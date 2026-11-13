@@ -1,0 +1,1 @@
+import{u as e}from"./preload-helper-DwX4x1rG.js";var t=(t,n,r,i)=>`clamp(${(t*i).toFixed(3)}rem, ${(n*i).toFixed(3)}${e}, ${(r*i).toFixed(3)}rem)`,n=(e=1)=>{let n=Number.isFinite(e)&&e>0?e:1;return{translationFontSize:t(1.125,2.6,1.25,n),upcomingFontSize:t(.875,2,1,n)}};export{n as t};

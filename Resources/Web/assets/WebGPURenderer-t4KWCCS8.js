@@ -1,0 +1,1 @@
+import{WebGPURenderer as e}from"./lib-CoI1gxlF.js";export{e as WebGPURenderer};

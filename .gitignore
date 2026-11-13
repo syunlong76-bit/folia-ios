@@ -1,0 +1,8 @@
+# XcodeGen 生成物与构建产物，不入库
+Folia.xcodeproj/
+build/
+DerivedData/
+*.ipa
+Payload/
+.DS_Store
+folia-ios-shell-project.zip

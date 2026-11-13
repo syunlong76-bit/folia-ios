@@ -1,0 +1,1 @@
+import{WebGLRenderer as e}from"./lib-CoI1gxlF.js";export{e as WebGLRenderer};
