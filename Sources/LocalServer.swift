@@ -74,7 +74,7 @@ final class LocalServer {
             case .waiting(let error):
                 // waiting 多为瞬态（接口未就绪等），其后通常会转 ready/failed，不要贸然取消；
                 // 仅当明确是「地址已被占用」时才按失败处理，换下一个端口
-                if case .posix(let code) = error, code == POSIXErrorCode.addrInUse {
+                if case .posix(let code) = error, code == POSIXErrorCode.EADDRINUSE {
                     NSLog("[LocalServer] port \(port) in use, trying next")
                     listener.cancel()
                     if retriesLeft > 0 {
