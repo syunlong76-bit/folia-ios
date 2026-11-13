@@ -1,0 +1,1 @@
+import{p as e}from"./preload-helper-DJS5tWln.js";import{Sc as t}from"./lucide-icons-pCqbiSjg.js";import{pa as n}from"./noLyricLines-CVYyCeoP.js";import{i as r,r as i}from"./lyricRenderQualityPin-c9H1bbps.js";var a=e(t(),1),o=e=>{let t=r(),o=i(),s=t?void 0:e?.scale,c=t?void 0:e?.antialias;return(0,a.useMemo)(()=>n(o,s&&c?{scale:s,antialias:c}:null),[o,s,c])};export{o as t};
