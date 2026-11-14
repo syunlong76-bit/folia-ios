@@ -29,6 +29,41 @@ targets:
         type: folder
     info:
       path: Info.plist
+      # 注意：XcodeGen 在 generate 时按这里的 properties 重写 Info.plist，
+      # 定制键不写在这里就会被生成默认值覆盖（曾因此丢过场景清单、ATS 例外，
+      # 且版本号被写成 1.0/1）。下面与仓库 Info.plist 的定制内容保持一致。
+      properties:
+        CFBundleDevelopmentRegion: zh-Hans
+        CFBundleDisplayName: Folia
+        CFBundleShortVersionString: "2.0"
+        CFBundleVersion: "3"
+        LSRequiresIPhoneOS: true
+        UIViewControllerBasedStatusBarAppearance: true
+        UILaunchScreen: {}
+        UIApplicationSceneManifest:
+          UIApplicationSupportsMultipleScenes: false
+          UISceneConfigurations:
+            UIWindowSceneSessionRoleApplication:
+              - UISceneConfigurationName: Default Configuration
+                UISceneDelegateClassName: "$(PRODUCT_MODULE_NAME).SceneDelegate"
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+          NSExceptionDomains:
+            127.0.0.1:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: false
+            localhost:
+              NSExceptionAllowsInsecureHTTPLoads: true
+              NSIncludesSubdomains: false
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.miller.folia
