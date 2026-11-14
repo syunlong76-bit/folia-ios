@@ -17,6 +17,8 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
     private var statusLabel: UILabel!
     private var gearButton: UIButton!
     private var gearHideWorkItem: DispatchWorkItem?
+    /// 本地首页地址（服务器就绪时记下）：内容进程被系统杀掉后靠它重载自愈
+    private var homeURL: URL?
 
     /// 齿轮静止时的不透明度（调柔和后低于 v1 的 0.85，与深色页面融合）
     private let gearRestingAlpha: CGFloat = 0.5
@@ -128,6 +130,7 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         LocalServer.shared.onReady = { [weak self] port in
             guard let self = self else { return }
             if let url = URL(string: "http://127.0.0.1:\(port)/") {
+                self.homeURL = url
                 self.webView.load(URLRequest(url: url))
             }
         }
@@ -201,6 +204,20 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         statusLabel.isHidden = true
+    }
+
+    /// 网页内容进程被系统杀掉（内存峰值下 jetsam）后 WKWebView 只剩一块黑屏、不会自己
+    /// 恢复：重新加载本地首页自愈。登录态与设置都在页面本地存储里，重载后自行恢复，
+    /// 用户最多看到一次页面重开，而不是永久黑屏只能杀 App。
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        NSLog("[MainVC] web content process terminated; reloading home")
+        statusLabel.isHidden = false
+        statusLabel.text = "页面进程被系统回收，正在重新加载…"
+        if let url = homeURL {
+            webView.load(URLRequest(url: url))
+        } else if let url = webView.url {
+            webView.load(URLRequest(url: url))
+        }
     }
 
     func webView(_ webView: WKWebView,

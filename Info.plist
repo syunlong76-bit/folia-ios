@@ -58,6 +58,10 @@
 		<string>UIInterfaceOrientationLandscapeLeft</string>
 		<string>UIInterfaceOrientationLandscapeRight</string>
 	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>audio</string>
+	</array>
 	<!-- ATS 配置说明：
 	     本应用内 WKWebView 只访问本机回环地址 http://127.0.0.1:<port>（内置本地服务器）。
 	     - NSAllowsLocalNetworking=true：苹果为「本地网络（含回环）」提供的 ATS 例外开关，
