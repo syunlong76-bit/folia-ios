@@ -1,1 +1,0 @@
-import{p as e}from"./preload-helper-DJS5tWln.js";import{wc as t}from"./lucide-icons-BymjaKfP.js";import{M as n}from"./registry-C_QJXhnx.js";var r=e(t(),1),i=(0,r.createContext)(null),a=()=>(0,r.useContext)(i),o=(0,r.createContext)(null),s=()=>{let e=a(),t=(0,r.useContext)(o),i=n(e=>e.lyricRenderQuality);return e??t??i};export{a as i,i as n,s as r,o as t};

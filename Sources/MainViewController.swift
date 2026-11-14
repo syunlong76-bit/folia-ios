@@ -213,9 +213,9 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         NSLog("[MainVC] web content process terminated; reloading home")
         statusLabel.isHidden = false
         statusLabel.text = "页面进程被系统回收，正在重新加载…"
+        // homeURL 在服务器就绪、首次加载之前赋值，此后不清空；能走到这里（页面曾加载过）
+        // 它必然已就位。服务器未就绪时还没有页面可终止，不会进这个回调。
         if let url = homeURL {
-            webView.load(URLRequest(url: url))
-        } else if let url = webView.url {
             webView.load(URLRequest(url: url))
         }
     }

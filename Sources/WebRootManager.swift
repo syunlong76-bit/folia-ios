@@ -9,7 +9,7 @@ final class WebRootManager {
 
     static let shared = WebRootManager()
 
-    /// 本壳内置的 Web 版本（壳 2.0 = Web v4，打包前由主线把 Resources/Web 同步为 v4 内容）
+    /// 本壳内置的 Web 版本（壳 2.0 构建 5 = Web v6，打包前由主线把 Resources/Web 同步为 v6 内容）
     static let bundledVersion = 6
 
     private let defaults = UserDefaults.standard

@@ -1,1 +1,0 @@
-import{Q as e}from"./bootstrap-DP0hj4Kc.js";export{e as matchLyrics};
