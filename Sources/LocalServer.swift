@@ -247,7 +247,7 @@ final class LocalServer {
             let data = try Data(contentsOf: url)
             let mime = LocalServer.mimeType(forExtension: url.pathExtension.lowercased())
             // 本地文件读取成本低，一律 no-cache，保证整包版本切换后不吃旧缓存
-            var headers: [(String, String)] = [("Content-Type", mime),
+            let headers: [(String, String)] = [("Content-Type", mime),
                                                ("Cache-Control", "no-cache")]
             if request.method == "HEAD" {
                 handler.respond(status: 200, reason: "OK", headers: headers, body: Data(),

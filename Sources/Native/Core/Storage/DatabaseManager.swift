@@ -64,7 +64,7 @@ final class DatabaseManager {
     }
 
     private func migrateIfNeeded() {
-        guard let db else { return }
+        guard db != nil else { return }
         let version = userVersion()
         queue.sync {
             if version < 1 {

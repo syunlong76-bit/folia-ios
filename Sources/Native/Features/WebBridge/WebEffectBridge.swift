@@ -1,5 +1,6 @@
 import Combine
 import Foundation
+import SwiftUI
 import UIKit
 import WebKit
 
@@ -102,7 +103,7 @@ final class FoliaBridgeLogStore {
         var allowed = false
         var droppedNote: String?
         ioQueue.sync {
-            var entry = windowCounts[key]?? (windowStart: now, count: 0)
+            var entry = windowCounts[key] ?? (windowStart: now, count: 0)
             if now.timeIntervalSince(entry.windowStart) >= 1.0 {
                 entry = (windowStart: now, count: 0)
             }
@@ -141,7 +142,7 @@ final class FoliaBridgeLogStore {
                 try? FileManager.default.removeItem(at: next)
                 FileManager.default.createFile(atPath: next.path, contents: nil)
             }
-            if!FileManager.default.fileExists(atPath: url.path) {
+            if !FileManager.default.fileExists(atPath: url.path) {
                 FileManager.default.createFile(atPath: url.path, contents: nil)
             }
             if let handle = try? FileHandle(forWritingTo: url) {
@@ -179,7 +180,7 @@ final class FoliaBridgeLogStore {
         for match in matches.reversed() {
             guard let range = Range(match.range, in: text) else { continue}
             let url = String(text[range])
-            let base = url.split(separator: "?", maxSplits: 1).first.map(String.init)?? url
+            let base = url.split(separator: "?", maxSplits: 1).first.map(String.init) ?? url
             if let nsRange = Range(match.range, in: result) {
                 result.replaceSubrange(nsRange, with: base)
             }
@@ -266,12 +267,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     private var lastBufferingState: Bool?
 
     private var currentRate: Float {
-        PlaybackEngine.shared.isPlaying? 1.0: 0.0
+        PlaybackEngine.shared.isPlaying ? 1.0 : 0.0
     }
 
     private override init() {
         let config = WKWebViewConfiguration()
-        config.websiteDataStore =.default()
+        config.websiteDataStore = .default()
         config.allowsInlineMediaPlayback = true
         config.mediaTypesRequiringUserActionForPlayback = []
 
@@ -293,8 +294,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         // 手势穿透框架（M2 末落地）：默认 passthroughRects 为空，行为与 WKWebView 一致。
         let webView = PassthroughWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
-        webView.backgroundColor =.clear
-        webView.scrollView.backgroundColor =.clear
+        webView.backgroundColor = .clear
+        webView.scrollView.backgroundColor = .clear
         webView.scrollView.isScrollEnabled = false
         webView.scrollView.bounces = false
         // 透明白闪处置：didFinish 前 alpha=0，完成后 150ms 渐入。
@@ -408,12 +409,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                     artist: $0.artist,
                     album: $0.album,
                     duration: $0.duration,
-                    isLiked: isLikedProvider?($0.id)?? false,
+                    isLiked: isLikedProvider?($0.id) ?? false,
                     artworkRef: $0.artworkURL?.absoluteString)
             },
             lrc: track.flatMap { lyricsProvider?($0) ?? lyricsCache[$0.id] } ?? "",
             renderActive: renderActive,
-            theme: themeProvider?()?? WebSnapshotDTO.Theme(backgroundMode: "web", palette: [:]),
+            theme: themeProvider?() ?? WebSnapshotDTO.Theme(backgroundMode: "web", palette: [:]),
             queue: queueSummary(),
             currentIndex: QueueManager.shared.currentIndex,
             initialTime: engine.currentTime,
@@ -468,7 +469,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         guard let track = PlaybackEngine.shared.currentTrack else { return}
         dispatchToJS(.artwork, payload: [
                 "trackId": track.id,
-                "ref": track.artworkURL?.absoluteString?? "",
+                "ref": track.artworkURL?.absoluteString ?? "",
         ])
     }
 
@@ -483,7 +484,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
 
     /// 主题变化（播放页背景归属切换 web/native-scene 时调这个）。
     func pushThemeEvent() {
-        let theme = themeProvider?()?? WebSnapshotDTO.Theme(backgroundMode: "web", palette: [:])
+        let theme = themeProvider?() ?? WebSnapshotDTO.Theme(backgroundMode: "web", palette: [:])
         dispatchToJS(.theme, payload: [
                 "backgroundMode": theme.backgroundMode,
                 "palette": theme.palette,
@@ -521,7 +522,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                 "playing": engine.isPlaying,
                 "rate": currentRate,
                 "t": engine.currentTime,
-                "trackId": engine.currentTrack?.id?? "",
+                "trackId": engine.currentTrack?.id ?? "",
         ])
     }
 
@@ -544,7 +545,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     private func queueSummary() -> [WebSnapshotDTO.QueueItem] {
         let queue = QueueManager.shared.queue
         let index = QueueManager.shared.currentIndex
-        guard!queue.isEmpty, queue.indices.contains(index) else {
+        guard !queue.isEmpty, queue.indices.contains(index) else {
             // 队列未建时退到当前单曲，保证快照里至少有正在播的那首。
             if let track = PlaybackEngine.shared.currentTrack {
                 return [WebSnapshotDTO.QueueItem(id: track.id, title: track.title, artist: track.artist)]
@@ -566,7 +567,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             pendingRenderActive = active
             return
         }
-        guard lastSentRenderActive!= active else { return}
+        guard lastSentRenderActive != active else { return }
         lastSentRenderActive = active
         dispatchToJS(.renderState, payload: ["active": active])
     }
@@ -612,10 +613,10 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             onMinimizeRequested?()
         case "log":
             // fire-and-forget：只转发 warn/error，info 不过桥；不要求回执。
-            let level = body["level"] as? String?? "warn"
+            let level = body["level"] as? String ?? "warn"
             guard level == "warn" || level == "error" else { return}
-            let module = body["module"] as? String?? "web"
-            let messageText = body["message"] as? String?? ""
+            let module = body["module"] as? String ?? "web"
+            let messageText = body["message"] as? String ?? ""
             logStore.record(level: level, module: module, message: messageText)
         default:
             break
@@ -670,7 +671,7 @@ extension WebEffectBridge: WKNavigationDelegate {
         }
         logStore.write(level: "warn", module: "bridge",
             message: "WebEffect content process terminated; reloading")
-        if webView.url!= nil {
+        if webView.url != nil {
             webView.reload()
         } else {
             loadLocalEffectBundle()
