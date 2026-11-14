@@ -1,3 +1,5 @@
+import Combine
+import SwiftUI
 import UIKit
 import WebKit
 
@@ -26,6 +28,10 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
     /// 本地服务端口（服务器就绪时记下）与两表面的入口地址：
     /// 内容进程被系统杀掉后靠各自地址重载自愈
     private var serverPort: UInt16 = 0
+    // M2 原生播放层：迷你条 + 全屏播放容器（UIHostingController 悬浮挂载）。
+    private var miniPlayerHostingController: UIHostingController<MiniPlayerView>?
+    private var fullPlayerHostingController: UIHostingController<FullPlayerContainer>?
+    private var nativePlayerCancellables = Set<AnyCancellable>()
     private var browseURL: URL?
     private var playerURL: URL?
 
@@ -102,6 +108,9 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         BridgeStore.shared.onShowSurface = { [weak self] surface in
             self?.showSurface(surface)
         }
+
+        // --- M2 原生播放层：迷你条悬浮挂载、全屏容器常驻挂载（RenderStateCenter 驱动） ---
+        setupNativePlayerUI()
 
         // --- 启动本地服务器，就绪后加载浏览表面 ---
         LocalServer.shared.onReady = { [weak self] port in
@@ -192,6 +201,84 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         } else {
             browseWebView.isHidden = false
         }
+    }
+
+    // MARK: - M2 原生播放层
+
+    /// 原生迷你条（UIHostingController 悬浮于浏览表面之上）+ 全屏播放容器
+    ///（UIHostingController 常驻挂载，位移切换）。双表面壳（LocalServer 与
+    /// /__bridge/* 表面切换）原样保留，不拆。
+    /// 展开 / 收起唯一来源：RenderStateCenter.isFullPlayerOpen。
+    private func setupNativePlayerUI() {
+        let renderCenter = RenderStateCenter.shared
+
+        // --- 迷你条：底部悬浮，安全区之上 ---
+        let miniView = MiniPlayerView {
+            RenderStateCenter.shared.setFullPlayerOpen(true)
+        }
+        let miniHC = UIHostingController(rootView: miniView)
+        miniHC.view.backgroundColor = .clear
+        miniHC.view.translatesAutoresizingMaskIntoConstraints = false
+        addChild(miniHC)
+        view.addSubview(miniHC.view)
+        miniHC.didMove(toParent: self)
+        NSLayoutConstraint.activate([
+            miniHC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            miniHC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            miniHC.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
+            miniHC.view.heightAnchor.constraint(equalToConstant: 64),
+        ])
+        miniHC.view.isHidden = true // 无曲目时隐藏
+        self.miniPlayerHostingController = miniHC
+
+        // --- 全屏播放容器：常驻挂载，收起时位移出屏 + 宿主隐藏 ---
+        let fullView = FullPlayerContainer {
+            RenderStateCenter.shared.setFullPlayerOpen(false)
+        }
+        let fullHC = UIHostingController(rootView: fullView)
+        fullHC.view.backgroundColor = .clear
+        fullHC.view.translatesAutoresizingMaskIntoConstraints = false
+        addChild(fullHC)
+        view.addSubview(fullHC.view)
+        fullHC.didMove(toParent: self)
+        NSLayoutConstraint.activate([
+            fullHC.view.topAnchor.constraint(equalTo: view.topAnchor),
+            fullHC.view.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            fullHC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            fullHC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        fullHC.view.isHidden = true
+        self.fullPlayerHostingController = fullHC
+
+        // 桥的收起请求（网页 minimize 动作）-> 收起播放页。
+        WebEffectBridge.shared.onMinimizeRequested = {
+            RenderStateCenter.shared.setFullPlayerOpen(false)
+        }
+
+        // 迷你条可见性：有曲目 且 播放页未展开。
+        Publishers.CombineLatest(PlaybackEngine.shared.$currentTrack, renderCenter.$isFullPlayerOpen)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] track, isOpen in
+                self?.miniPlayerHostingController?.view.isHidden = (track == nil || isOpen)
+            }
+            .store(in: &nativePlayerCancellables)
+
+        // 全屏容器宿主可见性：展开立即显示；收起等 spring 动画（0.35s）后再隐藏。
+        renderCenter.$isFullPlayerOpen
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] open in
+                guard let self, let hostView = self.fullPlayerHostingController?.view else { return }
+                if open {
+                    hostView.isHidden = false
+                } else {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        if !RenderStateCenter.shared.isFullPlayerOpen {
+                            hostView.isHidden = true
+                        }
+                    }
+                }
+            }
+            .store(in: &nativePlayerCancellables)
     }
 
     // MARK: - 齿轮自动隐藏

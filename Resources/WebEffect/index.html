@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<!--
+  WebEffect POC 占位可视化壳（M2，见同目录 STRIP-PLAN.md）
+  ------------------------------------------------------------
+  这不是剥离后的 Folia 构建产物。真正的 Folia 可视化壳（歌词样式 +
+  莫奈背景完整保留、剔除 transport / 音频元素 / 媒体会话注册）需要
+  改 folia-major 源码（Vite 插件 FOLIA_SURFACE=player-visual），
+  改动点清单在 STRIP-PLAN.md，须协调员批准后才做。
+  本占位壳只验证整条 M2 链路：原生 PlaybackEngine -> WebEffectBridge
+  -> folia-bridge.js -> 歌词行高亮 / 主题 / 队列，且自身满足剥离
+  验收的硬指标：无 transport 标记（0 命中）、无音频元素、
+  无媒体会话注册、html/body 强制 transparent。
+-->
+<html lang="zh-Hans">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+<title>Folia WebEffect</title>
+<style>
+  /* 透明白闪处置：html/body 强制 transparent。 */
+  html, body { background: transparent !important; margin: 0; padding: 0; height: 100%; overflow: hidden; }
+  body {
+    font-family: -apple-system, "PingFang SC", "Helvetica Neue", sans-serif;
+    color: rgba(255, 255, 255, 0.92);
+    -webkit-tap-highlight-color: transparent;
+  }
+  /* 剥离兜底：任何被打上 transport 标记的节点禁交互、不可见。 */
+  [data-folia-transport] { pointer-events: none !important; visibility: hidden !important; }
+  /* 休眠冻结：停全部 CSS 动画、藏重型画布。 */
+  .folia-frozen *, .folia-frozen *::before, .folia-frozen *::after { animation-play-state: paused !important; }
+  .folia-frozen [data-folia-heavy-canvas] { display: none !important; }
+
+  #bg { position: fixed; inset: 0; background: radial-gradient(120% 90% at 50% 0%, var(--folia-primary, #2b3a55) 0%, #0b0e14 62%, #05070a 100%); transition: opacity .4s; }
+  #bg[data-mode="native-scene"] { opacity: 0.85; }
+  #stage { position: relative; z-index: 1; height: 100%; display: flex; flex-direction: column; justify-content: flex-end; padding: 24px 24px 150px; box-sizing: border-box; }
+  #track { margin-bottom: 18px; }
+  #title { font-size: 22px; font-weight: 700; line-height: 1.3; }
+  #artist { font-size: 14px; color: rgba(255, 255, 255, 0.6); margin-top: 4px; }
+  #queue { font-size: 12px; color: rgba(255, 255, 255, 0.45); margin-top: 8px; }
+  #lyrics { overflow: hidden; }
+  /* 歌词容器：禁长按菜单与文本选择（桥 JS 也会再加固一次）。 */
+  #lyrics[data-folia-lyrics] { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+  .line { font-size: 17px; line-height: 2.1; color: rgba(255, 255, 255, 0.38); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; transition: color .2s; }
+  .line.active { color: rgba(255, 255, 255, 0.95); font-weight: 600; }
+  #status { position: fixed; left: 0; right: 0; bottom: 118px; text-align: center; font-size: 12px; color: rgba(255, 255, 255, 0.4); z-index: 1; }
+</style>
+</head>
+<body>
+  <div id="bg" data-folia-decor aria-hidden="true"></div>
+  <div id="stage">
+    <div id="track">
+      <div id="title">等待播放…</div>
+      <div id="artist"></div>
+      <div id="queue"></div>
+    </div>
+    <div id="lyrics" data-folia-lyrics role="text"></div>
+  </div>
+  <div id="status">WebEffect POC 占位壳 · 等原生播放状态</div>
+  <script src="./folia-bridge.js"></script>
+  <script>
+    (function () {
+      'use strict';
+      var bridge = window.__FOLIA_BRIDGE__;
+      var titleEl = document.getElementById('title');
+      var artistEl = document.getElementById('artist');
+      var queueEl = document.getElementById('queue');
+      var lyricsEl = document.getElementById('lyrics');
+      var statusEl = document.getElementById('status');
+      var bgEl = document.getElementById('bg');
+      var lines = [];
+      var activeIndex = -1;
+
+      function renderLyrics() {
+        lyricsEl.innerHTML = '';
+        lines.forEach(function (entry, i) {
+          var div = document.createElement('div');
+          div.className = 'line' + (i === activeIndex ? ' active' : '');
+          div.textContent = entry.text;
+          lyricsEl.appendChild(div);
+        });
+      }
+
+      function setActiveLine(idx) {
+        if (idx === activeIndex) return;
+        activeIndex = idx;
+        var children = lyricsEl.children;
+        for (var i = 0; i < children.length; i++) {
+          children[i].classList.toggle('active', i === idx);
+        }
+      }
+
+      window.addEventListener('folia:track', function (e) {
+        var t = e.detail || {};
+        titleEl.textContent = t.title || '未知曲名';
+        artistEl.textContent = t.artist || '';
+        statusEl.textContent = '';
+        lines = [];
+        activeIndex = -1;
+        renderLyrics();
+      });
+      window.addEventListener('folia:lyrics', function (e) {
+        lines = (e.detail && e.detail.lines) || [];
+        activeIndex = -1;
+        renderLyrics();
+      });
+      window.addEventListener('folia:tick', function (e) {
+        if (!lines.length) return;
+        setActiveLine(bridge.lyricLineAt((e.detail && e.detail.time) || 0));
+      });
+      window.addEventListener('folia:queue', function (e) {
+        var d = e.detail || {};
+        var items = d.items || [];
+        queueEl.textContent = items.length
+          ? '队列 ' + (d.currentIndex + 1) + '/' + items.length + ' · ' + items.map(function (it) { return it.title; }).join(' / ')
+          : '';
+      });
+      window.addEventListener('folia:theme', function (e) {
+        var d = e.detail || {};
+        bgEl.setAttribute('data-mode', d.backgroundMode || 'web');
+      });
+      window.addEventListener('folia:buffering', function (e) {
+        statusEl.textContent = e.detail && e.detail.buffering ? '缓冲中…' : '';
+      });
+    })();
+  </script>
+</body>
+</html>
