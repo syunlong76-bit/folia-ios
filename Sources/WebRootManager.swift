@@ -9,8 +9,8 @@ final class WebRootManager {
 
     static let shared = WebRootManager()
 
-    /// 本壳内置的 Web 版本（v2 壳 = Web v3，打包前由主线把 Resources/Web 同步为 v3 内容）
-    static let bundledVersion = 3
+    /// 本壳内置的 Web 版本（壳 2.0 = Web v4，打包前由主线把 Resources/Web 同步为 v4 内容）
+    static let bundledVersion = 4
 
     private let defaults = UserDefaults.standard
     private let fm = FileManager.default
@@ -56,6 +56,9 @@ final class WebRootManager {
 
         var active = defaults.integer(forKey: Keys.active)
         if active <= 0 { active = WebRootManager.bundledVersion }
+        // 内置版本是下限：覆盖安装新壳后，旧设备上记录的 active 不得低于包内版本，
+        // 否则新壳仍跑旧前端，且刚拷入的内置目录还会被下面的清理当旧版本删掉。
+        if active < WebRootManager.bundledVersion { active = WebRootManager.bundledVersion }
 
         // 首次启动（或内置目录缺失）：把包内 Web 拷贝为 v{bundledVersion}
         let bundledDir = versionDir(WebRootManager.bundledVersion)
@@ -74,17 +77,19 @@ final class WebRootManager {
             }
         }
 
-        // pending 切换：版本更高且目录完整才生效
+        // pending 切换：版本更高且目录完整才生效；不高于内置版本的待生效标记已被下限覆盖，清掉
         let pending = pendingWebVersion
         if pending > active, isComplete(dir: versionDir(pending)) {
             active = pending
+            pendingWebVersion = 0
+        } else if pending <= WebRootManager.bundledVersion {
             pendingWebVersion = 0
         }
 
         activeWebVersion = active
         defaults.set(active, forKey: Keys.active)
 
-        cleanupOldVersions(keeping: [active, pendingWebVersion])
+        cleanupOldVersions(keeping: [active, pendingWebVersion, WebRootManager.bundledVersion])
     }
 
     /// 目录完整性判据：存在 index.html 即视为完整（解压成功后写入 pending 前也会用它校验）
