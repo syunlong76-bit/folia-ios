@@ -1,13 +1,16 @@
 import Foundation
 
 /// 管理本地服务器的静态文件根目录（与安卓版同构）：
-/// - app 包内 Resources/Web 为前端 v1 全量文件（folder reference 打包，Bundle 内名为 "Web"）
-/// - 首次启动拷贝到 Documents/web/v1
+/// - app 包内 Resources/Web 为内置前端全量文件（folder reference 打包，Bundle 内名为 "Web"）
+/// - 首次启动拷贝到 Documents/web/v{bundledVersion}
 /// - 更新包下载解压后落在 Documents/web/v{n}，记为 pendingWebVersion；
 ///   下次冷启动时若 pending > active 且目录完整（含 index.html），切换为生效版本
 final class WebRootManager {
 
     static let shared = WebRootManager()
+
+    /// 本壳内置的 Web 版本（v2 壳 = Web v3，打包前由主线把 Resources/Web 同步为 v3 内容）
+    static let bundledVersion = 3
 
     private let defaults = UserDefaults.standard
     private let fm = FileManager.default
@@ -18,7 +21,7 @@ final class WebRootManager {
     }
 
     /// 当前生效的前端版本号
-    private(set) var activeWebVersion: Int = 1
+    private(set) var activeWebVersion: Int = WebRootManager.bundledVersion
 
     /// 已下载、待下次冷启动生效的前端版本号（0 = 无）
     var pendingWebVersion: Int {
@@ -43,7 +46,7 @@ final class WebRootManager {
 
     private init() {}
 
-    /// 冷启动时调用：确保 v1 存在；处理 pending 切换；清理无用旧版本目录。
+    /// 冷启动时调用：确保内置版本存在；处理 pending 切换；清理无用旧版本目录。
     func prepare() {
         do {
             try fm.createDirectory(at: webBaseDir, withIntermediateDirectories: true)
@@ -52,17 +55,17 @@ final class WebRootManager {
         }
 
         var active = defaults.integer(forKey: Keys.active)
-        if active <= 0 { active = 1 }
+        if active <= 0 { active = WebRootManager.bundledVersion }
 
-        // 首次启动：把包内 Web 拷贝为 v1
-        let v1Dir = versionDir(1)
-        if !isComplete(dir: v1Dir) {
+        // 首次启动（或内置目录缺失）：把包内 Web 拷贝为 v{bundledVersion}
+        let bundledDir = versionDir(WebRootManager.bundledVersion)
+        if !isComplete(dir: bundledDir) {
             if let bundled = Bundle.main.url(forResource: "Web", withExtension: nil) {
                 do {
-                    if fm.fileExists(atPath: v1Dir.path) {
-                        try fm.removeItem(at: v1Dir)
+                    if fm.fileExists(atPath: bundledDir.path) {
+                        try fm.removeItem(at: bundledDir)
                     }
-                    try fm.copyItem(at: bundled, to: v1Dir)
+                    try fm.copyItem(at: bundled, to: bundledDir)
                 } catch {
                     NSLog("[WebRoot] copy bundled Web failed: \(error)")
                 }

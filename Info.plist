@@ -22,6 +22,10 @@
 	<string>$(CURRENT_PROJECT_VERSION)</string>
 	<key>LSRequiresIPhoneOS</key>
 	<true/>
+	<!-- 状态栏/主指示条外观由视图控制器决定（MainViewController 里
+	     prefersStatusBarHidden / prefersHomeIndicatorAutoHidden 做沉浸全屏） -->
+	<key>UIViewControllerBasedStatusBarAppearance</key>
+	<true/>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIApplicationSceneManifest</key>

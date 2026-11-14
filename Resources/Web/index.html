@@ -2,7 +2,10 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover：让布局视口铺满刘海/底部横条区域。缺它时 iOS（PWA 与 WKWebView 壳）
+         会把页面排进安全区内、上下留出黑边，且下面 black-translucent 的状态栏样式也不生效。
+         桌面浏览器忽略这一项；App 根容器是 fixed inset-0，会跟着视口一起铺满。 -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <meta name="referrer" content="no-referrer" />
     <meta name="description" content="一个动态歌词播放器，支持 AI 主题生成" />
     <meta name="theme-color" content="#09090b" />
@@ -32,7 +35,7 @@
   }
 }
 </script>
-  <script type="module" crossorigin src="/assets/main-C36x3fgG.js"></script>
+  <script type="module" crossorigin src="/assets/main-WCU6kZ2q.js"></script>
   <link rel="modulepreload" crossorigin href="/assets/preload-helper-DJS5tWln.js">
   <link rel="modulepreload" crossorigin href="/assets/modulepreload-polyfill-P2Xu9kJm.js">
 <link rel="manifest" href="/manifest.webmanifest"><script id="vite-plugin-pwa:register-sw" src="/registerSW.js"></script></head>

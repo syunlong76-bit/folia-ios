@@ -21,6 +21,8 @@ targets:
     deploymentTarget: "16.0"
     sources:
       - path: Sources
+      # App 图标资产目录（AppIcon.appiconset，1024 满版 PNG）
+      - path: Assets.xcassets
       # 整个 Web 文件夹以 folder reference（蓝色文件夹）打进 app 包，
       # 保持目录结构，运行时经 Bundle.main 定位 "Web" 文件夹
       - path: Resources/Web
@@ -33,10 +35,10 @@ targets:
         PRODUCT_NAME: Folia
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
-        MARKETING_VERSION: "1.0"
-        CURRENT_PROJECT_VERSION: "1"
+        MARKETING_VERSION: "2.0"
+        CURRENT_PROJECT_VERSION: "2"
         IPHONEOS_DEPLOYMENT_TARGET: "16.0"
-        ASSETCATALOG_COMPILER_APPICON_NAME: ""
+        ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
     dependencies:
       - package: ZIPFoundation
         product: ZIPFoundation
