@@ -9,8 +9,11 @@ final class WebRootManager {
 
     static let shared = WebRootManager()
 
-    /// 本壳内置的 Web 版本（壳 2.0 构建 5 = Web v6，打包前由主线把 Resources/Web 同步为 v6 内容）
-    static let bundledVersion = 6
+    /// 本壳内置的 Web 版本（壳 3.0 (1) = Web v7，打包前由主线把 Resources/Web 同步为 v7 播放构建）
+    static let bundledVersion = 7
+
+    /// 双壳浏览表面的内置版本（与播放构建同版本号，内容为浏览构建，目录独立管理）
+    static let bundledBrowseVersion = 7
 
     private let defaults = UserDefaults.standard
     private let fm = FileManager.default
@@ -38,6 +41,17 @@ final class WebRootManager {
     /// 当前生效版本目录（本地服务器的静态根目录）
     var activeWebDir: URL {
         webBaseDir.appendingPathComponent("v\(activeWebVersion)", isDirectory: true)
+    }
+
+    /// Documents/web-browse 目录（浏览表面专用，与播放根分开，避免 OTA 机制互相影响）
+    var browseBaseDir: URL {
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        return docs.appendingPathComponent("web-browse", isDirectory: true)
+    }
+
+    /// 浏览表面的静态根目录（内置只读版本，不走 OTA；壳升级时随 bundledBrowseVersion 换代）
+    var browseWebDir: URL {
+        browseBaseDir.appendingPathComponent("v\(WebRootManager.bundledBrowseVersion)", isDirectory: true)
     }
 
     func versionDir(_ version: Int) -> URL {
@@ -90,6 +104,39 @@ final class WebRootManager {
         defaults.set(active, forKey: Keys.active)
 
         cleanupOldVersions(keeping: [active, pendingWebVersion, WebRootManager.bundledVersion])
+
+        prepareBrowse()
+    }
+
+    /// 浏览根准备：包内 Resources/WebBrowse 拷到 Documents/web-browse/v{bundledBrowseVersion}；
+    /// 浏览构建只随壳升级换代，不走 OTA，故逻辑比播放根简单：缺失/不完整才拷，旧版本目录顺手清理。
+    private func prepareBrowse() {
+        do {
+            try fm.createDirectory(at: browseBaseDir, withIntermediateDirectories: true)
+        } catch {
+            NSLog("[WebRoot] create browseBaseDir failed: \(error)")
+        }
+        let target = browseWebDir
+        if !isComplete(dir: target) {
+            if let bundled = Bundle.main.url(forResource: "WebBrowse", withExtension: nil) {
+                do {
+                    if fm.fileExists(atPath: target.path) {
+                        try fm.removeItem(at: target)
+                    }
+                    try fm.copyItem(at: bundled, to: target)
+                } catch {
+                    NSLog("[WebRoot] copy bundled WebBrowse failed: \(error)")
+                }
+            } else {
+                NSLog("[WebRoot] bundled WebBrowse folder not found in app bundle")
+            }
+        }
+        let keep = "v\(WebRootManager.bundledBrowseVersion)"
+        if let entries = try? fm.contentsOfDirectory(atPath: browseBaseDir.path) {
+            for entry in entries where entry.hasPrefix("v") && entry != keep {
+                try? fm.removeItem(at: browseBaseDir.appendingPathComponent(entry))
+            }
+        }
     }
 
     /// 目录完整性判据：存在 index.html 即视为完整（解压成功后写入 pending 前也会用它校验）

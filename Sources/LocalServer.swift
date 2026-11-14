@@ -111,11 +111,16 @@ final class LocalServer {
     fileprivate func route(_ request: HTTPRequest, for handler: ConnectionHandler) {
         let rawPath = request.pathWithoutQuery
 
-        if rawPath == "/sw.js" {
+        if rawPath == "/sw.js" || rawPath == "/browse/sw.js" {
             handler.respond(status: 200, reason: "OK",
                             headers: [("Content-Type", "text/javascript; charset=utf-8"),
                                       ("Cache-Control", "no-store")],
                             body: Data(LocalServer.serviceWorkerStub.utf8))
+            return
+        }
+
+        if rawPath.hasPrefix("/__bridge/") {
+            handleBridge(request: request, handler: handler)
             return
         }
 
@@ -124,13 +129,78 @@ final class LocalServer {
             return
         }
 
+        // 双壳浏览表面：/browse/* 映射到浏览根目录（SPA 回退在浏览根内），
+        // 其余路径仍走播放根（含 OTA 版本目录）。
+        if rawPath == "/browse" || rawPath.hasPrefix("/browse/") {
+            let sub = String(rawPath.dropFirst("/browse".count))
+            serveStatic(request: request, rawPath: sub.isEmpty ? "/" : sub,
+                        handler: handler, root: WebRootManager.shared.browseWebDir)
+            return
+        }
+
         serveStatic(request: request, rawPath: rawPath, handler: handler)
+    }
+
+    // MARK: - 跨表面桥（/__bridge/*，协议见 BridgeStore）
+
+    private func handleBridge(request: HTTPRequest, handler: ConnectionHandler) {
+        let rawPath = request.pathWithoutQuery
+        let jsonHeaders: [(String, String)] = [("Content-Type", "application/json; charset=utf-8"),
+                                               ("Cache-Control", "no-store")]
+        func respondJson(_ object: [String: Any]) {
+            let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
+            handler.respond(status: 200, reason: "OK", headers: jsonHeaders, body: data)
+        }
+        func respondBadRequest() {
+            handler.respond(status: 400, reason: "Bad Request",
+                            headers: [("Content-Type", "text/plain; charset=utf-8")],
+                            body: Data("Bad Request".utf8))
+        }
+
+        switch rawPath {
+        case "/__bridge/cmd":
+            guard request.method == "POST",
+                  let cmd = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] else {
+                respondBadRequest()
+                return
+            }
+            let assigned = BridgeStore.shared.enqueue(cmd)
+            respondJson(["ok": true, "seq": assigned])
+        case "/__bridge/cmds":
+            var since = 0
+            if let qIdx = request.target.firstIndex(of: "?") {
+                let query = request.target[request.target.index(after: qIdx)...]
+                for pair in query.split(separator: "&") {
+                    let kv = pair.split(separator: "=", maxSplits: 1)
+                    if kv.count == 2, kv[0] == "since" { since = Int(kv[1]) ?? 0 }
+                }
+            }
+            let result = BridgeStore.shared.commands(since: since)
+            respondJson(["seq": result.seq, "cmds": result.cmds])
+        case "/__bridge/state":
+            if request.method == "POST" {
+                if let state = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] {
+                    BridgeStore.shared.setState(state)
+                }
+                respondJson(["ok": true])
+            } else {
+                let snap = BridgeStore.shared.snapshot()
+                respondJson(["state": snap.state ?? NSNull()])
+            }
+        case "/__bridge/session":
+            let snap = BridgeStore.shared.snapshot()
+            respondJson(["lastPlay": snap.lastPlay ?? NSNull(), "state": snap.state ?? NSNull()])
+        default:
+            handler.respond(status: 404, reason: "Not Found",
+                            headers: [("Content-Type", "text/plain; charset=utf-8")],
+                            body: Data("Not Found".utf8))
+        }
     }
 
     // MARK: - 静态文件
 
-    private func serveStatic(request: HTTPRequest, rawPath: String, handler: ConnectionHandler) {
-        let root = WebRootManager.shared.activeWebDir
+    private func serveStatic(request: HTTPRequest, rawPath: String, handler: ConnectionHandler,
+                             root: URL = WebRootManager.shared.activeWebDir) {
         let decoded = rawPath.removingPercentEncoding ?? rawPath
 
         var relative = decoded

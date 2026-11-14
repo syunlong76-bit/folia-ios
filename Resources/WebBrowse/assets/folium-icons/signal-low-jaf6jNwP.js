@@ -1,0 +1,1 @@
+import{Gs as e}from"../lucide-icons-DvrbnK6l.js";var t={name:`signal-low`,size:24,node:[[`path`,{d:`M2 20h.01`,key:`4haj6o`}],[`path`,{d:`M7 20v-4`,key:`j294jx`}]]};t.node;var n=e(t);export{t as __iconData,n as default};

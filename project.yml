@@ -27,6 +27,9 @@ targets:
       # 保持目录结构，运行时经 Bundle.main 定位 "Web" 文件夹
       - path: Resources/Web
         type: folder
+      # 双壳浏览表面的前端文件（浏览构建，folder reference，运行时定位 "WebBrowse"）
+      - path: Resources/WebBrowse
+        type: folder
     info:
       path: Info.plist
       # 注意：XcodeGen 在 generate 时按这里的 properties 重写 Info.plist，
@@ -35,8 +38,8 @@ targets:
       properties:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
-        CFBundleShortVersionString: "2.0"
-        CFBundleVersion: "5"
+        CFBundleShortVersionString: "3.0"
+        CFBundleVersion: "1"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         UILaunchScreen: {}
@@ -72,8 +75,8 @@ targets:
         PRODUCT_NAME: Folia
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
-        MARKETING_VERSION: "2.0"
-        CURRENT_PROJECT_VERSION: "5"
+        MARKETING_VERSION: "3.0"
+        CURRENT_PROJECT_VERSION: "1"
         IPHONEOS_DEPLOYMENT_TARGET: "16.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
     dependencies:

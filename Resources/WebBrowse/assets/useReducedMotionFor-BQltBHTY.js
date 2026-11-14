@@ -1,0 +1,1 @@
+import{i as e,r as t}from"./useMotionSettingsStore-Kpu8AL9h.js";var n=n=>e(e=>t(e,n));export{n as t};
