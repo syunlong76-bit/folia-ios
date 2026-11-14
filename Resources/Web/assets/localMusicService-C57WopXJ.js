@@ -1,0 +1,1 @@
+import{Q as e}from"./bootstrap-DtfBelDz.js";export{e as matchLyrics};

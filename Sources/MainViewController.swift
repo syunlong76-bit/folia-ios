@@ -42,8 +42,26 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         // 音乐播放器：允许自动播放带声媒体，不强制要求用户手势
         config.mediaTypesRequiringUserActionForPlayback = []
         config.preferences.javaScriptCanOpenWindowsAutomatically = true
+        // 抑制 iOS 网页原生「长按菜单」（拷贝/查询/翻译/共享…）与链接预览：
+        // 在文档开始处注入样式——全局关 touch callout；文本选择只对非输入元素关闭，
+        // input/textarea/contenteditable 的编辑、选中、粘贴能力保持原样。
+        let calloutSuppressScript = WKUserScript(
+            source: """
+            (function () {
+              var css = '* { -webkit-touch-callout: none !important; }'
+                + '*:not(input):not(textarea):not([contenteditable]) { -webkit-user-select: none !important; }';
+              var style = document.createElement('style');
+              style.textContent = css;
+              document.documentElement.appendChild(style);
+            })();
+            """,
+            injectionTime: .atDocumentStart,
+            forMainFrameOnly: false
+        )
+        config.userContentController.addUserScript(calloutSuppressScript)
 
         let webView = WKWebView(frame: .zero, configuration: config)
+        webView.allowsLinkPreview = false
         webView.navigationDelegate = self
         webView.backgroundColor = .black
         webView.isOpaque = false
