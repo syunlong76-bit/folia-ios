@@ -16,7 +16,7 @@ import Foundation
 import MediaPlayer
 import UIKit
 
-final class NowPlayingController {
+final class NowPlayingController: NSObject {
 
     static let shared = NowPlayingController()
 
@@ -35,7 +35,8 @@ final class NowPlayingController {
 
     private var commandsRegistered = false
 
-    private init() {
+    private override init() {
+        super.init()
         registerRemoteCommands()
     }
 
