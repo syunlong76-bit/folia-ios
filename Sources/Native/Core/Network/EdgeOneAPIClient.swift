@@ -190,6 +190,67 @@ final class EdgeOneAPIClient {
         return playlist
     }
 
+    /// 歌曲详情批量取（歌单页补齐曲目元数据）。实测 2026-11-16：
+    /// GET /api/netease/song/detail?ids=1973665667,186016 → 200，songs[] 含
+    /// ar / al（含 picUrl）/ dt。按 200 首分片并发取，按入参顺序拼回。
+    func fetchSongDetails(ids: [Int]) async throws -> [FoliaTrack] {
+        guard !ids.isEmpty else { return [] }
+        var byId: [Int: FoliaTrack] = [:]
+        let chunkSize = 200
+        var start = 0
+        while start < ids.count {
+            let chunk = Array(ids[start..<min(start + chunkSize, ids.count)])
+            let resp = try await requestJSON(
+                provider: .netease,
+                path: "/song/detail",
+                queryItems: [URLQueryItem(name: "ids", value: chunk.map(String.init).joined(separator: ","))],
+                as: NeteaseSongDetailResponse.self
+            )
+            for song in resp.songs ?? [] {
+                byId[song.id] = song.toFoliaTrack()
+            }
+            start += chunkSize
+        }
+        // 保持歌单原序；接口没回的 id 直接跳过（已下架等）。
+        return ids.compactMap { byId[$0] }
+    }
+
+    /// 推荐歌单（免登录）。实测 2026-11-16：GET /api/netease/personalized?limit= → 200。
+    func fetchPersonalizedPlaylists(limit: Int = 30) async throws -> [PlaylistSummary] {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/personalized",
+            queryItems: [URLQueryItem(name: "limit", value: "\(limit)")],
+            as: NeteasePersonalizedResponse.self
+        )
+        return (resp.result ?? []).map {
+            PlaylistSummary(id: $0.id, name: $0.name,
+                            coverURL: $0.picUrl.flatMap(Self.secureURL),
+                            trackCount: $0.trackCount ?? 0)
+        }
+    }
+
+    /// 排行榜（免登录）。实测 2026-11-16：GET /api/netease/toplist → 200，
+    /// list[] 的 id 可直接喂 fetchPlaylistDetail。
+    func fetchToplist() async throws -> [PlaylistSummary] {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/toplist",
+            queryItems: [],
+            as: NeteaseToplistResponse.self
+        )
+        return (resp.list ?? []).map {
+            PlaylistSummary(id: $0.id, name: $0.name,
+                            coverURL: $0.coverImgUrl.flatMap(Self.secureURL),
+                            trackCount: $0.trackCount ?? 0)
+        }
+    }
+
+    /// http → https + URL 化（网易云图片 CDN 地址归一化）。
+    private static func secureURL(_ text: String) -> URL? {
+        URL(string: text.replacingOccurrences(of: "http://", with: "https://"))
+    }
+
     // MARK: - QQ / 酷狗（M1 仅留 raw 逃生口，类型化方法待 M3 核对）
 
     /// QQ/酷狗搜索原始数据（不解码）。已知：/api/qq/search 用当前参数回 400，
@@ -336,14 +397,79 @@ private struct NeteasePlaylistDetailResponse: Decodable {
     let playlist: NeteasePlaylistDetail?
 }
 
-/// 歌单详情（M1 只取 id / 名称 / 封面 / 曲目 id 列表；曲目元数据由 M3 搜索补齐）。
+/// 歌单详情（id / 名称 / 封面 / 曲目 id 列表 + 接口顺带回的首批完整曲目）。
 struct NeteasePlaylistDetail: Decodable {
     let id: Int
     let name: String
     let coverImgUrl: String?
     let trackIds: [TrackId]?
+    let tracks: [SongDetailDTO]?
 
     struct TrackId: Decodable { let id: Int }
 
     var trackIdList: [Int] { trackIds?.map(\.id) ?? [] }
+
+    /// 接口在 detail 里顺带回的首批完整曲目（通常前若干首），可省一次详情请求。
+    var prefetchedTracks: [FoliaTrack] { (tracks ?? []).map { $0.toFoliaTrack() } }
+}
+
+/// 歌单摘要（推荐歌单 / 排行榜共用）。
+struct PlaylistSummary: Identifiable {
+    let id: Int
+    let name: String
+    let coverURL: URL?
+    let trackCount: Int
+}
+
+private struct NeteasePersonalizedResponse: Decodable {
+    let result: [Item]?
+    struct Item: Decodable {
+        let id: Int
+        let name: String
+        let picUrl: String?
+        let trackCount: Int?
+    }
+}
+
+private struct NeteaseToplistResponse: Decodable {
+    let list: [Item]?
+    struct Item: Decodable {
+        let id: Int
+        let name: String
+        let coverImgUrl: String?
+        let trackCount: Int?
+    }
+}
+
+private struct NeteaseSongDetailResponse: Decodable {
+    let songs: [SongDetailDTO]?
+}
+
+/// /song/detail 的单曲形状（ar / al / dt，与搜索实测形状同族）。
+struct SongDetailDTO: Decodable {
+    let id: Int
+    let name: String
+    let dt: Int?
+    let ar: [ArtistDTO]?
+    let al: AlbumDTO?
+
+    struct ArtistDTO: Decodable { let name: String }
+    struct AlbumDTO: Decodable {
+        let name: String
+        let picUrl: String?
+    }
+
+    func toFoliaTrack() -> FoliaTrack {
+        let artistNames = (ar ?? []).map(\.name).joined(separator: " / ")
+        let secureArt = al?.picUrl?.replacingOccurrences(of: "http://", with: "https://")
+        return FoliaTrack(
+            id: "ncm_\(id)",
+            sourceType: .netease,
+            title: name,
+            artist: artistNames.isEmpty ? "未知歌手" : artistNames,
+            album: al?.name ?? "",
+            duration: Double(dt ?? 0) / 1000.0,
+            artworkURL: secureArt.flatMap(URL.init(string:))
+        )
+    }
 }

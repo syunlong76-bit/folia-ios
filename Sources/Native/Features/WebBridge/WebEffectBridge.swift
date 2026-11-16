@@ -30,6 +30,9 @@ enum BridgeEvent: String {
     case renderState
     case buffering
     case spectrum
+    /// 视觉切换（3.3 新增，只增不改）：{ lyricMode?, backgroundMode? }，
+    /// 特效面据此调 visualizer 设置 store 的现成 setter。
+    case visual
 }
 
 // MARK: - 全量状态快照 DTO（native-arch.md §9/§13：以后新增桥字段只改 DTO + 前端类型）
@@ -493,6 +496,16 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
 
     /// 缓冲态。由 bindPlaybackEngine 订阅 engine.$playbackState 驱动
     ///（.waiting -> true，其余 -> false，变化才发）；也供 M1 直接调用。waiting 时锁屏 rate=0.
+    /// 歌词样式 / 背景类型切换（原生播放页的特效面板调用）。
+    /// 特效面自己的 store 会把选择持久化，页面重载后仍是用户选的样式。
+    func pushVisual(lyricMode: String?, backgroundMode: String?) {
+        var payload: [String: Any] = [:]
+        if let lyricMode { payload["lyricMode"] = lyricMode }
+        if let backgroundMode { payload["backgroundMode"] = backgroundMode }
+        guard !payload.isEmpty else { return }
+        dispatchToJS(.visual, payload: payload)
+    }
+
     func pushBuffering(_ buffering: Bool) {
         dispatchToJS(.buffering, payload: ["buffering": buffering])
     }

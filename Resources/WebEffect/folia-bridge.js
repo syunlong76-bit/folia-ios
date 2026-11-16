@@ -328,6 +328,11 @@
                 applyTheme(payload);
                 break;
             }
+            case 'visual': {
+                // 3.3 新增：原生特效面板的样式/背景切换，转发给特效面应用层。
+                window.dispatchEvent(new CustomEvent('folia:visual', { detail: payload }));
+                break;
+            }
             case 'snapshot': {
                 // 全量恢复：track / lrc / queue / theme / renderActive / time / rate 一次推齐。
                 if (payload.track) {

@@ -3,26 +3,24 @@ import SwiftUI
 import UIKit
 import WebKit
 
-/// 主界面（壳 3.0 双表面）：两个全屏 WKWebView + 右边缘垂直居中的半透明齿轮按钮。
+/// 主界面（3.3 全原生浏览）：原生 SwiftUI 浏览面 + 右边缘垂直居中的半透明齿轮。
 ///
-/// 双表面进程隔离：
-/// - 浏览表面（browseWebView）：加载 /browse/?surface=browse，无特效构建，
-///   主页/歌单/搜索/收藏/设置都在这里，冷启即加载、常驻最上层。
-/// - 播放表面（playerWebView）：加载 /?surface=player、完整特效构建，
-///   只在第一次需要播放时才创建；始终留在视图层级内（垫在浏览表面之下），
-///   切到浏览表面只是被盖住，音频不间断。
-/// 两边用独立的 WKWebViewConfiguration（独立网页进程），但显式共用同一个
-/// WKWebsiteDataStore.default()：同源（127.0.0.1 同端口）下登录态、
-/// localStorage、IndexedDB 两边一致。任一表面进程被系统杀掉只重载它自己。
+/// 3.3 收口后的结构：主页/歌单/搜索是 NativeBrowseView（SwiftUI），点歌直进
+/// QueueManager 原生队列；播放页 = 原生全屏容器 + 特效面 WebView（纯可视化，
+/// 由 WebEffectBridge 持有）；迷你条是全 App 唯一播放条。网页只剩特效画布
+/// 一处。playerWebView 与 LocalServer 均为旧双表面时代的遗留：LocalServer
+/// 不再启动，playerWebView 只在「队列为空的旧桥路径」才可能被创建，正常
+/// 流程走不到。
 ///
 /// 沿用 v2 壳行为：全屏沉浸（隐藏状态栏与主指示条、scrollView 不做安全区
 /// 内缩）；齿轮无触摸约 3.5 秒淡出且不可点，任意触摸先唤出并重新计时
 /// （手势识别器只旁听，不吞页面触摸）。
 final class MainViewController: UIViewController, WKNavigationDelegate, UIGestureRecognizerDelegate {
 
-    private var browseWebView: WKWebView!
+    /// 3.3 起浏览面是原生 SwiftUI（NativeBrowseView 的宿主视图）；
+    /// playerWebView 仅保留给「队列为空时旧路径回退」，正常流程不再创建。
+    private var browseContainerView: UIView!
     private var playerWebView: WKWebView?
-    private var statusLabel: UILabel!
     private var gearButton: UIButton!
     private var gearHideWorkItem: DispatchWorkItem?
     /// 本地服务端口（服务器就绪时记下）与两表面的入口地址：
@@ -53,26 +51,14 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         edgesForExtendedLayout = .all
         extendedLayoutIncludesOpaqueBars = true
 
-        // --- 浏览表面 WebView（播放表面在第一次需要时垫到它下面创建）---
-        let browse = makeWebView()
-        view.addSubview(browse)
-        pinToEdges(browse)
-        self.browseWebView = browse
-
-        // --- 启动状态提示（服务器就绪后随 WebView 加载自然被覆盖，出错时保留可见）---
-        let label = UILabel()
-        label.text = "Folia 正在启动本地服务…"
-        label.textColor = .lightGray
-        label.font = .systemFont(ofSize: 14)
-        label.textAlignment = .center
-        label.numberOfLines = 0
-        label.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: view.centerYAnchor)
-        ])
-        self.statusLabel = label
+        // --- 浏览表面：3.3 起为原生 SwiftUI（主页/歌单/搜索），冷启即挂载 ---
+        let browseHost = UIHostingController(rootView: NativeBrowseView())
+        browseHost.view.translatesAutoresizingMaskIntoConstraints = false
+        addChild(browseHost)
+        view.addSubview(browseHost.view)
+        browseHost.didMove(toParent: self)
+        pinToEdges(browseHost.view)
+        self.browseContainerView = browseHost.view
 
         // --- 设置齿轮：右边缘、垂直居中；更小、更透，与页面融合 ---
         let gear = UIButton(type: .system)
@@ -115,19 +101,8 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         // --- M2 原生播放层：迷你条悬浮挂载、全屏容器常驻挂载（RenderStateCenter 驱动） ---
         setupNativePlayerUI()
 
-        // --- 启动本地服务器，就绪后加载浏览表面 ---
-        LocalServer.shared.onReady = { [weak self] port in
-            guard let self = self else { return }
-            self.serverPort = port
-            let browse = URL(string: "http://127.0.0.1:\(port)/browse/?surface=browse")
-            let player = URL(string: "http://127.0.0.1:\(port)/?surface=player")
-            self.browseURL = browse
-            self.playerURL = player
-            if let browse = browse {
-                self.browseWebView.load(URLRequest(url: browse))
-            }
-        }
-        LocalServer.shared.start()
+        // 3.3：浏览/播放均已原生化，LocalServer 不再启动（网页浏览面与
+        // 网页播放面退役；特效面走本地文件加载，不经本地服务）。
     }
 
     // MARK: - WebView 工厂与表面切换
@@ -172,12 +147,12 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         return webView
     }
 
-    private func pinToEdges(_ webView: WKWebView) {
+    private func pinToEdges(_ pinnedView: UIView) {
         NSLayoutConstraint.activate([
-            webView.topAnchor.constraint(equalTo: view.topAnchor),
-            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+            pinnedView.topAnchor.constraint(equalTo: view.topAnchor),
+            pinnedView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            pinnedView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            pinnedView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
     }
 
@@ -186,7 +161,7 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
     private func ensurePlayerWebView() -> WKWebView {
         if let existing = playerWebView { return existing }
         let player = makeWebView()
-        view.insertSubview(player, belowSubview: browseWebView)
+        view.insertSubview(player, belowSubview: browseContainerView)
         pinToEdges(player)
         playerWebView = player
         if let url = playerURL {
@@ -206,9 +181,9 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
                 return
             }
             _ = ensurePlayerWebView()
-            browseWebView.isHidden = true
+            browseContainerView.isHidden = true
         } else {
-            browseWebView.isHidden = false
+            browseContainerView.isHidden = false
         }
     }
 
@@ -264,13 +239,12 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
             RenderStateCenter.shared.setFullPlayerOpen(false)
         }
 
-        // 迷你条可见性：3.2 起原生迷你条停用（保持隐藏）。浏览表面的网页
-        // 迷你条由原生状态回发驱动、功能完整（上一首/播放暂停/下一首），
-        // 两条同时出现就是 3.0 时代报过的双播放条重叠问题，只留一条。
+        // 迷你条可见性：3.3 起浏览面原生化，网页播放条已不存在，原生迷你条
+        // 是全 App 唯一播放条：有曲目且全屏播放器未展开时显示。
         Publishers.CombineLatest(PlaybackEngine.shared.$currentTrack, renderCenter.$isFullPlayerOpen)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _, _ in
-                self?.miniPlayerHostingController?.view.isHidden = true
+            .sink { [weak self] track, fullOpen in
+                self?.miniPlayerHostingController?.view.isHidden = track == nil || fullOpen
             }
             .store(in: &nativePlayerCancellables)
 
@@ -357,39 +331,20 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         decisionHandler(.allow)
     }
 
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if webView === browseWebView {
-            statusLabel.isHidden = true
-        }
-    }
-
-    /// 网页内容进程被系统杀掉（内存峰值下 jetsam）后 WKWebView 只剩黑屏、不会自己
-    /// 恢复：只重载出事的那个表面，另一个表面（尤其正在放歌的播放表面）不受影响。
-    /// 播放表面重载后会从桥的 lastPlay 快照恢复队列与进度到可续播状态。
+    /// 网页内容进程被系统杀掉后重载出事的表面（3.3 后只剩旧路径的播放表面
+    /// 还可能存在；特效面 WebView 由 WebEffectBridge 自己管自愈）。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         if webView === playerWebView {
             NSLog("[MainVC] player web content process terminated; reloading player surface")
             if let url = playerURL {
                 webView.load(URLRequest(url: url))
             }
-            return
-        }
-        NSLog("[MainVC] browse web content process terminated; reloading browse surface")
-        if browseWebView.isHidden == false {
-            statusLabel.isHidden = false
-            statusLabel.text = "页面进程被系统回收，正在重新加载…"
-        }
-        if let url = browseURL {
-            webView.load(URLRequest(url: url))
         }
     }
 
     func webView(_ webView: WKWebView,
                  didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
-        if webView === browseWebView && browseWebView.isHidden == false {
-            statusLabel.isHidden = false
-            statusLabel.text = "页面加载失败：\(error.localizedDescription)\n可尝试关闭应用后重新打开"
-        }
+        NSLog("[MainVC] navigation failed: \(error.localizedDescription)")
     }
 }

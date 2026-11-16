@@ -28,6 +28,23 @@ final class QueueManager {
     @Published private(set) var queue: [FoliaTrack] = []
     @Published private(set) var currentIndex: Int = 0
 
+    /// 播放模式（3.3 播放页收口新增）：列表循环 / 单曲循环 / 随机。
+    enum PlayMode: String {
+        case loopAll
+        case repeatOne
+        case shuffle
+    }
+
+    @Published var playMode: PlayMode = .loopAll
+
+    /// 最近一次「用户点播的歌无法播放」的错误文案（UI 展示用）。
+    /// 点播失败不再连环跳歌：停住、报错，等用户自己选下一首（3.2 教训）。
+    @Published private(set) var lastError: String?
+
+    /// 本次 load 是否来自用户点播（setQueue / insertAndPlay / playAtIndex）。
+    /// 自动推进（完播切歌）置 false：失败按老规矩跳歌 + 熔断。
+    private var loadIsManual = false
+
     var currentTrack: FoliaTrack? {
         guard !queue.isEmpty else { return nil }
         return queue[currentIndex % queue.count]
@@ -46,7 +63,14 @@ final class QueueManager {
 
     private init() {
         engine.onTrackEnded = { [weak self] in
-            self?.playNext(manual: false)
+            guard let self else { return }
+            if self.playMode == .repeatOne {
+                // 单曲循环：回开头续播同一首（地址不重换，条目仍在引擎里）。
+                self.engine.seek(to: 0)
+                self.engine.play()
+                return
+            }
+            self.playNext(manual: false)
         }
         engine.onTrackFailed = { [weak self] error in
             self?.handleFailure(error)
@@ -100,6 +124,19 @@ final class QueueManager {
             self.queue = tracks
             self.currentIndex = tracks.isEmpty ? 0 : (index % tracks.count)
             self.consecutiveFailures = 0
+            self.loadIsManual = true
+            self.updateCommandAvailability()
+            self.loadTrackAtCurrentIndex()
+        }
+    }
+
+    /// 跳到队列中指定位置播放（原生队列页点选）。
+    func playAtIndex(_ index: Int) {
+        runOnMain { [weak self] in
+            guard let self, self.queue.indices.contains(index) else { return }
+            self.currentIndex = index
+            self.consecutiveFailures = 0
+            self.loadIsManual = true
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
         }
@@ -108,7 +145,16 @@ final class QueueManager {
     func playNext(manual: Bool) {
         runOnMain { [weak self] in
             guard let self, !self.queue.isEmpty else { return }
-            self.currentIndex = (self.currentIndex + 1) % self.queue.count
+            if self.playMode == .shuffle, self.queue.count > 1 {
+                var next = self.currentIndex
+                while next == self.currentIndex {
+                    next = Int.random(in: 0..<self.queue.count)
+                }
+                self.currentIndex = next
+            } else {
+                self.currentIndex = (self.currentIndex + 1) % self.queue.count
+            }
+            self.loadIsManual = false
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
         }
@@ -123,6 +169,7 @@ final class QueueManager {
                 return
             }
             self.currentIndex = (self.currentIndex - 1 + self.queue.count) % self.queue.count
+            self.loadIsManual = false
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
         }
@@ -156,6 +203,7 @@ final class QueueManager {
                 self.currentIndex = at
             }
             self.consecutiveFailures = 0
+            self.loadIsManual = true
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
         }
@@ -176,6 +224,7 @@ final class QueueManager {
         guard let track = currentTrack else { return }
         loadGeneration += 1
         let generation = loadGeneration
+        let manual = loadIsManual
 
         Task {
             do {
@@ -185,6 +234,7 @@ final class QueueManager {
                     // 切歌代际已过期（用户又切了歌）→ 丢弃本次结果。
                     guard generation == self.loadGeneration else { return }
                     self.consecutiveFailures = 0
+                    self.lastError = nil
                     // 曲目元数据入库（仅元数据；remote_stream_url 不写入播放地址）。
                     DatabaseManager.shared.upsertTrack(track)
                     // 封面不阻塞起播：先以 nil 起播，封面到后再补。
@@ -195,7 +245,15 @@ final class QueueManager {
                 await MainActor.run {
                     guard generation == self.loadGeneration else { return }
                     NSLog("[QueueManager] load failed for \(track.id): \(error.localizedDescription)")
-                    self.handleFailure(error)
+                    if manual {
+                        // 用户点播的歌拿不到地址（VIP / 版权 / 下架）：停住报错，
+                        // 不连环跳歌（3.2 录屏里歌名闪切的教训）。
+                        self.consecutiveFailures = 0
+                        self.engine.stop()
+                        self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+                    } else {
+                        self.handleFailure(error)
+                    }
                 }
             }
         }

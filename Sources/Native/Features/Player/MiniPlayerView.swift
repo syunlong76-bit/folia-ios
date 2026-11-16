@@ -57,6 +57,17 @@ struct MiniPlayerView: View {
                     Spacer(minLength: 4)
 
                     Button {
+                        QueueManager.shared.playPrevious()
+                    } label: {
+                        Image(systemName: "backward.fill")
+                            .font(.body)
+                            .frame(width: 36, height: 36)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("上一首")
+
+                    Button {
                         engine.togglePlayPause()
                     } label: {
                         Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
