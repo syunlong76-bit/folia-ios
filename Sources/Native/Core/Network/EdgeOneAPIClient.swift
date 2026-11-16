@@ -516,7 +516,7 @@ private struct NeteaseSearchResponse: Decodable {
                 artist: artistNames.isEmpty ? "未知歌手" : artistNames,
                 album: albumInfo?.name ?? "",
                 duration: Double(durationMs) / 1000.0,
-                artworkURL: secureArt.flatMap(URL.init(string:)),
+                artworkURL: secureArt.flatMap { URL(string: $0) },
                 fee: fee
             )
         }
@@ -566,10 +566,10 @@ struct NeteasePlaylistDetail: Decodable {
     var prefetchedTracks: [FoliaTrack] { (tracks ?? []).map { $0.toFoliaTrack() } }
 
     var coverURL: URL? {
-        coverImgUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap(URL.init(string:))
+        coverImgUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap { URL(string: $0) }
     }
     var creatorAvatarURL: URL? {
-        creator?.avatarUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap(URL.init(string:))
+        creator?.avatarUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap { URL(string: $0) }
     }
 }
 
@@ -641,7 +641,7 @@ struct SongDetailDTO: Decodable {
             artist: artistNames.isEmpty ? "未知歌手" : artistNames,
             album: al?.name ?? "",
             duration: Double(dt ?? 0) / 1000.0,
-            artworkURL: secureArt.flatMap(URL.init(string:)),
+            artworkURL: secureArt.flatMap { URL(string: $0) },
             fee: fee
         )
     }
@@ -688,7 +688,7 @@ struct FlexibleSongDTO: Decodable {
             artist: artistNames.isEmpty ? "未知歌手" : artistNames,
             album: albumInfo?.name ?? "",
             duration: Double(duration ?? dt ?? 0) / 1000.0,
-            artworkURL: secureArt.flatMap(URL.init(string:)),
+            artworkURL: secureArt.flatMap { URL(string: $0) },
             fee: fee
         )
     }
@@ -790,7 +790,7 @@ struct NeteaseAlbumDetail {
     }
 
     var coverURL: URL? {
-        info.picUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap(URL.init(string:))
+        info.picUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap { URL(string: $0) }
     }
     var artistLabel: String {
         let names = (info.artists ?? []).map(\.name).filter { !$0.isEmpty }
