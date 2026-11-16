@@ -1,0 +1,1 @@
+var e=e=>Math.max(0,Math.min(1,e)),t=(t,n)=>n>=1?1:e((t-n)/(1-n)),n=(t,n)=>{let r=e(t),i=e(n),a=i<=0||i>=1?r:r<=i?.5*r/i:.5+.5*(r-i)/(1-i);return a*a*(3-2*a)};export{t as n,n as t};

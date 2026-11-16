@@ -296,6 +296,41 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         config.userContentController.addUserScript(WKUserScript(
                 source: debugFlagSource, injectionTime:.atDocumentStart, forMainFrameOnly: true))
 
+        // P9 兜底（3.6 全量前端，审计 fullapp-exit-audit）：网页绝不出声的
+        // 最后一道保险。deck 已在源码层饿死（audioSrc 恒 null、无 play 路径），
+        // 这里再封 HTMLAudioElement.play()，防漏网写源路径被调用出声；
+        // video 只强制静音不封 play——VideoLayer 的静音背景视频是原版视觉
+        // 功能。元数据探针（localMusicService）从不调 play()，不受影响。
+        let audioGuardSource = """
+        (function () {
+          HTMLAudioElement.prototype.play = function () {
+            try { console.warn('[FoliaShell] blocked HTMLAudioElement.play()'); } catch (e) {}
+            return Promise.reject(new Error('folia-native-audio-only'));
+          };
+          var originalVideoPlay = HTMLVideoElement.prototype.play;
+          HTMLVideoElement.prototype.play = function () {
+            this.muted = true;
+            return originalVideoPlay.call(this);
+          };
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(
+                source: audioGuardSource, injectionTime:.atDocumentStart, forMainFrameOnly: false))
+
+        // 长按抑制（沿用旧壳口径）：全局关 touch callout；文本选择只对
+        // 非输入元素关闭，input/textarea/contenteditable 的编辑能力保持原样。
+        let calloutSuppressSource = """
+        (function () {
+          var css = '* { -webkit-touch-callout: none !important; }'
+            + '*:not(input):not(textarea):not([contenteditable]) { -webkit-user-select: none !important; }';
+          var style = document.createElement('style');
+          style.textContent = css;
+          document.documentElement.appendChild(style);
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(
+                source: calloutSuppressSource, injectionTime:.atDocumentStart, forMainFrameOnly: false))
+
         // foliaAction 注册必须在创建 WKWebView 之前——
         // 先 config.userContentController.add，后 WKWebView(frame:configuration:)。
         // 事后改 config 不生效，网页回传会全部收不到。
@@ -307,12 +342,14 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         config.userContentController.add(weakHandler, name: "foliaNative")
 
         // 手势穿透框架（M2 末落地）：默认 passthroughRects 为空，行为与 WKWebView 一致。
+        // 3.6 全量前端：这台 WebView 就是整个 App 的界面，滚动恢复常态。
         let webView = PassthroughWebView(frame: .zero, configuration: config)
         webView.isOpaque = false
-        webView.backgroundColor = .clear
-        webView.scrollView.backgroundColor = .clear
-        webView.scrollView.isScrollEnabled = false
+        webView.backgroundColor = .black
+        webView.scrollView.backgroundColor = .black
+        webView.scrollView.isScrollEnabled = true
         webView.scrollView.bounces = false
+        webView.allowsLinkPreview = false
         // 透明白闪处置：didFinish 前 alpha=0，完成后 150ms 渐入。
         webView.alpha = 0
 
@@ -727,6 +764,20 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             if let value = body["value"] as? Double {
                 PlaybackEngine.shared.setVolume(Float(value))
             }
+        case "setQueuePlay":
+            // 3.6 全量前端起播漏斗：网页交来完整队列 + 起始下标，原生装载起播。
+            let tracks = Self.tracks(fromSongDTOs: body["songs"])
+            guard !tracks.isEmpty else { break }
+            let start = (body["startIndex"] as? Int) ?? 0
+            QueueManager.shared.setQueue(
+                tracks, startingAt: min(max(start, 0), tracks.count - 1))
+        case "setQueue":
+            // 3.6 全量前端队列变异后的全量重发：静默替换，不打断当前播放；
+            // 补发快照让网页镜像的下标与原生一次对齐。
+            let tracks = Self.tracks(fromSongDTOs: body["songs"])
+            let index = (body["currentIndex"] as? Int) ?? -1
+            QueueManager.shared.replaceQueueSilently(tracks, currentIndex: index)
+            pushSnapshot()
         case "dismissPlayer":
             RenderStateCenter.shared.setFullPlayerOpen(false)
         case "visualChanged":
@@ -735,6 +786,52 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             logStore.write(level: "info", module: "bridge", message: "visualChanged (record only)")
         default:
             break
+        }
+    }
+
+    /// 网页 SongDTO -> FoliaTrack（3.6）。id 规则与 EdgeOneAPIClient 的
+    /// toFoliaTrack 对齐：ncm_/qq_/kg_ 前缀 + 平台原始 id；取流 id 以
+    /// mediaId 为准（仅与 id 不同时才带），缺省用 id。
+    /// local/navidrome 归 .local：原生暂无本地文件通道，仍入队保下标与
+    /// 网页队列对齐，轮到它时走引擎既有失败跳歌路径。
+    private static func tracks(fromSongDTOs raw: Any?) -> [FoliaTrack] {
+        guard let list = raw as? [[String: Any]] else { return [] }
+        return list.compactMap { dto in
+            let rawId = (dto["mediaId"] as? String)
+                ?? (dto["id"] as? String)
+                ?? (dto["mediaId"] as? NSNumber)?.stringValue
+                ?? (dto["id"] as? NSNumber)?.stringValue
+            guard let rawId, let provider = dto["provider"] as? String else { return nil }
+            let sourceType: AudioSourceType
+            let prefixedId: String
+            switch provider {
+            case "netease":
+                sourceType = .netease
+                prefixedId = "ncm_\(rawId)"
+            case "qq":
+                sourceType = .qq
+                prefixedId = "qq_\(rawId)"
+            case "kugou":
+                sourceType = .kugou
+                prefixedId = "kg_\(rawId)"
+            default:
+                sourceType = .local
+                prefixedId = "local_\(rawId)"
+            }
+            var coverURL: URL?
+            if let coverStr = dto["coverUrl"] as? String {
+                coverURL = URL(string: coverStr.replacingOccurrences(
+                    of: "http://", with: "https://"))
+            }
+            let durationMs = (dto["durationMs"] as? NSNumber)?.doubleValue ?? 0
+            return FoliaTrack(
+                id: prefixedId,
+                sourceType: sourceType,
+                title: (dto["title"] as? String) ?? "",
+                artist: (dto["artist"] as? String) ?? "",
+                album: (dto["album"] as? String) ?? "",
+                duration: durationMs / 1000.0,
+                artworkURL: coverURL)
         }
     }
 }

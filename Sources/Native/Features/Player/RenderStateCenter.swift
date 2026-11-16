@@ -67,7 +67,10 @@ final class RenderStateCenter: ObservableObject {
     }
 
     private func recompute() {
-        let next = isForeground && isFullPlayerOpen && !isSleeping
+        // 3.6 全量前端：页面自己决定何时渲染歌词（播放视图是否打开在页内），
+        // 中心只管前台 + 未休眠，不再要求原生全屏容器展开。
+        // isFullPlayerOpen 保留为记录字段（桥 dismissPlayer 仍写），不参与计算。
+        let next = isForeground && !isSleeping
         if isActive != next {
             isActive = next
         }

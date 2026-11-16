@@ -1,0 +1,1 @@
+import{WebGLRenderer as e}from"./lib-DnPcaykq.js";export{e as WebGLRenderer};

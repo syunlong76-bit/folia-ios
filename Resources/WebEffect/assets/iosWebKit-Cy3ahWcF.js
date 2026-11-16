@@ -1,1 +1,0 @@
-var e=()=>typeof navigator>`u`?!1:/iPhone|iPad|iPod/i.test(navigator.userAgent)?!0:navigator.platform===`MacIntel`&&navigator.maxTouchPoints>1,t=e()?`vmin`:`vw`;export{t as n,e as t};

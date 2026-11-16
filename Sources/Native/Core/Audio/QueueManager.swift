@@ -149,6 +149,35 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    /// 全量队列静默替换（3.6 全量前端 setQueue 消息专用）：网页侧队列变异后
+    /// 全量重发，原生只换队列与下标，不打断正在播的歌。
+    /// - 当前曲在新队列的 currentIndex 处仍是同一首：只换队列/下标。
+    /// - 引擎尚无当前曲（冷启恢复等）：只换队列/下标，不起播。
+    /// - 当前曲已被移出/替换且引擎有歌在手：装载新当前曲（与网页 deck
+    ///   移除当前曲后自动落到下一首的行为对齐）。
+    /// - 空队列：只清队列/下标，引擎不动（网页清队列不等于停播）。
+    func replaceQueueSilently(_ tracks: [FoliaTrack], currentIndex index: Int) {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            if tracks.isEmpty {
+                self.queue = []
+                self.currentIndex = 0
+                self.updateCommandAvailability()
+                return
+            }
+            let clamped = min(max(index, 0), tracks.count - 1)
+            let currentId = self.engine.currentTrack?.id
+            self.queue = tracks
+            self.currentIndex = clamped
+            self.updateCommandAvailability()
+            if let currentId, tracks[clamped].id != currentId {
+                self.loadIsManual = true
+                self.manualSelectionPending = true
+                self.loadTrackAtCurrentIndex()
+            }
+        }
+    }
+
     /// 跳到队列中指定位置播放（原生队列页点选）。
     func playAtIndex(_ index: Int) {
         runOnMain { [weak self] in

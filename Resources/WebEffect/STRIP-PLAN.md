@@ -88,3 +88,9 @@ grep -o "html,body{background[^}]*}" index.html                              # �
 - `build-v7/player/` 与壳内 `Resources/Web` 不动（旧双表面壳继续用）。
 - 不动 Netlify / EdgeOne / 播放 API；歌词仍由原生侧 `EdgeOneAPIClient.fetchLyricText`
   现取后经桥推给页面（桥内已接好，见 `WebEffectBridge.fetchLyricsIfNeeded`）。
+
+## 3.6 追记（2026-11-16，包内产物已换为 ios-full 全量变体）
+
+- 本目录产物自 3.6 起为 folia-major 的 `FOLIA_SURFACE=ios-full` 变体（原版完整 App），不再是 player-visual。上文 §4 的 transport 校验口径对本变体同样作废：原版 UI 的 transport 字符串在位属预期；硬线改为：产物 `navigator.mediaSession` 0 命中、deck 写源点全桩（`setAudioSrc` 拦截 warn 在位）、`setQueuePlay` 在位、三基址烤入、无 sw.js。
+- 构建必带三个 env（仓库只有 .env.example 占位，漏带会交出无基址产物）：VITE_NETEASE_API_BASE / VITE_QQ_API_BASE / VITE_KUGOU_API_BASE = https://folia-music.netlify.app/api/{netease,qq,kugou}（键名以 folia-major .env.example 为准）。
+- 壳侧兜底（P9）：WebEffectBridge 在文档开始处注入脚本封 HTMLAudioElement.play()、video 强制静音；加载 URL 不得带 ?surface=browse（P17）。
