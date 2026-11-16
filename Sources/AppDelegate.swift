@@ -19,6 +19,10 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         } catch {
             NSLog("[AppDelegate] AVAudioSession setCategory failed: \(error.localizedDescription)")
         }
+        // 锁屏远程命令在启动时就注册（3.6 (3)）：NowPlayingController 的注册
+        // 原先靠单例首次被引擎/队列触碰时才发生，时机不确定；这里显式触碰，
+        // 保证命令从冷启起就在位（处理闭包里对引擎的调用都是惰性的，安全）。
+        _ = NowPlayingController.shared
         // 来电/Siri 等打断结束后系统不会自动把会话恢复为激活状态，网页音频可能就此
         // 没声：只在打断结束这一刻补一次激活（此时用户正在与本应用交互，合情合理）。
         interruptionObserver = NotificationCenter.default.addObserver(

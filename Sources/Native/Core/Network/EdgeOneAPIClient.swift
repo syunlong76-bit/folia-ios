@@ -419,8 +419,27 @@ final class EdgeOneAPIClient {
     ///   由 RangeStreamResourceLoader 做 200→206 切片代理。
     /// 302 跟随策略：m801.music.126.net 实测直连通，无需特殊 header/cookie，
     /// 默认跟随（不盲抄拒绝跟随；平台流地址若以 302 分发到 CDN，拒绝跟随会被误判）。
+    /// Range 支持探测结果按主机缓存（3.6 (3)）：同一 CDN 主机的探测结论
+    /// 全程复用，不再每首歌都先打一发探测请求（最长 4 秒）才开始备播——
+    /// 这是切歌慢的一个固定成本。探测失败（超时）按不支持缓存，避免反复
+    /// 在坏网络上重试探测；结论错了也只是多走一遍自定义加载器，不致命。
+    private static var rangeSupportCache: [String: Bool] = [:]
+    private static let rangeSupportCacheLock = NSLock()
+
     func resolvePlayableURL(rawStreamURL: URL) async -> URL {
-        let supportsRange = await probeRangeSupport(url: rawStreamURL)
+        let host = rawStreamURL.host ?? ""
+        let supportsRange: Bool
+        Self.rangeSupportCacheLock.lock()
+        let cached = Self.rangeSupportCache[host]
+        Self.rangeSupportCacheLock.unlock()
+        if let cached {
+            supportsRange = cached
+        } else {
+            supportsRange = await probeRangeSupport(url: rawStreamURL)
+            Self.rangeSupportCacheLock.lock()
+            Self.rangeSupportCache[host] = supportsRange
+            Self.rangeSupportCacheLock.unlock()
+        }
         if supportsRange { return rawStreamURL }
         var comps = URLComponents(url: rawStreamURL, resolvingAgainstBaseURL: false)
         comps?.scheme = RangeStreamResourceLoader.customScheme

@@ -60,6 +60,9 @@ final class QueueManager: ObservableObject {
 
     /// 整队一轮仍无一可播后停止并回调（由 M2/M3 的 UI 层接错误提示）。
     var onFatalError: ((Error) -> Void)?
+    /// 用户点播装载失败回调（3.6 (3)）：桥据此推 playbackError 事件给前端
+    /// 展示；旧原生界面走 lastError，全量前端壳没有原生报错面，必须走桥。
+    var onManualLoadFailed: ((FoliaTrack) -> Void)?
 
     private let engine = PlaybackEngine.shared
     private let apiClient = EdgeOneAPIClient.shared
@@ -329,6 +332,8 @@ final class QueueManager: ObservableObject {
                 await MainActor.run {
                     guard generation == self.loadGeneration else { return }
                     NSLog("[QueueManager] load failed for \(track.id): \(error.localizedDescription)")
+                    FoliaBridgeLogStore.shared.write(level: "warn", module: "queue",
+                        message: "load failed track=\(track.id) manual=\(manual) error=\(error.localizedDescription)")
                     if manual {
                         // 用户点播的歌拿不到地址（VIP / 版权 / 下架）：停住报错，
                         // 不连环跳歌（3.2 录屏里歌名闪切的教训）。
@@ -336,6 +341,7 @@ final class QueueManager: ObservableObject {
                         self.manualSelectionPending = false
                         self.engine.stop()
                         self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+                        self.onManualLoadFailed?(track)
                     } else {
                         self.handleFailure(error)
                     }
@@ -387,6 +393,7 @@ final class QueueManager: ObservableObject {
                 self.engine.stop()
                 if let track = self.currentTrack {
                     self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+                    self.onManualLoadFailed?(track)
                 }
                 return
             }

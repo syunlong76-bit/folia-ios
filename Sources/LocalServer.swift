@@ -1,4 +1,6 @@
+import CryptoKit
 import Foundation
+import ImageIO
 import Network
 
 /// 内置本地 HTTP 服务器（与安卓版同构）：
@@ -121,6 +123,11 @@ final class LocalServer {
 
         if rawPath.hasPrefix("/__bridge/") {
             handleBridge(request: request, handler: handler)
+            return
+        }
+
+        if rawPath == "/img" || rawPath.hasPrefix("/img/") {
+            CoverImageProxy.handle(request: request, handler: handler)
             return
         }
 
@@ -575,8 +582,16 @@ private enum Proxy {
                     outHeaders.append(("Set-Cookie", reserialize(cookie)))
                 }
             }
-            let body = data ?? Data()
+            var body = data ?? Data()
             let status = http.statusCode
+            // 3.6 (3)：JSON 响应里的封面 URL 改写到本地图片代理（按显示尺寸
+            // 降分辨率下发），治格子墙全尺寸封面解码把 WebView 进程撑爆被杀。
+            // 只改图片地址这一处数据，不动任何字段结构与界面。
+            if (200...299).contains(status), !body.isEmpty,
+               let contentType = http.value(forHTTPHeaderField: "Content-Type"),
+               contentType.contains("json") {
+                body = CoverURLRewriter.rewrite(body: body, port: LocalServer.shared.port)
+            }
             if status == 204 || status == 304 {
                 handler.respond(status: status,
                                 reason: LocalServer.reasonPhrase(for: status),
@@ -606,5 +621,287 @@ private enum Proxy {
         if cookie.isSecure { parts.append("Secure") }
         if cookie.isHTTPOnly { parts.append("HttpOnly") }
         return parts.joined(separator: "; ")
+    }
+}
+
+// MARK: - 封面图本地代理（3.6 (3) 热修）
+
+/// /img/<base64url(原图URL)>?w=<最大边>：把平台 CDN 的全尺寸封面在本地降
+/// 分辨率后再下发给 WebView，并做磁盘缓存与同图合并请求。
+/// 地址形态是刻意的：前端（原版 App）多处把 http: 封面无条件升级成 https:
+/// （provider 入库、toSafeRemoteUrl、Carousel3D 等），还有按 '126.net' 子串
+/// 匹配改尺寸的兜底——绝对 http 代理地址会被升成 https://127.0.0.1 打不通，
+/// 明文内嵌原地址又会触发子串误伤。相对路径 + base64url（无 '.'、无明文
+/// 主机名）两种都避开，且路径自带唯一身份，前端的封面同一性判断不串图。
+///
+/// 动机（2026-11-16 真机实证）：格子墙几十张 1500–3000px 封面同时解码，
+/// WKWebView 内容进程内存冲爆被系统杀（Jetsam），页面反复重启。改的是
+/// 图片源分辨率（数据层），不改 CSS、不封 DPR、不关动画，不属于降级特效。
+/// 任何一步失败都 302 回原图地址，最差与不改写时一致，绝不让封面消失。
+private enum CoverImageProxy {
+
+    /// 只代理音乐平台图片 CDN 的域名（后缀匹配），防被当开放代理用。
+    static let allowedHostSuffixes = ["126.net", "163.com", "gtimg.cn", "qq.com", "kugou.com", "sinaimg.cn"]
+
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 20
+        config.urlCache = nil
+        return URLSession(configuration: config)
+    }()
+
+    /// 同时进行的取图+缩放上限（本地 CPU 与内存保护）。
+    private static let gate = DispatchSemaphore(value: 3)
+    private static let workQueue = DispatchQueue(label: "com.miller.folia.imgproxy", qos: .utility, attributes: .concurrent)
+
+    /// 同图在途合并：key -> 等待者。
+    private static let flightLock = NSLock()
+    private static var inFlight: [String: [(Data?, String?) -> Void]] = [:]
+
+    private static var cacheDir: URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("folia-img", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func isAllowedHost(_ host: String) -> Bool {
+        allowedHostSuffixes.contains { host == $0 || host.hasSuffix("." + $0) }
+    }
+
+    static func handle(request: HTTPRequest, handler: ConnectionHandler) {
+        guard request.method == "GET" || request.method == "HEAD" else {
+            handler.respond(status: 405, reason: "Method Not Allowed",
+                            headers: [("Content-Type", "text/plain; charset=utf-8")],
+                            body: Data("Method Not Allowed".utf8))
+            return
+        }
+        let params = queryParams(request.target)
+        // 原图地址走路径段的 base64url（改写侧 CoverURLRewriter 同口径）：
+        // 相对路径 + 无明文主机名，避开前端多处 http→https 升级与 '126.net'
+        // 子串匹配对代理地址的误伤。旧 ?src= 形式仅作兜底兼容。
+        let src = srcFromPath(request.target) ?? params["src"]
+        guard let src, let srcURL = URL(string: src),
+              let host = srcURL.host?.lowercased(), isAllowedHost(host),
+              srcURL.scheme == "https" || srcURL.scheme == "http" else {
+            handler.respond(status: 400, reason: "Bad Request",
+                            headers: [("Content-Type", "text/plain; charset=utf-8")],
+                            body: Data("Bad src".utf8))
+            return
+        }
+        let maxPixel = min(max(Int(params["w"] ?? "") ?? 1024, 240), 1600)
+        let key = cacheKey(src: src, maxPixel: maxPixel)
+
+        // 磁盘命中直接回（HEAD 只回头）。
+        let fileURL = cacheDir.appendingPathComponent(key + ".jpg")
+        if let data = try? Data(contentsOf: fileURL), !data.isEmpty {
+            respondImage(data: data, request: request, handler: handler)
+            return
+        }
+
+        fetchCoalesced(key: key, srcURL: srcURL, maxPixel: maxPixel) { data, contentType in
+            if let data, let contentType {
+                if request.method != "HEAD" {
+                    try? data.write(to: fileURL, options: .atomic)
+                    trimCacheIfNeeded()
+                }
+                handler.respond(status: 200, reason: "OK",
+                                headers: [("Content-Type", contentType),
+                                          ("Cache-Control", "public, max-age=604800")],
+                                body: request.method == "HEAD" ? Data() : data,
+                                contentLengthOverride: request.method == "HEAD" ? data.count : nil)
+            } else {
+                // 兜底：跳回原图，WebView 直连加载，最差与改写前一致。
+                handler.respond(status: 302, reason: "Found",
+                                headers: [("Location", src)],
+                                body: Data())
+            }
+        }
+    }
+
+    private static func respondImage(data: Data, request: HTTPRequest, handler: ConnectionHandler) {
+        if request.method == "HEAD" {
+            handler.respond(status: 200, reason: "OK",
+                            headers: [("Content-Type", "image/jpeg"),
+                                      ("Cache-Control", "public, max-age=604800")],
+                            body: Data(), contentLengthOverride: data.count)
+        } else {
+            handler.respond(status: 200, reason: "OK",
+                            headers: [("Content-Type", "image/jpeg"),
+                                      ("Cache-Control", "public, max-age=604800")],
+                            body: data)
+        }
+    }
+
+    private static func fetchCoalesced(key: String, srcURL: URL, maxPixel: Int,
+                                       completion: @escaping (Data?, String?) -> Void) {
+        flightLock.lock()
+        if inFlight[key] != nil {
+            inFlight[key]?.append(completion)
+            flightLock.unlock()
+            return
+        }
+        inFlight[key] = [completion]
+        flightLock.unlock()
+
+        workQueue.async {
+            gate.wait()
+            let result = fetchAndScale(srcURL: srcURL, maxPixel: maxPixel)
+            gate.signal()
+            flightLock.lock()
+            let waiters = inFlight.removeValue(forKey: key) ?? []
+            flightLock.unlock()
+            for waiter in waiters { waiter(result.0, result.1) }
+        }
+    }
+
+    private static func fetchAndScale(srcURL: URL, maxPixel: Int) -> (Data?, String?) {
+        let semaphore = DispatchSemaphore(value: 0)
+        var fetched: Data?
+        let task = session.dataTask(with: srcURL) { data, response, _ in
+            if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
+                fetched = data
+            }
+            semaphore.signal()
+        }
+        task.resume()
+        _ = semaphore.wait(timeout: .now() + 25)
+        guard let data = fetched, !data.isEmpty, data.count <= 16 * 1024 * 1024 else { return (nil, nil) }
+        guard let scaled = downscale(data: data, maxPixel: maxPixel) else { return (nil, nil) }
+        return (scaled, "image/jpeg")
+    }
+
+    /// ImageIO 缩略图：只解码到目标尺寸，不整图进内存。
+    private static func downscale(data: Data, maxPixel: Int) -> Data? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
+        let out = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(
+            out, "public.jpeg" as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dest, image, [kCGImageDestinationLossyCompressionQuality: 0.82] as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return nil }
+        return out as Data
+    }
+
+    /// 从 /img/<base64url> 路径段解出原图地址（target 含 query，先剥掉）。
+    private static func srcFromPath(_ target: String) -> String? {
+        let path = target.split(separator: "?", maxSplits: 1).first.map(String.init) ?? target
+        guard path.hasPrefix("/img/") else { return nil }
+        let encoded = String(path.dropFirst("/img/".count))
+        guard !encoded.isEmpty else { return nil }
+        var b64 = encoded.replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while b64.count % 4 != 0 { b64 += "=" }
+        guard let data = Data(base64Encoded: b64) else { return nil }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func cacheKey(src: String, maxPixel: Int) -> String {
+        let digest = SHA256.hash(data: Data("\(src)#\(maxPixel)".utf8))
+        return digest.map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 缓存总量超过约 200MB 时按修改时间删旧到约 150MB（低频触发即可）。
+    private static var lastTrimAt = Date.distantPast
+    private static func trimCacheIfNeeded() {
+        // lastTrimAt 的检查+赋值在 flightLock 内做，避免多连接完成回调并发读写（审查低 10）。
+        flightLock.lock()
+        guard Date().timeIntervalSince(lastTrimAt) > 60 else { flightLock.unlock(); return }
+        lastTrimAt = Date()
+        flightLock.unlock()
+        workQueue.async {
+            let fm = FileManager.default
+            guard let files = try? fm.contentsOfDirectory(
+                at: cacheDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey]) else { return }
+            var total = 0
+            var entries: [(url: URL, size: Int, date: Date)] = []
+            for file in files {
+                let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+                let size = values?.fileSize ?? 0
+                total += size
+                entries.append((file, size, values?.contentModificationDate ?? .distantPast))
+            }
+            guard total > 200 * 1024 * 1024 else { return }
+            for entry in entries.sorted(by: { $0.date < $1.date }) {
+                if total <= 150 * 1024 * 1024 { break }
+                try? fm.removeItem(at: entry.url)
+                total -= entry.size
+            }
+        }
+    }
+
+    private static func queryParams(_ target: String) -> [String: String] {
+        guard let qIdx = target.firstIndex(of: "?") else { return [:] }
+        var result: [String: String] = [:]
+        for pair in target[target.index(after: qIdx)...].split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            if kv.count == 2 {
+                result[String(kv[0])] = String(kv[1]).removingPercentEncoding ?? String(kv[1])
+            }
+        }
+        return result
+    }
+}
+
+// MARK: - /api JSON 封面 URL 改写（3.6 (3) 热修）
+
+/// 把 JSON 响应里平台 CDN 的封面地址改写成本地 /img 代理地址。
+/// 尺寸档：blur 图 480、avatar 512、其余（专辑封面）1024。
+/// 只认图片专用域名或带图片扩展名的地址；改写失败/不匹配一律原样保留。
+private enum CoverURLRewriter {
+
+    // 专用图片域名只留图片 CDN 本体：music.126.net / kugou.com 的同后缀域名还承载
+    // 音频流（m*.music.126.net、webfs.kugou.com），放进来会把流地址误改成图片代理
+    // （审查高 1）。这两家的图片 URL 基本带图片扩展名，走扩展名规则即可。
+    private static let dedicatedImageHostSuffixes = ["gtimg.cn", "singerimg.kugou.com"]
+    private static let imageExtensions = [".jpg", ".jpeg", ".png", ".webp"]
+    /// 音频扩展名黑名单：任何情况下不改写（双保险）。
+    private static let audioExtensions = [".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wav", ".opus"]
+
+    static func rewrite(body: Data, port: UInt16) -> Data {
+        guard port != 0, var text = String(data: body, encoding: .utf8) else { return body }
+        // JSON 里 \/ 与 / 等价，先归一方便匹配（语义不变）。
+        if text.contains("\\/") { text = text.replacingOccurrences(of: "\\/", with: "/") }
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s"'<>\\]+"#, options: []) else { return body }
+        let matches = regex.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
+        guard !matches.isEmpty else { return body }
+        var changed = false
+        for match in matches.reversed() {
+            guard let range = Range(match.range, in: text) else { continue }
+            let original = String(text[range])
+            guard let replacement = proxiedURL(original, port: port) else { continue }
+            text.replaceSubrange(range, with: replacement)
+            changed = true
+        }
+        return changed ? Data(text.utf8) : body
+    }
+
+    private static func proxiedURL(_ original: String, port: UInt16) -> String? {
+        guard let url = URL(string: original), let host = url.host?.lowercased(),
+              CoverImageProxy.isAllowedHost(host) else { return nil }
+        let path = url.path.lowercased()
+        guard !audioExtensions.contains(where: { path.hasSuffix($0) }) else { return nil }
+        let dedicated = dedicatedImageHostSuffixes.contains { host == $0 || host.hasSuffix("." + $0) }
+        let hasImageExtension = imageExtensions.contains { path.hasSuffix($0) }
+        guard dedicated || hasImageExtension else { return nil }
+        let lower = original.lowercased()
+        let tier = lower.contains("blur") ? 480 : (lower.contains("avatar") ? 512 : 1024)
+        // 相对路径 + base64url：见 CoverImageProxy 头注（避前端 https 升级与子串误伤）。
+        _ = port // 地址已改相对路径，端口不再出现在产物里（签名保留兼容调用点）
+        return "/img/\(base64URL(original))?w=\(tier)"
+    }
+
+    /// base64url（无填充）：字母表不含 '.'，原地址的主机名不会以明文出现。
+    private static func base64URL(_ value: String) -> String {
+        Data(value.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 }

@@ -30,6 +30,13 @@ enum BridgeEvent: String {
     case renderState
     case buffering
     case spectrum
+    /// 点播装载失败（3.6 (3) 新增，只增不改）：{ trackId, title, message }。
+    /// 此前原生失败只写 lastError，而全量前端壳没有原生报错面，点了没反应
+    /// 也没提示；经此事件交前端用它自己的状态消息展示。
+    case playbackError
+    /// 歌词行边界（3.6 (3) 新增）：{ cueId, t }。前端注册 cue 表后，原生在
+    /// 音频时钟跨过行界时发，前端据此钉锚点，页面忙时歌词也不漂。
+    case cue
     /// 视觉切换（3.3 新增，只增不改）：{ lyricMode?, backgroundMode? }，
     /// 特效面据此调 visualizer 设置 store 的现成 setter。
     case visual
@@ -73,6 +80,16 @@ struct WebSnapshotDTO: Codable {
     /// 可选字段，旧版网页忽略不报错（2026-11-16 随原版面板恢复补上）。
     let loopMode: String?
     let volume: Double?
+    /// 队列窗口对账（3.6 (3) 新增）：queue 是当前 ±3 的窗口，queueTotal 是
+    /// 全队长度、queueOffset 是窗口首项在全队中的下标。网页镜像据此把下标
+    /// 对回自己的全量队列，不再把窗口当全队（长歌单切歌后歌词页不更新的根源）。
+    let queueTotal: Int
+    let queueOffset: Int
+    /// 锚点纪元（3.6 (3) 新增）：seek/切歌时 +1，网页据此丢弃迟到的旧锚点。
+    let seekSeq: Int
+    /// 快照采样时刻（epoch 毫秒，与网页 Date.now() 同钟）：网页据此扣除
+    /// evaluateJavaScript 的投递延迟，锚点不再系统性慢半拍。
+    let epochMs: Double
 }
 
 // MARK: - 滚动日志（native-arch.md §9 第六批：沙盒 2MB 双文件轮换 + Xcode Console）
@@ -164,6 +181,24 @@ final class FoliaBridgeLogStore {
                 }
             }
         }
+    }
+
+    /// 设置页桥日志查看器用：两份轮换文件按修改时间拼接，取最后 maxLines 行。
+    func recentLogText(maxLines: Int) -> String {
+        let urls = [fileURL(index: 0), fileURL(index: 1)]
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+            .sorted {
+                let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return a < b
+            }
+        var lines: [String] = []
+        for url in urls {
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                lines += text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            }
+        }
+        return lines.suffix(maxLines).joined(separator: "\n")
     }
 
     /// 脱敏：剥 URL 查询串（禁带签名参数的完整音频 URL 过桥/落盘），
@@ -270,6 +305,17 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 进程自愈防抖：60 秒窗口内的 terminate 时间戳。
     private var terminateDates: [Date] = []
     private var autoReloadSuspended = false
+    /// 后台时进程被杀：不在后台硬重载（系统还会再杀），回前台再恢复。
+    private var pendingReloadAfterTermination = false
+
+    /// 锚点纪元：seek / 切歌 / 快照时递增，网页丢弃纪元更旧的锚点（3.6 (3)）。
+    private var seekSeq = 0
+
+    /// 状态事件可靠投递（3.6 (3)）：state / queue / snapshot 带 seq，网页经
+    /// foliaNative 回 ack；500ms 未 ack 重发，最多 2 次。progress / seek /
+    /// tick 类高频事件不走这套（丢了有下一跳，只有状态事件要求必达）。
+    private var outboundSeq = 0
+    private var unackedEvent: (seq: Int, js: String, retries: Int)?
 
     private var lastKnownTime: TimeInterval = 0
     /// 歌词缓存（track id -> LRC 文本）；失败也记 ""，避免反复请求。
@@ -359,9 +405,47 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         weakHandler.delegate = self
         webView.navigationDelegate = self
 
+        // 点播失败要上浮到前端展示（3.6 (3)）：全量前端壳没有原生报错面，
+        // 不推事件就是点了没反应还没提示。
+        QueueManager.shared.onManualLoadFailed = { [weak self] track in
+            self?.pushPlaybackError(for: track)
+        }
+        // 歌词行边界：引擎跨过 cue 时发 cue 事件（前端注册 cue 表，见
+        // handleNativeMessage 的 registerCues）。
+        PlaybackEngine.shared.onLyricCue = { [weak self] cueId, time in
+            // 带 epochMs：桥 JS 钉锚点时扣掉投递延迟，与其余四路口径一致（审查低 5）。
+            self?.dispatchToJS(.cue, payload: ["cueId": cueId, "t": time,
+                                                "epochMs": Date().timeIntervalSince1970 * 1000])
+        }
+        // 后台被杀后的延迟恢复：回前台时补一次重载 + 快照。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil)
+
         bindPlaybackEngine()
         bindRenderStateCenter()
         loadLocalEffectBundle()
+    }
+
+    @objc private func appDidBecomeActive() {
+        guard pendingReloadAfterTermination, !autoReloadSuspended else { return }
+        pendingReloadAfterTermination = false
+        logStore.write(level: "warn", module: "bridge",
+            message: "WebEffect deferred reload on becoming active")
+        if webView.url != nil {
+            webView.reload()
+        } else {
+            loadLocalEffectBundle()
+        }
+    }
+
+    /// 点播装载失败事件：前端用自己的状态消息展示（文案与原生 lastError 同口径）。
+    private func pushPlaybackError(for track: FoliaTrack) {
+        dispatchToJS(.playbackError, payload: [
+            "trackId": track.id,
+            "title": track.title,
+            "message": "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制",
+        ])
     }
 
     // MARK: - 加载
@@ -401,6 +485,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         autoReloadSuspended = false
         terminateDates.removeAll()
         lastFatalError = nil
+        // 手动恢复后清掉后台终止的待恢复标志，否则下次回前台会多一次无谓重载（审查低 11）。
+        pendingReloadAfterTermination = false
         loadLocalEffectBundle()
     }
 
@@ -481,8 +567,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     }
 
     func pushSnapshot() {
+        // 快照即新锚点纪元：切歌、恢复、模式变更都经这里，迟到的旧 progress
+        // 锚点由网页按 seekSeq 丢弃。
+        seekSeq += 1
         let engine = PlaybackEngine.shared
         let track = engine.currentTrack
+        let window = queueWindow()
         let dto = WebSnapshotDTO(
             track: track.map {
                 WebSnapshotDTO.Track(
@@ -498,12 +588,16 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             lrc: track.flatMap { lyricsProvider?($0) ?? lyricsCache[$0.id] } ?? "",
             renderActive: renderActive,
             theme: themeProvider?() ?? WebSnapshotDTO.Theme(backgroundMode: "web", palette: [:]),
-            queue: queueSummary(),
+            queue: window.items,
             currentIndex: QueueManager.shared.currentIndex,
             initialTime: engine.currentTime,
             rate: currentRate,
             loopMode: Self.bridgeLoopMode(QueueManager.shared.playMode),
-            volume: Double(engine.volume))
+            volume: Double(engine.volume),
+            queueTotal: window.total,
+            queueOffset: window.offset,
+            seekSeq: seekSeq,
+            epochMs: Date().timeIntervalSince1970 * 1000)
         guard let data = try? JSONEncoder().encode(dto),
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             logStore.write(level: "error", module: "bridge", message: "snapshot encode failed")
@@ -541,11 +635,14 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         }
     }
     
-    /// 队列摘要：当前 ±3 首。
+    /// 队列摘要：当前 ±3 首的窗口 + 全队长度/窗口偏移（3.6 (3) 对账字段）。
     func pushQueueEvent() {
+        let window = queueWindow()
         dispatchToJS(.queue, payload: [
                 "currentIndex": QueueManager.shared.currentIndex,
-                "items": queueSummary().map { ["id": $0.id, "title": $0.title, "artist": $0.artist]},
+                "items": window.items.map { ["id": $0.id, "title": $0.title, "artist": $0.artist]},
+                "total": window.total,
+                "offset": window.offset,
         ])
     }
 
@@ -601,13 +698,18 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 先调这个，立即推乐观锚点；随后周期 observer 跳过推送，直到落点确认。
     func noteSeekStarted(target: TimeInterval) {
         pendingSeek = (target: target, startedAt: Date())
-        dispatchToJS(.seek, payload: ["t": target, "rate": currentRate])
+        seekSeq += 1
+        dispatchToJS(.seek, payload: [
+                "t": target, "rate": currentRate,
+                "epochMs": Date().timeIntervalSince1970 * 1000, "seekSeq": seekSeq,
+        ])
     }
 
     private func pushAnchor() {
         dispatchToJS(.seek, payload: [
                 "t": PlaybackEngine.shared.currentTime,
                 "rate": currentRate,
+                "epochMs": Date().timeIntervalSince1970 * 1000, "seekSeq": seekSeq,
         ])
     }
 
@@ -618,6 +720,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                 "rate": currentRate,
                 "t": engine.currentTime,
                 "trackId": engine.currentTrack?.id ?? "",
+                "epochMs": Date().timeIntervalSince1970 * 1000, "seekSeq": seekSeq,
         ])
     }
 
@@ -634,24 +737,35 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             }
             return
         }
-        dispatchToJS(.progress, payload: ["t": time, "rate": currentRate])
+        dispatchToJS(.progress, payload: [
+                "t": time, "rate": currentRate,
+                "epochMs": Date().timeIntervalSince1970 * 1000, "seekSeq": seekSeq,
+        ])
     }
 
     private func queueSummary() -> [WebSnapshotDTO.QueueItem] {
+        queueWindow().items
+    }
+
+    /// 队列窗口：当前 ±3 首 + 窗口首项在全队中的下标 + 全队长度。
+    private func queueWindow() -> (items: [WebSnapshotDTO.QueueItem], offset: Int, total: Int) {
         let queue = QueueManager.shared.queue
         let index = QueueManager.shared.currentIndex
         guard !queue.isEmpty, queue.indices.contains(index) else {
             // 队列未建时退到当前单曲，保证快照里至少有正在播的那首。
             if let track = PlaybackEngine.shared.currentTrack {
-                return [WebSnapshotDTO.QueueItem(id: track.id, title: track.title, artist: track.artist)]
+                // total 口径是「全队长度」：items 里有 1 首时 total 必须是 1，
+                // 报 0 会让镜像的 aligned 对账快路径永远进不去（审查中 3）。
+                return ([WebSnapshotDTO.QueueItem(id: track.id, title: track.title, artist: track.artist)],
+                        0, 1)
             }
-            return []
+            return ([], 0, queue.count)
         }
         let lower = max(index - 3, 0)
         let upper = min(index + 3, queue.count - 1)
-        return queue[lower...upper].map {
+        return (queue[lower...upper].map {
             WebSnapshotDTO.QueueItem(id: $0.id, title: $0.title, artist: $0.artist)
-        }
+        }, lower, queue.count)
     }
 
     /// renderState 应用点：幂等（同值不重发），页面未加载完时缓存待发，
@@ -667,15 +781,50 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         dispatchToJS(.renderState, payload: ["active": active])
     }
 
+    /// 需要可靠投递的状态事件（3.6 (3)）：带 seq、等 ack、超时重发。
+    private static let trackedEvents: Set<BridgeEvent> = [.state, .queue, .snapshot]
+
     private func dispatchToJS(_ event: BridgeEvent, payload: [String: Any]) {
-        guard isPageLoaded,
-        let data = try? JSONSerialization.data(withJSONObject: payload),
+        guard isPageLoaded else { return }
+        var payload = payload
+        let tracked = Self.trackedEvents.contains(event)
+        if tracked {
+            outboundSeq += 1
+            payload["seq"] = outboundSeq
+        }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
         let jsonStr = String(data: data, encoding:.utf8) else { return}
         // event 是枚举 rawValue，无注入风险；payload 走 JSONSerialization，防歌名引号破坏 JS。
         let js = "window.__FOLIA_BRIDGE__?.onNativeEvent('\(event.rawValue)', \(jsonStr));"
+        if tracked {
+            unackedEvent = (seq: outboundSeq, js: js, retries: 0)
+            scheduleAckCheck(seq: outboundSeq)
+        }
         DispatchQueue.main.async { [weak self] in
             self?.webView.evaluateJavaScript(js, completionHandler: nil)
         }
+    }
+
+    /// 500ms 未收到 ack 就重发同一条（最多 2 次）；新事件发出后旧的自动作废。
+    private func scheduleAckCheck(seq: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, let pending = self.unackedEvent, pending.seq == seq else { return }
+            guard pending.retries < 2 else {
+                self.logStore.write(level: "warn", module: "bridge",
+                    message: "state event seq=\(seq) unacked after retries; dropping")
+                self.unackedEvent = nil
+                return
+            }
+            self.unackedEvent = (seq: seq, js: pending.js, retries: pending.retries + 1)
+            self.webView.evaluateJavaScript(pending.js, completionHandler: nil)
+            self.scheduleAckCheck(seq: seq)
+        }
+    }
+
+    /// 网页经 foliaNative 回的 ack：清掉待确认事件。
+    private func handleAck(_ body: [String: Any]) {
+        guard let seq = (body["seq"] as? NSNumber)?.intValue else { return }
+        if unackedEvent?.seq == seq { unackedEvent = nil }
     }
 
     // MARK: - JS -> Native
@@ -732,6 +881,19 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     private func handleNativeMessage(_ body: [String: Any]) {
         guard let type = body["type"] as? String else { return }
         switch type {
+        case "ack":
+            handleAck(body)
+        case "registerCues":
+            // 歌词行边界注册（3.6 (3)）：前端把当前曲的行界时间交原生，
+            // 引擎跨界时回 cue 事件。切歌后旧表自动失效（trackId 对不上）。
+            let trackId = (body["trackId"] as? String) ?? ""
+            let cues = (body["cues"] as? [[String: Any]]) ?? []
+            let parsed: [(id: String, time: TimeInterval)] = cues.compactMap { cue in
+                guard let id = cue["id"] as? String,
+                      let t = (cue["t"] as? NSNumber)?.doubleValue else { return nil }
+                return (id: id, time: t)
+            }
+            PlaybackEngine.shared.setLyricCues(trackId: trackId, cues: parsed)
         case "transport":
             switch body["action"] as? String {
             case "play":
@@ -783,7 +945,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             }
         case "setQueuePlay":
             // 3.6 全量前端起播漏斗：网页交来完整队列 + 起始下标，原生装载起播。
+            // 入口留痕（3.6 (3) 取证）：主页点歌放不了时先分清「消息没到 /
+            // 到了但队列为空 / 到了但装载失败」三岔口，日志在壳设置页可查。
             let tracks = Self.tracks(fromSongDTOs: body["songs"])
+            logStore.write(level: "info", module: "bridge",
+                message: "setQueuePlay songs=\(tracks.count) start=\((body["startIndex"] as? NSNumber)?.intValue ?? -1) first=\(tracks.first?.id ?? "-")")
             guard !tracks.isEmpty else { break }
             let start = (body["startIndex"] as? Int) ?? 0
             QueueManager.shared.setQueue(
@@ -885,9 +1051,13 @@ extension WebEffectBridge: WKNavigationDelegate {
 
     /// 特效页进程自愈：terminate → reload → didFinish 后快照恢复。
     /// 防抖：60 秒内 ≥3 次停止自动 reload 并落盘报错，防包体损坏时死循环重载。
+    /// 3.6 (3) 两点修正：①立即重载会撞上系统刚杀进程的内存回收期，延迟
+    /// 0.6 秒再重载；②后台时被杀不在后台硬重载（多半立刻再被杀，还白耗
+    /// 电），标记待恢复，回前台（didBecomeActive）再重载，音频不受影响。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         isPageLoaded = false
         lastSentRenderActive = nil
+        unackedEvent = nil
         let now = Date()
         terminateDates.append(now)
         terminateDates.removeAll { now.timeIntervalSince($0) > 60}
@@ -898,12 +1068,21 @@ extension WebEffectBridge: WKNavigationDelegate {
             logStore.write(level: "error", module: "bridge", message: message)
             return
         }
+        if UIApplication.shared.applicationState != .active {
+            pendingReloadAfterTermination = true
+            logStore.write(level: "warn", module: "bridge",
+                message: "WebEffect content process terminated in background; deferring reload")
+            return
+        }
         logStore.write(level: "warn", module: "bridge",
-            message: "WebEffect content process terminated; reloading")
-        if webView.url != nil {
-            webView.reload()
-        } else {
-            loadLocalEffectBundle()
+            message: "WebEffect content process terminated; reloading in 0.6s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            guard let self, !self.autoReloadSuspended else { return }
+            if self.webView.url != nil {
+                self.webView.reload()
+            } else {
+                self.loadLocalEffectBundle()
+            }
         }
     }
 }

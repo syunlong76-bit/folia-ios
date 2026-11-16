@@ -14,6 +14,12 @@
  *     renderState { active }                         渲染启停
  *     buffering   { buffering }                      缓冲态
  *     spectrum    预留，POC 前原生不发，只定型
+ *     cue         { cueId, t }                       歌词行边界（3.6 (3)）
+ *     playbackError { trackId, title, message }      点播装载失败（3.6 (3)）
+ *   3.6 (3) 协议扩展（只增不改）：state / progress / seek / snapshot 的锚点
+ *   载荷带 epochMs（采样时刻）与 seekSeq（锚点纪元）；state / queue /
+ *   snapshot 带 seq 并要求网页经 sendNative 回 { type:'ack', seq }；
+ *   queue / snapshot 带 total / offset（窗口对账，见原生 queueWindow）。
  *   网页 -> 原生 sendAction(action, data)：togglePlay / next / prev / seek /
  *     like / minimize / log（只发 warn/error，fire-and-forget，不要求回执）。
  *   网页 -> 原生 sendNative(message)：播放页自带 UI（胶囊条 / 玻璃面板）的控制
@@ -128,9 +134,26 @@
         return r;
     }
 
-    function setAnchor(t, rate) {
+    var currentSeekSeq = -1; // 锚点纪元（3.6 (3)）：更旧的锚点直接丢弃
+
+    function setAnchor(t, rate, epochMs, seekSeq) {
+        // 纪元守卫：seek/切歌后迟到的旧 progress 锚点不得把时间拉回去。
+        if (typeof seekSeq === 'number') {
+            if (seekSeq < currentSeekSeq) return;
+            currentSeekSeq = seekSeq;
+        }
         anchorAudioTime = Math.max(0, Number(t) || 0);
-        anchorPerfTime = performance.now();
+        // 投递延迟扣除（3.6 (3)）：原生在 payload 里带采样时刻 epochMs（与本
+        // 机 Date.now() 同钟）。此前锚点一律按「收到时刻」起算，evaluateJava
+        // Script 排队多久歌词就慢多久（真机慢半拍的机制）。按采样时刻回推
+        // 锚点，投递延迟不再进时钟；延迟异常（时钟跳变）时夹回 [0, 1000]。
+        var transitMs = 0;
+        if (typeof epochMs === 'number' && isFinite(epochMs)) {
+            transitMs = Date.now() - epochMs;
+            if (!(transitMs >= 0)) transitMs = 0;
+            if (transitMs > 1000) transitMs = 1000;
+        }
+        anchorPerfTime = performance.now() - transitMs;
         playbackRate = clampRate(rate);
     }
 
@@ -308,11 +331,18 @@
 
     function onNativeEvent(type, payload) {
         payload = payload || {};
+        // 可靠投递回执（3.6 (3)）：状态类事件带 seq，收到即回 ack；原生
+        // 500ms 未收到会重发同一条（最多 2 次）。重发件按 seq 去重靠应用层
+        // 幂等（state/queue/snapshot 都是全量覆盖式应用，重复无害）。
+        if ((type === 'state' || type === 'queue' || type === 'snapshot')
+            && typeof payload.seq === 'number') {
+            sendNative({ type: 'ack', seq: payload.seq });
+        }
         switch (type) {
             case 'state': {
                 // 热路径：不打日志。
                 isPlaying = !!payload.playing;
-                setAnchor(payload.t, payload.rate);
+                setAnchor(payload.t, payload.rate, payload.epochMs, payload.seekSeq);
                 window.dispatchEvent(new CustomEvent('folia:state', {
                     detail: { playing: isPlaying, rate: playbackRate, time: anchorAudioTime, trackId: payload.trackId || '' }
                 }));
@@ -320,12 +350,12 @@
             }
             case 'progress': {
                 // 200ms 周期基准：只更新锚点，不发事件、不打日志。
-                setAnchor(payload.t, payload.rate);
+                setAnchor(payload.t, payload.rate, payload.epochMs, payload.seekSeq);
                 break;
             }
             case 'seek': {
                 // 锚点重置（乐观 seek / 中断恢复 / scenePhase 回前台补发）。
-                setAnchor(payload.t, payload.rate);
+                setAnchor(payload.t, payload.rate, payload.epochMs, payload.seekSeq);
                 window.dispatchEvent(new CustomEvent('folia:seek', {
                     detail: { time: anchorAudioTime, rate: playbackRate }
                 }));
@@ -335,8 +365,27 @@
                 currentQueue = Array.isArray(payload.items) ? payload.items : [];
                 currentQueueIndex = typeof payload.currentIndex === 'number' ? payload.currentIndex : -1;
                 window.dispatchEvent(new CustomEvent('folia:queue', {
-                    detail: { currentIndex: currentQueueIndex, items: currentQueue }
+                    detail: {
+                        currentIndex: currentQueueIndex, items: currentQueue,
+                        total: typeof payload.total === 'number' ? payload.total : undefined,
+                        offset: typeof payload.offset === 'number' ? payload.offset : undefined
+                    }
                 }));
+                break;
+            }
+            case 'cue': {
+                // 歌词行边界（3.6 (3)）：原生按音频时钟跨界发来，把锚点钉到
+                // 行界时刻，页面忙导致的渲染滞后不再累积成相位差。
+                // epochMs 扣投递延迟，与 state/progress/seek/snapshot 四路一致。
+                setAnchor(payload.t, playbackRate, payload.epochMs);
+                window.dispatchEvent(new CustomEvent('folia:cue', {
+                    detail: { cueId: payload.cueId || '', time: anchorAudioTime }
+                }));
+                break;
+            }
+            case 'playbackError': {
+                // 点播装载失败（3.6 (3)）：原样转发，应用层用状态消息展示。
+                window.dispatchEvent(new CustomEvent('folia:playbackError', { detail: payload }));
                 break;
             }
             case 'artwork': {
@@ -378,7 +427,11 @@
                     currentQueue = payload.queue;
                     currentQueueIndex = typeof payload.currentIndex === 'number' ? payload.currentIndex : -1;
                     window.dispatchEvent(new CustomEvent('folia:queue', {
-                        detail: { currentIndex: currentQueueIndex, items: currentQueue }
+                        detail: {
+                            currentIndex: currentQueueIndex, items: currentQueue,
+                            total: typeof payload.queueTotal === 'number' ? payload.queueTotal : undefined,
+                            offset: typeof payload.queueOffset === 'number' ? payload.queueOffset : undefined
+                        }
                     }));
                 }
                 if (payload.theme) applyTheme(payload.theme);
@@ -387,7 +440,7 @@
                         detail: { trackId: currentTrack ? currentTrack.id : '', ref: payload.track.artworkRef || '' }
                     }));
                 }
-                setAnchor(payload.initialTime, payload.rate);
+                setAnchor(payload.initialTime, payload.rate, payload.epochMs, payload.seekSeq);
                 if (typeof payload.renderActive === 'boolean') applyRenderActive(payload.renderActive);
                 // 原样再分发一份：应用层据此采纳可选字段（如 loopMode / volume /
                 // isMuted，原生开始下发后才有），桥本身不解释这些字段。

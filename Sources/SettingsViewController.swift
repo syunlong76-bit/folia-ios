@@ -241,6 +241,18 @@ final class SettingsViewController: UIViewController {
         ])
         cardStack.addArrangedSubview(checkWrap)
 
+        // 桥日志（3.6 (3) 取证入口）：点歌/切歌/锁屏出问题时在这里看留痕，
+        // 可整段复制发回诊断。样式与检查更新按钮同款。
+        let logButton = UIButton(type: .system)
+        logButton.setTitle("桥日志", for: .normal)
+        logButton.setTitleColor(FoliaUI.primary, for: .normal)
+        logButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        logButton.backgroundColor = FoliaUI.buttonFill
+        logButton.layer.cornerRadius = 12
+        logButton.addTarget(self, action: #selector(logTapped), for: .touchUpInside)
+        logButton.heightAnchor.constraint(equalToConstant: 46).isActive = true
+        cardStack.addArrangedSubview(logButton)
+
         // 应用新版本（仅 pending 存在时可见）：同款胶囊，危险色文字
         applyButton.setTitle("重启应用新版本", for: .normal)
         applyButton.setTitleColor(FoliaUI.danger, for: .normal)
@@ -342,6 +354,12 @@ final class SettingsViewController: UIViewController {
         }
     }
 
+    @objc private func logTapped() {
+        let viewer = BridgeLogViewController()
+        viewer.modalPresentationStyle = .overFullScreen
+        present(viewer, animated: true)
+    }
+
     @objc private func applyTapped() {
         // 不强杀进程：按 iOS 规范引导用户手动关闭重开，冷启动时 WebRootManager 自动切换版本
         let alert = UIAlertController(
@@ -350,5 +368,80 @@ final class SettingsViewController: UIViewController {
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "知道了", style: .default))
         present(alert, animated: true)
+    }
+}
+
+
+/// 桥日志查看器（3.6 (3)）：全屏深色页展示桥日志尾部，支持整段复制。
+/// 没有 Mac 连真机看日志的条件，诊断留痕只能靠这个页面人工带回。
+final class BridgeLogViewController: UIViewController {
+
+    private let textView = UITextView()
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        overrideUserInterfaceStyle = .dark
+        view.backgroundColor = UIColor(red: 0.086, green: 0.086, blue: 0.102, alpha: 1)
+
+        let header = UIStackView()
+        header.axis = .horizontal
+        header.alignment = .center
+        header.translatesAutoresizingMaskIntoConstraints = false
+        let title = UILabel()
+        title.text = "桥日志（最近 300 行）"
+        title.font = .systemFont(ofSize: 16, weight: .semibold)
+        title.textColor = .white
+        let copyButton = UIButton(type: .system)
+        copyButton.setTitle("复制", for: .normal)
+        copyButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        copyButton.addTarget(self, action: #selector(copyAll), for: .touchUpInside)
+        let doneButton = UIButton(type: .system)
+        doneButton.setTitle("完成", for: .normal)
+        doneButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        doneButton.addTarget(self, action: #selector(close), for: .touchUpInside)
+        header.addArrangedSubview(title)
+        header.addArrangedSubview(UIView())
+        header.addArrangedSubview(copyButton)
+        let spacer = UIView()
+        spacer.widthAnchor.constraint(equalToConstant: 18).isActive = true
+        header.addArrangedSubview(spacer)
+        header.addArrangedSubview(doneButton)
+        view.addSubview(header)
+
+        textView.translatesAutoresizingMaskIntoConstraints = false
+        textView.backgroundColor = .clear
+        textView.textColor = UIColor.white.withAlphaComponent(0.85)
+        textView.font = .monospacedSystemFont(ofSize: 10.5, weight: .regular)
+        textView.isEditable = false
+        view.addSubview(textView)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+            header.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            header.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            textView.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 10),
+            textView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            textView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
+        ])
+
+        let text = FoliaBridgeLogStore.shared.recentLogText(maxLines: 300)
+        textView.text = text.isEmpty ? "（暂无日志）" : text
+        // 打开即滚到底，最新留痕在最下面。
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let length = (self.textView.text as NSString).length
+            if length > 0 {
+                self.textView.scrollRangeToVisible(NSRange(location: length - 1, length: 1))
+            }
+        }
+    }
+
+    @objc private func copyAll() {
+        UIPasteboard.general.string = textView.text
+    }
+
+    @objc private func close() {
+        dismiss(animated: true)
     }
 }

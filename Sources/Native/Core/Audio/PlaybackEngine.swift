@@ -49,6 +49,15 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
     var onTrackEnded: (() -> Void)?
     var onTrackFailed: ((Error?) -> Void)?
 
+    /// 歌词行边界回调（3.6 (3)），由 WebEffectBridge 注入：音频时钟跨过
+    /// 前端注册的行界时回调 (cueId, cueTime)，桥转成 cue 事件钉前端锚点。
+    var onLyricCue: ((String, TimeInterval) -> Void)?
+
+    /// 前端注册的歌词行界表（按 trackId 绑定，切歌自动失效）。
+    private var lyricCues: (trackId: String, cues: [(id: String, time: TimeInterval)])?
+    private var cueBoundaryObserver: Any?
+    private var cueFiredThroughIndex = -1
+
     // MARK: - 内部状态
 
     private var statusObservations: [NSKeyValueObservation] = []
@@ -104,7 +113,9 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
 
     func pause() {
         activePlayer.pause()
-        releaseSessionIfNeeded()
+        // 3.6 (3)：暂停不再停用音频会话。有曲目在手时保持会话激活，App 才
+        // 稳定保持「正在播放应用」身份，锁屏/控制中心（含上一首/下一首）
+        // 不会因暂停被系统收走；会话只在 stop()（无曲目）时释放。
         // 状态不手工置位：等 KVO 收敛为 .paused。
     }
 
@@ -131,6 +142,8 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
 
     func stop() {
         activePlayer.pause()
+        disarmLyricCues()
+        lyricCues = nil
         flushListeningHistory(isCompleted: false)
         teardownCurrentItemObservers()
         activePlayer.replaceCurrentItem(with: nil)
@@ -164,10 +177,77 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         pendingSeek = false
 
         activePlayer.replaceCurrentItem(with: item)
+        // 歌词行界：注册表与新曲对不上就作废；对得上（同曲重载）重新布防。
+        if lyricCues?.trackId == track.id {
+            cueFiredThroughIndex = -1
+            armLyricCues()
+        } else {
+            disarmLyricCues()
+            lyricCues = nil
+        }
         play()
         // 切歌是离散事件：先推一次乐观锁屏状态（elapsed 0 / rate 1），
         // KVO 收敛后 NowPlayingController 会再同步一次。
         NowPlayingController.shared.syncNowPlaying(elapsed: 0, rate: 1.0)
+    }
+
+    // MARK: - 歌词行边界（3.6 (3)）
+
+    /// 前端注册当前曲的歌词行界（桥 registerCues 的落点）。只存表 + 布防，
+    /// 跨界判定由 AVPlayer boundary observer 按音频时钟触发，不占周期推送。
+    func setLyricCues(trackId: String, cues: [(id: String, time: TimeInterval)]) {
+        lyricCues = (trackId: trackId, cues: cues.sorted { $0.time < $1.time })
+        cueFiredThroughIndex = -1
+        if currentTrack?.id == trackId {
+            armLyricCues()
+        } else {
+            disarmLyricCues()
+        }
+    }
+
+    /// 给 active 轨挂 boundary observer（接下来 24 个未跨过的行界）。
+    private func armLyricCues() {
+        disarmLyricCues()
+        guard let lyricCues, lyricCues.trackId == currentTrack?.id else { return }
+        // 布防按播放器实时 playhead 算，不用 200ms 周期缓存的 currentTime：
+        // 缓存值可慢近 200ms，已跨过的行界进了 observer 也永不触发（审查中 2）。
+        let rawNow = activePlayer.currentTime().seconds
+        let now = rawNow.isFinite ? rawNow : currentTime
+        let upcoming = lyricCues.cues.enumerated()
+            .filter { $0.element.time > now + 0.05 }
+            .prefix(24)
+        guard !upcoming.isEmpty else { return }
+        let times = upcoming.map { NSValue(time: CMTime(seconds: $0.element.time, preferredTimescale: 600)) }
+        cueBoundaryObserver = activePlayer.addBoundaryTimeObserver(
+            forTimes: times, queue: .main
+        ) { [weak self] in
+            self?.handleCueBoundaryCrossed()
+        }
+    }
+
+    private func disarmLyricCues() {
+        if let observer = cueBoundaryObserver {
+            activePlayer.removeTimeObserver(observer)
+            cueBoundaryObserver = nil
+        }
+    }
+
+    /// boundary 回调不指明跨的是哪一界：按当前音频时间找最后一个已跨过的
+    /// 行界补发 cue，并为后续行界重新布防。
+    private func handleCueBoundaryCrossed() {
+        guard let lyricCues, lyricCues.trackId == currentTrack?.id else { return }
+        let now = activePlayer.currentTime().seconds
+        guard now.isFinite else { return }
+        var latest = cueFiredThroughIndex
+        for (index, cue) in lyricCues.cues.enumerated() {
+            if cue.time <= now + 0.05 { latest = index } else { break }
+        }
+        if latest > cueFiredThroughIndex {
+            cueFiredThroughIndex = latest
+            let cue = lyricCues.cues[latest]
+            onLyricCue?(cue.id, cue.time)
+        }
+        armLyricCues()
     }
 
     /// 封面后到补齐：QueueManager 异步下载到封面后调用；仅当仍是当前曲时生效，
@@ -199,6 +279,11 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
                 let real = self.activePlayer.currentTime().seconds
                 let resolved = real.isFinite ? real : target
                 self.currentTime = resolved
+                // seek 后行界重新对齐：已跨过的界标为已发，为后续界重新布防。
+                if let cues = self.lyricCues, cues.trackId == self.currentTrack?.id {
+                    self.cueFiredThroughIndex = cues.cues.lastIndex { $0.time <= resolved + 0.05 } ?? -1
+                    self.armLyricCues()
+                }
                 self.onTimeSync?(resolved, self.currentRate)
                 NowPlayingController.shared.syncNowPlaying(elapsed: resolved, rate: self.currentRate)
             }

@@ -80,6 +80,17 @@ final class NowPlayingController: NSObject {
 
         center.nowPlayingInfo = info
         center.playbackState = rate > 0 ? .playing : .paused
+        // 3.6 (3)：每次同步顺带重申切歌命令的启用状态。队列侧的可用性更新
+        // 只挂在队列变异点上，一旦错过，锁屏按钮就长期灰着没人纠正；这里
+        // 按队列现状（多于 1 首即可切，与 QueueManager 口径一致）兜底重申。
+        let canMove = QueueManager.shared.queue.count > 1
+        let center2 = MPRemoteCommandCenter.shared()
+        if center2.nextTrackCommand.isEnabled != canMove {
+            center2.nextTrackCommand.isEnabled = canMove
+        }
+        if center2.previousTrackCommand.isEnabled != canMove {
+            center2.previousTrackCommand.isEnabled = canMove
+        }
     }
 
     // MARK: - 封面后台等比缩放
@@ -139,6 +150,9 @@ final class NowPlayingController: NSObject {
         center.playCommand.addTarget(self, action: #selector(handlePlayCommand(_:)))
         center.pauseCommand.isEnabled = true
         center.pauseCommand.addTarget(self, action: #selector(handlePauseCommand(_:)))
+        // 耳机/锁屏的合并播放暂停键（3.6 (3) 补注册）。
+        center.togglePlayPauseCommand.isEnabled = true
+        center.togglePlayPauseCommand.addTarget(self, action: #selector(handleTogglePlayPauseCommand(_:)))
         center.nextTrackCommand.isEnabled = true
         center.nextTrackCommand.addTarget(self, action: #selector(handleNextCommand(_:)))
         center.previousTrackCommand.isEnabled = true
@@ -152,6 +166,7 @@ final class NowPlayingController: NSObject {
     private func removeAllCommandTargets(_ center: MPRemoteCommandCenter) {
         center.playCommand.removeTarget(self)
         center.pauseCommand.removeTarget(self)
+        center.togglePlayPauseCommand.removeTarget(self)
         center.nextTrackCommand.removeTarget(self)
         center.previousTrackCommand.removeTarget(self)
         center.changePlaybackPositionCommand.removeTarget(self)
@@ -160,21 +175,32 @@ final class NowPlayingController: NSObject {
     }
 
     @objc private func handlePlayCommand(_ event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        FoliaBridgeLogStore.shared.write(level: "info", module: "nowplaying", message: "remote play")
         PlaybackEngine.shared.play()
         return .success
     }
 
     @objc private func handlePauseCommand(_ event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        FoliaBridgeLogStore.shared.write(level: "info", module: "nowplaying", message: "remote pause")
         PlaybackEngine.shared.pause()
         return .success
     }
 
+    @objc private func handleTogglePlayPauseCommand(_ event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        FoliaBridgeLogStore.shared.write(level: "info", module: "nowplaying", message: "remote toggle")
+        PlaybackEngine.shared.togglePlayPause()
+        return .success
+    }
+
     @objc private func handleNextCommand(_ event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        // 留痕（3.6 (3)）：锁屏切歌是否送达一眼可查（壳设置页桥日志）。
+        FoliaBridgeLogStore.shared.write(level: "info", module: "nowplaying", message: "remote next")
         onNextTrack?()
         return .success
     }
 
     @objc private func handlePreviousCommand(_ event: MPRemoteCommandEvent) -> MPRemoteCommandHandlerStatus {
+        FoliaBridgeLogStore.shared.write(level: "info", module: "nowplaying", message: "remote previous")
         onPreviousTrack?()
         return .success
     }
