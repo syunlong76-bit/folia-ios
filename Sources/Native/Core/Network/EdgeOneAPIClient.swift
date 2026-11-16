@@ -565,11 +565,16 @@ struct NeteasePlaylistDetail: Decodable {
     /// 接口在 detail 里顺带回的首批完整曲目（通常前若干首），可省一次详情请求。
     var prefetchedTracks: [FoliaTrack] { (tracks ?? []).map { $0.toFoliaTrack() } }
 
+    // 注：不要把 .flatMap 直接链在 ?. 后面——可选链会把 flatMap 吃进链内
+    // 落到 String 的 Sequence.flatMap 上（元素是 Character），编译不过；
+    // 先 guard 取出原文再构造 URL。
     var coverURL: URL? {
-        coverImgUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap { URL(string: $0) }
+        guard let raw = coverImgUrl else { return nil }
+        return URL(string: raw.replacingOccurrences(of: "http://", with: "https://"))
     }
     var creatorAvatarURL: URL? {
-        creator?.avatarUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap { URL(string: $0) }
+        guard let raw = creator?.avatarUrl else { return nil }
+        return URL(string: raw.replacingOccurrences(of: "http://", with: "https://"))
     }
 }
 
@@ -790,7 +795,8 @@ struct NeteaseAlbumDetail {
     }
 
     var coverURL: URL? {
-        info.picUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap { URL(string: $0) }
+        guard let raw = info.picUrl else { return nil }
+        return URL(string: raw.replacingOccurrences(of: "http://", with: "https://"))
     }
     var artistLabel: String {
         let names = (info.artists ?? []).map(\.name).filter { !$0.isEmpty }
