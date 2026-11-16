@@ -45,6 +45,12 @@ final class QueueManager: ObservableObject {
     /// 自动推进（完播切歌）置 false：失败按老规矩跳歌 + 熔断。
     private var loadIsManual = false
 
+    /// 用户刚点选的曲目尚未成功播出过：此窗口内任何失败（取流失败或
+    /// 引擎播流失败）都算点播失败——停住报错，不许连环跳歌把队列跳空、
+    /// 最后留一个无标题无提示的黑屏播放页（3.3 真机录屏实证）。
+    /// 首次成功起播后清零，回到自动推进的跳歌语义。
+    private var manualSelectionPending = false
+
     var currentTrack: FoliaTrack? {
         guard !queue.isEmpty else { return nil }
         return queue[currentIndex % queue.count]
@@ -125,6 +131,7 @@ final class QueueManager: ObservableObject {
             self.currentIndex = tracks.isEmpty ? 0 : (index % tracks.count)
             self.consecutiveFailures = 0
             self.loadIsManual = true
+            self.manualSelectionPending = true
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
         }
@@ -137,6 +144,7 @@ final class QueueManager: ObservableObject {
             self.currentIndex = index
             self.consecutiveFailures = 0
             self.loadIsManual = true
+            self.manualSelectionPending = true
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
         }
@@ -204,6 +212,7 @@ final class QueueManager: ObservableObject {
             }
             self.consecutiveFailures = 0
             self.loadIsManual = true
+            self.manualSelectionPending = true
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
         }
@@ -235,6 +244,7 @@ final class QueueManager: ObservableObject {
                     guard generation == self.loadGeneration else { return }
                     self.consecutiveFailures = 0
                     self.lastError = nil
+                    self.manualSelectionPending = false
                     // 曲目元数据入库（仅元数据；remote_stream_url 不写入播放地址）。
                     DatabaseManager.shared.upsertTrack(track)
                     // 封面不阻塞起播：先以 nil 起播，封面到后再补。
@@ -249,6 +259,7 @@ final class QueueManager: ObservableObject {
                         // 用户点播的歌拿不到地址（VIP / 版权 / 下架）：停住报错，
                         // 不连环跳歌（3.2 录屏里歌名闪切的教训）。
                         self.consecutiveFailures = 0
+                        self.manualSelectionPending = false
                         self.engine.stop()
                         self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
                     } else {
@@ -294,6 +305,17 @@ final class QueueManager: ObservableObject {
         // Task catch 路径经 MainActor.run 进来，runOnMain 是兜底。
         runOnMain { [weak self] in
             guard let self, !self.queue.isEmpty else { return }
+            if self.manualSelectionPending {
+                // 用户点选的歌在播流阶段失败：同点播失败处理，停住报错，
+                // 不进跳歌循环（跳空队列会留下无标题无提示的黑屏播放页）。
+                self.manualSelectionPending = false
+                self.consecutiveFailures = 0
+                self.engine.stop()
+                if let track = self.currentTrack {
+                    self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+                }
+                return
+            }
             self.consecutiveFailures += 1
             if self.consecutiveFailures >= self.queue.count {
                 // 整队一轮仍无一可播 → 停并报错，不无限循环。

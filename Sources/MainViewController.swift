@@ -46,6 +46,9 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // Folia 默认主题就是深色（Midnight Default）：全局强制深色外观，
+        // 不随系统浅色模式翻白（3.3 真机录屏里白底系统皮的直接原因之一）。
+        overrideUserInterfaceStyle = .dark
         view.backgroundColor = .black
         // 内容延伸到状态栏/主指示条之下，不给系统栏位留黑带
         edgesForExtendedLayout = .all

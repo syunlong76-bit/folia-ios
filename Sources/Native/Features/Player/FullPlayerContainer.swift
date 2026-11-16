@@ -42,6 +42,37 @@ struct FullPlayerContainer: View {
                 WebEffectView(webView: bridge.webView)
                     .ignoresSafeArea()
 
+                // 引擎尚无曲目但队列里有选中曲（加载中 / 点播失败）：原生兜底
+                // 信息层，杜绝无歌名无提示的纯黑播放页（3.3 录屏实证）。
+                if engine.currentTrack == nil, let selected = queueManager.currentTrack {
+                    VStack(spacing: 14) {
+                        NativeCoverView(url: selected.artworkURL, targetPixels: 500)
+                            .frame(width: 180, height: 180)
+                            .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
+                        VStack(spacing: 4) {
+                            Text(selected.title)
+                                .font(.headline)
+                                .foregroundColor(.white)
+                                .lineLimit(1)
+                            Text(selected.artist)
+                                .font(.subheadline)
+                                .foregroundColor(.white.opacity(0.6))
+                                .lineLimit(1)
+                        }
+                        if let error = queueManager.lastError {
+                            Text(error)
+                                .font(.caption)
+                                .foregroundColor(.white.opacity(0.85))
+                                .multilineTextAlignment(.center)
+                                .padding(.horizontal, 32)
+                        } else {
+                            ProgressView()
+                                .tint(.white)
+                        }
+                    }
+                    .padding(.bottom, 120)
+                }
+
                 // 原生顶栏与底部精准进度控制层。
                 VStack {
                     // 顶部：收起按钮 + 曲名。
@@ -58,7 +89,7 @@ struct FullPlayerContainer: View {
 
                         Spacer()
 
-                        if let track = engine.currentTrack {
+                        if let track = engine.currentTrack ?? queueManager.currentTrack {
                             VStack(spacing: 2) {
                                 Text(track.title)
                                     .font(.subheadline.weight(.semibold))

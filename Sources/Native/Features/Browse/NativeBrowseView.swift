@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// 原生浏览面（3.3 第二/三步）：主页（排行榜 + 推荐歌单）/ 歌单页 / 搜索。
-/// 取代原 WKWebView 浏览面：网页只剩播放页里的特效画布，浏览、点歌、队列
-/// 全在原生。数据走 EdgeOneAPIClient（Netlify 同源代理），点歌直接进
-/// QueueManager 原生队列，不再经桥绕行。
+/// 原生浏览面（3.3 第二/三步；3.4 按计划复刻 Folia 原版视觉）。
+/// 视觉口径 = Folia 网页版默认主题（baseThemes 的 Midnight Default）：
+/// 背景 #09090b、主文字 #f4f4f5、次级 #71717a、封面主导排版、深色全局。
+/// 实现换原生，样子和用法保持 Folia 原样——这是计划，不是新设计。
+/// 数据走 EdgeOneAPIClient，点歌直进 QueueManager 原生队列。
 struct NativeBrowseView: View {
     @ObservedObject private var engine = PlaybackEngine.shared
 
@@ -11,6 +12,7 @@ struct NativeBrowseView: View {
         NavigationStack {
             HomeView()
         }
+        .preferredColorScheme(.dark)
         // 底部给原生迷你条让位（迷你条是壳层浮层，不在 SwiftUI 布局内）。
         .safeAreaInset(edge: .bottom) {
             if engine.currentTrack != nil {
@@ -24,65 +26,75 @@ struct NativeBrowseView: View {
     }
 }
 
+/// Folia 默认主题色板（Midnight Default，folia-major/src/services/baseThemes.ts）。
+enum FoliaTheme {
+    static let background = Color(red: 0x09 / 255, green: 0x09 / 255, blue: 0x0B / 255)
+    static let primary = Color(red: 0xF4 / 255, green: 0xF4 / 255, blue: 0xF5 / 255)
+    static let secondary = Color(red: 0x71 / 255, green: 0x71 / 255, blue: 0x7A / 255)
+    static let card = Color.white.opacity(0.06)
+    static let field = Color.white.opacity(0.09)
+}
+
 // MARK: - 主页
 
 private struct HomeView: View {
     @State private var toplist: [PlaylistSummary] = []
     @State private var personalized: [PlaylistSummary] = []
+    @State private var toplistFailed = false
+    @State private var personalizedFailed = false
     @State private var isLoading = true
-    @State private var loadFailed = false
 
     private let gridColumns = [
-        GridItem(.flexible(), spacing: 12),
-        GridItem(.flexible(), spacing: 12)
+        GridItem(.flexible(), spacing: 14),
+        GridItem(.flexible(), spacing: 14)
     ]
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 24) {
-                NavigationLink {
-                    SearchView()
-                } label: {
-                    HStack(spacing: 8) {
-                        Image(systemName: "magnifyingglass")
-                        Text("搜索歌曲")
-                        Spacer()
+            VStack(alignment: .leading, spacing: 26) {
+                // 顶部：品牌 + 搜索入口（照网页版的克制排版，不用系统大标题栏）。
+                VStack(alignment: .leading, spacing: 16) {
+                    Text("Folia")
+                        .font(.system(size: 30, weight: .bold))
+                        .foregroundColor(FoliaTheme.primary)
+
+                    NavigationLink {
+                        SearchView()
+                    } label: {
+                        HStack(spacing: 8) {
+                            Image(systemName: "magnifyingglass")
+                            Text("搜索歌曲")
+                            Spacer()
+                        }
+                        .font(.subheadline)
+                        .foregroundColor(FoliaTheme.secondary)
+                        .padding(.horizontal, 14)
+                        .padding(.vertical, 11)
+                        .background(FoliaTheme.field)
+                        .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
                     }
-                    .foregroundColor(.secondary)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 10)
-                    .background(Color.secondary.opacity(0.12))
-                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .buttonStyle(.plain)
                 }
-                .buttonStyle(.plain)
 
                 if isLoading {
                     HStack {
                         Spacer()
-                        ProgressView("加载中…")
+                        ProgressView()
+                            .tint(FoliaTheme.primary)
                         Spacer()
                     }
-                    .padding(.top, 40)
-                } else if loadFailed {
-                    VStack(spacing: 10) {
-                        Text("加载失败，检查网络后再试")
-                            .foregroundColor(.secondary)
-                        Button("重试") { Task { await load() } }
-                    }
-                    .frame(maxWidth: .infinity)
-                    .padding(.top, 40)
+                    .padding(.top, 48)
                 } else {
                     if !toplist.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("排行榜")
-                                .font(.title3.weight(.bold))
+                        VStack(alignment: .leading, spacing: 14) {
+                            sectionTitle("排行榜")
                             ScrollView(.horizontal, showsIndicators: false) {
-                                HStack(alignment: .top, spacing: 12) {
+                                HStack(alignment: .top, spacing: 14) {
                                     ForEach(toplist.prefix(12)) { item in
                                         NavigationLink {
                                             PlaylistView(summary: item)
                                         } label: {
-                                            playlistCard(item, width: 128)
+                                            playlistCard(item, width: 138)
                                         }
                                         .buttonStyle(.plain)
                                     }
@@ -92,10 +104,9 @@ private struct HomeView: View {
                     }
 
                     if !personalized.isEmpty {
-                        VStack(alignment: .leading, spacing: 12) {
-                            Text("推荐歌单")
-                                .font(.title3.weight(.bold))
-                            LazyVGrid(columns: gridColumns, spacing: 16) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            sectionTitle("推荐歌单")
+                            LazyVGrid(columns: gridColumns, spacing: 18) {
                                 ForEach(personalized) { item in
                                     NavigationLink {
                                         PlaylistView(summary: item)
@@ -107,32 +118,51 @@ private struct HomeView: View {
                             }
                         }
                     }
+
+                    if toplist.isEmpty && personalized.isEmpty {
+                        VStack(spacing: 10) {
+                            Text("加载失败，检查网络后再试")
+                                .foregroundColor(FoliaTheme.secondary)
+                            Button("重试") { Task { await load() } }
+                                .foregroundColor(FoliaTheme.primary)
+                        }
+                        .frame(maxWidth: .infinity)
+                        .padding(.top, 48)
+                    }
                 }
             }
-            .padding(16)
+            .padding(.horizontal, 18)
+            .padding(.top, 14)
+            .padding(.bottom, 24)
         }
-        .navigationTitle("Folia")
-        .navigationBarTitleDisplayMode(.large)
+        .background(FoliaTheme.background.ignoresSafeArea())
+        .toolbar(.hidden, for: .navigationBar)
         .task {
             if isLoading { await load() }
         }
     }
 
+    private func sectionTitle(_ text: String) -> some View {
+        Text(text)
+            .font(.system(size: 19, weight: .bold))
+            .foregroundColor(FoliaTheme.primary)
+    }
+
     private func playlistCard(_ item: PlaylistSummary, width: CGFloat?) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
-            NativeCoverView(url: item.coverURL, targetPixels: 300)
+        VStack(alignment: .leading, spacing: 7) {
+            NativeCoverView(url: item.coverURL, targetPixels: 400)
                 .aspectRatio(1, contentMode: .fill)
                 .frame(width: width)
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
             Text(item.name)
                 .font(.caption)
-                .foregroundColor(.primary)
+                .foregroundColor(FoliaTheme.primary)
                 .lineLimit(2)
                 .multilineTextAlignment(.leading)
             if item.trackCount > 0 {
                 Text("\(item.trackCount) 首")
                     .font(.caption2)
-                    .foregroundColor(.secondary)
+                    .foregroundColor(FoliaTheme.secondary)
             }
         }
         .frame(width: width)
@@ -140,16 +170,13 @@ private struct HomeView: View {
 
     private func load() async {
         isLoading = true
-        loadFailed = false
-        async let tops = EdgeOneAPIClient.shared.fetchToplist()
-        async let recs = EdgeOneAPIClient.shared.fetchPersonalizedPlaylists(limit: 30)
-        do {
-            toplist = try await tops
-            personalized = try await recs
-            if toplist.isEmpty && personalized.isEmpty { loadFailed = true }
-        } catch {
-            loadFailed = true
-        }
+        // 两路独立：一路失败不拖垮另一路。
+        async let tops = try? EdgeOneAPIClient.shared.fetchToplist()
+        async let recs = try? EdgeOneAPIClient.shared.fetchPersonalizedPlaylists(limit: 30)
+        toplist = await tops ?? []
+        personalized = await recs ?? []
+        toplistFailed = toplist.isEmpty
+        personalizedFailed = personalized.isEmpty
         isLoading = false
     }
 }
@@ -159,102 +186,138 @@ private struct HomeView: View {
 private struct PlaylistView: View {
     let summary: PlaylistSummary
 
+    @ObservedObject private var queueManager = QueueManager.shared
     @State private var tracks: [FoliaTrack] = []
     @State private var isLoading = true
     @State private var loadFailed = false
 
     var body: some View {
-        Group {
-            if isLoading {
-                ProgressView("加载歌单…")
-            } else if loadFailed {
+        ZStack {
+            FoliaTheme.background.ignoresSafeArea()
+
+            if isLoading && tracks.isEmpty {
+                ProgressView()
+                    .tint(FoliaTheme.primary)
+            } else if loadFailed && tracks.isEmpty {
                 VStack(spacing: 10) {
                     Text("歌单加载失败")
-                        .foregroundColor(.secondary)
+                        .foregroundColor(FoliaTheme.secondary)
                     Button("重试") { Task { await load() } }
+                        .foregroundColor(FoliaTheme.primary)
                 }
             } else {
                 List {
                     Section {
                         ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
-                            Button {
-                                QueueManager.shared.setQueue(tracks, startingAt: index)
-                                NativeBrowseView.openFullPlayer()
-                            } label: {
-                                HStack(spacing: 12) {
-                                    Text("\(index + 1)")
-                                        .font(.footnote.monospacedDigit())
-                                        .foregroundColor(.secondary)
-                                        .frame(width: 30, alignment: .trailing)
-                                    VStack(alignment: .leading, spacing: 2) {
-                                        Text(track.title)
-                                            .font(.subheadline)
-                                            .foregroundColor(.primary)
-                                            .lineLimit(1)
-                                        Text(track.artist)
-                                            .font(.caption)
-                                            .foregroundColor(.secondary)
-                                            .lineLimit(1)
-                                    }
-                                    Spacer()
-                                    Text(formatDuration(track.duration))
-                                        .font(.caption.monospacedDigit())
-                                        .foregroundColor(.secondary)
-                                }
-                                .contentShape(Rectangle())
-                            }
-                            .buttonStyle(.plain)
+                            trackRow(index: index, track: track)
                         }
                     } header: {
-                        VStack(alignment: .leading, spacing: 10) {
-                            HStack(alignment: .top, spacing: 14) {
-                                NativeCoverView(url: summary.coverURL, targetPixels: 500)
-                                    .frame(width: 96, height: 96)
-                                    .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                                VStack(alignment: .leading, spacing: 6) {
-                                    Text(summary.name)
-                                        .font(.headline)
-                                        .foregroundColor(.primary)
-                                        .lineLimit(3)
-                                    Text("\(tracks.count) 首")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                }
-                                Spacer(minLength: 0)
-                            }
-                            Button {
-                                QueueManager.shared.setQueue(tracks, startingAt: 0)
-                                NativeBrowseView.openFullPlayer()
-                            } label: {
-                                HStack(spacing: 6) {
-                                    Image(systemName: "play.fill")
-                                    Text("播放全部")
-                                }
-                                .font(.subheadline.weight(.semibold))
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 16)
-                                .padding(.vertical, 8)
-                                .background(Color.accentColor)
-                                .clipShape(Capsule())
-                            }
-                            .buttonStyle(.plain)
+                        playlistHeader
+                    }
+                    if isLoading {
+                        HStack {
+                            Spacer()
+                            ProgressView()
+                                .tint(FoliaTheme.primary)
+                            Spacer()
                         }
-                        .textCase(nil)
-                        .padding(.bottom, 6)
+                        .listRowBackground(Color.clear)
+                        .listRowSeparator(.hidden)
                     }
                 }
                 .listStyle(.plain)
+                .scrollContentBackground(.hidden)
             }
         }
         .navigationTitle(summary.name)
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(FoliaTheme.background, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
         .task {
             if isLoading { await load() }
         }
     }
 
+    private var playlistHeader: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(alignment: .top, spacing: 16) {
+                NativeCoverView(url: summary.coverURL, targetPixels: 500)
+                    .frame(width: 108, height: 108)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+                VStack(alignment: .leading, spacing: 7) {
+                    Text(summary.name)
+                        .font(.system(size: 17, weight: .semibold))
+                        .foregroundColor(FoliaTheme.primary)
+                        .lineLimit(3)
+                    Text("\(tracks.count) 首")
+                        .font(.caption)
+                        .foregroundColor(FoliaTheme.secondary)
+                }
+                Spacer(minLength: 0)
+            }
+            Button {
+                QueueManager.shared.setQueue(tracks, startingAt: 0)
+                NativeBrowseView.openFullPlayer()
+            } label: {
+                HStack(spacing: 6) {
+                    Image(systemName: "play.fill")
+                    Text("播放全部")
+                }
+                .font(.subheadline.weight(.semibold))
+                .foregroundColor(.black)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 9)
+                .background(FoliaTheme.primary)
+                .clipShape(Capsule())
+            }
+            .buttonStyle(.plain)
+        }
+        .textCase(nil)
+        .padding(.vertical, 8)
+        .listRowBackground(Color.clear)
+    }
+
+    private func trackRow(index: Int, track: FoliaTrack) -> some View {
+        let isCurrent = queueManager.currentTrack?.id == track.id
+        return Button {
+            QueueManager.shared.setQueue(tracks, startingAt: index)
+            NativeBrowseView.openFullPlayer()
+        } label: {
+            HStack(spacing: 12) {
+                NativeCoverView(url: track.artworkURL, targetPixels: 150)
+                    .frame(width: 46, height: 46)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(track.title)
+                        .font(.subheadline.weight(isCurrent ? .bold : .regular))
+                        .foregroundColor(isCurrent ? FoliaTheme.primary : FoliaTheme.primary.opacity(0.92))
+                        .lineLimit(1)
+                    Text(track.artist)
+                        .font(.caption)
+                        .foregroundColor(FoliaTheme.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if isCurrent {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .foregroundColor(FoliaTheme.primary)
+                        .font(.caption)
+                } else {
+                    Text(formatDuration(track.duration))
+                        .font(.caption.monospacedDigit())
+                        .foregroundColor(FoliaTheme.secondary)
+                }
+            }
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .listRowBackground(Color.clear)
+        .listRowSeparatorTint(Color.white.opacity(0.08))
+    }
+
+    /// 渐进加载：detail 自带的曲目先渲染，其余 id 走并行分片补齐，
+    /// 不再全部取齐才出列表（3.3 白屏转圈的教训）。
     private func load() async {
-        isLoading = true
         loadFailed = false
         do {
             let detail = try await EdgeOneAPIClient.shared.fetchPlaylistDetail(
@@ -262,24 +325,30 @@ private struct PlaylistView: View {
             let ids = detail.trackIdList
             var byId: [Int: FoliaTrack] = [:]
             for track in detail.prefetchedTracks {
-                if let numeric = Int(track.id.replacingOccurrences(of: "ncm_", with: "")) {
-                    byId[numeric] = track
-                }
+                byId[numericId(of: track)] = track
+            }
+            let firstBatch = ids.compactMap { byId[$0] }
+            if !firstBatch.isEmpty {
+                tracks = firstBatch
+                isLoading = false
             }
             let missing = ids.filter { byId[$0] == nil }
             if !missing.isEmpty {
-                for track in try await EdgeOneAPIClient.shared.fetchSongDetails(ids: missing) {
-                    if let numeric = Int(track.id.replacingOccurrences(of: "ncm_", with: "")) {
-                        byId[numeric] = track
-                    }
+                let fetched = try await EdgeOneAPIClient.shared.fetchSongDetails(ids: missing)
+                for track in fetched {
+                    byId[numericId(of: track)] = track
                 }
+                tracks = ids.compactMap { byId[$0] }
             }
-            tracks = ids.compactMap { byId[$0] }
             if tracks.isEmpty { loadFailed = true }
         } catch {
-            loadFailed = true
+            if tracks.isEmpty { loadFailed = true }
         }
         isLoading = false
+    }
+
+    private func numericId(of track: FoliaTrack) -> Int {
+        Int(track.id.replacingOccurrences(of: "ncm_", with: "")) ?? -1
     }
 }
 
@@ -293,43 +362,48 @@ private struct SearchView: View {
     @State private var searchFailed = false
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 8) {
-                HStack(spacing: 6) {
-                    Image(systemName: "magnifyingglass")
-                        .foregroundColor(.secondary)
-                    TextField("搜索歌曲 / 歌手", text: $keyword)
-                        .submitLabel(.search)
-                        .onSubmit { Task { await search() } }
+        ZStack {
+            FoliaTheme.background.ignoresSafeArea()
+
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    HStack(spacing: 7) {
+                        Image(systemName: "magnifyingglass")
+                            .foregroundColor(FoliaTheme.secondary)
+                        TextField("搜索歌曲 / 歌手", text: $keyword)
+                            .foregroundColor(FoliaTheme.primary)
+                            .submitLabel(.search)
+                            .onSubmit { Task { await search() } }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 10)
+                    .background(FoliaTheme.field)
+                    .clipShape(RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+                    Button("搜索") { Task { await search() } }
+                        .foregroundColor(FoliaTheme.primary)
+                        .disabled(keyword.trimmingCharacters(in: .whitespaces).isEmpty)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
-                .background(Color.secondary.opacity(0.12))
-                .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
+                .padding(14)
 
-                Button("搜索") { Task { await search() } }
-                    .disabled(keyword.trimmingCharacters(in: .whitespaces).isEmpty)
-            }
-            .padding(12)
-
-            if isSearching {
-                Spacer()
-                ProgressView("搜索中…")
-                Spacer()
-            } else if searchFailed {
-                Spacer()
-                Text("搜索失败，检查网络后再试")
-                    .foregroundColor(.secondary)
-                Spacer()
-            } else if hasSearched && results.isEmpty {
-                Spacer()
-                Text("没有找到结果")
-                    .foregroundColor(.secondary)
-                Spacer()
-            } else {
-                List {
-                    if !results.isEmpty {
-                        Section {
+                if isSearching {
+                    Spacer()
+                    ProgressView()
+                        .tint(FoliaTheme.primary)
+                    Spacer()
+                } else if searchFailed {
+                    Spacer()
+                    Text("搜索失败，检查网络后再试")
+                        .foregroundColor(FoliaTheme.secondary)
+                    Spacer()
+                } else if hasSearched && results.isEmpty {
+                    Spacer()
+                    Text("没有找到结果")
+                        .foregroundColor(FoliaTheme.secondary)
+                    Spacer()
+                } else {
+                    List {
+                        if !results.isEmpty {
                             Button {
                                 QueueManager.shared.setQueue(results, startingAt: 0)
                                 NativeBrowseView.openFullPlayer()
@@ -339,36 +413,47 @@ private struct SearchView: View {
                                     Text("播放全部结果")
                                 }
                                 .font(.subheadline.weight(.semibold))
+                                .foregroundColor(FoliaTheme.primary)
                             }
+                            .buttonStyle(.plain)
+                            .listRowBackground(Color.clear)
                         }
-                    }
-                    Section {
                         ForEach(results) { track in
                             Button {
                                 QueueManager.shared.insertAndPlay(track)
                                 NativeBrowseView.openFullPlayer()
                             } label: {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(track.title)
-                                        .font(.subheadline)
-                                        .foregroundColor(.primary)
-                                        .lineLimit(1)
-                                    Text("\(track.artist) · \(track.album)")
-                                        .font(.caption)
-                                        .foregroundColor(.secondary)
-                                        .lineLimit(1)
+                                HStack(spacing: 12) {
+                                    NativeCoverView(url: track.artworkURL, targetPixels: 150)
+                                        .frame(width: 46, height: 46)
+                                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(track.title)
+                                            .font(.subheadline)
+                                            .foregroundColor(FoliaTheme.primary)
+                                            .lineLimit(1)
+                                        Text("\(track.artist) · \(track.album)")
+                                            .font(.caption)
+                                            .foregroundColor(FoliaTheme.secondary)
+                                            .lineLimit(1)
+                                    }
                                 }
                                 .contentShape(Rectangle())
                             }
                             .buttonStyle(.plain)
+                            .listRowBackground(Color.clear)
+                            .listRowSeparatorTint(Color.white.opacity(0.08))
                         }
                     }
+                    .listStyle(.plain)
+                    .scrollContentBackground(.hidden)
                 }
-                .listStyle(.plain)
             }
         }
         .navigationTitle("搜索")
         .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(FoliaTheme.background, for: .navigationBar)
+        .toolbarColorScheme(.dark, for: .navigationBar)
     }
 
     private func search() async {

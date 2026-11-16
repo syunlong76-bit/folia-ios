@@ -195,21 +195,30 @@ final class EdgeOneAPIClient {
     /// ar / al（含 picUrl）/ dt。按 200 首分片并发取，按入参顺序拼回。
     func fetchSongDetails(ids: [Int]) async throws -> [FoliaTrack] {
         guard !ids.isEmpty else { return [] }
+        // 分片并行取（3.4）：顺序分片在几百首的歌单上要串行等多个往返，
+        // TaskGroup 并发后总时长≈最慢的一片。
+        let chunkSize = 100
+        let chunks: [[Int]] = stride(from: 0, to: ids.count, by: chunkSize).map {
+            Array(ids[$0..<min($0 + chunkSize, ids.count)])
+        }
         var byId: [Int: FoliaTrack] = [:]
-        let chunkSize = 200
-        var start = 0
-        while start < ids.count {
-            let chunk = Array(ids[start..<min(start + chunkSize, ids.count)])
-            let resp = try await requestJSON(
-                provider: .netease,
-                path: "/song/detail",
-                queryItems: [URLQueryItem(name: "ids", value: chunk.map(String.init).joined(separator: ","))],
-                as: NeteaseSongDetailResponse.self
-            )
-            for song in resp.songs ?? [] {
-                byId[song.id] = song.toFoliaTrack()
+        try await withThrowingTaskGroup(of: [SongDetailDTO].self) { group in
+            for chunk in chunks {
+                group.addTask {
+                    let resp = try await self.requestJSON(
+                        provider: .netease,
+                        path: "/song/detail",
+                        queryItems: [URLQueryItem(name: "ids", value: chunk.map(String.init).joined(separator: ","))],
+                        as: NeteaseSongDetailResponse.self
+                    )
+                    return resp.songs ?? []
+                }
             }
-            start += chunkSize
+            for try await songs in group {
+                for song in songs {
+                    byId[song.id] = song.toFoliaTrack()
+                }
+            }
         }
         // 保持歌单原序；接口没回的 id 直接跳过（已下架等）。
         return ids.compactMap { byId[$0] }
