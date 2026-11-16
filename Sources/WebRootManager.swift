@@ -43,6 +43,13 @@ final class WebRootManager {
         webBaseDir.appendingPathComponent("v\(activeWebVersion)", isDirectory: true)
     }
 
+    /// 3.6 全量前端包内目录（Resources/WebEffect，folder reference 打包）。
+    /// 本地服务器直接只读供这个目录：file:// 加载会让原版 App 的
+    /// IndexedDB 初始化挂死、开机过不去，必须走 http://127.0.0.1 同源。
+    var webEffectDir: URL? {
+        Bundle.main.url(forResource: "WebEffect", withExtension: nil)
+    }
+
     /// Documents/web-browse 目录（浏览表面专用，与播放根分开，避免 OTA 机制互相影响）
     var browseBaseDir: URL {
         let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0]

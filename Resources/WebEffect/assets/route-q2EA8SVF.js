@@ -1,1 +1,0 @@
-import{Gs as e,Ks as t}from"./bootstrap-aJrU0_8w.js";export{t as __iconData,e as default};

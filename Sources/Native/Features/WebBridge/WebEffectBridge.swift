@@ -367,8 +367,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     // MARK: - 加载
 
     private func loadLocalEffectBundle() {
-        guard let htmlURL = Bundle.main.url(
-            forResource: "index", withExtension: "html", subdirectory: "WebEffect") else {
+        guard Bundle.main.url(
+            forResource: "index", withExtension: "html", subdirectory: "WebEffect") != nil else {
             // 包缺失必须暴露，不许静默白屏。
             let message = "WebEffect bundle missing: Resources/WebEffect/index.html not found in app bundle"
             lastFatalError = message
@@ -376,7 +376,24 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             assertionFailure(message)
             return
         }
-        webView.loadFileURL(htmlURL, allowingReadAccessTo: htmlURL.deletingLastPathComponent())
+        // 3.6 (2)：必须走本地 http 同源加载。file:// 直读会让原版 App 的
+        // IndexedDB（Dexie）初始化挂死、开机动画无限转（3.6 (1) 真机实证：
+        // 同一产物 http 加载可完整启动）。数据接口走 LocalServer 的 /api
+        // 同源代理，登录 Cookie 也按本机源规则流转。
+        let server = LocalServer.shared
+        if server.isRunning {
+            loadPageURL(port: server.port)
+            return
+        }
+        server.onReady = { [weak self] port in
+            self?.loadPageURL(port: port)
+        }
+        server.start()
+    }
+
+    private func loadPageURL(port: UInt16) {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/index.html") else { return }
+        webView.load(URLRequest(url: url))
     }
 
     /// 防抖触发后的人工重试入口（诊断面板 / 设置页调用）。

@@ -94,3 +94,10 @@ grep -o "html,body{background[^}]*}" index.html                              # �
 - 本目录产物自 3.6 起为 folia-major 的 `FOLIA_SURFACE=ios-full` 变体（原版完整 App），不再是 player-visual。上文 §4 的 transport 校验口径对本变体同样作废：原版 UI 的 transport 字符串在位属预期；硬线改为：产物 `navigator.mediaSession` 0 命中、deck 写源点全桩（`setAudioSrc` 拦截 warn 在位）、`setQueuePlay` 在位、三基址烤入、无 sw.js。
 - 构建必带三个 env（仓库只有 .env.example 占位，漏带会交出无基址产物）：VITE_NETEASE_API_BASE / VITE_QQ_API_BASE / VITE_KUGOU_API_BASE = https://folia-music.netlify.app/api/{netease,qq,kugou}（键名以 folia-major .env.example 为准）。
 - 壳侧兜底（P9）：WebEffectBridge 在文档开始处注入脚本封 HTMLAudioElement.play()、video 强制静音；加载 URL 不得带 ?surface=browse（P17）。
+
+## 3.6 (2) 追记（2026-11-16，加载方式与基址修正）
+
+- 3.6 (1) 真机卡开机动画：壳用 loadFileURL(file://) 加载本包是元凶 —— 原版 App 存储全走 IndexedDB(Dexie)，file:// 下初始化挂死，boot 永远等它。已实证同一产物 http 加载可完整启动（无头 Chromium 跑到 What's New + 主界面）。
+- 修法：壳改走 LocalServer 本地 http 同源（127.0.0.1:18765 起）供本目录，WebEffectBridge 改载 http://127.0.0.1:<port>/index.html；LocalServer 主静态根改指包内 WebEffect 目录（WebRootManager.webEffectDir），/browse 与 OTA 根保留回退。
+- 基址改相对路径：本版构建三基址 = /api/{netease,qq,kugou}，由 LocalServer 的 /api 反向代理转发 Netlify 站点（与 3.0 双表面壳同一条已验证数据路；Set-Cookie 去 Domain 变本机源 cookie，登录态按源规则流转）。原生 EdgeOneAPIClient 仍直连绝对地址，不受影响。
+- 交付前自验（本版新增固定关口）：最终产物按壳的真实加载方式（本地 http + /api 代理 + 模拟原生桥回 snapshot/state/progress）在无头 Chromium 里全功能跑一遍 —— 开机过 logo、向导走完、主页格子、搜索出真结果、Play track 过桥起播、播放页/歌词取词/视觉面板（样式与背景切换）/命令面板/循环模式过桥、零 pageerror —— 全过才出包。

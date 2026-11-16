@@ -1,1 +1,0 @@
-import{Fc as e,Ic as t}from"./bootstrap-aJrU0_8w.js";export{t as __iconData,e as default};

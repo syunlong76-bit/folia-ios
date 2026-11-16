@@ -138,7 +138,12 @@ final class LocalServer {
             return
         }
 
-        serveStatic(request: request, rawPath: rawPath, handler: handler)
+        // 3.6：主根 = 包内 WebEffect 目录（全量前端）；缺失时回退旧 OTA 根。
+        if let webEffectDir = WebRootManager.shared.webEffectDir {
+            serveStatic(request: request, rawPath: rawPath, handler: handler, root: webEffectDir)
+        } else {
+            serveStatic(request: request, rawPath: rawPath, handler: handler)
+        }
     }
 
     // MARK: - 跨表面桥（/__bridge/*，协议见 BridgeStore）
