@@ -20,7 +20,7 @@ enum QueueError: Error {
 /// 先经 runOnMain 回到主线程再执行（调用方多为锁屏命令 / 桥回调 / engine 回调，
 /// 正常都在主线程，hop 只是兜底）；取流等耗时工作在 Task 里做，状态变更与
 /// engine.load 一律经 MainActor.run 回主线程。
-final class QueueManager {
+final class QueueManager: ObservableObject {
 
     static let shared = QueueManager()
 

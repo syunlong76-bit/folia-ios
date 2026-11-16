@@ -354,30 +354,7 @@ private struct QueueListView: View {
         NavigationStack {
             List {
                 ForEach(Array(queueManager.queue.enumerated()), id: \.offset) { index, track in
-                    Button {
-                        queueManager.playAtIndex(index)
-                        dismiss()
-                    } label: {
-                        HStack(spacing: 12) {
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(track.title)
-                                    .font(.subheadline.weight(index == queueManager.currentIndex ? .bold : .regular))
-                                    .foregroundColor(.primary)
-                                    .lineLimit(1)
-                                Text(track.artist)
-                                    .font(.caption)
-                                    .foregroundColor(.secondary)
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                            if index == queueManager.currentIndex {
-                                Image(systemName: "speaker.wave.2.fill")
-                                    .foregroundColor(.accentColor)
-                                    .font(.caption)
-                            }
-                        }
-                    }
-                    .buttonStyle(.plain)
+                    queueRow(index: index, track: track)
                 }
             }
             .navigationTitle("播放队列（\(queueManager.queue.count)）")
@@ -388,5 +365,33 @@ private struct QueueListView: View {
                 }
             }
         }
+    }
+
+    private func queueRow(index: Int, track: FoliaTrack) -> some View {
+        let isCurrent = index == queueManager.currentIndex
+        return Button {
+            queueManager.playAtIndex(index)
+            dismiss()
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title)
+                        .font(.subheadline.weight(isCurrent ? .bold : .regular))
+                        .foregroundColor(.primary)
+                        .lineLimit(1)
+                    Text(track.artist)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                if isCurrent {
+                    Image(systemName: "speaker.wave.2.fill")
+                        .foregroundColor(.accentColor)
+                        .font(.caption)
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 }
