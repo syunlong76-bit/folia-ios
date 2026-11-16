@@ -1,0 +1,1 @@
+var e=e=>e?e.source===`online`?`online:${e.providerId}:${e.type}:${String(e.id)}`:`${e.source}:${e.type}:${String(e.id)}`:``;export{e as t};

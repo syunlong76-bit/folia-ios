@@ -56,11 +56,19 @@
   只有 Option A 行不通时才评估本路线。
 
 ### 4. 产物校验（构建后必跑，命令可复现）
+
+> **2026-11-16 口径变更（Miller 定版）**：播放页 UI 恢复 Folia 自带组件
+> （FloatingPlayerControls 胶囊条 + UnifiedPanel 玻璃面板），走带经
+> foliaNative 通道回原生引擎——下面第一条「transport 字符串 0 命中」
+> 校验**自此作废**（组件在产物里是预期结果，不再是残留）。仍必跑的是
+> 第 2、3 条：网页绝不能自己出声、不能抢 MediaSession，这是原生单一
+> 音频源的底线，不随口径变。
+
 ```sh
 cd <webeffect 产物目录>
-grep -r "PlayerBottomBar\|FloatingPlayerControls\|ProgressBar" assets/ | wc -l  # 预期 0
-grep -r "navigator.mediaSession\|setActionHandler" assets/ | wc -l            # 预期 0
-grep -r "<audio" assets/ index.html | wc -l                                  # 预期 0
+grep -r "PlayerBottomBar\|FloatingPlayerControls\|ProgressBar" assets/ | wc -l  # 2026-11-16 起预期 >= 1（原版 UI 已恢复，本条仅作在位确认）
+grep -r "navigator.mediaSession\|setActionHandler" assets/ | wc -l            # 预期 0（硬线）
+grep -r "<audio" assets/ index.html | wc -l                                  # 预期 0（硬线）
 grep -c "data-folia-transport" index.html                                     # 剥离工序人为打标后 >= 1（兜底用）
 grep -o "html,body{background[^}]*}" index.html                              # 须含 transparent
 ```

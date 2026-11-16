@@ -28,6 +28,9 @@ struct FoliaTrack: Identifiable, Codable {
     let album: String
     let duration: TimeInterval
     let artworkURL: URL?
+    /// 网易云 fee（0/8 可播、1 VIP 专享、4 专辑付费）；其他来源为 nil。
+    /// 仅供界面标记不可播角标，不参与取流判定（取流失败仍走 QueueManager 报错路径）。
+    let fee: Int?
 
     init(id: String,
          sourceType: AudioSourceType,
@@ -35,7 +38,8 @@ struct FoliaTrack: Identifiable, Codable {
          artist: String,
          album: String = "",
          duration: TimeInterval,
-         artworkURL: URL? = nil) {
+         artworkURL: URL? = nil,
+         fee: Int? = nil) {
         self.id = id
         self.sourceType = sourceType
         self.title = title
@@ -43,7 +47,11 @@ struct FoliaTrack: Identifiable, Codable {
         self.album = album
         self.duration = duration
         self.artworkURL = artworkURL
+        self.fee = fee
     }
+
+    /// fee=1/4 在原生取流侧拿不到地址（3.2 实证），界面按不可播标记。
+    var isMarkedUnplayable: Bool { fee == 1 || fee == 4 }
 }
 
 /// 播放状态三态。waiting = 缓冲中（timeControlStatus == .waitingToPlayAtSpecifiedRate）。

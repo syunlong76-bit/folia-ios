@@ -117,6 +117,18 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         }
     }
 
+    /// 播放音量 0...1（两轨统一；播放页面板 VolumeRow 经 foliaNative 通道下发，
+    /// 用的是 AVPlayer 本级音量，不动系统音量）。A/B 两台 player 是常驻实例，
+    /// 切歌不换实例，设一次即长期有效；快照经 bridge 回报给网页面板回显。
+    @Published private(set) var volume: Float = 1.0
+
+    func setVolume(_ value: Float) {
+        let clamped = min(max(value, 0), 1)
+        volume = clamped
+        playerA.volume = clamped
+        playerB.volume = clamped
+    }
+
     func stop() {
         activePlayer.pause()
         flushListeningHistory(isCompleted: false)

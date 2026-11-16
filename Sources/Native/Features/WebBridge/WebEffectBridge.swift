@@ -46,6 +46,10 @@ struct WebSnapshotDTO: Codable {
         let duration: TimeInterval
         let isLiked: Bool
         let artworkRef: String?
+        /// 来源平台（AudioSourceType rawValue：netease/qq/kugou/local）。
+        /// 网页面板据此识别歌曲平台（SongCredits 平台链接、在线歌词页签），
+        /// 缺了它网页只能默认按网易云处理（2026-11-16 网页侧审查指出）。
+        let provider: String
     }
     struct QueueItem: Codable {
         let id: String
@@ -65,6 +69,10 @@ struct WebSnapshotDTO: Codable {
     let currentIndex: Int
     let initialTime: TimeInterval
     let rate: Float
+    /// 循环模式（桥词表 off/all/one）与音量 0...1：网页面板采纳回显用，
+    /// 可选字段，旧版网页忽略不报错（2026-11-16 随原版面板恢复补上）。
+    let loopMode: String?
+    let volume: Double?
 }
 
 // MARK: - 滚动日志（native-arch.md §9 第六批：沙盒 2MB 双文件轮换 + Xcode Console）
@@ -293,6 +301,10 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         // 事后改 config 不生效，网页回传会全部收不到。
         let weakHandler = WeakScriptMessageHandler()
         config.userContentController.add(weakHandler, name: "foliaAction")
+        // 播放页自带 UI 的指令通道（foliaNative，2026-11-16 随 Folia 原版
+        // 胶囊条 + 玻璃面板恢复新增）：与 foliaAction 同一个弱引用 handler，
+        // 同样必须在创建 WKWebView 之前注册。
+        config.userContentController.add(weakHandler, name: "foliaNative")
 
         // 手势穿透框架（M2 末落地）：默认 passthroughRects 为空，行为与 WKWebView 一致。
         let webView = PassthroughWebView(frame: .zero, configuration: config)
@@ -401,6 +413,19 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
 
     /// 全量状态快照：didFinish / reload 恢复 / 切歌的统一入口。
     /// 以后新增桥字段只改 WebSnapshotDTO + 前端类型，不再维护逐字段补发清单。
+    /// 原生 PlayMode → 桥 loopMode 词表（off/all/one）。shuffle 在桥词表里
+    /// 没有对应词（面板的循环磁贴只循环 off/all/one），按 all 报。
+    private static func bridgeLoopMode(_ mode: QueueManager.PlayMode) -> String {
+        switch mode {
+        case .loopAll, .shuffle:
+            return "all"
+        case .repeatOne:
+            return "one"
+        case .off:
+            return "off"
+        }
+    }
+
     func pushSnapshot() {
         let engine = PlaybackEngine.shared
         let track = engine.currentTrack
@@ -413,7 +438,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                     album: $0.album,
                     duration: $0.duration,
                     isLiked: isLikedProvider?($0.id) ?? false,
-                    artworkRef: $0.artworkURL?.absoluteString)
+                    artworkRef: $0.artworkURL?.absoluteString,
+                    provider: $0.sourceType.rawValue)
             },
             lrc: track.flatMap { lyricsProvider?($0) ?? lyricsCache[$0.id] } ?? "",
             renderActive: renderActive,
@@ -421,7 +447,9 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             queue: queueSummary(),
             currentIndex: QueueManager.shared.currentIndex,
             initialTime: engine.currentTime,
-            rate: currentRate)
+            rate: currentRate,
+            loopMode: Self.bridgeLoopMode(QueueManager.shared.playMode),
+            volume: Double(engine.volume))
         guard let data = try? JSONEncoder().encode(dto),
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             logStore.write(level: "error", module: "bridge", message: "snapshot encode failed")
@@ -602,8 +630,15 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         _ userContentController: WKUserContentController,
         didReceive message: WKScriptMessage
     ) {
+        guard let body = message.body as? [String: Any] else { return }
+
+        // 播放页自带 UI 的指令通道：独立分发，与 foliaAction 互不影响。
+        if message.name == "foliaNative" {
+            handleNativeMessage(body)
+            return
+        }
+
         guard message.name == "foliaAction",
-        let body = message.body as? [String: Any],
         let action = body["action"] as? String else { return}
 
         switch action {
@@ -631,6 +666,73 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             let module = body["module"] as? String ?? "web"
             let messageText = body["message"] as? String ?? ""
             logStore.record(level: level, module: module, message: messageText)
+        default:
+            break
+        }
+    }
+
+    /// 播放页自带 UI（Folia 原版胶囊条 + 玻璃面板）的指令通道分发。
+    /// 消息形状定版见 Resources/WebEffect/folia-bridge.js 的 sendNative 注释：
+    /// transport / seek / queuePlay / queueRemove / playMode / volume /
+    /// dismissPlayer / visualChanged，只增不改。
+    private func handleNativeMessage(_ body: [String: Any]) {
+        guard let type = body["type"] as? String else { return }
+        switch type {
+        case "transport":
+            switch body["action"] as? String {
+            case "play":
+                PlaybackEngine.shared.play()
+            case "pause":
+                PlaybackEngine.shared.pause()
+            case "toggle":
+                PlaybackEngine.shared.togglePlayPause()
+            case "next":
+                QueueManager.shared.playNext(manual: true)
+            case "previous":
+                QueueManager.shared.playPrevious()
+            default:
+                break
+            }
+        case "seek":
+            if let seconds = body["seconds"] as? TimeInterval {
+                // 与原生拖动同一条路：先推乐观锚点并挂起周期推送，再 seek。
+                noteSeekStarted(target: seconds)
+                PlaybackEngine.shared.seek(to: seconds)
+            }
+        case "queuePlay":
+            if let index = body["index"] as? Int {
+                QueueManager.shared.playAtIndex(index)
+            }
+        case "queueRemove":
+            if let index = body["index"] as? Int {
+                QueueManager.shared.removeFromQueue(at: index)
+                // 队列摘要由 $queue 订阅另行推送；这里再补一份全量快照，
+                // 让面板队列页的行与当前下标一次对齐。
+                pushSnapshot()
+            }
+        case "playMode":
+            switch body["mode"] as? String {
+            case "off":
+                QueueManager.shared.playMode = .off
+            case "all":
+                QueueManager.shared.playMode = .loopAll
+            case "one":
+                QueueManager.shared.playMode = .repeatOne
+            default:
+                break
+            }
+            // loopMode 只在快照里下发，改完立即补发让面板磁贴回显新状态。
+            pushSnapshot()
+        case "volume":
+            if let value = body["value"] as? Double {
+                PlaybackEngine.shared.setVolume(Float(value))
+            }
+        case "dismissPlayer":
+            RenderStateCenter.shared.setFullPlayerOpen(false)
+        case "visualChanged":
+            // 外观状态以特效面 store 为唯一真源（它自带持久化），原生仅记录、
+            // 不回改、不回推 visual 事件，防两边互相覆盖。
+            logStore.write(level: "info", module: "bridge", message: "visualChanged (record only)")
         default:
             break
         }

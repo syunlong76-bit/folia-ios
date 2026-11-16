@@ -1,11 +1,22 @@
 import SwiftUI
 
-/// 全屏播放容器（M2，native-arch.md §10）。
+/// 全屏播放容器（M2 骨架 + 2026-11-16 口径收口）。
 ///
-/// 原生顶栏＋底部原生 Slider 精准进度（拖动锁定 isScrubbing，松手才 seek）。
-/// 常驻挂载＋位移切换：容器位移用 GeometryReader 实测高度（弃 UIScreen.main.bounds），
-/// spring 动画结束后同步 webView.isHidden，离屏不进合成。
-/// 展开 / 收起状态唯一来源是 RenderStateCenter.isFullPlayerOpen；
+/// 播放页 UI 全部归 Folia 网页自带组件：底部胶囊条 FloatingPlayerControls +
+/// 右下手柄玻璃面板 UnifiedPanel（封面/控制/队列/账号页签，外观区在控制
+/// 页签内），走带/队列/音量/收起经 foliaNative 通道回原生引擎执行。原生侧
+/// 不再画任何走带、进度与特效选择控件——3.3/3.4 的自创原生条与特效筹码表
+/// 已撤（Miller 2026-11-16 定版口径：源码功能与界面原封不动，原生只接管
+/// 会闪退/会卡的底层）。
+///
+/// 本容器只剩三件事：
+/// 1. 常驻挂载 + 位移切换：容器位移用 GeometryReader 实测高度（弃
+///    UIScreen.main.bounds），spring 动画结束后同步 webView.isHidden，
+///    离屏不进合成。展开/收起状态唯一来源是 RenderStateCenter。
+/// 2. 引擎尚无曲目（加载中 / 点播失败）时的原生兜底信息层，杜绝无歌名
+///    无提示的纯黑播放页（3.3 录屏实证）。
+/// 3. 网页未加载成功或进程自愈停摆时，左上留一个原生收起钮（与网页自带
+///    返回钮同位），防用户被困在播放页出不去。
 /// WebEffect WebView 本体由 WebEffectBridge 单例持有，容器只包装，不重建。
 struct FullPlayerContainer: View {
     @ObservedObject var engine = PlaybackEngine.shared
@@ -14,22 +25,12 @@ struct FullPlayerContainer: View {
     @ObservedObject var queueManager = QueueManager.shared
     var onDismiss: () -> Void
 
-    /// 拖动进度条防抖锁定状态。
-    @State private var isScrubbing = false
-    @State private var scrubTime: TimeInterval = 0
-
-    /// 特效面板与队列页的呈现开关（3.3 播放页收口）。
-    @State private var showStylePanel = false
-    @State private var showQueue = false
-
-    /// 视觉选择（原生侧存一份，与特效面 store 经桥同步；特效面也会自己持久化）。
-    @AppStorage("folia.lyricMode") private var lyricMode = "classic"
-    @AppStorage("folia.backgroundMode") private var backgroundMode = "common"
-
     private var isOpen: Bool { renderCenter.isFullPlayerOpen }
 
-    private var displayedTime: TimeInterval {
-        isScrubbing ? scrubTime : engine.currentTime
+    /// 网页不可用（未加载完 / 自愈停摆）：播放页自带 UI 指望不上，
+    /// 原生收起钮是唯一的出路。
+    private var webUnavailable: Bool {
+        !bridge.isPageLoaded || bridge.lastFatalError != nil
     }
 
     var body: some View {
@@ -38,7 +39,8 @@ struct FullPlayerContainer: View {
                 // 底层深色底板，防止网页加载瞬间透出底层主页。
                 Color.black.ignoresSafeArea()
 
-                // 核心：Folia 纯可视化网页特效面（桥单例持有，常驻不重建）。
+                // 核心：Folia 网页特效面 + 它自带的播放页 UI（桥单例持有，
+                // 常驻不重建）。
                 WebEffectView(webView: bridge.webView)
                     .ignoresSafeArea()
 
@@ -70,163 +72,48 @@ struct FullPlayerContainer: View {
                                 .tint(.white)
                         }
                     }
-                    .padding(.bottom, 120)
+                    .padding(.bottom, 40)
                 }
 
-                // 原生顶栏与底部精准进度控制层。
-                VStack {
-                    // 顶部：收起按钮 + 曲名。
-                    HStack {
-                        Button(action: onDismiss) {
-                            Image(systemName: "chevron.down")
-                                .font(.title3.weight(.semibold))
-                                .foregroundColor(.white.opacity(0.85))
-                                .frame(width: 40, height: 40)
-                                .background(.ultraThinMaterial.opacity(0.4))
-                                .clipShape(Circle())
-                        }
-                        .accessibilityLabel("收起播放页")
-
+                // 有曲目在播但最近一次点播/切歌失败：顶部错误小药丸。这不是
+                // 控制条，只是把 QueueManager 的报错露出来（网页没有报错面），
+                // 下一首成功起播后 lastError 清空、药丸自动消失。
+                if engine.currentTrack != nil, let error = queueManager.lastError {
+                    VStack {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundColor(.white)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 6)
+                            .background(Color.red.opacity(0.55))
+                            .clipShape(Capsule())
+                            .lineLimit(2)
+                            .multilineTextAlignment(.center)
+                            .padding(.horizontal, 32)
                         Spacer()
-
-                        if let track = engine.currentTrack ?? queueManager.currentTrack {
-                            VStack(spacing: 2) {
-                                Text(track.title)
-                                    .font(.subheadline.weight(.semibold))
-                                    .foregroundColor(.white)
-                                    .lineLimit(1)
-                                Text(track.artist)
-                                    .font(.caption)
-                                    .foregroundColor(.white.opacity(0.6))
-                                    .lineLimit(1)
-                            }
-                            Spacer()
-                        }
                     }
-                    .padding(.horizontal, 16)
-                    .padding(.top, 8)
+                    .padding(.top, 64)
+                }
 
-                    Spacer()
-
-                    // 底部原生进度条 +  transport（网页 transport 已剥离，这里是唯一一套）。
-                    VStack(spacing: 12) {
-                        if let error = queueManager.lastError {
-                            Text(error)
-                                .font(.caption)
-                                .foregroundColor(.white)
-                                .padding(.horizontal, 12)
-                                .padding(.vertical, 6)
-                                .background(Color.red.opacity(0.55))
-                                .clipShape(Capsule())
-                                .lineLimit(2)
-                                .multilineTextAlignment(.center)
-                        }
-
-                        VStack(spacing: 4) {
-                            Slider(
-                                value: Binding(
-                                    get: { displayedTime },
-                                    set: { newValue in
-                                        scrubTime = newValue
-                                    }
-                                ),
-                                in: 0...max(engine.duration, 1),
-                                onEditingChanged: { editing in
-                                    isScrubbing = editing
-                                    if editing {
-                                        scrubTime = engine.currentTime
-                                    } else {
-                                        // 松手才 seek：先让桥推乐观锚点并挂起周期推送。
-                                        WebEffectBridge.shared.noteSeekStarted(target: scrubTime)
-                                        engine.seek(to: scrubTime)
-                                    }
-                                }
-                            )
-                            .tint(.white)
-
-                            HStack {
-                                Text(formatTime(displayedTime))
-                                Spacer()
-                                Text(formatTime(engine.duration))
-                            }
-                            .font(.caption2.monospacedDigit())
-                            .foregroundColor(.white.opacity(0.7))
-                        }
-
-                        HStack(spacing: 44) {
-                            Button {
-                                QueueManager.shared.playPrevious()
-                            } label: {
-                                Image(systemName: "backward.fill")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .frame(width: 48, height: 48)
-                            }
-                            .accessibilityLabel("上一首")
-
-                            Button {
-                                engine.togglePlayPause()
-                            } label: {
-                                Image(systemName: engine.isPlaying ? "pause.circle.fill" : "play.circle.fill")
-                                    .font(.system(size: 64))
-                                    .foregroundColor(.white)
-                                    .frame(width: 72, height: 72)
-                            }
-                            .accessibilityLabel(engine.isPlaying ? "暂停" : "播放")
-
-                            Button {
-                                QueueManager.shared.playNext(manual: true)
-                            } label: {
-                                Image(systemName: "forward.fill")
-                                    .font(.title2)
-                                    .foregroundColor(.white)
-                                    .frame(width: 48, height: 48)
-                            }
-                            .accessibilityLabel("下一首")
-                        }
-
-                        // 播放模式 / 特效切换 / 队列（3.3 收口补回的功能行）。
+                // 网页不可用时的原生收起钮（左上，与网页自带返回钮同位同尺寸）。
+                if webUnavailable {
+                    VStack {
                         HStack {
-                            Button {
-                                cyclePlayMode()
-                            } label: {
-                                Image(systemName: playModeIcon)
-                                    .font(.body)
-                                    .foregroundColor(.white.opacity(0.9))
-                                    .frame(width: 44, height: 32)
+                            Button(action: onDismiss) {
+                                Image(systemName: "chevron.left")
+                                    .font(.body.weight(.semibold))
+                                    .foregroundColor(.white.opacity(0.85))
+                                    .frame(width: 40, height: 40)
+                                    .background(Color.black.opacity(0.35))
+                                    .clipShape(Circle())
                             }
-                            .accessibilityLabel("播放模式")
-
+                            .accessibilityLabel("收起播放页")
                             Spacer()
-
-                            Button {
-                                showStylePanel = true
-                            } label: {
-                                HStack(spacing: 5) {
-                                    Image(systemName: "sparkles")
-                                    Text("特效")
-                                }
-                                .font(.subheadline)
-                                .foregroundColor(.white.opacity(0.9))
-                                .frame(height: 32)
-                            }
-                            .accessibilityLabel("歌词特效与背景")
-
-                            Spacer()
-
-                            Button {
-                                showQueue = true
-                            } label: {
-                                Image(systemName: "list.bullet")
-                                    .font(.body)
-                                    .foregroundColor(.white.opacity(0.9))
-                                    .frame(width: 44, height: 32)
-                            }
-                            .accessibilityLabel("播放队列")
                         }
+                        Spacer()
                     }
-                    .padding(.horizontal, 24)
-                    .padding(.bottom, 24)
+                    .padding(.leading, 24)
+                    .padding(.top, 24)
                 }
             }
             // 位移切换：容器实测高度（GeometryReader），不用 UIScreen.main.bounds。
@@ -242,8 +129,6 @@ struct FullPlayerContainer: View {
             .onChange(of: isOpen) { _, open in
                 if open {
                     bridge.webView.isHidden = false
-                    // 打开播放页时把原生侧的视觉选择推给特效面，保持两边一致。
-                    bridge.pushVisual(lyricMode: lyricMode, backgroundMode: backgroundMode)
                 } else {
                     DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
                         if !renderCenter.isFullPlayerOpen {
@@ -253,176 +138,5 @@ struct FullPlayerContainer: View {
                 }
             }
         }
-        .sheet(isPresented: $showStylePanel) {
-            StylePanelView(
-                lyricMode: $lyricMode,
-                backgroundMode: $backgroundMode,
-                onLyricModeChange: { bridge.pushVisual(lyricMode: $0, backgroundMode: nil) },
-                onBackgroundModeChange: { bridge.pushVisual(lyricMode: nil, backgroundMode: $0) }
-            )
-            .presentationDetents([.medium, .large])
-        }
-        .sheet(isPresented: $showQueue) {
-            QueueListView()
-                .presentationDetents([.medium, .large])
-        }
-    }
-
-    private func formatTime(_ seconds: TimeInterval) -> String {
-        guard seconds.isFinite && seconds >= 0 else { return "00:00" }
-        let total = Int(seconds)
-        return String(format: "%02d:%02d", total / 60, total % 60)
-    }
-
-    private var playModeIcon: String {
-        switch queueManager.playMode {
-        case .loopAll: return "repeat"
-        case .repeatOne: return "repeat.1"
-        case .shuffle: return "shuffle"
-        }
-    }
-
-    private func cyclePlayMode() {
-        switch queueManager.playMode {
-        case .loopAll: queueManager.playMode = .repeatOne
-        case .repeatOne: queueManager.playMode = .shuffle
-        case .shuffle: queueManager.playMode = .loopAll
-        }
-    }
-}
-
-/// 特效面板（3.3）：歌词样式 17 种 + 背景类型 5 种，id 与网页注册表同源
-///（folia-major src/types/visualizerModes.ts 的 BUILTIN 清单与各 entry 的
-/// labelFallback，顺序按 registry order）。选择经桥发给特效面即时生效。
-private struct StylePanelView: View {
-    @Binding var lyricMode: String
-    @Binding var backgroundMode: String
-    var onLyricModeChange: (String) -> Void
-    var onBackgroundModeChange: (String) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    private let lyricStyles: [(id: String, label: String)] = [
-        ("sonnet", "商籁"), ("tempera", "Tempera"), ("lumiere", "绘光"),
-        ("hanabi", "花火"), ("machi", "町景"), ("nebbia", "雾笺"),
-        ("classic", "Luminous"), ("cadenza", "Mindscape"), ("partita", "云阶"),
-        ("fume", "Fume"), ("tilt", "Tilt"), ("claddagh", "Claddagh"),
-        ("monet", "Monet"), ("pendolo", "Pendolo"), ("cappella", "Cappella"),
-        ("diorama", "镜台"), ("still", "Still")
-    ]
-
-    private let backgroundModes: [(id: String, label: String)] = [
-        ("common", "通用"), ("latent", "潜行"), ("monet", "莫奈"),
-        ("nomand", "游牧"), ("sora", "天空")
-    ]
-
-    private let columns = [GridItem(.adaptive(minimum: 96), spacing: 10)]
-
-    var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 22) {
-                    section(title: "歌词样式", items: lyricStyles, selected: lyricMode) { id in
-                        lyricMode = id
-                        onLyricModeChange(id)
-                    }
-                    section(title: "背景类型", items: backgroundModes, selected: backgroundMode) { id in
-                        backgroundMode = id
-                        onBackgroundModeChange(id)
-                    }
-                }
-                .padding(16)
-            }
-            .navigationTitle("特效")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                }
-            }
-        }
-    }
-
-    private func section(
-        title: String,
-        items: [(id: String, label: String)],
-        selected: String,
-        onPick: @escaping (String) -> Void
-    ) -> some View {
-        VStack(alignment: .leading, spacing: 10) {
-            Text(title)
-                .font(.headline)
-            LazyVGrid(columns: columns, spacing: 10) {
-                ForEach(items, id: \.id) { item in
-                    Button {
-                        onPick(item.id)
-                    } label: {
-                        Text(item.label)
-                            .font(.subheadline)
-                            .lineLimit(1)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 10)
-                            .background(
-                                selected == item.id
-                                    ? Color.accentColor.opacity(0.25)
-                                    : Color.secondary.opacity(0.12)
-                            )
-                            .foregroundColor(selected == item.id ? .accentColor : .primary)
-                            .clipShape(RoundedRectangle(cornerRadius: 10, style: .continuous))
-                    }
-                    .buttonStyle(.plain)
-                }
-            }
-        }
-    }
-}
-
-/// 播放队列页（3.3）：点任意一首跳过去播，当前曲高亮。
-private struct QueueListView: View {
-    @ObservedObject var queueManager = QueueManager.shared
-    @Environment(\.dismiss) private var dismiss
-
-    var body: some View {
-        NavigationStack {
-            List {
-                ForEach(Array(queueManager.queue.enumerated()), id: \.offset) { index, track in
-                    queueRow(index: index, track: track)
-                }
-            }
-            .navigationTitle("播放队列（\(queueManager.queue.count)）")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("完成") { dismiss() }
-                }
-            }
-        }
-    }
-
-    private func queueRow(index: Int, track: FoliaTrack) -> some View {
-        let isCurrent = index == queueManager.currentIndex
-        return Button {
-            queueManager.playAtIndex(index)
-            dismiss()
-        } label: {
-            HStack(spacing: 12) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.subheadline.weight(isCurrent ? .bold : .regular))
-                        .foregroundColor(.primary)
-                        .lineLimit(1)
-                    Text(track.artist)
-                        .font(.caption)
-                        .foregroundColor(.secondary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                if isCurrent {
-                    Image(systemName: "speaker.wave.2.fill")
-                        .foregroundColor(.accentColor)
-                        .font(.caption)
-                }
-            }
-        }
-        .buttonStyle(.plain)
     }
 }

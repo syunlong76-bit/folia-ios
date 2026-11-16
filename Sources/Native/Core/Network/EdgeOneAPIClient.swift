@@ -235,7 +235,9 @@ final class EdgeOneAPIClient {
         return (resp.result ?? []).map {
             PlaylistSummary(id: $0.id, name: $0.name,
                             coverURL: $0.picUrl.flatMap(Self.secureURL),
-                            trackCount: $0.trackCount ?? 0)
+                            trackCount: $0.trackCount ?? 0,
+                            playCount: $0.playCount,
+                            copywriter: $0.copywriter)
         }
     }
 
@@ -251,8 +253,140 @@ final class EdgeOneAPIClient {
         return (resp.list ?? []).map {
             PlaylistSummary(id: $0.id, name: $0.name,
                             coverURL: $0.coverImgUrl.flatMap(Self.secureURL),
-                            trackCount: $0.trackCount ?? 0)
+                            trackCount: $0.trackCount ?? 0,
+                            playCount: $0.playCount,
+                            updateFrequency: $0.updateFrequency,
+                            toplistType: $0.ToplistType)
         }
+    }
+
+    // MARK: - 探索页货架（neteaseExplore 映射，2026-11-16 移植）
+
+    /// 网易云首页 blocks 第一页（/homepage/block/page）。映射 folia-major
+    /// neteaseExplore.shelvesOf：剔除榜单块（排行榜另有分区）与听歌记录块
+    /// （RECENT/HISTORY 或标题以「最近」开头），块内条目按 key 去重；
+    /// 资源种类只认 song/list/album，其余（播客/视频/数字专辑）跳过。
+    /// 后续 blocks 页（cursor 翻页）本轮未映射，见移植报告偏差清单。
+    func fetchHomeBlockSections() async throws -> [ExploreFeedSection] {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/homepage/block/page",
+            queryItems: [URLQueryItem(name: "refresh", value: "false")],
+            as: NeteaseHomeBlocksResponse.self
+        )
+        var sections: [ExploreFeedSection] = []
+        var usedIds = Set<String>()
+        for block in resp.data?.blocks ?? [] {
+            let code = block.blockCode ?? ""
+            let title = block.uiElement?.subTitle?.title ?? block.uiElement?.mainTitle?.title ?? ""
+            if code == "HOMEPAGE_BLOCK_TOPLIST" { continue }
+            if code.contains("RECENT") || code.contains("HISTORY") || title.hasPrefix("最近") { continue }
+            var seen = Set<String>()
+            var items: [ExploreItem] = []
+            for creative in block.creatives ?? [] {
+                for resource in creative.resources ?? [] {
+                    guard let item = Self.exploreItem(of: resource) else { continue }
+                    if seen.contains(item.id) { continue }
+                    seen.insert(item.id)
+                    items.append(item)
+                }
+            }
+            if items.isEmpty || title.isEmpty { continue }
+            var sectionId = "netease-block-\(code)"
+            var suffix = 2
+            while usedIds.contains(sectionId) {
+                sectionId = "netease-block-\(code)-\(suffix)"
+                suffix += 1
+            }
+            usedIds.insert(sectionId)
+            sections.append(ExploreFeedSection(id: sectionId, title: title, items: items))
+        }
+        return sections
+    }
+
+    /// 首页 block 的一条资源 → 探索条目（对应源码 itemOf）。
+    private static func exploreItem(of resource: HomeBlockResourceDTO) -> ExploreItem? {
+        let info = resource.resourceExtInfo
+        if resource.resourceType == "song" {
+            guard var dto = info?.songData ?? info?.song, dto.id != 0 else { return nil }
+            // 歌曲自带封面缺失时用资源图（源码同规则）。
+            if dto.album?.picUrl == nil, let cover = resource.uiElement?.image?.imageUrl {
+                dto = dto.withAlbumCover(cover)
+            }
+            return .song(dto.toFoliaTrack())
+        }
+        guard let rawId = resource.resourceId?.value, rawId > 0,
+              let name = resource.uiElement?.mainTitle?.title, !name.isEmpty else { return nil }
+        let cover = resource.uiElement?.image?.imageUrl.flatMap(Self.secureURL)
+        if resource.resourceType == "list" {
+            return .collection(ExploreCollection(
+                kind: .playlist, id: rawId, name: name, coverURL: cover,
+                subtitle: "歌单"))
+        }
+        if resource.resourceType == "album" {
+            let artists = (info?.artists ?? []).map(\.name).filter { !$0.isEmpty }.joined(separator: ", ")
+            return .collection(ExploreCollection(
+                kind: .album, id: rawId, name: name, coverURL: cover,
+                subtitle: artists.isEmpty ? "专辑" : artists))
+        }
+        return nil
+    }
+
+    /// 新歌速递（/top/song?type=0，一次回约 100 首旧格式歌曲）。
+    /// 对应 neteaseExplore 的 NEW_SONGS 货架（listShelf 整表分批）。
+    func fetchNewSongs() async throws -> [FoliaTrack] {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/top/song",
+            queryItems: [URLQueryItem(name: "type", value: "0")],
+            as: NeteaseTopSongResponse.self
+        )
+        return (resp.data ?? []).map { $0.toFoliaTrack() }
+    }
+
+    /// 新碟上架（/album/new 分页）。对应 neteaseExplore 的 NEW_ALBUMS 分页货架。
+    /// 返回本页专辑与总数（hasMore 由调用方按 offset+count < total 判定）。
+    func fetchNewAlbums(limit: Int, offset: Int) async throws -> (albums: [ExploreCollection], total: Int) {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/album/new",
+            queryItems: [
+                URLQueryItem(name: "limit", value: "\(limit)"),
+                URLQueryItem(name: "offset", value: "\(offset)")
+            ],
+            as: NeteaseNewAlbumsResponse.self
+        )
+        let albums = (resp.albums ?? []).map { dto in
+            let artists = (dto.artists ?? []).map(\.name).filter { !$0.isEmpty }.joined(separator: ", ")
+            return ExploreCollection(
+                kind: .album, id: dto.id, name: dto.name,
+                coverURL: dto.picUrl.flatMap(Self.secureURL),
+                subtitle: artists.isEmpty ? "专辑" : artists)
+        }
+        return (albums, resp.total ?? 0)
+    }
+
+    /// 相似歌曲（/simi/song）。对应 neteaseExplore 的相似货架数据源（每首约 5 首）。
+    func fetchSimilarSongs(songId: Int) async throws -> [FoliaTrack] {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/simi/song",
+            queryItems: [URLQueryItem(name: "id", value: "\(songId)")],
+            as: NeteaseSimilarResponse.self
+        )
+        return (resp.songs ?? []).map { $0.toFoliaTrack() }
+    }
+
+    /// 专辑详情（/album?id=）：专辑信息 + 全部曲目一次回。
+    func fetchAlbumDetail(albumId: String) async throws -> NeteaseAlbumDetail {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/album",
+            queryItems: [URLQueryItem(name: "id", value: albumId)],
+            as: NeteaseAlbumDetailResponse.self
+        )
+        guard let album = resp.album else { throw EdgeOneError.invalidResponse }
+        return NeteaseAlbumDetail(info: album, tracks: (resp.songs ?? []).map { $0.toFoliaTrack() })
     }
 
     /// http → https + URL 化（网易云图片 CDN 地址归一化）。
@@ -361,6 +495,7 @@ private struct NeteaseSearchResponse: Decodable {
         let ar: [ArtistDTO]?    // 旧键回退
         let album: AlbumDTO?
         let al: AlbumDTO?       // 旧键回退
+        let fee: Int?
 
         struct ArtistDTO: Decodable { let name: String }
         struct AlbumDTO: Decodable {
@@ -381,7 +516,8 @@ private struct NeteaseSearchResponse: Decodable {
                 artist: artistNames.isEmpty ? "未知歌手" : artistNames,
                 album: albumInfo?.name ?? "",
                 duration: Double(durationMs) / 1000.0,
-                artworkURL: secureArt.flatMap(URL.init(string:))
+                artworkURL: secureArt.flatMap(URL.init(string:)),
+                fee: fee
             )
         }
     }
@@ -413,13 +549,28 @@ struct NeteasePlaylistDetail: Decodable {
     let coverImgUrl: String?
     let trackIds: [TrackId]?
     let tracks: [SongDetailDTO]?
+    let trackCount: Int?
+    let playCount: Int?
+    let description: String?
+    let creator: CreatorDTO?
 
     struct TrackId: Decodable { let id: Int }
+    struct CreatorDTO: Decodable {
+        let nickname: String?
+        let avatarUrl: String?
+    }
 
     var trackIdList: [Int] { trackIds?.map(\.id) ?? [] }
 
     /// 接口在 detail 里顺带回的首批完整曲目（通常前若干首），可省一次详情请求。
     var prefetchedTracks: [FoliaTrack] { (tracks ?? []).map { $0.toFoliaTrack() } }
+
+    var coverURL: URL? {
+        coverImgUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap(URL.init(string:))
+    }
+    var creatorAvatarURL: URL? {
+        creator?.avatarUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap(URL.init(string:))
+    }
 }
 
 /// 歌单摘要（推荐歌单 / 排行榜共用）。
@@ -428,6 +579,12 @@ struct PlaylistSummary: Identifiable {
     let name: String
     let coverURL: URL?
     let trackCount: Int
+    var playCount: Int? = nil
+    /// 榜单更新频率文案（「每天更新」），探索页榜单卡的副文本。
+    var updateFrequency: String? = nil
+    /// 官方榜标记（neteaseExplore 以 ToplistType 挑官方四榜做歌曲货架）。
+    var toplistType: String? = nil
+    var copywriter: String? = nil
 }
 
 private struct NeteasePersonalizedResponse: Decodable {
@@ -437,6 +594,8 @@ private struct NeteasePersonalizedResponse: Decodable {
         let name: String
         let picUrl: String?
         let trackCount: Int?
+        let playCount: Int?
+        let copywriter: String?
     }
 }
 
@@ -447,6 +606,9 @@ private struct NeteaseToplistResponse: Decodable {
         let name: String
         let coverImgUrl: String?
         let trackCount: Int?
+        let playCount: Int?
+        let updateFrequency: String?
+        let ToplistType: String?
     }
 }
 
@@ -461,6 +623,7 @@ struct SongDetailDTO: Decodable {
     let dt: Int?
     let ar: [ArtistDTO]?
     let al: AlbumDTO?
+    let fee: Int?
 
     struct ArtistDTO: Decodable { let name: String }
     struct AlbumDTO: Decodable {
@@ -478,7 +641,171 @@ struct SongDetailDTO: Decodable {
             artist: artistNames.isEmpty ? "未知歌手" : artistNames,
             album: al?.name ?? "",
             duration: Double(dt ?? 0) / 1000.0,
-            artworkURL: secureArt.flatMap(URL.init(string:))
+            artworkURL: secureArt.flatMap(URL.init(string:)),
+            fee: fee
         )
     }
+}
+
+// MARK: - 探索页 DTO（形状随 folia-major netease.ts 的归一化前原始响应）
+
+/// 宽松歌曲形状：新旧两套键都认（artists/ar、album/al、duration/dt）。
+/// /top/song 与 /simi/song 与首页 block 的 songData 都走这个形状。
+struct FlexibleSongDTO: Decodable {
+    let id: Int
+    let name: String
+    let duration: Int?
+    let dt: Int?
+    let artists: [NameDTO]?
+    let ar: [NameDTO]?
+    let album: AlbumDTO?
+    let al: AlbumDTO?
+    let fee: Int?
+
+    struct NameDTO: Decodable { let name: String }
+    struct AlbumDTO: Decodable {
+        let name: String
+        let picUrl: String?
+    }
+
+    /// 换一张专辑封面（首页 block 歌曲缺封面时用资源图补，源码 itemOf 同规则）。
+    func withAlbumCover(_ picUrl: String) -> FlexibleSongDTO {
+        FlexibleSongDTO(
+            id: id, name: name, duration: duration, dt: dt,
+            artists: artists, ar: ar,
+            album: AlbumDTO(name: album?.name ?? al?.name ?? "", picUrl: picUrl),
+            al: al, fee: fee)
+    }
+
+    func toFoliaTrack() -> FoliaTrack {
+        let artistNames = (artists ?? ar ?? []).map(\.name).joined(separator: " / ")
+        let albumInfo = album ?? al
+        let secureArt = albumInfo?.picUrl?.replacingOccurrences(of: "http://", with: "https://")
+        return FoliaTrack(
+            id: "ncm_\(id)",
+            sourceType: .netease,
+            title: name,
+            artist: artistNames.isEmpty ? "未知歌手" : artistNames,
+            album: albumInfo?.name ?? "",
+            duration: Double(duration ?? dt ?? 0) / 1000.0,
+            artworkURL: secureArt.flatMap(URL.init(string:)),
+            fee: fee
+        )
+    }
+}
+
+/// resourceId 在 block 里时而数字时而字符串，两边都收。
+struct FlexibleID: Decodable {
+    let value: Int?
+    init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if let number = try? container.decode(Int.self) {
+            value = number
+        } else if let text = try? container.decode(String.self) {
+            value = Int(text)
+        } else {
+            value = nil
+        }
+    }
+}
+
+private struct NeteaseHomeBlocksResponse: Decodable {
+    let data: DataBody?
+    struct DataBody: Decodable {
+        let blocks: [BlockDTO]?
+        let hasMore: Bool?
+    }
+    struct BlockDTO: Decodable {
+        let blockCode: String?
+        let uiElement: UIElementDTO?
+        let creatives: [CreativeDTO]?
+    }
+    struct CreativeDTO: Decodable {
+        let resources: [HomeBlockResourceDTO]?
+    }
+    struct UIElementDTO: Decodable {
+        let mainTitle: TitleDTO?
+        let subTitle: TitleDTO?
+    }
+    struct TitleDTO: Decodable { let title: String? }
+}
+
+struct HomeBlockResourceDTO: Decodable {
+    let resourceType: String?
+    let resourceId: FlexibleID?
+    let uiElement: ResourceUIElementDTO?
+    let resourceExtInfo: ExtInfoDTO?
+
+    struct ResourceUIElementDTO: Decodable {
+        let mainTitle: TitleDTO?
+        let image: ImageDTO?
+    }
+    struct TitleDTO: Decodable { let title: String? }
+    struct ImageDTO: Decodable { let imageUrl: String? }
+    struct ExtInfoDTO: Decodable {
+        let songData: FlexibleSongDTO?
+        let song: FlexibleSongDTO?
+        let playCount: Int?
+        let artists: [FlexibleSongDTO.NameDTO]?
+    }
+}
+
+private struct NeteaseTopSongResponse: Decodable {
+    let data: [FlexibleSongDTO]?
+}
+
+private struct NeteaseSimilarResponse: Decodable {
+    let songs: [FlexibleSongDTO]?
+}
+
+private struct NeteaseNewAlbumsResponse: Decodable {
+    let total: Int?
+    let albums: [AlbumItemDTO]?
+    struct AlbumItemDTO: Decodable {
+        let id: Int
+        let name: String
+        let picUrl: String?
+        let artists: [FlexibleSongDTO.NameDTO]?
+        let size: Int?
+    }
+}
+
+/// 专辑详情（信息 + 曲目）。publishTime 为毫秒时间戳。
+struct NeteaseAlbumDetail {
+    let info: AlbumInfoDTO
+    let tracks: [FoliaTrack]
+
+    struct AlbumInfoDTO: Decodable {
+        let id: Int
+        let name: String
+        let picUrl: String?
+        let artist: ArtistDTO?
+        let artists: [ArtistDTO]?
+        let publishTime: Int64?
+        let company: String?
+        let description: String?
+        let size: Int?
+
+        struct ArtistDTO: Decodable { let name: String }
+    }
+
+    var coverURL: URL? {
+        info.picUrl?.replacingOccurrences(of: "http://", with: "https://").flatMap(URL.init(string:))
+    }
+    var artistLabel: String {
+        let names = (info.artists ?? []).map(\.name).filter { !$0.isEmpty }
+        if !names.isEmpty { return names.joined(separator: ", ") }
+        return info.artist?.name ?? ""
+    }
+    var publishDateText: String? {
+        guard let ms = info.publishTime, ms > 0 else { return nil }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: Date(timeIntervalSince1970: Double(ms) / 1000.0))
+    }
+}
+
+private struct NeteaseAlbumDetailResponse: Decodable {
+    let album: NeteaseAlbumDetail.AlbumInfoDTO?
+    let songs: [SongDetailDTO]?
 }

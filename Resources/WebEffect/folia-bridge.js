@@ -16,6 +16,8 @@
  *     spectrum    预留，POC 前原生不发，只定型
  *   网页 -> 原生 sendAction(action, data)：togglePlay / next / prev / seek /
  *     like / minimize / log（只发 warn/error，fire-and-forget，不要求回执）。
+ *   网页 -> 原生 sendNative(message)：播放页自带 UI（胶囊条 / 玻璃面板）的控制
+ *     通道，独立 handler foliaNative，消息形状见 sendNative 上方注释。
  *
  * 时间模型：原生下发 anchor + rate，前端用 rAF + performance.now() 本地插值，
  * 禁止 60Hz evaluateJavaScript。rate 定义域 [0, 2]，时间基准 = 听众感知时间，
@@ -156,6 +158,30 @@
         }
         try {
             handler.postMessage(payload);
+        } catch (e) {
+            // 桥不可用时静默丢弃，不抛到页面逻辑里。
+        }
+    }
+
+    /* ------------------------------------------------------------------ */
+    /* 网页 -> 原生：播放页 UI 控制通道（foliaNative）                        */
+    /* ------------------------------------------------------------------ */
+
+    // 播放页自带 UI（FloatingPlayerControls 胶囊条 + UnifiedPanel 玻璃面板）的
+    // 指令走这条独立通道，消息形状定版（只增不改）：
+    //   { type: 'transport', action: 'play'|'pause'|'toggle'|'next'|'previous' }
+    //   { type: 'seek', seconds }          { type: 'queuePlay', index }
+    //   { type: 'queueRemove', index }    { type: 'playMode', mode: 'off'|'all'|'one' }
+    //   { type: 'volume', value: 0..1 }   { type: 'dismissPlayer' }
+    //   { type: 'visualChanged' }（外观变化通知，原生仅记录、不回改）
+    // 与 sendAction（foliaAction，M2 旧通道）并存，互不影响。
+    function sendNative(message) {
+        var handler = window.webkit &&
+            window.webkit.messageHandlers &&
+            window.webkit.messageHandlers.foliaNative;
+        if (!handler || typeof handler.postMessage !== 'function' || !message) return;
+        try {
+            handler.postMessage(message);
         } catch (e) {
             // 桥不可用时静默丢弃，不抛到页面逻辑里。
         }
@@ -363,6 +389,9 @@
                 }
                 setAnchor(payload.initialTime, payload.rate);
                 if (typeof payload.renderActive === 'boolean') applyRenderActive(payload.renderActive);
+                // 原样再分发一份：应用层据此采纳可选字段（如 loopMode / volume /
+                // isMuted，原生开始下发后才有），桥本身不解释这些字段。
+                window.dispatchEvent(new CustomEvent('folia:snapshot', { detail: payload }));
                 break;
             }
             case 'renderState': {
@@ -447,6 +476,7 @@
         onNativeEvent: onNativeEvent,
         getInterpolatedTime: getInterpolatedTime,
         sendAction: sendAction,
+        sendNative: sendNative,
         previewSeek: previewSeek,
         commitSeek: commitSeek,
         pauseRender: pauseRender,

@@ -33,6 +33,8 @@ final class QueueManager: ObservableObject {
         case loopAll
         case repeatOne
         case shuffle
+        /// 不循环（播放页面板循环磁贴的 off 档）：队列最后一首播完停住。
+        case off
     }
 
     @Published var playMode: PlayMode = .loopAll
@@ -74,6 +76,16 @@ final class QueueManager: ObservableObject {
                 // 单曲循环：回开头续播同一首（地址不重换，条目仍在引擎里）。
                 self.engine.seek(to: 0)
                 self.engine.play()
+                return
+            }
+            if self.playMode == .off {
+                // 不循环：最后一首播完停住；未到末尾照常推进（playNext 的
+                // 取模绕回只会在手动切歌时触发，自动推进到末尾前不会绕）。
+                if self.currentIndex >= self.queue.count - 1 {
+                    self.stop()
+                    return
+                }
+                self.playNext(manual: false)
                 return
             }
             self.playNext(manual: false)
@@ -147,6 +159,36 @@ final class QueueManager: ObservableObject {
             self.manualSelectionPending = true
             self.updateCommandAvailability()
             self.loadTrackAtCurrentIndex()
+        }
+    }
+
+    /// 从队列移除一首（播放页队列页签的 queueRemove 用）。移除当前曲时装载
+    /// 落到该位置的下一首（越界回落最后一首）；队列清空则停播；移除当前曲
+    /// 之前的歌只平移下标，不打断播放。
+    func removeFromQueue(at index: Int) {
+        runOnMain { [weak self] in
+            guard let self, self.queue.indices.contains(index) else { return }
+            let wasCurrent = index == self.currentIndex
+            self.queue.remove(at: index)
+            if self.queue.isEmpty {
+                self.currentIndex = 0
+                self.consecutiveFailures = 0
+                self.updateCommandAvailability()
+                self.engine.stop()
+                return
+            }
+            if index < self.currentIndex {
+                self.currentIndex -= 1
+                self.updateCommandAvailability()
+            } else if wasCurrent {
+                self.currentIndex = min(self.currentIndex, self.queue.count - 1)
+                self.consecutiveFailures = 0
+                self.loadIsManual = false
+                self.updateCommandAvailability()
+                self.loadTrackAtCurrentIndex()
+            } else {
+                self.updateCommandAvailability()
+            }
         }
     }
 
@@ -247,6 +289,9 @@ final class QueueManager: ObservableObject {
                     self.manualSelectionPending = false
                     // 曲目元数据入库（仅元数据；remote_stream_url 不写入播放地址）。
                     DatabaseManager.shared.upsertTrack(track)
+                    // 本机播放记录（探索页「最近播放 / 再听一次」自有分区的数据源）：
+                    // 取流成功、即将起播 = 一次成功起播，记在这里改动最小。
+                    PlayHistoryStore.shared.recordPlay(track)
                     // 封面不阻塞起播：先以 nil 起播，封面到后再补。
                     self.engine.load(track: track, playableURL: playableURL, artwork: nil)
                 }

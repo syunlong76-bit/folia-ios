@@ -212,8 +212,9 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         NSLayoutConstraint.activate([
             miniHC.view.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             miniHC.view.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            miniHC.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -8),
-            miniHC.view.heightAnchor.constraint(equalToConstant: 64),
+            // BrowseMiniBar 口径：bottom = 12 + 安全区；条高 = py-2×2 + 封面 40 = 56。
+            miniHC.view.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
+            miniHC.view.heightAnchor.constraint(equalToConstant: 56),
         ])
         miniHC.view.isHidden = true // 无曲目时隐藏
         self.miniPlayerHostingController = miniHC
@@ -240,6 +241,16 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
         // 桥的收起请求（网页 minimize 动作）-> 收起播放页。
         WebEffectBridge.shared.onMinimizeRequested = {
             RenderStateCenter.shared.setFullPlayerOpen(false)
+        }
+
+        // 喜欢（红心）：本地存档 LikesStore 为唯一真源——桥快照 isLiked 读它，
+        // 网页面板的 like 动作写它，写完补发快照让面板红心立即回显新状态。
+        WebEffectBridge.shared.isLikedProvider = { trackId in
+            LikesStore.shared.isLiked(trackId)
+        }
+        WebEffectBridge.shared.onToggleLikeRequested = { trackId in
+            LikesStore.shared.toggle(trackId)
+            WebEffectBridge.shared.pushSnapshot()
         }
 
         // 迷你条可见性：3.3 起浏览面原生化，网页播放条已不存在，原生迷你条

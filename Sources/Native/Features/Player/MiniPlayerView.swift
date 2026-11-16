@@ -1,100 +1,88 @@
 import SwiftUI
 
-/// 原生悬浮迷你播放条（M2，native-arch.md §10）：全 App 唯一播放条。
+/// 原生悬浮迷你播放条（M2；2026-11-16 按 Folia 自带 BrowseMiniBar 对齐数值）。
 ///
-/// 悬浮卡片＋顶部细进度条＋封面 / 歌名歌手 / 播放暂停 / 下一首。
-/// 只订阅 PlaybackEngine 的 @Published 状态（不另起 onTimeSync 单回调；
-/// 多播由 M1 在引擎侧处理，本视图只做 Published 订阅兜底）。
-/// 无曲目时不渲染内容；可见性由 MainViewController 按 currentTrack 控制。
+/// 规格（folia-major/src/components/app/shellBridge/BrowseMiniBar.tsx）：
+/// inset-x 12、bottom = 12 + 安全区（宿主在 MainViewController 侧对齐）、
+/// rounded-2xl、border white/10、bg zinc-900/85、backdrop-blur、px-3 py-2、
+/// gap-3；封面 40×40 rounded-lg（无封面为 white/10 空块）；歌名 14 medium
+/// 白色 + 歌手 12 white/60；上一首 20 / 播放暂停 24 / 下一首 20（走带键
+/// white/80、播放键 white，p-2）；点条身开播放页；无当前歌曲不渲染。
+/// 宿主可见性仍由 MainViewController 按 currentTrack 控制。
 struct MiniPlayerView: View {
     @ObservedObject var engine = PlaybackEngine.shared
     var onTapExpand: () -> Void
 
-    private var progress: Double {
-        guard engine.duration > 0, engine.duration.isFinite else { return 0 }
-        return min(max(engine.currentTime / engine.duration, 0), 1)
-    }
-
     var body: some View {
         if let track = engine.currentTrack {
-            VStack(spacing: 0) {
-                // 顶部细进度条（2pt）。
-                GeometryReader { geo in
-                    ZStack(alignment: .leading) {
-                        Color.primary.opacity(0.08)
-                        Color.accentColor
-                            .frame(width: geo.size.width * progress)
-                    }
+            HStack(spacing: 12) {
+                MiniCoverView(artworkURL: track.artworkURL)
+                    .frame(width: 40, height: 40)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(track.title)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(.white)
+                        .lineLimit(1)
+                    Text(track.artist)
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.6))
+                        .lineLimit(1)
                 }
-                .frame(height: 2)
 
-                HStack(spacing: 12) {
-                    MiniCoverView(artworkURL: track.artworkURL)
-                        .frame(width: 42, height: 42)
-                        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                Spacer(minLength: 4)
 
-                    VStack(alignment: .leading, spacing: 2) {
-                        Text(track.title)
-                            .font(.subheadline.weight(.semibold))
-                            .lineLimit(1)
-                        HStack(spacing: 4) {
-                            if track.sourceType == .local {
-                                Text("本地")
-                                    .font(.system(size: 9, weight: .bold))
-                                    .padding(.horizontal, 4)
-                                    .padding(.vertical, 1)
-                                    .background(Color.accentColor.opacity(0.15))
-                                    .foregroundColor(.accentColor)
-                                    .clipShape(RoundedRectangle(cornerRadius: 3))
-                            }
-                            Text(track.artist)
-                                .font(.caption)
-                                .foregroundColor(.secondary)
-                                .lineLimit(1)
-                        }
-                    }
-
-                    Spacer(minLength: 4)
-
-                    Button {
-                        QueueManager.shared.playPrevious()
-                    } label: {
-                        Image(systemName: "backward.fill")
-                            .font(.body)
-                            .frame(width: 36, height: 36)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("上一首")
-
-                    Button {
-                        engine.togglePlayPause()
-                    } label: {
-                        Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                            .font(.title3)
-                            .frame(width: 36, height: 36)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(engine.isPlaying ? "暂停" : "播放")
-
-                    Button {
-                        QueueManager.shared.playNext(manual: true)
-                    } label: {
-                        Image(systemName: "forward.fill")
-                            .font(.body)
-                            .frame(width: 36, height: 36)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel("下一首")
+                Button {
+                    QueueManager.shared.playPrevious()
+                } label: {
+                    Image(systemName: "backward.end.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 8)
+                .buttonStyle(.plain)
+                .accessibilityLabel("上一首")
+
+                Button {
+                    engine.togglePlayPause()
+                } label: {
+                    Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 24))
+                        .foregroundColor(.white)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel(engine.isPlaying ? "暂停" : "播放")
+
+                Button {
+                    QueueManager.shared.playNext(manual: true)
+                } label: {
+                    Image(systemName: "forward.end.fill")
+                        .font(.system(size: 20))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 36, height: 36)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("下一首")
             }
-            .background(.ultraThinMaterial)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background {
+                ZStack {
+                    Rectangle().fill(.ultraThinMaterial)
+                    Rectangle().fill(Color(red: 0x18 / 255, green: 0x18 / 255, blue: 0x1B / 255)
+                        .opacity(0.85))
+                }
+            }
             .clipShape(RoundedRectangle(cornerRadius: 16, style: .continuous))
-            .shadow(color: .black.opacity(0.12), radius: 10, x: 0, y: 4)
+            .overlay(
+                RoundedRectangle(cornerRadius: 16, style: .continuous)
+                    .stroke(Color.white.opacity(0.10), lineWidth: 1))
+            .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 4)
             .padding(.horizontal, 12)
             .contentShape(Rectangle())
             .onTapGesture {
@@ -106,6 +94,7 @@ struct MiniPlayerView: View {
 
 /// 迷你条封面：远程 URL 走 AsyncImage；本地 file URL 走 UIImage 加载
 ///（不直接用 AsyncImage 加载 file URL，见 native-arch.md §7 M3 登记 ⑦）。
+/// 无封面/加载中 = white/10 空块（BrowseMiniBar 原样）。
 private struct MiniCoverView: View {
     let artworkURL: URL?
     @State private var fileImage: UIImage?
@@ -135,10 +124,6 @@ private struct MiniCoverView: View {
     }
 
     private var coverPlaceholder: some View {
-        ZStack {
-            Color.secondary.opacity(0.15)
-            Image(systemName: "music.note")
-                .foregroundColor(.secondary)
-        }
+        Color.white.opacity(0.10)
     }
 }
