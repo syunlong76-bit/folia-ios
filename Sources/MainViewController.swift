@@ -109,6 +109,9 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
             self?.showSurface(surface)
         }
 
+        // --- 3.2 原生接管：桥点歌指令改道原生引擎（须在首条指令到达前装好） ---
+        NativePlaybackCoordinator.shared.start()
+
         // --- M2 原生播放层：迷你条悬浮挂载、全屏容器常驻挂载（RenderStateCenter 驱动） ---
         setupNativePlayerUI()
 
@@ -194,8 +197,14 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
 
     /// 切换可见表面（主线程）。播放表面从不移出层级、从不 hidden：
     /// 「切到浏览」= 浏览表面盖回来；「切到播放」= 浏览表面隐藏、露出下面的播放表面。
+    /// 3.2：原生队列已有曲目时，「切到播放」改开原生全屏播放器（特效面），
+    /// 网页播放表面不再创建；队列为空（旧路径）才回退网页播放表面。
     private func showSurface(_ surface: String) {
         if surface == "player" {
+            if QueueManager.shared.currentTrack != nil {
+                RenderStateCenter.shared.setFullPlayerOpen(true)
+                return
+            }
             _ = ensurePlayerWebView()
             browseWebView.isHidden = true
         } else {
@@ -255,11 +264,13 @@ final class MainViewController: UIViewController, WKNavigationDelegate, UIGestur
             RenderStateCenter.shared.setFullPlayerOpen(false)
         }
 
-        // 迷你条可见性：有曲目 且 播放页未展开。
+        // 迷你条可见性：3.2 起原生迷你条停用（保持隐藏）。浏览表面的网页
+        // 迷你条由原生状态回发驱动、功能完整（上一首/播放暂停/下一首），
+        // 两条同时出现就是 3.0 时代报过的双播放条重叠问题，只留一条。
         Publishers.CombineLatest(PlaybackEngine.shared.$currentTrack, renderCenter.$isFullPlayerOpen)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] track, isOpen in
-                self?.miniPlayerHostingController?.view.isHidden = (track == nil || isOpen)
+            .sink { [weak self] _, _ in
+                self?.miniPlayerHostingController?.view.isHidden = true
             }
             .store(in: &nativePlayerCancellables)
 

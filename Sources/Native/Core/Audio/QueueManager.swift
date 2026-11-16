@@ -128,6 +128,39 @@ final class QueueManager {
         }
     }
 
+    /// 追加到队尾（去重，不打断当前播放；3.2 桥 addToQueue 用）。
+    func appendToQueue(_ tracks: [FoliaTrack]) {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            let existing = Set(self.queue.map(\.id))
+            let fresh = tracks.filter { !existing.contains($0.id) }
+            guard !fresh.isEmpty else { return }
+            self.queue.append(contentsOf: fresh)
+            self.updateCommandAvailability()
+        }
+    }
+
+    /// 插入并立即播放（3.2 桥 addAndPlay 用）：已在队内则跳过去播，
+    /// 否则插到当前曲之后并切过去。
+    func insertAndPlay(_ track: FoliaTrack) {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            if let idx = self.queue.firstIndex(where: { $0.id == track.id }) {
+                self.currentIndex = idx
+            } else if self.queue.isEmpty {
+                self.queue = [track]
+                self.currentIndex = 0
+            } else {
+                let at = self.currentIndex + 1
+                self.queue.insert(track, at: at)
+                self.currentIndex = at
+            }
+            self.consecutiveFailures = 0
+            self.updateCommandAvailability()
+            self.loadTrackAtCurrentIndex()
+        }
+    }
+
     func stop() {
         runOnMain { [weak self] in
             guard let self else { return }

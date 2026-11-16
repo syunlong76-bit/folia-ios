@@ -14,6 +14,20 @@ final class BridgeStore {
     /// 壳层回调：需要切换可见表面时调用（"browse" / "player"），已切到主线程
     var onShowSurface: ((String) -> Void)?
 
+    /// 3.2 原生接管回调：play 家族指令入队时同步触发（在 onShowSurface
+    /// 派发之前），由 NativePlaybackCoordinator 处理并改道原生引擎。
+    var onCommand: (([String: Any]) -> Void)?
+
+    /// play 家族指令类型：3.2 起由原生引擎执行，不再下发网页播放表面。
+    static let nativeHandledTypes: Set<String> = [
+        "play", "playQueueFromStart", "addAndPlay", "addToQueue", "transport"
+    ]
+
+    /// 是否已有 play 家族指令被原生接管（首条到达即置位，只增不减）。
+    /// 置位后 commands() 过滤该族指令、snapshot() 不再给 lastPlay 快照，
+    /// 防网页播放表面自启播或按快照恢复出第二路声音。
+    private(set) var nativePlaybackActive = false
+
     private let lock = NSLock()
     private var seq = 0
     private var queue: [(seq: Int, cmd: [String: Any])] = []
@@ -35,9 +49,14 @@ final class BridgeStore {
         if type == "play" {
             lastPlay = ["song": cmd["song"] ?? NSNull(), "queue": cmd["queue"] ?? []]
         }
+        let isNativeHandled = type.map { Self.nativeHandledTypes.contains($0) } ?? false
+        if isNativeHandled { nativePlaybackActive = true }
         var show = cmd["show"] as? String
         if type == "show" { show = cmd["surface"] as? String }
         lock.unlock()
+        if isNativeHandled {
+            onCommand?(cmd)
+        }
         if let show = show {
             DispatchQueue.main.async { [weak self] in
                 self?.onShowSurface?(show)
@@ -46,11 +65,20 @@ final class BridgeStore {
         return mySeq
     }
 
-    /// 取序号大于 since 的指令（播放表面轮询用）与当前最大序号
+    /// 取序号大于 since 的指令（播放表面轮询用）与当前最大序号。
+    /// 原生接管置位后，play 家族指令不再下发（已由原生引擎执行）。
     func commands(since: Int) -> (seq: Int, cmds: [[String: Any]]) {
         lock.lock()
         defer { lock.unlock() }
-        let items = queue.filter { $0.seq > since }.map { ["seq": $0.seq, "cmd": $0.cmd] as [String: Any] }
+        let items = queue.filter { item in
+            guard item.seq > since else { return false }
+            if nativePlaybackActive,
+               let type = item.cmd["type"] as? String,
+               Self.nativeHandledTypes.contains(type) {
+                return false
+            }
+            return true
+        }.map { ["seq": $0.seq, "cmd": $0.cmd] as [String: Any] }
         return (seq, items)
     }
 
@@ -63,6 +91,8 @@ final class BridgeStore {
     func snapshot() -> (state: [String: Any]?, lastPlay: [String: Any]?) {
         lock.lock()
         defer { lock.unlock() }
-        return (latestState, lastPlay)
+        // 原生接管后不给快照：网页播放表面即使被旧路径拉起，也不能按
+        // lastPlay 恢复网页播放（会和原生引擎双出声）。state 照常返回。
+        return (latestState, nativePlaybackActive ? nil : lastPlay)
     }
 }
