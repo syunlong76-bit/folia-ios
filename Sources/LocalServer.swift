@@ -8,7 +8,8 @@ import Network
 /// - 静态文件：根目录 = WebRootManager 当前生效版本目录；MIME 齐全；SPA 回退 index.html
 /// - /sw.js：返回自注销 stub（壳内禁用 Folia 自带 Service Worker，避免其缓存与
 ///   壳的整包版本切换机制互相打架；离线能力由本地文件本身提供）
-/// - /api/*：反向代理到 https://folia-music.netlify.app
+/// - /api/*：反向代理（3.6 (4) 起主上游为各平台 EdgeOne 函数直连，传输
+///   错误/5xx 时回退 Netlify 站点一次；GET 响应带磁盘缓存与 TTL）。
 ///   完整转发 method / 请求头（含 Cookie）/ 请求体；响应状态、响应头、Set-Cookie、响应体原样回传。
 ///   因为本服务器就是 WKWebView 的源（origin），登录 Cookie 在 WebView 与本服务器之间
 ///   按标准浏览器规则流转，再由代理原样带给上游，不需要另做 cookie 罐。
@@ -507,6 +508,50 @@ private final class ConnectionHandler {
     }
 }
 
+// MARK: - 持久文件日志（3.6 (4) 最小埋点）
+
+/// Documents/folia-native.log：只记生命周期级事件（进程终止/重载/视图
+/// 恢复）与 /api 慢请求（>1s）/失败，供真机复盘。纪律取自社区版 3.0.5 的
+/// 真机教训：环形上限 2MB、串行队列异步写、写失败一律静默吞掉、错误
+/// 路径不再写日志、不记 Cookie/csrf/token 任何凭据值；排除 iCloud 备份。
+enum FoliaFileLog {
+    private static let queue = DispatchQueue(label: "com.miller.folia.filelog")
+    private static let maxBytes = 2 * 1024 * 1024
+
+    private static var fileURL: URL {
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("folia-native.log")
+    }
+
+    static func write(_ module: String, _ message: String) {
+        queue.async {
+            let line = "\(ISO8601DateFormatter().string(from: Date())) [\(module)] \(message)\n"
+            guard let data = line.data(using: .utf8) else { return }
+            let url = fileURL
+            do {
+                if !FileManager.default.fileExists(atPath: url.path) {
+                    FileManager.default.createFile(atPath: url.path, contents: nil)
+                    var mutable = url
+                    var values = URLResourceValues()
+                    values.isExcludedFromBackup = true
+                    try? mutable.setResourceValues(values)
+                }
+                if let attrs = try? FileManager.default.attributesOfItem(atPath: url.path),
+                   let size = attrs[.size] as? NSNumber, size.intValue > maxBytes,
+                   let existing = try? Data(contentsOf: url) {
+                    try Data(existing.suffix(512 * 1024)).write(to: url, options: .atomic)
+                }
+                let handle = try FileHandle(forWritingTo: url)
+                defer { try? handle.close() }
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+            } catch {
+                // 静默：日志失败绝不影响主流程，也不再记录这次失败（防自激）。
+            }
+        }
+    }
+}
+
 // MARK: - /api 反向代理
 
 private enum Proxy {
@@ -523,13 +568,172 @@ private enum Proxy {
         return URLSession(configuration: config)
     }()
 
+    // MARK: - 上游映射（3.6 (4)：去 Netlify 跳）
+
+    /// 各平台 EdgeOne 函数直连地址（与 EdgeOneAPIClient 的 backup 同源）。
+    /// Netlify 站点只剩回退角色：主上游传输错误或 5xx 时回退一次。
+    private static let edgeOneBases: [(prefix: String, base: String)] = [
+        ("/api/netease", "https://folia-netease-8v5g6dx9.edgeone.cool"),
+        ("/api/qq", "https://folia-qq-8j540jls.edgeone.cool"),
+        ("/api/kugou", "https://folia-kugou-k62owtqf.edgeone.cool"),
+    ]
+
+    private static func upstreamURLs(for target: String) -> (primary: URL?, fallback: URL?) {
+        for (prefix, base) in edgeOneBases
+        where target.hasPrefix(prefix + "/") || target.hasPrefix(prefix + "?") {
+            let rest = String(target.dropFirst(prefix.count))
+            return (URL(string: base + rest), URL(string: LocalServer.upstreamBase + target))
+        }
+        return (URL(string: LocalServer.upstreamBase + target), nil)
+    }
+
+    // MARK: - GET 磁盘缓存（3.6 (4)）
+
+    private static var apiCacheDir: URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("folia-api", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func sha256Hex(_ value: String) -> String {
+        SHA256.hash(data: Data(value.utf8)).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// 缓存键含 Cookie 哈希：不同登录态不串数据，哈希值不可逆推凭据。
+    /// 另含代次号（独立审查 M4）：歌单增删/订阅/喜欢类写操作成功后代次
+    /// +1，旧代次条目整体作废（孤儿文件由容量淘汰回收），避免用户改完
+    /// 歌单后在 TTL 内还看到旧内容。
+    private static var cacheGeneration: Int {
+        UserDefaults.standard.integer(forKey: "folia.apiCacheGen")
+    }
+
+    private static func bumpCacheGeneration() {
+        UserDefaults.standard.set(cacheGeneration + 1, forKey: "folia.apiCacheGen")
+    }
+
+    private static func cacheFile(target: String, cookieHash: String) -> URL {
+        apiCacheDir.appendingPathComponent(sha256Hex(target + "|" + cookieHash + "|g\(cacheGeneration)") + ".json")
+    }
+
+    /// 网易云大量错误是 HTTP 200 + 业务 code != 200，错误体不许落缓存
+    /// （独立审查 H2 附带项）。仅对网易云目标生效：QQ/酷狗的 code 约定
+    /// 不同（0 为成功），不在此判。无 code 字段时放行。
+    private static func neteaseBusinessOK(_ body: Data, target: String) -> Bool {
+        guard target.hasPrefix("/api/netease") else { return true }
+        guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let code = (object["code"] as? NSNumber)?.intValue else { return true }
+        return code == 200
+    }
+
+    /// API 缓存容量上限与 LRU 淘汰（独立审查 M1）：图片缓存有配额，
+    /// API 缓存此前无界增长。超限时按修改时间从旧到新删到达标。
+    private static let apiCacheCapBytes = 150 * 1024 * 1024
+
+    private static func trimAPICacheIfNeeded() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(
+            at: apiCacheDir, includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]) else { return }
+        var entries: [(url: URL, size: Int, mtime: Date)] = []
+        var total = 0
+        for file in files {
+            let values = try? file.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let size = values?.fileSize ?? 0
+            total += size
+            entries.append((file, size, values?.contentModificationDate ?? .distantPast))
+        }
+        guard total > apiCacheCapBytes else { return }
+        for entry in entries.sorted(by: { $0.mtime < $1.mtime }) {
+            if total <= apiCacheCapBytes { break }
+            try? fm.removeItem(at: entry.url)
+            total -= entry.size
+        }
+    }
+
+    /// GET 缓存 TTL（秒）；nil 表示不缓存（登录/二维码/取流/写操作类）。
+    /// 独立审查 M4 补排除：personal_fm 每次须取新一批、check 类是实时
+    /// 校验、download 地址带过期签名——都不许进缓存。
+    private static func cacheTTL(for target: String) -> TimeInterval? {
+        let path = target.components(separatedBy: "?").first ?? target
+        let lower = path.lowercased()
+        if lower.contains("login") || lower.contains("/qr") || lower.contains("/song/url")
+            || lower.contains("scrobble") || lower.contains("/like")
+            || lower.contains("personal_fm") || lower.contains("/check/")
+            || lower.contains("download") { return nil }
+        if lower.contains("lyric") { return 24 * 3600 }
+        if lower.contains("/playlist/detail") || lower.contains("/song/detail") { return 600 }
+        if lower.contains("search") { return 1800 }
+        return 300
+    }
+
+    /// 纯列表端点判定（参数保留，当前档位已不随它变化，见改写器头注）。
+    private static func isListContext(target: String) -> Bool {
+        let path = target.components(separatedBy: "?").first ?? target
+        return path.contains("/playlist/detail") || path.contains("/album")
+            || path.contains("/artist/") || path.contains("/toplist") || path.contains("search")
+    }
+
+    private static func freshCacheData(target: String, cookieHash: String, ttl: TimeInterval) -> Data? {
+        let file = cacheFile(target: target, cookieHash: cookieHash)
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: file.path),
+              let mtime = attrs[.modificationDate] as? Date else { return nil }
+        // 过期文件顺手删掉，不让它占着容量配额（M1）。
+        guard Date().timeIntervalSince(mtime) < ttl else {
+            try? FileManager.default.removeItem(at: file)
+            return nil
+        }
+        guard let data = try? Data(contentsOf: file), !data.isEmpty else { return nil }
+        return data
+    }
+
     static func proxy(request: HTTPRequest, handler: ConnectionHandler) {
-        guard let url = URL(string: LocalServer.upstreamBase + request.target) else {
+        let startedAt = Date()
+        let cookieHash = sha256Hex(request.header("Cookie") ?? "")
+        // GET 缓存先行：新鲜条目直接回，不打上游（存的是已改写封面的成品体）。
+        var cacheTarget: String?
+        if request.method == "GET", let ttl = cacheTTL(for: request.target) {
+            if let cached = freshCacheData(target: request.target, cookieHash: cookieHash, ttl: ttl) {
+                handler.respond(status: 200, reason: "OK",
+                                headers: [("Content-Type", "application/json; charset=utf-8"),
+                                          ("X-Folia-Cache", "hit")],
+                                body: cached)
+                return
+            }
+            cacheTarget = request.target
+        }
+
+        let (primary, fallback) = upstreamURLs(for: request.target)
+        guard let primary else {
             handler.respond(status: 502, reason: "Bad Gateway",
                             headers: [("Content-Type", "text/plain; charset=utf-8")],
                             body: Data("Bad upstream URL".utf8))
             return
         }
+        // 回退只对幂等方法开放（独立审查 H1）：写请求若在主上游已执行
+        // 但响应 5xx，重放到第二上游会双重提交（如重复加曲）。POST 失败
+        // 就把原响应/502 交回页面，由页面决定是否重试。
+        let allowFallback = request.method == "GET" || request.method == "HEAD"
+        perform(url: primary, request: request) { data, http, error in
+            // 开关化迁移的保险：主上游（EdgeOne 直连）传输错误或 5xx，
+            // 回退 Netlify 旧链路一次，页面无感。
+            if allowFallback, let fallback, error != nil || (http.map { $0.statusCode >= 500 } ?? false) {
+                perform(url: fallback, request: request) { data2, http2, error2 in
+                    finish(data: data2, http: http2, error: error2, url: fallback,
+                           request: request, handler: handler, startedAt: startedAt,
+                           upstream: "netlify-fallback", cacheTarget: cacheTarget, cookieHash: cookieHash)
+                }
+                return
+            }
+            finish(data: data, http: http, error: error, url: primary,
+                   request: request, handler: handler, startedAt: startedAt,
+                   upstream: fallback != nil ? "edgeone" : "netlify",
+                   cacheTarget: cacheTarget, cookieHash: cookieHash)
+        }
+    }
+
+    private static func perform(url: URL, request: HTTPRequest,
+                                completion: @escaping (Data?, HTTPURLResponse?, Error?) -> Void) {
         var upstream = URLRequest(url: url)
         upstream.httpMethod = request.method
         // 逐项转发请求头；Host/Content-Length 由 URLSession 生成，
@@ -543,66 +747,157 @@ private enum Proxy {
         if !request.body.isEmpty {
             upstream.httpBody = request.body
         }
-
         let task = session.dataTask(with: upstream) { data, response, error in
-            if let error = error {
-                NSLog("[Proxy] \(request.method) \(request.target) failed: \(error)")
-                handler.respond(status: 502, reason: "Bad Gateway",
-                                headers: [("Content-Type", "text/plain; charset=utf-8")],
-                                body: Data("Upstream Error".utf8))
-                return
-            }
-            guard let http = response as? HTTPURLResponse else {
-                handler.respond(status: 502, reason: "Bad Gateway",
-                                headers: [("Content-Type", "text/plain; charset=utf-8")],
-                                body: Data("Bad upstream response".utf8))
-                return
-            }
-            var outHeaders: [(String, String)] = []
-            var setCookies: [String] = []
-            for (key, value) in http.allHeaderFields {
-                guard let name = key as? String, let text = value as? String else { continue }
-                let lower = name.lowercased()
-                // 这些头由本服务器重新生成；Content-Encoding 因 identity 请求一般不会出现，
-                // 若出现则说明上游未按 identity 返回，仍原样透传由 WebView 处理
-                if ["content-length", "transfer-encoding", "connection"].contains(lower) { continue }
-                if lower == "set-cookie" {
-                    setCookies.append(text)
-                    continue
-                }
-                outHeaders.append((name, text))
-            }
-            // Set-Cookie 可能被合并成一条逗号拼接字符串；用 HTTPCookie 解析后逐条重发。
-            // 重发时去掉 Domain 属性：让 cookie 成为本机源（127.0.0.1）的 host-only cookie，
-            // 这样 WebView 才会存下并在后续请求里带给本服务器，代理再原样转给上游。
-            if !setCookies.isEmpty {
-                let parsed = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": setCookies.joined(separator: ", ")],
-                                                for: url)
-                for cookie in parsed {
-                    outHeaders.append(("Set-Cookie", reserialize(cookie)))
-                }
-            }
-            var body = data ?? Data()
-            let status = http.statusCode
-            // 3.6 (3)：JSON 响应里的封面 URL 改写到本地图片代理（按显示尺寸
-            // 降分辨率下发），治格子墙全尺寸封面解码把 WebView 进程撑爆被杀。
-            // 只改图片地址这一处数据，不动任何字段结构与界面。
-            if (200...299).contains(status), !body.isEmpty,
-               let contentType = http.value(forHTTPHeaderField: "Content-Type"),
-               contentType.contains("json") {
-                body = CoverURLRewriter.rewrite(body: body, port: LocalServer.shared.port)
-            }
-            if status == 204 || status == 304 {
-                handler.respond(status: status,
-                                reason: LocalServer.reasonPhrase(for: status),
-                                headers: outHeaders, body: Data())
-            } else {
-                handler.respond(status: status,
-                                reason: LocalServer.reasonPhrase(for: status),
-                                headers: outHeaders, body: body)
-            }
+            completion(data, response as? HTTPURLResponse, error)
         }
         task.resume()
+    }
+
+    private static func finish(data: Data?, http: HTTPURLResponse?, error: Error?, url: URL,
+                               request: HTTPRequest, handler: ConnectionHandler,
+                               startedAt: Date, upstream: String,
+                               cacheTarget: String?, cookieHash: String) {
+        let elapsedMs = Int(Date().timeIntervalSince(startedAt) * 1000)
+        let pathOnly = request.target.components(separatedBy: "?").first ?? request.target
+        if let error = error {
+            NSLog("[Proxy] \(request.method) \(request.target) failed: \(error)")
+            FoliaFileLog.write("api", "\(request.method) \(pathOnly) FAILED \(elapsedMs)ms upstream=\(upstream)")
+            handler.respond(status: 502, reason: "Bad Gateway",
+                            headers: [("Content-Type", "text/plain; charset=utf-8")],
+                            body: Data("Upstream Error".utf8))
+            return
+        }
+        guard let http else {
+            handler.respond(status: 502, reason: "Bad Gateway",
+                            headers: [("Content-Type", "text/plain; charset=utf-8")],
+                            body: Data("Bad upstream response".utf8))
+            return
+        }
+        // 慢请求与上游错误落持久日志（阈值口径与 DS 对账：>1s 或失败才记）。
+        if elapsedMs > 1000 || http.statusCode >= 500 {
+            FoliaFileLog.write("api", "\(request.method) \(pathOnly) \(http.statusCode) \(elapsedMs)ms upstream=\(upstream) bytes=\(data?.count ?? 0)")
+        }
+        var outHeaders: [(String, String)] = []
+        var setCookies: [String] = []
+        for (key, value) in http.allHeaderFields {
+            guard let name = key as? String, let text = value as? String else { continue }
+            let lower = name.lowercased()
+            // 这些头由本服务器重新生成；Content-Encoding 因 identity 请求一般不会出现，
+            // 若出现则说明上游未按 identity 返回，仍原样透传由 WebView 处理
+            if ["content-length", "transfer-encoding", "connection"].contains(lower) { continue }
+            if lower == "set-cookie" {
+                setCookies.append(text)
+                continue
+            }
+            outHeaders.append((name, text))
+        }
+        // Set-Cookie 可能被合并成一条逗号拼接字符串；用 HTTPCookie 解析后逐条重发。
+        // 重发时去掉 Domain 属性：让 cookie 成为本机源（127.0.0.1）的 host-only cookie，
+        // 这样 WebView 才会存下并在后续请求里带给本服务器，代理再原样转给上游。
+        if !setCookies.isEmpty {
+            let parsed = HTTPCookie.cookies(withResponseHeaderFields: ["Set-Cookie": setCookies.joined(separator: ", ")],
+                                            for: url)
+            for cookie in parsed {
+                outHeaders.append(("Set-Cookie", reserialize(cookie)))
+            }
+        }
+        var body = data ?? Data()
+        let status = http.statusCode
+        // 3.6 (3)：JSON 响应里的封面 URL 改写到本地图片代理（按显示尺寸
+        // 降分辨率下发），治格子墙全尺寸封面解码把 WebView 进程撑爆被杀。
+        // 只改图片地址这一处数据，不动任何字段结构与界面。
+        let isJSON = http.value(forHTTPHeaderField: "Content-Type")?.contains("json") ?? false
+        if (200...299).contains(status), !body.isEmpty, isJSON {
+            body = CoverURLRewriter.rewrite(body: body, port: LocalServer.shared.port,
+                                            listContext: isListContext(target: request.target))
+        }
+        // GET 缓存落盘：200 + JSON + 无 Set-Cookie（带 Cookie 的响应多为
+        // 登录态流转，不缓存）+ 网易云业务码 200。存改写后的成品体，
+        // 命中时直接回。
+        if let cacheTarget, status == 200, isJSON, setCookies.isEmpty, !body.isEmpty,
+           neteaseBusinessOK(body, target: cacheTarget) {
+            let file = cacheFile(target: cacheTarget, cookieHash: cookieHash)
+            try? body.write(to: file, options: .atomic)
+            prefetchQueue.async { trimAPICacheIfNeeded() }
+            // 「我的歌单」列表一到手，后台把各歌单详情预热进缓存：
+            // 用户点开任意自有歌单时大概率直接命中（治 #4 首次点开慢）。
+            // 触发收紧为网易云（独立审查 H2 附带项：预热硬编码网易云
+            // base 与缓存键，别家同名路径不许误触）。
+            if cacheTarget.hasPrefix("/api/netease/user/playlist") {
+                prefetchPlaylistDetails(from: body, cookie: request.header("Cookie") ?? "",
+                                        cookieHash: cookieHash)
+            }
+        }
+        // 写操作成功后推进缓存代次（M4）：歌单增删曲目/订阅/喜欢会改变
+        // detail 与 user/playlist 的内容，旧代次条目整体作废。
+        if request.method == "POST", (200...299).contains(status) {
+            let lower = pathOnly.lowercased()
+            if lower.contains("/playlist/tracks") || lower.contains("/playlist/subscribe")
+                || lower.contains("/playlist/create") || lower.contains("/playlist/delete")
+                || lower.contains("/like") {
+                bumpCacheGeneration()
+            }
+        }
+        if status == 204 || status == 304 {
+            handler.respond(status: status,
+                            reason: LocalServer.reasonPhrase(for: status),
+                            headers: outHeaders, body: Data())
+        } else {
+            handler.respond(status: status,
+                            reason: LocalServer.reasonPhrase(for: status),
+                            headers: outHeaders, body: body)
+        }
+    }
+
+    // MARK: - 歌单详情预热（3.6 (4)）
+
+    private static let prefetchQueue = DispatchQueue(label: "com.miller.folia.api-prefetch", qos: .utility)
+    private static let prefetchGate = DispatchSemaphore(value: 2)
+
+    /// 从 user/playlist 响应里取歌单 id（最多 24 个），后台逐个把
+    /// playlist/detail 拉进缓存。全程失败静默：预热只是加速，不成不报错。
+    private static func prefetchPlaylistDetails(from body: Data, cookie: String, cookieHash: String) {
+        // 响应数组键是单数 playlist（独立审查 H2：此前误写复数，
+        // guard 必然失败，整个预热是死代码）。
+        guard let object = try? JSONSerialization.jsonObject(with: body) as? [String: Any],
+              let playlists = object["playlist"] as? [[String: Any]] else { return }
+        let ids = playlists.prefix(24).compactMap { entry -> Int64? in
+            if let number = entry["id"] as? NSNumber { return number.int64Value }
+            if let text = entry["id"] as? String { return Int64(text) }
+            return nil
+        }
+        for id in ids {
+            let target = "/api/netease/playlist/detail?id=\(id)"
+            guard let ttl = cacheTTL(for: target),
+                  let url = URL(string: "https://folia-netease-8v5g6dx9.edgeone.cool/playlist/detail?id=\(id)")
+            else { continue }
+            prefetchQueue.async {
+                // 新鲜度在执行时复查（审查 L6）：排队期间可能已被主链路
+                // 或前一个预热任务写入，不重复拉取。
+                guard freshCacheData(target: target, cookieHash: cookieHash, ttl: ttl) == nil else { return }
+                prefetchGate.wait()
+                defer { prefetchGate.signal() }
+                var upstream = URLRequest(url: url)
+                if !cookie.isEmpty { upstream.setValue(cookie, forHTTPHeaderField: "Cookie") }
+                upstream.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+                let semaphore = DispatchSemaphore(value: 0)
+                var fetched: Data?
+                var fetchedStatus = 0
+                let task = session.dataTask(with: upstream) { data, response, _ in
+                    if let http = response as? HTTPURLResponse {
+                        fetchedStatus = http.statusCode
+                        if http.statusCode == 200 { fetched = data }
+                    }
+                    semaphore.signal()
+                }
+                task.resume()
+                _ = semaphore.wait(timeout: .now() + 30)
+                guard fetchedStatus == 200, var data = fetched, !data.isEmpty,
+                      neteaseBusinessOK(data, target: target) else { return }
+                data = CoverURLRewriter.rewrite(body: data, port: LocalServer.shared.port, listContext: true)
+                try? data.write(to: cacheFile(target: target, cookieHash: cookieHash), options: .atomic)
+            }
+        }
     }
 
     /// 把 HTTPCookie 重新序列化为一条 Set-Cookie 头（不带 Domain，见 proxy 内注释）
@@ -756,9 +1051,32 @@ private enum CoverImageProxy {
     }
 
     private static func fetchAndScale(srcURL: URL, maxPixel: Int) -> (Data?, String?) {
+        // 3.6 (4)：网易云图片 CDN 支持 ?param=<边>y<边> 服务端缩放。优先取
+        // 尺寸变体（下载量从原图数 MB 降到档位量级，治 #3 封面久不出来），
+        // 变体失败再退原图；ImageIO 仍作最终上限兜底。其他 CDN 直接取原图。
+        if let host = srcURL.host?.lowercased(), host.hasSuffix("music.126.net"),
+           let variant = sizedVariantURL(srcURL, maxPixel: maxPixel),
+           let result = fetchScaledOnce(url: variant, maxPixel: maxPixel) {
+            return result
+        }
+        return fetchScaledOnce(url: srcURL, maxPixel: maxPixel) ?? (nil, nil)
+    }
+
+    private static func sizedVariantURL(_ url: URL, maxPixel: Int) -> URL? {
+        let tier = maxPixel <= 512 ? 512 : (maxPixel <= 768 ? 768 : 1080)
+        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
+        var query = components.queryItems ?? []
+        query.removeAll { $0.name == "param" }
+        query.append(URLQueryItem(name: "param", value: "\(tier)y\(tier)"))
+        components.queryItems = query
+        return components.url
+    }
+
+    /// 取一张图并缩到 maxPixel；失败返回 nil（区别于「取到了但内容不可用」）。
+    private static func fetchScaledOnce(url: URL, maxPixel: Int) -> (Data?, String?)? {
         let semaphore = DispatchSemaphore(value: 0)
         var fetched: Data?
-        let task = session.dataTask(with: srcURL) { data, response, _ in
+        let task = session.dataTask(with: url) { data, response, _ in
             if let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                 fetched = data
             }
@@ -766,8 +1084,8 @@ private enum CoverImageProxy {
         }
         task.resume()
         _ = semaphore.wait(timeout: .now() + 25)
-        guard let data = fetched, !data.isEmpty, data.count <= 16 * 1024 * 1024 else { return (nil, nil) }
-        guard let scaled = downscale(data: data, maxPixel: maxPixel) else { return (nil, nil) }
+        guard let data = fetched, !data.isEmpty, data.count <= 16 * 1024 * 1024 else { return nil }
+        guard let scaled = downscale(data: data, maxPixel: maxPixel) else { return nil }
         return (scaled, "image/jpeg")
     }
 
@@ -852,7 +1170,18 @@ private enum CoverImageProxy {
 // MARK: - /api JSON 封面 URL 改写（3.6 (3) 热修）
 
 /// 把 JSON 响应里平台 CDN 的封面地址改写成本地 /img 代理地址。
-/// 尺寸档：blur 图 480、avatar 512、其余（专辑封面）1024。
+/// 尺寸档（3.6 (4)，与 DS 第十轮回评对账定版）：先按 JSON 字段名分档
+/// （coverImgUrl 头图/墙卡 768；picUrl 一律 640；img1v1Url/avatarUrl
+/// 512），未命中字段名的走通用档（blur 480、avatar 512、其余 640）。
+/// 依据：1024² 单图解码约 4MB 是大歌单滚动时解码内存的主项；播放页
+/// 封面约 300pt 显示（@3x 理想 900），640 属轻微不足且有歌词特效覆
+/// 层，是砍不可见浪费而非降级感官——此点已列入真机验收确认项，
+/// Miller 若判糊再给播放页单开高档。
+/// 注：DS 回评曾把纯列表端点的 picUrl 定为 400，前提是「详情页曲目
+/// 的 picUrl 不会被播放页复用」；独立审查 L4 指出该前提不成立——从
+/// 歌单详情点播时播放页用的正是该响应的曲目对象。400 在播放页必然
+/// 糊、属可见降级，故 picUrl 统一 640（仍比原 1024 档省约 60% 解码
+/// 量）。此偏离已记录，晨报与真机清单同步说明。
 /// 只认图片专用域名或带图片扩展名的地址；改写失败/不匹配一律原样保留。
 private enum CoverURLRewriter {
 
@@ -864,25 +1193,53 @@ private enum CoverURLRewriter {
     /// 音频扩展名黑名单：任何情况下不改写（双保险）。
     private static let audioExtensions = [".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wav", ".opus"]
 
-    static func rewrite(body: Data, port: UInt16) -> Data {
+    /// listContext：该响应是否来自纯列表端点（playlist/detail、album、
+    /// artist、toplist、search）。参数保留供后续按端点细分档位；当前
+    /// picUrl 已统一 640（理由见类型头注），档位不再随它变化。
+    static func rewrite(body: Data, port: UInt16, listContext: Bool = false) -> Data {
+        _ = listContext
         guard port != 0, var text = String(data: body, encoding: .utf8) else { return body }
         // JSON 里 \/ 与 / 等价，先归一方便匹配（语义不变）。
         if text.contains("\\/") { text = text.replacingOccurrences(of: "\\/", with: "/") }
-        guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s"'<>\\]+"#, options: []) else { return body }
-        let matches = regex.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
-        guard !matches.isEmpty else { return body }
         var changed = false
+        // 第一遍：字段名分档。只替换 URL 部分，键与结构原样不动。
+        if let keyed = try? NSRegularExpression(
+            pattern: #""(coverImgUrl|picUrl|img1v1Url|avatarUrl)"\s*:\s*"(https?://[^\s"'<>\\]+)""#,
+            options: []) {
+            let keyedMatches = keyed.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
+            for match in keyedMatches.reversed() {
+                guard match.numberOfRanges >= 3,
+                      let keyRange = Range(match.range(at: 1), in: text),
+                      let urlRange = Range(match.range(at: 2), in: text) else { continue }
+                let key = String(text[keyRange])
+                let original = String(text[urlRange])
+                let tier: Int
+                switch key {
+                case "coverImgUrl": tier = 768
+                case "picUrl": tier = 640
+                default: tier = 512
+                }
+                guard let replacement = proxiedURL(original, port: port, tierOverride: tier) else { continue }
+                text.replaceSubrange(urlRange, with: replacement)
+                changed = true
+            }
+        }
+        // 第二遍：其余图片 URL 走通用档（已改写的 /img 相对地址不含 http 前缀，不会二次命中）。
+        guard let regex = try? NSRegularExpression(pattern: #"https?://[^\s"'<>\\]+"#, options: []) else {
+            return changed ? Data(text.utf8) : body
+        }
+        let matches = regex.matches(in: text, options: [], range: NSRange(text.startIndex..., in: text))
         for match in matches.reversed() {
             guard let range = Range(match.range, in: text) else { continue }
             let original = String(text[range])
-            guard let replacement = proxiedURL(original, port: port) else { continue }
+            guard let replacement = proxiedURL(original, port: port, tierOverride: nil) else { continue }
             text.replaceSubrange(range, with: replacement)
             changed = true
         }
         return changed ? Data(text.utf8) : body
     }
 
-    private static func proxiedURL(_ original: String, port: UInt16) -> String? {
+    private static func proxiedURL(_ original: String, port: UInt16, tierOverride: Int?) -> String? {
         guard let url = URL(string: original), let host = url.host?.lowercased(),
               CoverImageProxy.isAllowedHost(host) else { return nil }
         let path = url.path.lowercased()
@@ -891,7 +1248,7 @@ private enum CoverURLRewriter {
         let hasImageExtension = imageExtensions.contains { path.hasSuffix($0) }
         guard dedicated || hasImageExtension else { return nil }
         let lower = original.lowercased()
-        let tier = lower.contains("blur") ? 480 : (lower.contains("avatar") ? 512 : 1024)
+        let tier = tierOverride ?? (lower.contains("blur") ? 480 : (lower.contains("avatar") ? 512 : 640))
         // 相对路径 + base64url：见 CoverImageProxy 头注（避前端 https 升级与子串误伤）。
         _ = port // 地址已改相对路径，端口不再出现在产物里（签名保留兼容调用点）
         return "/img/\(base64URL(original))?w=\(tier)"

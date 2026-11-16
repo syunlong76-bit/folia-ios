@@ -1,1 +1,0 @@
-import{WebGPURenderer as e}from"./lib-wmmFW1qD.js";export{e as WebGPURenderer};

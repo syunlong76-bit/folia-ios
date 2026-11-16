@@ -40,6 +40,12 @@ enum BridgeEvent: String {
     /// 视觉切换（3.3 新增，只增不改）：{ lyricMode?, backgroundMode? }，
     /// 特效面据此调 visualizer 设置 store 的现成 setter。
     case visual
+    /// 视图恢复（3.6 (4) 新增，只增不改）：{ source, providerId?, id, type,
+    /// name?, coverUrl?, trackCount? }。页面进程被杀重载后，原生把持久化
+    /// 的当前集合视图描述发回页面，页面用自有导航回到原集合页（治 #4
+    /// 回弹主页）。桥脚本同时把 payload 暂存 window.__foliaRestoreView，
+    /// 防事件先于页面 hook 挂载到达。
+    case restoreView
 }
 
 // MARK: - 全量状态快照 DTO（native-arch.md §9/§13：以后新增桥字段只改 DTO + 前端类型）
@@ -308,6 +314,17 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 后台时进程被杀：不在后台硬重载（系统还会再杀），回前台再恢复。
     private var pendingReloadAfterTermination = false
 
+    /// 视图恢复（3.6 (4)，治 #4/#5）：本次重载是否由进程终止触发（决定
+    /// didFinish 后要不要下发 restoreView）；恢复尝试计数防死循环（同一
+    /// 会话最多 2 次，用户手动导航到别的集合后清零）。
+    private var terminationReloadPending = false
+    private var viewRestoreAttempts = 0
+    private var lastRestoredViewKey: String?
+    /// 恢复期间盖住重载黑屏的快照遮罩（无快照时纯色兜底）。
+    private var snapshotMaskView: UIImageView?
+    private var lastViewSnapshot: UIImage?
+    private var lastSnapshotCaptureAt: Date?
+
     /// 锚点纪元：seek / 切歌 / 快照时递增，网页丢弃纪元更旧的锚点（3.6 (3)）。
     private var seekSeq = 0
 
@@ -430,12 +447,104 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     @objc private func appDidBecomeActive() {
         guard pendingReloadAfterTermination, !autoReloadSuspended else { return }
         pendingReloadAfterTermination = false
+        terminationReloadPending = true
         logStore.write(level: "warn", module: "bridge",
             message: "WebEffect deferred reload on becoming active")
+        FoliaFileLog.write("bridge", "deferred reload on becoming active (termination recovery)")
+        showSnapshotMask()
         if webView.url != nil {
             webView.reload()
         } else {
             loadLocalEffectBundle()
+        }
+    }
+
+    // MARK: - 视图恢复（3.6 (4)）
+
+    /// 已存集合视图的 UserDefaults 键（JSON 字典：source/providerId/id/type…）。
+    private static let savedViewKey = "folia.lastCollectionView"
+
+    private func handleViewState(_ view: [String: Any]?) {
+        guard let view, let id = view["id"] else {
+            UserDefaults.standard.removeObject(forKey: Self.savedViewKey)
+            lastRestoredViewKey = nil
+            viewRestoreAttempts = 0
+            return
+        }
+        if let data = try? JSONSerialization.data(withJSONObject: view) {
+            UserDefaults.standard.set(data, forKey: Self.savedViewKey)
+        }
+        let key = "\(view["providerId"] as? String ?? "-")/\(view["type"] as? String ?? "-")/\(id)"
+        FoliaFileLog.write("bridge", "viewState \(key)")
+        // 用户手动导航到与上次恢复目标不同的集合：恢复计数清零。
+        if key != lastRestoredViewKey {
+            viewRestoreAttempts = 0
+        }
+        captureViewSnapshotThrottled()
+    }
+
+    private func savedCollectionView() -> [String: Any]? {
+        guard let data = UserDefaults.standard.data(forKey: Self.savedViewKey),
+              let object = try? JSONSerialization.jsonObject(with: data),
+              let view = object as? [String: Any], view["id"] != nil else { return nil }
+        return view
+    }
+
+    /// 终止重载完成（didFinish）后调用：把已存视图下发页面恢复。
+    /// 尝试上限 2 次/会话，超限只记日志不再发（防恢复-再被杀死循环）。
+    private func dispatchViewRestoreIfNeeded() {
+        guard let view = savedCollectionView() else {
+            hideSnapshotMask()
+            return
+        }
+        guard viewRestoreAttempts < 2 else {
+            FoliaFileLog.write("bridge", "view restore skipped: attempts exhausted")
+            hideSnapshotMask()
+            return
+        }
+        viewRestoreAttempts += 1
+        let key = "\(view["providerId"] as? String ?? "-")/\(view["type"] as? String ?? "-")/\(view["id"]!)"
+        lastRestoredViewKey = key
+        FoliaFileLog.write("bridge", "restoreView dispatched attempt=\(viewRestoreAttempts) \(key)")
+        dispatchToJS(.restoreView, payload: view)
+        // 页面导航回原页后会再报一次 viewState；遮罩最迟 2.2 秒撤下，
+        // 恢复失败时也不把用户困在快照上。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.2) { [weak self] in
+            self?.hideSnapshotMask()
+        }
+    }
+
+    private func captureViewSnapshotThrottled() {
+        let now = Date()
+        if let last = lastSnapshotCaptureAt, now.timeIntervalSince(last) < 4 { return }
+        lastSnapshotCaptureAt = now
+        guard webView.superview != nil, !webView.isLoading else { return }
+        webView.takeSnapshot(with: nil) { [weak self] image, _ in
+            if let image { self?.lastViewSnapshot = image }
+        }
+    }
+
+    private func showSnapshotMask() {
+        guard let superview = webView.superview, snapshotMaskView == nil else { return }
+        let mask = UIImageView(frame: webView.frame)
+        mask.image = lastViewSnapshot
+        mask.contentMode = .scaleAspectFill
+        mask.backgroundColor = UIColor(red: 0.035, green: 0.035, blue: 0.043, alpha: 1)
+        mask.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        mask.isUserInteractionEnabled = false
+        superview.addSubview(mask)
+        snapshotMaskView = mask
+        // 硬兜底：4 秒后无论如何撤下，绝不困住用户。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+            self?.hideSnapshotMask()
+        }
+    }
+
+    private func hideSnapshotMask() {
+        guard let mask = snapshotMaskView else { return }
+        snapshotMaskView = nil
+        UIView.animate(withDuration: 0.2, animations: { mask.alpha = 0 }) { _ in
+            mask.removeFromSuperview()
         }
     }
 
@@ -894,6 +1003,10 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                 return (id: id, time: t)
             }
             PlaybackEngine.shared.setLyricCues(trackId: trackId, cues: parsed)
+        case "viewState":
+            // 当前集合视图上报（3.6 (4)）：持久化到 UserDefaults，进程被杀
+            // 重载后据此恢复原页。view 为 null（或缺失）表示已回首页，清除。
+            handleViewState(body["view"] as? [String: Any])
         case "transport":
             switch body["action"] as? String {
             case "play":
@@ -1038,6 +1151,16 @@ extension WebEffectBridge: WKNavigationDelegate {
         }
         // 恢复统一走全量快照。
         pushSnapshot()
+        // 终止重载的页面：快照之后补发视图恢复（3.6 (4)），把用户带回
+        // 被杀前所在的集合页而不是停在首页。延时 0.9 秒等页面 App 挂载
+        // 与恢复 hook 注册；桥脚本有暂存兜底，早到也不会丢。
+        if terminationReloadPending {
+            terminationReloadPending = false
+            FoliaFileLog.write("bridge", "termination reload finished; scheduling view restore")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+                self?.dispatchViewRestoreIfNeeded()
+            }
+        }
     }
 
     func webView(
@@ -1045,6 +1168,8 @@ extension WebEffectBridge: WKNavigationDelegate {
         didFail navigation: WKNavigation!,
         withError error: Error
     ) {
+        // 导航失败时终止恢复标志一并清掉（独立审查 L2），防残留误触发。
+        terminationReloadPending = false
         logStore.write(level: "error", module: "bridge",
             message: "WebEffect navigation failed: \(error.localizedDescription)")
     }
@@ -1068,16 +1193,22 @@ extension WebEffectBridge: WKNavigationDelegate {
             logStore.write(level: "error", module: "bridge", message: message)
             return
         }
+        FoliaFileLog.write("bridge", "webContentProcessDidTerminate count60s=\(terminateDates.count) state=\(UIApplication.shared.applicationState == .active ? "active" : "background")")
         if UIApplication.shared.applicationState != .active {
             pendingReloadAfterTermination = true
             logStore.write(level: "warn", module: "bridge",
                 message: "WebEffect content process terminated in background; deferring reload")
             return
         }
+        terminationReloadPending = true
+        showSnapshotMask()
         logStore.write(level: "warn", module: "bridge",
             message: "WebEffect content process terminated; reloading in 0.6s")
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-            guard let self, !self.autoReloadSuspended else { return }
+            guard let self else { return }
+            // 独立审查 L2：重载被挂起时把标志清掉，别让它残留到下一次
+            // 无关的 didFinish 上误触发一次视图恢复。
+            if self.autoReloadSuspended { self.terminationReloadPending = false; return }
             if self.webView.url != nil {
                 self.webView.reload()
             } else {

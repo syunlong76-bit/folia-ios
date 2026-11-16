@@ -460,6 +460,14 @@
                 // 预留：POC 通过前原生不发；收到也只忽略。
                 break;
             }
+            case 'restoreView': {
+                // 视图恢复（3.6 (4)）：页面进程被杀重载后，原生把被杀前所在
+                // 的集合视图描述发回。先暂存再分发：页面 App 的恢复 hook 可能
+                // 晚于本事件挂载，hook 挂载时会读暂存补做，不丢。
+                window.__foliaRestoreView = payload;
+                window.dispatchEvent(new CustomEvent('folia:restoreView', { detail: payload }));
+                break;
+            }
             default:
                 // 未知值忽略（枚举扩展只增不删的另一侧约定）。
                 break;
