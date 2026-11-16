@@ -353,7 +353,7 @@ private struct QueueListView: View {
     var body: some View {
         NavigationStack {
             List {
-                ForEach(Array(queueManager.queue.enumerated()), id: \.element.id) { index, track in
+                ForEach(Array(queueManager.queue.enumerated()), id: \.offset) { index, track in
                     Button {
                         queueManager.playAtIndex(index)
                         dismiss()

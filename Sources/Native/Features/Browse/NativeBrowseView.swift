@@ -176,7 +176,7 @@ private struct PlaylistView: View {
             } else {
                 List {
                     Section {
-                        ForEach(Array(tracks.enumerated()), id: \.element.id) { index, track in
+                        ForEach(Array(tracks.enumerated()), id: \.offset) { index, track in
                             Button {
                                 QueueManager.shared.setQueue(tracks, startingAt: index)
                                 NativeBrowseView.openFullPlayer()
