@@ -587,6 +587,57 @@ private enum Proxy {
         return (URL(string: LocalServer.upstreamBase + target), nil)
     }
 
+    // MARK: - 上游健康记忆（3.6 (5)）
+
+    /// 3.6 (4) 真机实锤：edgeone.cool 是 EdgeOne Makers 预览域名，项目
+    /// 部署区域为「全球（不含中国大陆）」，大陆来源直连在边缘层被 401
+    /// 拦截（HTML 页、请求根本到不了函数），而旧回退只认传输错误/5xx，
+    /// 401 被原样交回页面导致全量 /api 失败。修复：平台级拦截可回退，
+    /// 且一旦证实被拦，该平台 30 分钟内直走 Netlify，不让每个请求都
+    /// 先撞一次墙。
+    private static func platformKey(for target: String) -> String? {
+        for (prefix, _) in edgeOneBases
+        where target.hasPrefix(prefix + "/") || target.hasPrefix(prefix + "?") {
+            return String(prefix.dropFirst("/api/".count))
+        }
+        return nil
+    }
+
+    private static func edgeOneDown(_ platform: String) -> Bool {
+        UserDefaults.standard.double(forKey: "folia.eoDown.\(platform)") > Date().timeIntervalSince1970
+    }
+
+    private static func markEdgeOneDown(_ platform: String) {
+        UserDefaults.standard.set(Date().timeIntervalSince1970 + 1800,
+                                  forKey: "folia.eoDown.\(platform)")
+    }
+
+    private enum Rejection {
+        case transport, serverError, platformBlock
+        var tag: String {
+            switch self {
+            case .transport: return "transport"
+            case .serverError: return "5xx"
+            case .platformBlock: return "platform-block"
+            }
+        }
+    }
+
+    /// 主上游响应是否属于「没拿到可用 API 响应」：传输错误、5xx、平台
+    /// 层拦截（401/403/429/451——请求未达函数），或 2xx 但不是 JSON
+    /// （200 挑战/拦截页）。业务性 4xx（400/404 的 JSON）不回退。
+    private static func rejection(data: Data?, http: HTTPURLResponse?, error: Error?) -> Rejection? {
+        if error != nil { return .transport }
+        guard let http else { return .transport }
+        if http.statusCode >= 500 { return .serverError }
+        if [401, 403, 429, 451].contains(http.statusCode) { return .platformBlock }
+        if (200...299).contains(http.statusCode), let data, !data.isEmpty {
+            let contentType = http.value(forHTTPHeaderField: "Content-Type") ?? ""
+            if !contentType.contains("json") { return .platformBlock }
+        }
+        return nil
+    }
+
     // MARK: - GET 磁盘缓存（3.6 (4)）
 
     private static var apiCacheDir: URL {
@@ -703,21 +754,54 @@ private enum Proxy {
             cacheTarget = request.target
         }
 
-        let (primary, fallback) = upstreamURLs(for: request.target)
-        guard let primary else {
+        let (edgeOneURL, netlifyURL) = upstreamURLs(for: request.target)
+        let platform = platformKey(for: request.target)
+        let pathOnly = request.target.components(separatedBy: "?").first ?? request.target
+        let isIdempotent = request.method == "GET" || request.method == "HEAD"
+
+        // 写请求固定走 Netlify 单上游（3.6 (5)，DS 对账）：EdgeOne 直连
+        // 在大陆来源被预览域名拦截、未经真机证明，且写请求不许跨上游
+        // 重放（独立审查 H1）。这与 3.6 (3) 验证过的路径一致。
+        if !isIdempotent {
+            guard let sole = netlifyURL ?? edgeOneURL else {
+                handler.respond(status: 502, reason: "Bad Gateway",
+                                headers: [("Content-Type", "text/plain; charset=utf-8")],
+                                body: Data("Bad upstream URL".utf8))
+                return
+            }
+            perform(url: sole, request: request) { data, http, error in
+                finish(data: data, http: http, error: error, url: sole,
+                       request: request, handler: handler, startedAt: startedAt,
+                       upstream: "netlify", cacheTarget: nil, cookieHash: cookieHash)
+            }
+            return
+        }
+
+        // 该平台已被证实被拦且在记忆期内：直走 Netlify，不撞墙。
+        if let platform, edgeOneDown(platform), let netlifyURL {
+            perform(url: netlifyURL, request: request) { data, http, error in
+                finish(data: data, http: http, error: error, url: netlifyURL,
+                       request: request, handler: handler, startedAt: startedAt,
+                       upstream: "netlify", cacheTarget: cacheTarget, cookieHash: cookieHash)
+            }
+            return
+        }
+
+        guard let primary = edgeOneURL else {
             handler.respond(status: 502, reason: "Bad Gateway",
                             headers: [("Content-Type", "text/plain; charset=utf-8")],
                             body: Data("Bad upstream URL".utf8))
             return
         }
-        // 回退只对幂等方法开放（独立审查 H1）：写请求若在主上游已执行
-        // 但响应 5xx，重放到第二上游会双重提交（如重复加曲）。POST 失败
-        // 就把原响应/502 交回页面，由页面决定是否重试。
-        let allowFallback = request.method == "GET" || request.method == "HEAD"
         perform(url: primary, request: request) { data, http, error in
-            // 开关化迁移的保险：主上游（EdgeOne 直连）传输错误或 5xx，
-            // 回退 Netlify 旧链路一次，页面无感。
-            if allowFallback, let fallback, error != nil || (http.map { $0.statusCode >= 500 } ?? false) {
+            // 没拿到可用 API 响应就回退 Netlify 一次（3.6 (5) 放宽：
+            // 3.6 (4) 只认传输错误/5xx，大陆直连的 401 拦截页漏网）。
+            // 平台级拦截（请求未达函数）另记健康标记，30 分钟内直走备路。
+            if let fallback = netlifyURL, let rejection = rejection(data: data, http: http, error: error) {
+                if rejection == .platformBlock, let platform {
+                    markEdgeOneDown(platform)
+                }
+                FoliaFileLog.write("api", "\(request.method) \(pathOnly) fallback reason=\(rejection.tag) primaryStatus=\(http?.statusCode ?? 0)")
                 perform(url: fallback, request: request) { data2, http2, error2 in
                     finish(data: data2, http: http2, error: error2, url: fallback,
                            request: request, handler: handler, startedAt: startedAt,
@@ -727,7 +811,7 @@ private enum Proxy {
             }
             finish(data: data, http: http, error: error, url: primary,
                    request: request, handler: handler, startedAt: startedAt,
-                   upstream: fallback != nil ? "edgeone" : "netlify",
+                   upstream: netlifyURL != nil ? "edgeone" : "netlify",
                    cacheTarget: cacheTarget, cookieHash: cookieHash)
         }
     }
@@ -773,8 +857,9 @@ private enum Proxy {
                             body: Data("Bad upstream response".utf8))
             return
         }
-        // 慢请求与上游错误落持久日志（阈值口径与 DS 对账：>1s 或失败才记）。
-        if elapsedMs > 1000 || http.statusCode >= 500 {
+        // 慢请求与上游错误落持久日志。3.6 (5) 起所有非 2xx 都记：
+        // 3.6 (4) 只记 5xx/慢请求，真机 401 拦截正好漏在阈值外。
+        if elapsedMs > 1000 || http.statusCode >= 400 {
             FoliaFileLog.write("api", "\(request.method) \(pathOnly) \(http.statusCode) \(elapsedMs)ms upstream=\(upstream) bytes=\(data?.count ?? 0)")
         }
         var outHeaders: [(String, String)] = []
