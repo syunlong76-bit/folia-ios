@@ -77,9 +77,14 @@ struct ExploreLayout {
             }
         }
         seatOf = seatMap
-        firstLotOf = filtered.indices.map { section in
-            lots.firstIndex { $0.section == section } ?? -1
+        // 不用 map 闭包直接给属性赋值：闭包在 init 完成前捕获 self
+        // 会被编译器判「firstLotOf 初始化前被闭包捕获」（CI 实测）。
+        let allLots = lots
+        var firstLots: [Int] = []
+        for section in filtered.indices {
+            firstLots.append(allLots.firstIndex { $0.section == section } ?? -1)
         }
+        firstLotOf = firstLots
     }
 
     // MARK: - strip 构建（exploreLayout.ts buildStrip）
