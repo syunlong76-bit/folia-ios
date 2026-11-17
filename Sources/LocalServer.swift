@@ -784,14 +784,14 @@ private enum Proxy {
                 ? edgeOneURL : nil
             perform(url: sole, request: request) { data, http, error in
                 if let retryURL = songURLRetry,
-                   let rejection = rejection(data: data, http: http, error: error) {
-                    FoliaFileLog.write("api", "POST \(pathOnly) song/url retry reason=\(rejection.tag) primaryStatus=\(http?.statusCode ?? 0)")
+                   let primaryRejection = Proxy.rejection(data: data, http: http, error: error) {
+                    FoliaFileLog.write("api", "POST \(pathOnly) song/url retry reason=\(primaryRejection.tag) primaryStatus=\(http?.statusCode ?? 0)")
                     perform(url: retryURL, request: request) { data2, http2, error2 in
                         // 重试结果必须复检（独立审查中-1）：EdgeOne 直连在
                         // 大陆会被预览域名 401 拦截，未复检直接透传会把
                         // 401+HTML 交给页面，比原 500 更坏。重试被拒时记
                         // 健康标记，并回落主上游的原始结果。
-                        if let retryRejection = rejection(data: data2, http: http2, error: error2) {
+                        if let retryRejection = Proxy.rejection(data: data2, http: http2, error: error2) {
                             if retryRejection == .platformBlock, let platform {
                                 markEdgeOneDown(platform)
                             }
