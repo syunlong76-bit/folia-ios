@@ -136,16 +136,14 @@ final class WallPrototypeViewController: UIViewController,
                         }
                         for await (pageOffset, page) in group { byOffset[pageOffset] = page }
                     }
+                    // 失败页不入表（字典赋 nil 即删键）：连续前缀在
+                    // 失败页处自然停住，本轮不再前进（重进墙会重拉）。
                     var chunk: [Entry] = []
                     var reachedEnd = false
                     while let page = byOffset[offset] {
-                        if let page {
-                            chunk.append(contentsOf: page)
-                            offset += page.count
-                            if page.count < pageSize { reachedEnd = true; break }
-                        } else {
-                            break // 缺口：停在失败页，下轮重取
-                        }
+                        chunk.append(contentsOf: page)
+                        offset += page.count
+                        if page.count < pageSize { reachedEnd = true; break }
                     }
                     let progressed = !chunk.isEmpty
                     await MainActor.run {
