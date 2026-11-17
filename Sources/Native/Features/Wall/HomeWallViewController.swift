@@ -181,7 +181,8 @@ final class HomeWallViewController: UIViewController,
         let entry = entries[instance.queueIndex]
         let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
         let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
-        let tier = NativeCoverLoader.tier(forPixelExtent: pixelExtent)
+        let tier = entry.picUrl.map { NativeCoverLoader.wallTier(raw: $0, pixelExtent: pixelExtent) }
+            ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
         cell.configure(entry: entry, tier: tier)
         return cell
     }
@@ -196,7 +197,7 @@ final class HomeWallViewController: UIViewController,
             guard let pic = entry.picUrl else { continue }
             let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
             let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
-            let tier = NativeCoverLoader.tier(forPixelExtent: pixelExtent)
+            let tier = NativeCoverLoader.wallTier(raw: pic, pixelExtent: pixelExtent)
             guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { continue }
             if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { continue }
             Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }

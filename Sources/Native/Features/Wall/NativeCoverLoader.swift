@@ -40,6 +40,30 @@ final class NativeCoverLoader {
         return maxSize
     }
 
+    /// 墙面实际取档（3.7 (6) 真机问题修复）：数据链给的 /img 地址里
+    /// 已带网关按字段选好的档（歌单 coverImgUrl 墙档 384、曲目 picUrl
+    /// 640），那正是 Web 墙在用的档、也是 /img 磁盘缓存里已有的变体。
+    /// 原生若按帧尺寸一律重取 1024/1200，每张都是冷取（缓存键含 w），
+    /// 主页墙首开全墙冷图、并发闸只有 3——真机表现为封面久不出来。
+    /// 规则：沿用内嵌档；只有真正的大卡（像素量 > 900，如展开卡/头条
+    /// 大海报）才升到 1024。非 /img 地址走原选档。
+    static func wallTier(raw: String, pixelExtent: Double) -> Int {
+        if raw.hasPrefix("/img/"), let embedded = embeddedTier(in: raw) {
+            return pixelExtent > 900 ? max(embedded, 1024) : embedded
+        }
+        return tier(forPixelExtent: pixelExtent)
+    }
+
+    /// 解析 /img 地址里已有的 ?w= 档位。
+    private static func embeddedTier(in raw: String) -> Int? {
+        guard let query = raw.split(separator: "?", maxSplits: 1).last else { return nil }
+        for pair in query.split(separator: "&") {
+            let kv = pair.split(separator: "=", maxSplits: 1)
+            if kv.count == 2, kv[0] == "w" { return Int(kv[1]) }
+        }
+        return nil
+    }
+
     /// 把数据链给的封面地址（可能已是 /img 相对路径，也可能是漏网的
     /// CDN 绝对地址）规范成本地 /img 绝对地址并换到目标档。
     /// 非图片代理形态的地址原样返回（加载失败走占位）。
@@ -74,6 +98,9 @@ final class NativeCoverLoader {
         do {
             let (data, response) = try await session.data(from: url)
             guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
+                // 失败留痕（地址是 base64 载荷、无明文主机）：下次封面
+                // 问题凭日志定位，不靠猜。
+                FoliaFileLog.write("cover", "native load bad status tier=\(tier) url=\(urlString)")
                 return nil
             }
             let image = await Task.detached(priority: .utility) {
@@ -81,9 +108,12 @@ final class NativeCoverLoader {
             }.value
             if let image {
                 cache.setObject(image, forKey: key, cost: data.count)
+            } else {
+                FoliaFileLog.write("cover", "native decode failed tier=\(tier) url=\(urlString)")
             }
             return image
         } catch {
+            FoliaFileLog.write("cover", "native load error tier=\(tier) url=\(urlString)")
             return nil
         }
     }

@@ -98,31 +98,64 @@ final class WallPrototypeViewController: UIViewController,
         Task { [weak self] in
             guard let self else { return }
             do {
-                // 先取详情拿真实总数（19723756 飙升榜实测就是 100 首，
-                // 不是被分页截断），再按 track/all 分页拉到 min(总数, 400)。
+                // 3.7 (6) 渐进加载（真机问题：大歌单全量串行拉完才肯
+                // 显示，338 首要等 4 个串行往返）：先取详情拿真实总数
+                // 立刻立墙，曲目按页 3 路并发补入、每页落地就上墙。
+                // 同时去掉原型期的 400 首上限：总数以详情为准，全量
+                // 分页（正式的 id 骨架+按需补页模型在详情 MVP 落）。
                 let detail = try await NativeDataClient.shared.fetchPlaylistDetail(id: playlistId)
-                let target = min(detail.trackCount, 400)
-                var loaded: [Entry] = []
-                while loaded.count < target {
-                    let page = try await NativeDataClient.shared.fetchPlaylistTracksPage(
-                        id: playlistId, limit: 100, offset: loaded.count)
-                    if page.isEmpty { break }
-                    loaded.append(contentsOf: page.map {
-                        Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl)
-                    })
-                    let count = loaded.count
-                    await MainActor.run {
-                        self.statusLabel.text = "墙原型加载中… \(count)"
-                    }
-                    if page.count < 100 { break }
-                }
+                let total = detail.trackCount
                 await MainActor.run {
-                    self.entries = loaded
-                    self.wallLayout.totalEntries = loaded.count
-                    self.statusLabel.text = "墙原型：\(loaded.count) 首 · 拖动平移 · 点按展开"
+                    self.wallLayout.totalEntries = total
+                    self.statusLabel.text = "墙原型：共 \(total) 首 · 加载中 0"
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
+                }
+                let pageSize = 100
+                var offset = 0
+                while offset < total {
+                    // 3 路并发取页；结果按 offset 收齐，只拼连续前缀：
+                    // 中间页失败就在缺口处停下，下一轮从缺口重取，
+                    // 绝不让序号错位。
+                    let batchOffsets = Array(stride(from: offset, to: min(offset + pageSize * 3, total), by: pageSize))
+                    var byOffset: [Int: [Entry]] = [:]
+                    await withTaskGroup(of: (Int, [Entry]?).self) { group in
+                        for pageOffset in batchOffsets {
+                            group.addTask {
+                                do {
+                                    let tracks = try await NativeDataClient.shared.fetchPlaylistTracksPage(
+                                        id: self.playlistId, limit: pageSize, offset: pageOffset)
+                                    return (pageOffset, tracks.map {
+                                        Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl)
+                                    })
+                                } catch {
+                                    return (pageOffset, nil)
+                                }
+                            }
+                        }
+                        for await (pageOffset, page) in group { byOffset[pageOffset] = page }
+                    }
+                    var chunk: [Entry] = []
+                    var reachedEnd = false
+                    while let page = byOffset[offset] {
+                        if let page {
+                            chunk.append(contentsOf: page)
+                            offset += page.count
+                            if page.count < pageSize { reachedEnd = true; break }
+                        } else {
+                            break // 缺口：停在失败页，下轮重取
+                        }
+                    }
+                    let progressed = !chunk.isEmpty
+                    await MainActor.run {
+                        self.entries.append(contentsOf: chunk)
+                        self.statusLabel.text = reachedEnd || self.entries.count >= total
+                            ? "墙原型：\(total) 首 · 拖动平移 · 点按展开"
+                            : "墙原型：共 \(total) 首 · 加载中 \(self.entries.count)"
+                        self.collectionView.reloadData()
+                    }
+                    if reachedEnd || !progressed { break }
                 }
             } catch {
                 await MainActor.run {
@@ -200,10 +233,17 @@ final class WallPrototypeViewController: UIViewController,
         let cell = collectionView.dequeueReusableCell(
             withReuseIdentifier: WallPosterCell.reuseId, for: indexPath) as! WallPosterCell
         let instance = wallLayout.instances[indexPath.item]
+        // 渐进加载期：该序号的曲目可能还没补到，先给空占位（深灰砖），
+        // 页落地 reloadData 后自然填上。
+        guard instance.queueIndex < entries.count else {
+            cell.configure(entry: Entry(id: "", title: "", picUrl: nil), tier: 512)
+            return cell
+        }
         let entry = entries[instance.queueIndex]
         let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
         let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
-        let tier = NativeCoverLoader.tier(forPixelExtent: pixelExtent)
+        let tier = entry.picUrl.map { NativeCoverLoader.wallTier(raw: $0, pixelExtent: pixelExtent) }
+            ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
         cell.configure(entry: entry, tier: tier)
         return cell
     }
@@ -220,7 +260,7 @@ final class WallPrototypeViewController: UIViewController,
             guard let pic = entry.picUrl else { continue }
             let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
             let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
-            let tier = NativeCoverLoader.tier(forPixelExtent: pixelExtent)
+            let tier = NativeCoverLoader.wallTier(raw: pic, pixelExtent: pixelExtent)
             guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { continue }
             if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { continue }
             Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
