@@ -2,8 +2,13 @@ import Foundation
 
 /// M1 阶段 2：原生数据链（规格 v2.1 §2/§3）。经 LocalServer 同源
 /// 路径调 /api/netease/*，与 Web 侧走同一代理、同一上游、同一回退
-/// 逻辑；差别只有请求方：原生 URLSession + CookieSync 手工注入
-/// 本地源 Cookie（URLSession 自带 Cookie 管理关闭，防双路打架）。
+/// 逻辑；差别只有请求方：原生 URLSession（自带 Cookie 管理关闭）。
+///
+/// 登录会话的载体（3.7 (5) 真机纠正，详见 WebSession.swift）：不是
+/// 浏览器 Cookie，而是 Web 存在 localStorage 的整串会话，以查询
+/// 参数 `cookie=` 附在请求上——与 netease.ts 的 fetchWithCreds 完全
+/// 同构。CookieSync 的 Cookie 头注入保留（同源请求与 Web 行为对齐），
+/// 但它不是登录态的载体。
 ///
 /// 只做网易云（一期口径，与全项目「只验网易云」一致）。
 final class NativeDataClient {
@@ -22,6 +27,9 @@ final class NativeDataClient {
     }
 
     private let session: URLSession
+    /// Web 会话串缓存（凭据，只存内存）。301 时作废，下次请求重读。
+    private let sessionLock = NSLock()
+    private var cachedWebCookie: String?
     /// /song/detail 单批 id 数：与 Web 侧 NETEASE_SONG_DETAIL_BATCH
     /// 对齐的已验证安全值（50）；原生侧实测调整时改这里并记规格。
     static let songDetailBatch = 50
@@ -42,6 +50,35 @@ final class NativeDataClient {
         return URL(string: "http://127.0.0.1:\(port)")
     }
 
+    // MARK: - Web 会话（登录态载体）
+
+    /// 从 WebView 重读会话串并刷新缓存（进原生表面前调用，拿最新
+    /// 登录态：用户可能刚在本会话里扫码登录）。
+    func refreshWebSession() async {
+        let value = await WebSession.readNeteaseCookie()
+        sessionLock.lock()
+        cachedWebCookie = value
+        sessionLock.unlock()
+    }
+
+    /// 当前会话串：缓存有就用，没有就现读一次 WebView。
+    private func webCookie() async -> String? {
+        sessionLock.lock()
+        let cached = cachedWebCookie
+        sessionLock.unlock()
+        if let cached { return cached }
+        await refreshWebSession()
+        sessionLock.lock()
+        defer { sessionLock.unlock() }
+        return cachedWebCookie
+    }
+
+    private func invalidateWebSession() {
+        sessionLock.lock()
+        cachedWebCookie = nil
+        sessionLock.unlock()
+    }
+
     // MARK: - 基础请求
 
     /// GET 一个 /api/netease 路径，返回解析后的 JSON 字典。
@@ -49,8 +86,13 @@ final class NativeDataClient {
     func getJSON(_ path: String, query: [String: String] = [:]) async throws -> [String: Any] {
         guard let base = baseURL else { throw DataError.serverNotReady }
         var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)
-        if !query.isEmpty {
-            components?.queryItems = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        var items = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+        // 登录会话按 Web 同构方式走 `cookie` 查询参数（见文件头）。
+        if let cookie = await webCookie() {
+            items.append(URLQueryItem(name: "cookie", value: cookie))
+        }
+        if !items.isEmpty {
+            components?.queryItems = items
         }
         guard let url = components?.url else { throw DataError.decoding }
         var request = URLRequest(url: url)
@@ -74,7 +116,11 @@ final class NativeDataClient {
         }
         if let codeValue = dict["code"] {
             let code = NativeJSON.int(codeValue)
-            if code == 301 { throw DataError.notLoggedIn }
+            if code == 301 {
+                // 会话可能已换（重新登录/退出）：作废缓存，下次重读。
+                invalidateWebSession()
+                throw DataError.notLoggedIn
+            }
             if code != 200 { throw DataError.api(code: code) }
         }
         return dict

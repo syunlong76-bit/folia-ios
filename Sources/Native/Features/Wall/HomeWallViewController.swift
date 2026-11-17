@@ -89,6 +89,9 @@ final class HomeWallViewController: UIViewController,
         Task { [weak self] in
             guard let self else { return }
             do {
+                // 先从 WebView 重读最新会话（用户可能刚扫码登录），
+                // 再探登录态——3.7 (4) 的误判就出在这里。
+                await NativeDataClient.shared.refreshWebSession()
                 let status = try await NativeDataClient.shared.fetchLoginStatus()
                 guard status.loggedIn, let userId = status.userId else {
                     await MainActor.run {
