@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 
 /// M1 阶段 3：单墙原型（队列墙几何 + 真实歌单数据）。入口：主界面
@@ -22,6 +23,12 @@ final class WallPrototypeViewController: UIViewController,
     private let playlistTitle: String?
     private let playlistCoverUrl: String?
     private var entries: [Entry] = []
+    /// 详情 MVP：与 entries 平行的完整曲目模型 + 全量 id 骨架
+    /// （队列按 trackIds 建、元数据按已加载曲目填，未加载的占位）。
+    private var nativeTracks: [NativeTrack] = []
+    private var allTrackIds: [String] = []
+    private var playbackCancellables = Set<AnyCancellable>()
+    private var progressTimer: Timer?
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
@@ -118,7 +125,32 @@ final class WallPrototypeViewController: UIViewController,
         // 转场落定：墙以 1.04 倍入场、viewDidAppear 里收回 1.0。
         collectionView.transform = CGAffineTransform(scaleX: 1.04, y: 1.04)
 
+        // 播放态同步（详情 MVP）：切歌/播放暂停时只更新可见 cell
+        // 的角标与展开卡控件，不整表刷新。
+        PlaybackEngine.shared.$currentTrack
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshVisiblePlaybackUI() }
+            .store(in: &playbackCancellables)
+        PlaybackEngine.shared.$isPlaying
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshVisiblePlaybackUI() }
+            .store(in: &playbackCancellables)
+
         loadEntries()
+    }
+
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        progressTimer?.invalidate()
+        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) {
+            [weak self] _ in self?.tickProgress()
+        }
+    }
+
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        progressTimer?.invalidate()
+        progressTimer = nil
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -184,8 +216,12 @@ final class WallPrototypeViewController: UIViewController,
                 }
                 let detail = try await NativeDataClient.shared.fetchPlaylistDetail(id: playlistId)
                 let total = detail.trackCount
-                let seed = detail.tracks.map { Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl) }
+                let seed = detail.tracks.map {
+                    Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl, subtitle: $0.artists)
+                }
                 await MainActor.run {
+                    self.nativeTracks = detail.tracks
+                    self.allTrackIds = detail.trackIds
                     self.entries = seed
                     self.wallLayout.totalEntries = total
                     self.statusLabel.text = seed.count >= total
@@ -215,16 +251,14 @@ final class WallPrototypeViewController: UIViewController,
                     // 中间页失败就在缺口处停下，下一轮从缺口重取，
                     // 绝不让序号错位。
                     let batchOffsets = Array(stride(from: offset, to: min(offset + pageSize * 3, total), by: pageSize))
-                    var byOffset: [Int: [Entry]] = [:]
-                    await withTaskGroup(of: (Int, [Entry]?).self) { group in
+                    var byOffset: [Int: [NativeTrack]] = [:]
+                    await withTaskGroup(of: (Int, [NativeTrack]?).self) { group in
                         for pageOffset in batchOffsets {
                             group.addTask {
                                 do {
                                     let tracks = try await NativeDataClient.shared.fetchPlaylistTracksPage(
                                         id: self.playlistId, limit: pageSize, offset: pageOffset)
-                                    return (pageOffset, tracks.map {
-                                        Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl)
-                                    })
+                                    return (pageOffset, tracks)
                                 } catch {
                                     return (pageOffset, nil)
                                 }
@@ -234,7 +268,7 @@ final class WallPrototypeViewController: UIViewController,
                     }
                     // 失败页不入表（字典赋 nil 即删键）：连续前缀在
                     // 失败页处自然停住，本轮不再前进（重进墙会重拉）。
-                    var chunk: [Entry] = []
+                    var chunk: [NativeTrack] = []
                     var reachedEnd = false
                     while let page = byOffset[offset] {
                         chunk.append(contentsOf: page)
@@ -243,7 +277,10 @@ final class WallPrototypeViewController: UIViewController,
                     }
                     let progressed = !chunk.isEmpty
                     await MainActor.run {
-                        self.entries.append(contentsOf: chunk)
+                        self.nativeTracks.append(contentsOf: chunk)
+                        self.entries.append(contentsOf: chunk.map {
+                            Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl, subtitle: $0.artists)
+                        })
                         self.statusLabel.text = reachedEnd || self.entries.count >= total
                             ? "墙原型：\(total) 首 · 拖动平移 · 点按展开"
                             : "墙原型：共 \(total) 首 · 加载中 \(self.entries.count)"
@@ -334,6 +371,8 @@ final class WallPrototypeViewController: UIViewController,
         // 页落地 reloadData 后自然填上。
         guard instance.queueIndex < entries.count else {
             cell.configure(entry: Entry(id: "", title: "", picUrl: nil), tier: 512)
+            cell.configurePlayback(expanded: false, isCurrent: false,
+                                   isPlaying: false, liked: false, progress: 0)
             return cell
         }
         let entry = entries[instance.queueIndex]
@@ -350,7 +389,96 @@ final class WallPrototypeViewController: UIViewController,
             waveCount += 1
         }
         cell.playEntranceIfNeeded(key: entry.id, delay: entranceDelay)
+        applyPlaybackState(to: cell, instance: instance)
         return cell
+    }
+
+    // MARK: 详情 MVP：展开卡播放 / 红心 / 播放态同步
+
+    /// 把引擎实况刷到一个 cell：展开卡控件、当前曲角标、红心、进度。
+    private func applyPlaybackState(to cell: WallPosterCell, instance: QueueInstance) {
+        guard instance.queueIndex < entries.count else { return }
+        let entry = entries[instance.queueIndex]
+        let engine = PlaybackEngine.shared
+        let isCurrent = engine.currentTrack?.id == entry.id
+        let progress = isCurrent && engine.duration > 0
+            ? engine.currentTime / engine.duration : 0
+        cell.configurePlayback(
+            expanded: wallLayout.expandedInstanceId == instance.instanceId,
+            isCurrent: isCurrent,
+            isPlaying: engine.isPlaying,
+            liked: LikesStore.shared.isLiked(entry.id),
+            progress: progress)
+        let queueIndex = instance.queueIndex
+        cell.onPlayTap = { [weak self] in self?.playTapped(queueIndex: queueIndex) }
+        cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
+    }
+
+    private func refreshVisiblePlaybackUI() {
+        for case let cell as WallPosterCell in collectionView.visibleCells {
+            guard let indexPath = collectionView.indexPath(for: cell),
+                  indexPath.item < wallLayout.instances.count else { continue }
+            applyPlaybackState(to: cell, instance: wallLayout.instances[indexPath.item])
+        }
+    }
+
+    /// 0.3 秒心跳：只更新展开中的当前曲卡的迷你进度条。
+    private func tickProgress() {
+        let engine = PlaybackEngine.shared
+        guard let currentId = engine.currentTrack?.id, engine.duration > 0 else { return }
+        for case let cell as WallPosterCell in collectionView.visibleCells {
+            guard let indexPath = collectionView.indexPath(for: cell),
+                  indexPath.item < wallLayout.instances.count else { continue }
+            let instance = wallLayout.instances[indexPath.item]
+            guard instance.queueIndex < entries.count,
+                  entries[instance.queueIndex].id == currentId,
+                  wallLayout.expandedInstanceId == instance.instanceId else { continue }
+            cell.updateProgress(engine.currentTime / engine.duration)
+        }
+    }
+
+    /// 点播放：当前曲切换播放/暂停；否则按全量 trackIds 建队列
+    /// （规格 v2.1：点行播放 = 全量队列，未加载曲目占位入队、取流
+    /// 时按 id 解析），从点中曲目起播。
+    private func playTapped(queueIndex: Int) {
+        guard queueIndex < entries.count else { return }
+        let tappedId = entries[queueIndex].id
+        if PlaybackEngine.shared.currentTrack?.id == tappedId {
+            PlaybackEngine.shared.togglePlayPause()
+            return
+        }
+        let ids = allTrackIds.isEmpty ? nativeTracks.map(\.id) : allTrackIds
+        guard let start = ids.firstIndex(of: tappedId) else { return }
+        let meta = Dictionary(nativeTracks.map { ($0.id, $0) },
+                              uniquingKeysWith: { first, _ in first })
+        let queue: [FoliaTrack] = ids.map { tid in
+            if let t = meta[tid] {
+                return FoliaTrack(
+                    id: t.id, sourceType: .netease, title: t.name,
+                    artist: t.artists, album: t.albumName ?? "",
+                    duration: Double(t.durationMs) / 1000,
+                    artworkURL: t.picUrl.flatMap { URL(string: $0) })
+            }
+            return FoliaTrack(id: tid, sourceType: .netease, title: "",
+                              artist: "", duration: 0)
+        }
+        QueueManager.shared.setQueue(queue, startingAt: start)
+    }
+
+    /// 红心：本地真源乐观切换 → /like 同步账号，失败回滚本地与界面。
+    private func likeTapped(queueIndex: Int) {
+        guard queueIndex < entries.count else { return }
+        let id = entries[queueIndex].id
+        let newState = LikesStore.shared.toggle(id)
+        refreshVisiblePlaybackUI()
+        Task {
+            do {
+                _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+            } catch {
+                LikesStore.shared.toggle(id)
+                await MainActor.run { self.refreshVisiblePlaybackUI() }
+            }
+        }
     }
 
     // MARK: - 预取（拖动闪黑对策：图先进内存缓存，cell 出现时同步上图）
@@ -394,6 +522,9 @@ final class WallPrototypeViewController: UIViewController,
         } else {
             collectionView.reloadData()
         }
+        // 展开/收起后控件归属变了：动画路径不重查 cell，手动刷一遍
+        // 可见 cell 的播放态（展开卡出控件、收起卡撤控件）。
+        refreshVisiblePlaybackUI()
     }
 }
 
@@ -409,6 +540,19 @@ final class WallPosterCell: UICollectionViewCell {
     private let subtitleLabel = UILabel()
     private var loadTask: Task<Void, Never>?
     private var currentUrl: String?
+
+    // 展开卡控件（详情 MVP 第一刀）：播放/暂停、红心、迷你进度条；
+    // 未展开只留「正在播放」角标。回调由 VC 按实例注入，普通卡
+    // （主页墙歌单卡）永不配置、恒隐藏。
+    var onPlayTap: (() -> Void)?
+    var onLikeTap: (() -> Void)?
+    private let playButton = UIButton(type: .system)
+    private let likeButton = UIButton(type: .system)
+    private let progressTrack = UIView()
+    private let progressFill = UIView()
+    private let playingBadge = UIImageView()
+    private var controlsVisible = false
+    private var progressValue: Double = 0
 
     /// 入场淡入已播过的条目（按条目 id 去重、跨 cell 复用有效）：
     /// 同一面墙里平铺重复的同一条目只在首现时淡入，后续实例直接
@@ -447,6 +591,78 @@ final class WallPosterCell: UICollectionViewCell {
         subtitleLabel.layer.shadowRadius = 2
         subtitleLabel.layer.shadowOffset = .zero
         shadowView.addSubview(subtitleLabel)
+
+        playButton.tintColor = .white
+        playButton.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        playButton.layer.cornerRadius = 15
+        playButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        playButton.addTarget(self, action: #selector(playButtonTapped), for: .touchUpInside)
+        playButton.isHidden = true
+        shadowView.addSubview(playButton)
+
+        likeButton.tintColor = .white
+        likeButton.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        likeButton.layer.cornerRadius = 15
+        likeButton.setImage(UIImage(systemName: "heart"), for: .normal)
+        likeButton.addTarget(self, action: #selector(likeButtonTapped), for: .touchUpInside)
+        likeButton.isHidden = true
+        shadowView.addSubview(likeButton)
+
+        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.28)
+        progressTrack.isHidden = true
+        shadowView.addSubview(progressTrack)
+        progressFill.backgroundColor = .white
+        progressTrack.addSubview(progressFill)
+
+        playingBadge.image = UIImage(systemName: "speaker.wave.2.fill")
+        playingBadge.tintColor = .white
+        playingBadge.contentMode = .scaleAspectFit
+        playingBadge.layer.shadowColor = UIColor.black.cgColor
+        playingBadge.layer.shadowOpacity = 0.8
+        playingBadge.layer.shadowRadius = 2
+        playingBadge.layer.shadowOffset = .zero
+        playingBadge.isHidden = true
+        shadowView.addSubview(playingBadge)
+    }
+
+    @objc private func playButtonTapped() { onPlayTap?() }
+    @objc private func likeButtonTapped() { onLikeTap?() }
+
+    /// 播放态配置（VC 在 cellForItem 与播放状态变化时调用）：展开卡
+    /// 显示控件行 + 进度，当前曲目显示角标，播放/暂停与红心按实况。
+    func configurePlayback(expanded: Bool, isCurrent: Bool, isPlaying: Bool,
+                           liked: Bool, progress: Double) {
+        controlsVisible = expanded
+        playButton.isHidden = !expanded
+        likeButton.isHidden = !expanded
+        progressTrack.isHidden = !expanded
+        playingBadge.isHidden = !isCurrent
+        progressValue = progress
+        playButton.setImage(
+            UIImage(systemName: isCurrent && isPlaying ? "pause.fill" : "play.fill"),
+            for: .normal)
+        setLiked(liked)
+        setNeedsLayout()
+    }
+
+    func setLiked(_ liked: Bool) {
+        likeButton.setImage(
+            UIImage(systemName: liked ? "heart.fill" : "heart"), for: .normal)
+        likeButton.tintColor = liked ? .systemRed : .white
+    }
+
+    /// 进度条热更新（VC 的 0.3 秒计时器只打这一处，不整表刷新）。
+    func updateProgress(_ progress: Double) {
+        progressValue = progress
+        layoutProgressFill()
+    }
+
+    private func layoutProgressFill() {
+        let w = progressTrack.bounds.width
+        progressFill.frame = CGRect(
+            x: 0, y: 0,
+            width: w * CGFloat(max(0, min(1, progressValue))),
+            height: progressTrack.bounds.height)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -457,16 +673,27 @@ final class WallPosterCell: UICollectionViewCell {
         shadowView.layer.shadowPath = UIBezierPath(
             roundedRect: contentView.bounds, cornerRadius: 8).cgPath
         imageView.frame = shadowView.bounds
+        let bounds = shadowView.bounds
+        // 展开卡底部让位：进度条 3 + 控件行 34，标题/副行整体上移。
+        let bottomInset: CGFloat = controlsVisible ? 41 : 4
         let labelHeight: CGFloat = 16
         let hasSubtitle = !(subtitleLabel.text ?? "").isEmpty
-        let titleY = shadowView.bounds.height - labelHeight - 4 - (hasSubtitle ? 13 : 0)
+        let titleY = bounds.height - bottomInset - labelHeight - (hasSubtitle ? 13 : 0)
         titleLabel.frame = CGRect(
             x: 6, y: titleY,
-            width: shadowView.bounds.width - 12, height: labelHeight)
+            width: bounds.width - 12, height: labelHeight)
         subtitleLabel.frame = CGRect(
-            x: 6, y: shadowView.bounds.height - 15,
-            width: shadowView.bounds.width - 12, height: 12)
+            x: 6, y: bounds.height - bottomInset - 13,
+            width: bounds.width - 12, height: 12)
         subtitleLabel.isHidden = !hasSubtitle
+        if controlsVisible {
+            let barTop = bounds.height - 37
+            playButton.frame = CGRect(x: 8, y: barTop + 2, width: 30, height: 30)
+            likeButton.frame = CGRect(x: bounds.width - 38, y: barTop + 2, width: 30, height: 30)
+            progressTrack.frame = CGRect(x: 0, y: bounds.height - 3, width: bounds.width, height: 3)
+            layoutProgressFill()
+        }
+        playingBadge.frame = CGRect(x: bounds.width - 26, y: 6, width: 18, height: 18)
     }
 
     /// 按压反馈：轻微缩放（原生点击手感的最低成本件）。
@@ -555,5 +782,13 @@ final class WallPosterCell: UICollectionViewCell {
         contentView.transform = .identity
         titleLabel.text = nil
         subtitleLabel.text = nil
+        onPlayTap = nil
+        onLikeTap = nil
+        controlsVisible = false
+        playButton.isHidden = true
+        likeButton.isHidden = true
+        progressTrack.isHidden = true
+        playingBadge.isHidden = true
+        progressValue = 0
     }
 }
