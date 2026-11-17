@@ -650,6 +650,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             UserDefaults.standard.removeObject(forKey: Self.savedViewKey)
             lastRestoredViewKey = nil
             viewRestoreAttempts = 0
+            // M1 阶段 1：导航协调器旁听记账（离开集合）。
+            NavigationCoordinator.shared.noteWebViewState(nil)
             return
         }
         if let data = try? JSONSerialization.data(withJSONObject: view) {
@@ -662,6 +664,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             viewRestoreAttempts = 0
         }
         captureViewSnapshotThrottled()
+        // M1 阶段 1：导航协调器旁听记账（不执行任何表面切换）。
+        NavigationCoordinator.shared.noteWebViewState(view)
     }
 
     private func savedCollectionView() -> [String: Any]? {
@@ -683,6 +687,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         viewRestoreAttempts += 1
         let key = "\(view["providerId"] as? String ?? "-")/\(view["type"] as? String ?? "-")/\(view["id"]!)"
         lastRestoredViewKey = key
+        // M1 阶段 1：标记恢复回声判定窗口（协调器据此区分 user/restore）。
+        NavigationCoordinator.shared.noteRestoreDispatched(collectionKey: key)
         FoliaFileLog.write("bridge", "restoreView dispatched attempt=\(viewRestoreAttempts) \(key)")
         dispatchToJS(.restoreView, payload: view)
         // 页面导航回原页后会再报一次 viewState；遮罩最迟 2.2 秒撤下，
@@ -1399,6 +1405,8 @@ extension WebEffectBridge: WKNavigationDelegate {
     /// 时被杀不硬重载，标记待恢复、回前台再重载，音频不受影响。
     /// 连杀信号（30 秒内 ≥2 次）同时触发 CoverPolicy 降档级（墙档 320）。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        // M1 阶段 1：导航协调器记账（表面归属不变，恢复链仍走桥侧既有逻辑）。
+        NavigationCoordinator.shared.noteWebProcessTerminated()
         isPageLoaded = false
         lastSentRenderActive = nil
         unackedEvent = nil
