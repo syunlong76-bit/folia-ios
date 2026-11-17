@@ -1,20 +1,23 @@
 import UIKit
 
-/// 曲目墙加载氛围底（3.7 (8) 丝滑切入组合，DS 第二十四轮对账定版）：
-/// 切入第一帧用该歌单封面（主页墙刚显示过、内存缓存现成）做模糊
-/// 氛围底 + 歌单名，替代「黑页 + 载入文字」；数据到达后由 VC 调
-/// dismiss() 淡出，只作过渡层、不留视觉重复。
+/// 曲目墙加载氛围底（3.7 (8) 丝滑切入组合，DS 第二十四轮对账定版；
+/// 3.7 (9) 按 Miller 验收建议改版）：加载视觉的主角是歌单封面
+/// 本人——居中一张清晰的封面卡做呼吸缩放动画，远景只留压暗的
+/// 模糊同图垫色，标题在卡下。数据到达后由 VC 调 dismiss() 淡出。
 ///
 /// 吉祥物预留接口（Miller 2026-11-18 定：吉祥物后面考虑，接口留给
-/// 大肥鱼）：mascotContainer 是加载态形象的挂载槽——将来把吉祥物
-/// 视图 add 进这里即可，出现阈值/退场节奏由 VC 的加载状态机统一
-/// 驱动，吉祥物本身不感知数据层。
+/// 大肥鱼）：mascotContainer 是加载态形象的挂载槽（标题下方）——
+/// 将来把吉祥物视图 add 进这里即可，出现阈值/退场节奏由 VC 的
+/// 加载状态机统一驱动，吉祥物本身不感知数据层。
 final class LoadingBackdropView: UIView {
 
-    /// 吉祥物挂载槽（预留给大肥鱼）：居中正方形区域，默认空。
+    /// 吉祥物挂载槽（预留给大肥鱼）：标题下方区域，默认空。
     let mascotContainer = UIView()
 
-    private let coverImageView = UIImageView()
+    /// 远景垫色（同图重模糊 + 重压暗，只负责给画面一点颜色）。
+    private let bleedImageView = UIImageView()
+    /// 主角：清晰封面卡（呼吸动画挂在它身上）。
+    private let cardImageView = UIImageView()
     private let titleLabel = UILabel()
     private var dismissed = false
 
@@ -23,29 +26,38 @@ final class LoadingBackdropView: UIView {
         isUserInteractionEnabled = false
         backgroundColor = .black
 
-        coverImageView.contentMode = .scaleAspectFill
-        coverImageView.clipsToBounds = true
-        coverImageView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(coverImageView)
+        bleedImageView.contentMode = .scaleAspectFill
+        bleedImageView.clipsToBounds = true
+        bleedImageView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(bleedImageView)
 
         // 模糊层：系统 GPU 模糊，不对原图做 CPU 重模糊（DS 坑单）。
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
         blur.translatesAutoresizingMaskIntoConstraints = false
         addSubview(blur)
-
-        // 压暗 + 顶部微光：暗封面糊成一团时靠它保住标题可读性。
         let dim = UIView()
-        dim.backgroundColor = UIColor.black.withAlphaComponent(0.22)
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.45)
         dim.translatesAutoresizingMaskIntoConstraints = false
         addSubview(dim)
-        let glow = UIView()
-        glow.backgroundColor = UIColor.white.withAlphaComponent(0.05)
-        glow.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(glow)
+
+        // 封面卡：圆角 + 阴影，呼吸缩放就是加载动画本体。
+        cardImageView.contentMode = .scaleAspectFill
+        cardImageView.clipsToBounds = true
+        cardImageView.layer.cornerRadius = 16
+        cardImageView.backgroundColor = UIColor(white: 0.13, alpha: 1)
+        cardImageView.translatesAutoresizingMaskIntoConstraints = false
+        let cardShadow = UIView()
+        cardShadow.layer.shadowColor = UIColor.black.cgColor
+        cardShadow.layer.shadowOpacity = 0.55
+        cardShadow.layer.shadowRadius = 24
+        cardShadow.layer.shadowOffset = CGSize(width: 0, height: 10)
+        cardShadow.translatesAutoresizingMaskIntoConstraints = false
+        cardShadow.addSubview(cardImageView)
+        addSubview(cardShadow)
 
         titleLabel.text = title
         titleLabel.textColor = .white
-        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
         titleLabel.textAlignment = .center
         titleLabel.numberOfLines = 2
         titleLabel.layer.shadowColor = UIColor.black.cgColor
@@ -59,10 +71,10 @@ final class LoadingBackdropView: UIView {
         addSubview(mascotContainer)
 
         NSLayoutConstraint.activate([
-            coverImageView.topAnchor.constraint(equalTo: topAnchor),
-            coverImageView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            coverImageView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            coverImageView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            bleedImageView.topAnchor.constraint(equalTo: topAnchor),
+            bleedImageView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            bleedImageView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bleedImageView.trailingAnchor.constraint(equalTo: trailingAnchor),
             blur.topAnchor.constraint(equalTo: topAnchor),
             blur.bottomAnchor.constraint(equalTo: bottomAnchor),
             blur.leadingAnchor.constraint(equalTo: leadingAnchor),
@@ -71,44 +83,68 @@ final class LoadingBackdropView: UIView {
             dim.bottomAnchor.constraint(equalTo: bottomAnchor),
             dim.leadingAnchor.constraint(equalTo: leadingAnchor),
             dim.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glow.topAnchor.constraint(equalTo: topAnchor),
-            glow.leadingAnchor.constraint(equalTo: leadingAnchor),
-            glow.trailingAnchor.constraint(equalTo: trailingAnchor),
-            glow.heightAnchor.constraint(equalTo: heightAnchor, multiplier: 0.4),
+            cardShadow.centerXAnchor.constraint(equalTo: centerXAnchor),
+            cardShadow.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -56),
+            cardShadow.widthAnchor.constraint(equalToConstant: 236),
+            cardShadow.heightAnchor.constraint(equalToConstant: 236),
+            cardImageView.topAnchor.constraint(equalTo: cardShadow.topAnchor),
+            cardImageView.bottomAnchor.constraint(equalTo: cardShadow.bottomAnchor),
+            cardImageView.leadingAnchor.constraint(equalTo: cardShadow.leadingAnchor),
+            cardImageView.trailingAnchor.constraint(equalTo: cardShadow.trailingAnchor),
             titleLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
-            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor, constant: -70),
+            titleLabel.topAnchor.constraint(equalTo: cardShadow.bottomAnchor, constant: 22),
             titleLabel.leadingAnchor.constraint(greaterThanOrEqualTo: leadingAnchor, constant: 32),
             titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -32),
             mascotContainer.centerXAnchor.constraint(equalTo: centerXAnchor),
-            mascotContainer.centerYAnchor.constraint(equalTo: centerYAnchor, constant: 40),
-            mascotContainer.widthAnchor.constraint(equalToConstant: 180),
-            mascotContainer.heightAnchor.constraint(equalToConstant: 180)
+            mascotContainer.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 14),
+            mascotContainer.widthAnchor.constraint(equalToConstant: 150),
+            mascotContainer.heightAnchor.constraint(equalToConstant: 150)
         ])
+        cardShadow.layer.shadowPath = UIBezierPath(
+            roundedRect: CGRect(x: 0, y: 0, width: 236, height: 236), cornerRadius: 16).cgPath
+
+        // 呼吸：1.0 ↔ 1.045、1.5 秒往返，封面卡活过来而不是死贴图。
+        let breath = CABasicAnimation(keyPath: "transform.scale")
+        breath.fromValue = 1.0
+        breath.toValue = 1.045
+        breath.duration = 1.5
+        breath.autoreverses = true
+        breath.repeatCount = .infinity
+        breath.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        cardShadow.layer.add(breath, forKey: "foliaCoverBreath")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
-    /// 填封面：先同步查内存缓存的几个候选档（主页墙用过的档），
-    /// 未命中再异步取 512 档，到达时若还没退场就补上。
+    /// 填封面：卡用大档（1024 优先），垫色用任意已缓存档；都未命中
+    /// 再异步取 1024 档一张两用。来源都是内存缓存优先（主页墙刚
+    /// 显示过这批封面），零额外等待是常态。
     func setCover(rawUrl: String?) {
         guard let rawUrl else { return }
         let loader = NativeCoverLoader.shared
         let embedded = NativeCoverLoader.wallTier(raw: rawUrl, pixelExtent: 100)
-        for tier in [embedded, 1024, 512] {
+        var cardImage: UIImage?
+        for tier in [1024, embedded, 512] {
             guard let urlString = loader.proxiedURLString(rawUrl, tier: tier),
                   let cached = loader.cachedImage(for: urlString) else { continue }
-            coverImageView.image = cached
+            cardImage = cached
+            break
+        }
+        if let cardImage {
+            cardImageView.image = cardImage
+            bleedImageView.image = cardImage
             return
         }
-        guard let urlString = loader.proxiedURLString(rawUrl, tier: 512) else { return }
+        guard let urlString = loader.proxiedURLString(rawUrl, tier: 1024) else { return }
         Task { [weak self] in
-            let image = await loader.image(for: urlString, tier: 512)
+            let image = await loader.image(for: urlString, tier: 1024)
             guard let self, !self.dismissed, let image else { return }
             await MainActor.run {
-                UIView.transition(with: self.coverImageView, duration: 0.3,
+                UIView.transition(with: self.cardImageView, duration: 0.3,
                                   options: [.transitionCrossDissolve]) {
-                    self.coverImageView.image = image
+                    self.cardImageView.image = image
                 }
+                self.bleedImageView.image = image
             }
         }
     }
