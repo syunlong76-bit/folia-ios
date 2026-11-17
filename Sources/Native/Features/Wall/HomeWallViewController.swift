@@ -210,8 +210,19 @@ final class HomeWallViewController: UIViewController,
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
         guard instance.queueIndex < playlistIds.count else { return }
-        let wall = WallPrototypeViewController(playlistId: playlistIds[instance.queueIndex])
+        let entry = entries[instance.queueIndex]
+        let wall = WallPrototypeViewController(
+            playlistId: playlistIds[instance.queueIndex],
+            title: entry.title, coverUrl: entry.picUrl)
         wall.modalPresentationStyle = .fullScreen
-        present(wall, animated: true)
+        wall.modalTransitionStyle = .crossDissolve
+        // 丝滑切入（3.7 (8)）：先预加载，最多等 250ms 让首批数据
+        // 落地再 present——预热命中时墙带着内容直接切入，黑屏不
+        // 出现；超时照常切入，由墙内氛围底兜住剩余等待。
+        wall.startPreload()
+        Task { [weak self] in
+            _ = await wall.awaitSeed(timeout: 0.25)
+            self?.present(wall, animated: true)
+        }
     }
 }

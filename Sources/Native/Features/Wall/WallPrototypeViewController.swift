@@ -18,15 +18,30 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     private let playlistId: String
+    /// 切入氛围底用的歌单名/封面（由主页墙点按时传入；原型入口可缺省）。
+    private let playlistTitle: String?
+    private let playlistCoverUrl: String?
     private var entries: [Entry] = []
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
+    private var backdrop: LoadingBackdropView?
     private var didCenterCamera = false
     private var isWrapping = false
 
-    init(playlistId: String = "19723756") {
+    // 丝滑切入（3.7 (8)）：预加载 + 等首批数据再 present 的信号。
+    private(set) var seedReady = false
+    private var seedWaiters: [CheckedContinuation<Bool, Never>] = []
+    /// 加载胶囊防闪：出现时刻（>600ms 才显示、最小展示 300ms）。
+    private var pillShownAt: Date?
+    /// 首屏波次入场：种子落地时刻 + 已发出的波次序号。
+    private var waveStart: Date?
+    private var waveCount = 0
+
+    init(playlistId: String = "19723756", title: String? = nil, coverUrl: String? = nil) {
         self.playlistId = playlistId
+        self.playlistTitle = title
+        self.playlistCoverUrl = coverUrl
         super.init(nibName: nil, bundle: nil)
     }
 
@@ -57,6 +72,7 @@ final class WallPrototypeViewController: UIViewController,
 
         statusLabel = UILabel()
         statusLabel.text = "墙原型加载中…"
+        statusLabel.isHidden = true
         statusLabel.textColor = .white
         statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
@@ -85,11 +101,63 @@ final class WallPrototypeViewController: UIViewController,
             close.heightAnchor.constraint(equalToConstant: 26)
         ])
 
+        // 氛围底（丝滑切入）：盖在空墙上、垫在胶囊/关闭键下；数据
+        // 到达后淡出。封面来自内存缓存（主页墙刚显示过），零等待。
+        let backdropView = LoadingBackdropView(title: playlistTitle)
+        backdropView.setCover(rawUrl: playlistCoverUrl)
+        backdropView.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(backdropView, belowSubview: statusLabel)
+        NSLayoutConstraint.activate([
+            backdropView.topAnchor.constraint(equalTo: view.topAnchor),
+            backdropView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            backdropView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            backdropView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        backdrop = backdropView
+
+        // 转场落定：墙以 1.04 倍入场、viewDidAppear 里收回 1.0。
+        collectionView.transform = CGAffineTransform(scaleX: 1.04, y: 1.04)
+
         loadEntries()
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseOut]) {
+            self.collectionView.transform = .identity
+        }
     }
 
     @objc private func closeTapped() {
         dismiss(animated: true)
+    }
+
+    // MARK: - 预加载（等首批数据再 present，DS 第二十四轮栈首）
+
+    /// 提前触发 view 加载（连带 loadEntries 开跑）：主页墙点按时先
+    /// 调它，再 awaitSeed 短等，命中就带内容 present。
+    func startPreload() {
+        loadViewIfNeeded()
+    }
+
+    /// 等种子（首批条目）落地；超时返回当前状态（多半 false），
+    /// 调用方照常 present、由氛围底兜住剩余等待。
+    func awaitSeed(timeout: TimeInterval) async -> Bool {
+        if seedReady { return true }
+        return await withCheckedContinuation { continuation in
+            seedWaiters.append(continuation)
+            Task { [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(timeout * 1_000_000_000))
+                await MainActor.run { self?.flushSeedWaiters() }
+            }
+        }
+    }
+
+    /// 在主线程统一唤醒等待者（种子落地与超时共用，保证只唤醒一次）。
+    private func flushSeedWaiters() {
+        let waiters = seedWaiters
+        seedWaiters.removeAll()
+        waiters.forEach { $0.resume(returning: seedReady) }
     }
 
     // MARK: - 数据
@@ -103,6 +171,17 @@ final class WallPrototypeViewController: UIViewController,
                 // 含 picUrl），一次往返数据全齐、封面立刻全量开取。
                 // 3.7 (6) 的分页拼接只留作缺口兜底：超大歌单内嵌被
                 // 截断时，从已得数量处继续分页补齐。
+                // 加载胶囊延迟出现：600ms 内种子落地就不显示加载态，
+                // 防快路径下胶囊一闪（DS 第二十四轮 e 项）。
+                Task { [weak self] in
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                    await MainActor.run {
+                        guard let self, !self.seedReady else { return }
+                        self.pillShownAt = Date()
+                        self.statusLabel.text = "墙原型加载中…"
+                        self.statusLabel.isHidden = false
+                    }
+                }
                 let detail = try await NativeDataClient.shared.fetchPlaylistDetail(id: playlistId)
                 let total = detail.trackCount
                 let seed = detail.tracks.map { Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl) }
@@ -112,9 +191,16 @@ final class WallPrototypeViewController: UIViewController,
                     self.statusLabel.text = seed.count >= total
                         ? "墙原型：\(total) 首 · 拖动平移 · 点按展开"
                         : "墙原型：共 \(total) 首 · 加载中 \(seed.count)"
+                    self.statusLabel.isHidden = false
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
+                    // 丝滑切入收口：唤醒等数据的 present、氛围底退场、
+                    // 首屏波次从此刻起算。
+                    self.seedReady = true
+                    self.flushSeedWaiters()
+                    self.waveStart = Date()
+                    self.backdrop?.dismiss()
                 }
                 // 页大小 400（3.7 (7) 实测）：往返的固定开销占大头
                 // （EdgeOne→网易云单次 4–9 秒、与页大小关系不大），
@@ -168,6 +254,9 @@ final class WallPrototypeViewController: UIViewController,
             } catch {
                 await MainActor.run {
                     self.statusLabel.text = "墙原型加载失败：\(error)"
+                    self.statusLabel.isHidden = false
+                    self.flushSeedWaiters()
+                    self.backdrop?.dismiss()
                 }
             }
         }
@@ -253,7 +342,14 @@ final class WallPrototypeViewController: UIViewController,
         let tier = entry.picUrl.map { NativeCoverLoader.wallTier(raw: $0, pixelExtent: pixelExtent) }
             ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
         cell.configure(entry: entry, tier: tier)
-        cell.playEntranceIfNeeded(key: entry.id)
+        // 首屏波次（种子落地 0.9 秒内）：按出现序给递增延迟，
+        // 总时长压在约 0.45 秒内（DS 第二十四轮 c 项上限）。
+        var entranceDelay: TimeInterval = 0
+        if let waveStart, Date().timeIntervalSince(waveStart) < 0.9 {
+            entranceDelay = Double(min(waveCount, 12)) * 0.035
+            waveCount += 1
+        }
+        cell.playEntranceIfNeeded(key: entry.id, delay: entranceDelay)
         return cell
     }
 
@@ -435,14 +531,16 @@ final class WallPosterCell: UICollectionViewCell {
         imageView.layer.removeAnimation(forKey: "foliaPulse")
     }
 
-    /// 首现淡入（每条目每进程一次）：只动 alpha，不碰 transform，
-    /// 与展开重排、按压缩放互不干扰。
-    func playEntranceIfNeeded(key: String) {
+    /// 首现淡入（每条目每进程一次）：alpha + 0.97→1 轻缩放；
+    /// delay 由 VC 的首屏波次调度给出（总时长 ≤0.45 秒）。
+    func playEntranceIfNeeded(key: String, delay: TimeInterval = 0) {
         guard !key.isEmpty, !Self.entranceSeen.contains(key) else { return }
         Self.entranceSeen.insert(key)
         contentView.alpha = 0
-        UIView.animate(withDuration: 0.32, delay: 0, options: [.curveEaseOut]) {
+        contentView.transform = CGAffineTransform(scaleX: 0.97, y: 0.97)
+        UIView.animate(withDuration: 0.32, delay: delay, options: [.curveEaseOut]) {
             self.contentView.alpha = 1
+            self.contentView.transform = .identity
         }
     }
 
@@ -454,6 +552,7 @@ final class WallPosterCell: UICollectionViewCell {
         imageView.image = nil
         stopPlaceholderPulse()
         contentView.alpha = 1
+        contentView.transform = .identity
         titleLabel.text = nil
         subtitleLabel.text = nil
     }
