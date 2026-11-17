@@ -327,6 +327,9 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     private var snapshotMaskView: UIImageView?
     private var lastViewSnapshot: UIImage?
     private var lastSnapshotCaptureAt: Date?
+    /// 3.6 (7) P2：内存警告触发的快照刷新节流（与 viewState 的 4 秒
+    /// 基础节流相互独立，防警告风暴连环截图反噬内存）。
+    private var lastMemorySnapshotAt: Date?
 
     /// 锚点纪元：seek / 切歌 / 快照时递增，网页丢弃纪元更旧的锚点（3.6 (3)）。
     private var seekSeq = 0
@@ -435,6 +438,102 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         config.userContentController.addUserScript(WKUserScript(
                 source: asyncDecodeSource, injectionTime:.atDocumentEnd, forMainFrameOnly: true))
 
+        // 不可见图驱逐（3.6 (7) P3，红线内组合包）：只定义触发函数，常态
+        // 不动作；原生在内存警告时 evaluateJavaScript 调用一轮。范围刻意
+        // 保守——只处理经 /img 代理的封面 <img>、且完全离开视口（含 0.5
+        // 屏边距）的元素：src 存 dataset 后置 1px 透明图释放解码，
+        // IntersectionObserver 在元素接近视口时恢复。墙海报由前端自身
+        // 代码涂绘（非 <img> 呈现，沙箱复核），不在此列；正在播放页的
+        // 可见图永远在视口内、不会被误伤。
+        let evictSource = """
+        (function () {
+          if (window.__foliaShellEvict) return;
+          var BLANK = 'data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';
+          // 恢复节流（DS 第十六轮 2.3C）：回视口的图排队恢复，每 100ms
+          // 最多放 4 张，防批量回调瞬间重取+重解码把内存弹回去。
+          var restoreQueue = [], restoreTimer = null;
+          function drainRestore() {
+            var n = 0;
+            while (restoreQueue.length && n < 4) {
+              var img = restoreQueue.shift();
+              if (img.dataset && img.dataset.foliaEvictedSrc) {
+                // 独立审查中-3：驱逐期间框架可能已把这张 <img> 就地改派
+                // 给新内容（src 不再是 BLANK）——此时只清标记，绝不把
+                // 旧图盖回去。审查中-2：cssText 还原按键存在性判断，
+                // 原样式为空串时也要还原，否则占位宽高永久残留。
+                var stillBlank = (img.getAttribute('src') || '') === BLANK;
+                if (stillBlank) {
+                  if (img.dataset.foliaEvictedSrcset !== undefined) { img.srcset = img.dataset.foliaEvictedSrcset; delete img.dataset.foliaEvictedSrcset; }
+                  if (img.dataset.foliaEvictedSizes !== undefined) { img.sizes = img.dataset.foliaEvictedSizes; delete img.dataset.foliaEvictedSizes; }
+                  img.src = img.dataset.foliaEvictedSrc;
+                  if (img.dataset.foliaEvictedStyle !== undefined) { img.style.cssText = img.dataset.foliaEvictedStyle; delete img.dataset.foliaEvictedStyle; }
+                } else {
+                  delete img.dataset.foliaEvictedSrcset;
+                  delete img.dataset.foliaEvictedSizes;
+                  delete img.dataset.foliaEvictedStyle;
+                }
+                delete img.dataset.foliaEvictedSrc;
+              }
+              n++;
+            }
+            if (restoreQueue.length) { restoreTimer = setTimeout(drainRestore, 100); }
+            else { restoreTimer = null; }
+          }
+          function queueRestore(img) {
+            if (restoreQueue.indexOf(img) < 0) restoreQueue.push(img);
+            if (!restoreTimer) restoreTimer = setTimeout(drainRestore, 30);
+          }
+          var io = ('IntersectionObserver' in window) ? new IntersectionObserver(function (entries) {
+            for (var i = 0; i < entries.length; i++) {
+              if (entries[i].isIntersecting) { queueRestore(entries[i].target); io.unobserve(entries[i].target); }
+            }
+          }, { rootMargin: '600px' }) : null;
+          function inWall(img) {
+            var el = img;
+            while (el && el !== document.body) {
+              var c = (el.className && el.className.baseVal !== undefined) ? el.className.baseVal : (el.className || '');
+              if (typeof c === 'string' && c.toLowerCase().indexOf('wall') >= 0) return true;
+              el = el.parentElement;
+            }
+            return false;
+          }
+          window.__foliaShellEvict = function () {
+            var vh = window.innerHeight || 0, vw = window.innerWidth || 0;
+            // 驱逐排除带（700px）必须大于恢复 rootMargin（600px），留
+            // 100px 迟滞带，否则边缘图会被驱逐后立刻恢复来回折腾
+            //（独立审查低）。
+            var marginY = 700, marginX = 700;
+            var imgs = document.images, count = 0;
+            for (var i = 0; i < imgs.length; i++) {
+              var img = imgs[i];
+              if (!img || img.dataset.foliaEvictedSrc) continue;
+              var s = img.getAttribute('src') || '';
+              if (s.indexOf('/img/') < 0) continue;
+              if (inWall(img)) continue;
+              var r = img.getBoundingClientRect();
+              if (r.width === 0 && r.height === 0) continue;
+              if (r.bottom >= -marginY && r.top <= vh + marginY && r.right >= -marginX && r.left <= vw + marginX) continue;
+              // srcset/sizes 一并保存清空（2.3A：只清 src 浏览器仍会按
+              // srcset 取图，驱逐无效）；占位尺寸防布局塌陷（2.3B）。
+              img.dataset.foliaEvictedSrc = s;
+              var ss = img.getAttribute('srcset');
+              if (ss) { img.dataset.foliaEvictedSrcset = ss; img.removeAttribute('srcset'); }
+              var sz = img.getAttribute('sizes');
+              if (sz) { img.dataset.foliaEvictedSizes = sz; img.removeAttribute('sizes'); }
+              img.dataset.foliaEvictedStyle = img.style.cssText || '';
+              img.style.width = r.width + 'px';
+              img.style.height = r.height + 'px';
+              img.src = BLANK;
+              if (io) io.observe(img);
+              count++;
+            }
+            return count;
+          };
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(
+                source: evictSource, injectionTime:.atDocumentEnd, forMainFrameOnly: true))
+
         // foliaAction 注册必须在创建 WKWebView 之前——
         // 先 config.userContentController.add，后 WKWebView(frame:configuration:)。
         // 事后改 config 不生效，网页回传会全部收不到。
@@ -492,6 +591,30 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
 
     @objc private func appDidReceiveMemoryWarning() {
         CoverPolicy.triggerGateLevel(source: "memoryWarning")
+        // 3.6 (7) P2：内存警告时节流刷新视图快照（≥10 秒），保证之后
+        // 万一被杀，遮罩盖的是最近画面而非旧帧；capture 内部另有
+        // superview/isLoading 守卫与 4 秒基础节流。
+        let now = Date()
+        if lastMemorySnapshotAt == nil || now.timeIntervalSince(lastMemorySnapshotAt!) >= 10 {
+            lastMemorySnapshotAt = now
+            captureViewSnapshotThrottled()
+        }
+        // 3.6 (7) P3：页面侧不可见图驱逐（函数由注入脚本定义）。延迟
+        // 一拍再跑：驱逐要遍历全图算布局，与上面的截图是同轮两件贵活，
+        // 错开避免在内存警告当口叠加开销（独立审查低）。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            self?.evictOffscreenImages()
+        }
+    }
+
+    /// 3.6 (7) P3：让页面卸下视口外 /img 封面的解码（脚本侧恢复逻辑
+    /// 自带）。页面未就绪/函数不存在时 evaluate 自然失败，静默忽略。
+    private func evictOffscreenImages() {
+        webView.evaluateJavaScript("window.__foliaShellEvict ? window.__foliaShellEvict() : -1") { result, _ in
+            if let count = result as? Int, count > 0 {
+                FoliaFileLog.write("bridge", "offscreen image eviction count=\(count)")
+            }
+        }
     }
 
     @objc private func appDidBecomeActive() {
@@ -577,7 +700,26 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         lastSnapshotCaptureAt = now
         guard webView.superview != nil, !webView.isLoading else { return }
         webView.takeSnapshot(with: nil) { [weak self] image, _ in
-            if let image { self?.lastViewSnapshot = image }
+            guard let self, let image else { return }
+            // 3.6 (7) P2（DS 第十六轮 4.4）：遮罩只是过渡显示，存图降采样
+            // 到最大边 1080 像素。注意 image.size 是点、image.scale 是
+            // 像素比——必须按像素判阈值，且 renderer 的 format.scale
+            // 钉为 1，否则点数阈值在 iPhone 上永不触发、渲染器默认
+            // scale 还会把节省抵消（独立审查中-1）。
+            let maxPixelEdge: CGFloat = 1080
+            let pixelW = image.size.width * image.scale
+            let pixelH = image.size.height * image.scale
+            let longest = max(pixelW, pixelH)
+            if longest > maxPixelEdge, pixelW > 0, pixelH > 0 {
+                let ratio = maxPixelEdge / longest
+                let target = CGSize(width: (pixelW * ratio).rounded(), height: (pixelH * ratio).rounded())
+                let format = UIGraphicsImageRendererFormat()
+                format.scale = 1
+                let renderer = UIGraphicsImageRenderer(size: target, format: format)
+                self.lastViewSnapshot = renderer.image { _ in image.draw(in: CGRect(origin: .zero, size: target)) }
+            } else {
+                self.lastViewSnapshot = image
+            }
         }
     }
 

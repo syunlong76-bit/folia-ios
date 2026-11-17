@@ -257,11 +257,24 @@ final class LocalServer {
 
     private func sendFile(url: URL, request: HTTPRequest, handler: ConnectionHandler) {
         do {
-            let data = try Data(contentsOf: url)
+            let rawData = try Data(contentsOf: url)
+            // 3.6 (7) P1：JS 供包时做墙解码登记表钳制定点替换（fail-open）
+            var patchCap: Int? = nil
+            let data: Data
+            if url.pathExtension.lowercased() == "js" {
+                let (patched, usedCap) = WallRegistryPatch.apply(to: rawData, fileName: url.lastPathComponent)
+                data = patched
+                patchCap = usedCap
+            } else {
+                data = rawData
+            }
             let mime = LocalServer.mimeType(forExtension: url.pathExtension.lowercased())
             // 本地文件读取成本低，一律 no-cache，保证整包版本切换后不吃旧缓存
-            let headers: [(String, String)] = [("Content-Type", mime),
+            var headers: [(String, String)] = [("Content-Type", mime),
                                                ("Cache-Control", "no-cache")]
+            if let patchCap {
+                headers.append(("X-Folia-Registry-Cap", String(patchCap)))
+            }
             if request.method == "HEAD" {
                 handler.respond(status: 200, reason: "OK", headers: headers, body: Data(),
                                 contentLengthOverride: data.count)
@@ -1131,6 +1144,77 @@ enum CoverPolicy {
             FoliaFileLog.write("cover", "low tier on (wall=320 for 600s) source=\(source)")
         }
         CoverImageProxy.applyGateLimit()
+    }
+
+    /// 3.6 (7) P1：墙解码登记表上限。正常 128，低档期 64——页面被杀
+    /// 重载时经 LocalServer 重新取 JS，新页面天生更小的登记表（供包
+    /// 定点替换 WallRegistryPatch 读此值）。600 原值 ×640² 解码约
+    /// 1.6MB/变体 ≈ 980MB 驻留上限；128 → 约 210MB，64 → 约 100MB。
+    static var registryCap: Int {
+        lock.lock(); defer { lock.unlock() }
+        return Date() < lowTierUntil ? 64 : 128
+    }
+
+    /// 低档期是否生效（日志/埋点用）。
+    static var lowTierActive: Bool {
+        lock.lock(); defer { lock.unlock() }
+        return Date() < lowTierUntil
+    }
+}
+
+/// 3.6 (7) P1：供包时对 wall chunk 里 MAX_TRACKED_VARIANTS 做定点替换。
+/// 锚点是结构模式而非变量名（变量名随构建变）：cap 变量赋值 + 紧跟三张
+/// =new Map 登记表 + remember 驱逐函数（delete/set 后以 e.size>capVar
+/// 循环）。全文件恰好命中 1 次才替换；未命中原样供包（fail-open），
+/// 命中与未命中都只记一次日志（按 文件名+cap 去重，防刷屏）。
+private enum WallRegistryPatch {
+    private static let regex: NSRegularExpression? = try? NSRegularExpression(
+        pattern: #"([A-Za-z_$][\w$]*)=(\d{2,4}),([A-Za-z_$][\w$]*)=new Map,([A-Za-z_$][\w$]*)=new Map,([A-Za-z_$][\w$]*)=new Map,([A-Za-z_$][\w$]*)=\(e,t\)=>\{for\(e\.delete\(t\),e\.set\(t,!0\);e\.size>\1"#)
+
+    private static var loggedKeys = Set<String>()
+    private static let logLock = NSLock()
+
+    /// 返回 (供包字节, 实际替换用的 cap)。未命中 cap 为 nil。命中时
+    /// 调用方给响应加 X-Folia-Registry-Cap 标记头（DS 第十六轮 4.5），
+    /// 值取本次替换实际用的 cap（独立审查低：避免二次读 CoverPolicy
+    /// 与替换值不一致）。
+    static func apply(to data: Data, fileName: String) -> (Data, Int?) {
+        guard let regex else { return (data, nil) }
+        // 前置过滤：三张登记表同现才值得跑正则；也把 MISS 日志收窄到
+        // 真正像 wall chunk 的文件，防全量 JS 首载时日志爆发（审查低）。
+        var mapHits = 0
+        var searchRange = data.startIndex..<data.endIndex
+        let needle = Data("=new Map,".utf8)
+        while let found = data.range(of: needle, in: searchRange) {
+            mapHits += 1
+            if mapHits >= 3 { break }
+            searchRange = found.upperBound..<data.endIndex
+        }
+        guard mapHits >= 3 else { return (data, nil) }
+        guard let text = String(data: data, encoding: .utf8) else {
+            logOnce(key: "nonutf8:\(fileName)", message: "registry patch SKIP non-utf8 file=\(fileName)")
+            return (data, nil)
+        }
+        let fullRange = NSRange(text.startIndex..., in: text)
+        let matches = regex.matches(in: text, range: fullRange)
+        let cap = CoverPolicy.registryCap
+        guard matches.count == 1, let match = matches.first,
+              let digitsRange = Range(match.range(at: 2), in: text) else {
+            logOnce(key: "miss:\(fileName)", message: "registry patch MISS file=\(fileName) matches=\(matches.count)")
+            return (data, nil)
+        }
+        let original = text[digitsRange]
+        var patched = text
+        patched.replaceSubrange(digitsRange, with: String(cap))
+        logOnce(key: "hit:\(fileName):\(cap)", message: "registry patch HIT file=\(fileName) \(original)->\(cap)")
+        return (Data(patched.utf8), cap)
+    }
+
+    private static func logOnce(key: String, message: String) {
+        logLock.lock()
+        let isNew = loggedKeys.insert(key).inserted
+        logLock.unlock()
+        if isNew { FoliaFileLog.write("cover", message) }
     }
 }
 
