@@ -80,7 +80,7 @@ final class WallLayout: UICollectionViewLayout {
             )
             let list = WallGeometry.layoutLattice(
                 geometry: geometry, totalEntries: totalEntries,
-                bounds: worldBounds, overscan: 500, metrics: metrics
+                bounds: worldBounds, overscan: 900, metrics: metrics
             )
             var rects: [String: WallRectD] = [:]
             if let expandedId = expandedInstanceId,

@@ -60,6 +60,12 @@ final class NativeCoverLoader {
         return nil
     }
 
+    /// 同步查内存缓存（cell 配置时用：命中直接上图，不走异步，
+    /// 避免 reloadData 重建 cell 时先清空再异步回图的一帧闪黑）。
+    func cachedImage(for urlString: String) -> UIImage? {
+        cache.object(forKey: urlString as NSString)
+    }
+
     /// 加载并按档降采样解码；同 URL 全局一份（NSCache）。
     func image(for urlString: String, tier: Int) async -> UIImage? {
         let key = urlString as NSString

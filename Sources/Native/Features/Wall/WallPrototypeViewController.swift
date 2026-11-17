@@ -6,7 +6,8 @@ import UIKit
 /// 不是正式表面：无播放焦点、无详情交接、无标题分区（探索墙的
 /// lot 系统与 Bravais 的 rank 系统在阶段 4 各自接入）。
 final class WallPrototypeViewController: UIViewController,
-    UICollectionViewDataSource, UICollectionViewDelegate {
+    UICollectionViewDataSource, UICollectionViewDelegate,
+    UICollectionViewDataSourcePrefetching {
 
     struct Entry {
         let id: String
@@ -38,6 +39,7 @@ final class WallPrototypeViewController: UIViewController,
         collectionView.backgroundColor = .black
         collectionView.dataSource = self
         collectionView.delegate = self
+        collectionView.prefetchDataSource = self
         collectionView.showsVerticalScrollIndicator = false
         collectionView.showsHorizontalScrollIndicator = false
         collectionView.decelerationRate = .fast
@@ -94,10 +96,12 @@ final class WallPrototypeViewController: UIViewController,
         Task { [weak self] in
             guard let self else { return }
             do {
-                // track/all 单页上限 100（真机实测：请求 400 只回 100），
-                // 分页拉满 400（几何按总量定单元，加载中途不换总量）。
+                // 先取详情拿真实总数（19723756 飙升榜实测就是 100 首，
+                // 不是被分页截断），再按 track/all 分页拉到 min(总数, 400)。
+                let detail = try await NativeDataClient.shared.fetchPlaylistDetail(id: playlistId)
+                let target = min(detail.trackCount, 400)
                 var loaded: [Entry] = []
-                while loaded.count < 400 {
+                while loaded.count < target {
                     let page = try await NativeDataClient.shared.fetchPlaylistTracksPage(
                         id: playlistId, limit: 100, offset: loaded.count)
                     if page.isEmpty { break }
@@ -202,34 +206,44 @@ final class WallPrototypeViewController: UIViewController,
         return cell
     }
 
+    // MARK: - 预取（拖动闪黑对策：图先进内存缓存，cell 出现时同步上图）
+
+    func collectionView(_ collectionView: UICollectionView,
+                        prefetchItemsAt indexPaths: [IndexPath]) {
+        for indexPath in indexPaths {
+            guard indexPath.item < wallLayout.instances.count else { continue }
+            let instance = wallLayout.instances[indexPath.item]
+            guard instance.queueIndex < entries.count else { continue }
+            let entry = entries[instance.queueIndex]
+            guard let pic = entry.picUrl else { continue }
+            let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
+            let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
+            let tier = NativeCoverLoader.tier(forPixelExtent: pixelExtent)
+            guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { continue }
+            if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { continue }
+            Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
+        }
+    }
+
     // MARK: - 点按展开
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
         let before = setIdentity()
+        // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
+        // 被点卡在原地长大、同块卡让位，镜头不动。
         if wallLayout.expandedInstanceId == instance.instanceId {
             wallLayout.expandedInstanceId = nil
         } else {
             wallLayout.expandedInstanceId = instance.instanceId
-            // 相机飞到该卡居中：只改 worldOrigin（增量折叠模型下
-            // offset 恒钉中心，改原点即移动镜头）。
-            let viewSize = collectionView.bounds.size
-            let centerX = instance.rect.x + instance.rect.width / 2
-            let centerY = instance.rect.y + instance.rect.height / 2
-            wallLayout.worldOrigin = CGPoint(
-                x: centerX - Double(viewSize.width) / wallLayout.cameraScale / 2,
-                y: centerY - Double(viewSize.height) / wallLayout.cameraScale / 2
-            )
         }
         wallLayout.refreshInstances()
         if setIdentity() == before {
-            // 实例集没换人：帧变化走动画（3.7 (1) 是 reloadData 跳变，
-            // 也是 PPT 感的来源之一）。
-            UIView.animate(withDuration: 0.32, delay: 0,
-                           options: [.curveEaseInOut, .beginFromCurrentState]) {
+            let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
                 self.wallLayout.invalidateLayout()
                 collectionView.layoutIfNeeded()
             }
+            animator.startAnimation()
         } else {
             collectionView.reloadData()
         }
@@ -259,7 +273,8 @@ final class WallPosterCell: UICollectionViewCell {
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         imageView.layer.cornerRadius = 8
-        imageView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        // 未出图占位用深灰而非近黑：拖动中未加载的卡读作灰砖，不读作黑洞。
+        imageView.backgroundColor = UIColor(white: 0.13, alpha: 1)
         shadowView.addSubview(imageView)
 
         titleLabel.font = .systemFont(ofSize: 10, weight: .medium)
@@ -286,16 +301,33 @@ final class WallPosterCell: UICollectionViewCell {
             width: shadowView.bounds.width - 12, height: labelHeight)
     }
 
+    /// 按压反馈：轻微缩放（原生点击手感的最低成本件）。
+    override var isHighlighted: Bool {
+        didSet {
+            UIView.animate(withDuration: 0.15) {
+                self.contentView.transform = self.isHighlighted
+                    ? CGAffineTransform(scaleX: 0.96, y: 0.96) : .identity
+            }
+        }
+    }
+
     func configure(entry: WallPrototypeViewController.Entry, tier: Int) {
         titleLabel.text = entry.title
         loadTask?.cancel()
-        imageView.image = nil
         guard let pic = entry.picUrl,
               let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else {
             currentUrl = nil
+            imageView.image = nil
             return
         }
         currentUrl = urlString
+        // 缓存命中同步上图：reloadData/复用重建时不先清空、不异步等一帧，
+        // 这是拖动闪黑的主修复。
+        if let cached = NativeCoverLoader.shared.cachedImage(for: urlString) {
+            imageView.image = cached
+            return
+        }
+        imageView.image = nil
         loadTask = Task { [weak self] in
             let image = await NativeCoverLoader.shared.image(for: urlString, tier: tier)
             guard let self else { return }
