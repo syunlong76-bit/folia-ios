@@ -94,9 +94,22 @@ final class WallPrototypeViewController: UIViewController,
         Task { [weak self] in
             guard let self else { return }
             do {
-                let tracks = try await NativeDataClient.shared.fetchPlaylistTracksPage(
-                    id: playlistId, limit: 400, offset: 0)
-                let loaded = tracks.map { Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl) }
+                // track/all 单页上限 100（真机实测：请求 400 只回 100），
+                // 分页拉满 400（几何按总量定单元，加载中途不换总量）。
+                var loaded: [Entry] = []
+                while loaded.count < 400 {
+                    let page = try await NativeDataClient.shared.fetchPlaylistTracksPage(
+                        id: playlistId, limit: 100, offset: loaded.count)
+                    if page.isEmpty { break }
+                    loaded.append(contentsOf: page.map {
+                        Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl)
+                    })
+                    let count = loaded.count
+                    await MainActor.run {
+                        self.statusLabel.text = "墙原型加载中… \(count)"
+                    }
+                    if page.count < 100 { break }
+                }
                 await MainActor.run {
                     self.entries = loaded
                     self.wallLayout.totalEntries = loaded.count
@@ -135,42 +148,39 @@ final class WallPrototypeViewController: UIViewController,
         centerCameraIfNeeded()
     }
 
-    /// 绕回（WallLayout 相机模型）：offset 偏出中心单元时成对调整
-    /// offset 与 worldOrigin，视觉位置不变（周期平铺的拷贝接棒）。
+    /// 相机增量折叠（3.7 (2) 修复）：3.7 (1) 的整格绕回模型有个致命
+    /// 错误——属性帧 =（世界 − 原点）× scale + contentOffset，视觉位置
+    /// = 帧 − offset 恒等于（世界 − 原点）× scale，与拖动无关：拖动时
+    /// 画面纹丝不动，跨过绕回阈值才整格跳一次，真机录屏实证为 PPT。
+    /// 改法：offset 恒钉在中心单元，任一滚动增量立即折进 worldOrigin
+    /// 并把 offset 拉回中心——相机连续跟手，帧公式不变即成立。
+    /// 实例集身份（首/尾 id + 计数）变了才 reloadData，否则只失效布局。
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
         guard !isWrapping, didCenterCamera else { return }
         let cell = wallLayout.cellViewSize
         guard cell.width > 0, cell.height > 0 else { return }
-        var offset = scrollView.contentOffset
-        var origin = wallLayout.worldOrigin
-        var changed = false
-        if offset.x < cell.width * 0.5 {
-            offset.x += cell.width
-            origin.x -= CGFloat(wallLayout.geometry.cellWidth)
-            changed = true
-        } else if offset.x > cell.width * 1.5 {
-            offset.x -= cell.width
-            origin.x += CGFloat(wallLayout.geometry.cellWidth)
-            changed = true
-        }
-        if offset.y < cell.height * 0.5 {
-            offset.y += cell.height
-            origin.y -= CGFloat(wallLayout.geometry.cellHeight)
-            changed = true
-        } else if offset.y > cell.height * 1.5 {
-            offset.y -= cell.height
-            origin.y += CGFloat(wallLayout.geometry.cellHeight)
-            changed = true
-        }
-        if changed {
-            isWrapping = true
-            wallLayout.worldOrigin = origin
-            scrollView.contentOffset = offset
-            // 实例集随窗口换了一批：刷新集并同步数据源计数。
-            wallLayout.refreshInstances()
+        let center = CGPoint(x: cell.width, y: cell.height)
+        let delta = CGPoint(
+            x: scrollView.contentOffset.x - center.x,
+            y: scrollView.contentOffset.y - center.y)
+        guard delta.x != 0 || delta.y != 0 else { return }
+        isWrapping = true
+        let before = setIdentity()
+        wallLayout.worldOrigin = CGPoint(
+            x: wallLayout.worldOrigin.x + delta.x / CGFloat(wallLayout.cameraScale),
+            y: wallLayout.worldOrigin.y + delta.y / CGFloat(wallLayout.cameraScale))
+        scrollView.contentOffset = center
+        wallLayout.refreshInstances()
+        if setIdentity() != before {
             collectionView.reloadData()
-            isWrapping = false
         }
+        isWrapping = false
+    }
+
+    /// 实例集身份指纹：判断下标→实例的映射是否还成立。
+    private func setIdentity() -> String {
+        let list = wallLayout.instances
+        return "\(list.first?.instanceId ?? "-")/\(list.last?.instanceId ?? "-")/\(list.count)"
     }
 
     // MARK: - 数据源
@@ -196,11 +206,13 @@ final class WallPrototypeViewController: UIViewController,
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
+        let before = setIdentity()
         if wallLayout.expandedInstanceId == instance.instanceId {
             wallLayout.expandedInstanceId = nil
         } else {
             wallLayout.expandedInstanceId = instance.instanceId
-            // 相机飞到该卡居中：只改 worldOrigin（视觉公式与 offset 相消）。
+            // 相机飞到该卡居中：只改 worldOrigin（增量折叠模型下
+            // offset 恒钉中心，改原点即移动镜头）。
             let viewSize = collectionView.bounds.size
             let centerX = instance.rect.x + instance.rect.width / 2
             let centerY = instance.rect.y + instance.rect.height / 2
@@ -209,9 +221,18 @@ final class WallPrototypeViewController: UIViewController,
                 y: centerY - Double(viewSize.height) / wallLayout.cameraScale / 2
             )
         }
-        // 原型阶段先跳变不做帧动画（阶段 4 接正式表面时补动画器）。
         wallLayout.refreshInstances()
-        collectionView.reloadData()
+        if setIdentity() == before {
+            // 实例集没换人：帧变化走动画（3.7 (1) 是 reloadData 跳变，
+            // 也是 PPT 感的来源之一）。
+            UIView.animate(withDuration: 0.32, delay: 0,
+                           options: [.curveEaseInOut, .beginFromCurrentState]) {
+                self.wallLayout.invalidateLayout()
+                collectionView.layoutIfNeeded()
+            }
+        } else {
+            collectionView.reloadData()
+        }
     }
 }
 
