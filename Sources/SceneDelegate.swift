@@ -12,6 +12,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 1) 准备 Web 根目录：首次拷贝内置版本；如有已下载待生效的新版本且目录完整，切换生效
         WebRootManager.shared.prepare()
 
+        // M1 阶段 2：启动登录 Cookie 同步观察（原生数据链的前置）。
+        CookieSync.shared.start()
+
         // 2) 主界面（内含 WKWebView + 本地服务器启动）；窗口底色纯黑，
         //    避免全屏沉浸时系统窗口在边缘透出白底
         let window = UIWindow(windowScene: windowScene)

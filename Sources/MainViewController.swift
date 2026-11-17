@@ -61,6 +61,10 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
         gear.accessibilityLabel = "设置"
         gear.translatesAutoresizingMaskIntoConstraints = false
         gear.addTarget(self, action: #selector(openSettings), for: .touchUpInside)
+        // M1 阶段 3 调试入口：长按齿轮打开单墙原型（正式表面接入后移除）。
+        let longPress = UILongPressGestureRecognizer(target: self, action: #selector(openWallPrototype))
+        longPress.minimumPressDuration = 0.8
+        gear.addGestureRecognizer(longPress)
         view.addSubview(gear)
         NSLayoutConstraint.activate([
             gear.widthAnchor.constraint(equalToConstant: 34),
@@ -180,6 +184,12 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
     func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                            shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
         return true
+    }
+
+    @objc private func openWallPrototype() {
+        let prototype = WallPrototypeViewController()
+        prototype.modalPresentationStyle = .fullScreen
+        present(prototype, animated: true)
     }
 
     @objc private func openSettings() {
