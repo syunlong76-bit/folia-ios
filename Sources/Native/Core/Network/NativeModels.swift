@@ -28,6 +28,10 @@ struct NativePlaylistDetail: Equatable {
     let detailText: String?
     /// 全量曲目 id（顺序即歌单序）——分页队列模型的骨架（规格 §3）。
     let trackIds: [String]
+    /// 详情响应内嵌的完整曲目（3.7 (7) 实测：/playlist/detail 直接
+    /// 带全部曲目对象，338/338 首全在——曲目墙可一次调用立全墙，
+    /// 不必再走 track/all 分页；超大歌单内嵌可能截断，缺口再分页补）。
+    let tracks: [NativeTrack]
 }
 
 struct NativeTrack: Equatable {
@@ -99,7 +103,8 @@ enum NativeParse {
             trackCount: NativeJSON.int(playlist["trackCount"]),
             playCount: NativeJSON.int(playlist["playCount"]),
             detailText: NativeJSON.string(playlist["description"]),
-            trackIds: ids
+            trackIds: ids,
+            tracks: NativeJSON.array(playlist["tracks"]).compactMap(track)
         )
     }
 

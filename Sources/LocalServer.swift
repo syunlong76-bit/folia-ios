@@ -1630,9 +1630,14 @@ private enum CoverURLRewriter {
         guard dedicated || hasImageExtension else { return nil }
         let lower = original.lowercased()
         let tier = tierOverride ?? (lower.contains("blur") ? 480 : (lower.contains("avatar") ? 512 : 640))
+        // http 明文原图先升 https（3.7 (7)）：歌单 coverImgUrl 是
+        // http:// 地址，ATS 只给本机开例外，代理取图会被拦；同图
+        // http/https 字节一致，升级无损，Web 与原生同时受益。
+        let upgraded = original.hasPrefix("http://")
+            ? "https://" + original.dropFirst(7) : original
         // 相对路径 + base64url：见 CoverImageProxy 头注（避前端 https 升级与子串误伤）。
         _ = port // 地址已改相对路径，端口不再出现在产物里（签名保留兼容调用点）
-        return "/img/\(base64URL(original))?w=\(tier)"
+        return "/img/\(base64URL(upgraded))?w=\(tier)"
     }
 
     /// base64url（无填充）：字母表不含 '.'，原地址的主机名不会以明文出现。

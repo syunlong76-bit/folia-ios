@@ -72,16 +72,43 @@ final class NativeCoverLoader {
         guard port != 0 else { return nil }
         if raw.hasPrefix("/img/") {
             let base = raw.split(separator: "?", maxSplits: 1).first.map(String.init) ?? raw
-            return "http://127.0.0.1:\(port)\(base)?w=\(tier)"
+            return "http://127.0.0.1:\(port)\(Self.upgradedImgPath(base))?w=\(tier)"
         }
         if raw.hasPrefix("http://") || raw.hasPrefix("https://") {
-            let encoded = Data(raw.utf8).base64EncodedString()
-                .replacingOccurrences(of: "+", with: "-")
-                .replacingOccurrences(of: "/", with: "_")
-                .replacingOccurrences(of: "=", with: "")
+            let encoded = Self.base64URL(Self.upgradedHTTPS(raw))
             return "http://127.0.0.1:\(port)/img/\(encoded)?w=\(tier)"
         }
         return nil
+    }
+
+    /// 3.7 (7) 封面全灭根因修复：网易云歌单 coverImgUrl 是 http:// 明文
+    /// 地址（曲目 picUrl 是 https://），App 的 ATS 只给本机开了例外，
+    /// 代理取 http 原图、原生跟随兜底跳转都会被拦——歌单封面全灭、
+    /// 曲目封面无事。同一图片 http/https 返回字节一致（实测），一律
+    /// 先升 https 再进代理。/img 载荷里烘焙的旧 http 地址同理：解码、
+    /// 升级、重编码（顺带绕开代理磁盘缓存里的旧响应）。
+    private static func upgradedHTTPS(_ url: String) -> String {
+        url.hasPrefix("http://") ? "https://" + url.dropFirst(7) : url
+    }
+
+    private static func upgradedImgPath(_ path: String) -> String {
+        guard path.hasPrefix("/img/") else { return path }
+        let payload = String(path.dropFirst(5))
+        var base64 = payload
+            .replacingOccurrences(of: "-", with: "+")
+            .replacingOccurrences(of: "_", with: "/")
+        while base64.count % 4 != 0 { base64 += "=" }
+        guard let data = Data(base64Encoded: base64),
+              let decoded = String(data: data, encoding: .utf8),
+              decoded.hasPrefix("http://") else { return path }
+        return "/img/" + base64URL(upgradedHTTPS(decoded))
+    }
+
+    private static func base64URL(_ value: String) -> String {
+        Data(value.utf8).base64EncodedString()
+            .replacingOccurrences(of: "+", with: "-")
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "=", with: "")
     }
 
     /// 同步查内存缓存（cell 配置时用：命中直接上图，不走异步，

@@ -184,6 +184,7 @@ final class HomeWallViewController: UIViewController,
         let tier = entry.picUrl.map { NativeCoverLoader.wallTier(raw: $0, pixelExtent: pixelExtent) }
             ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
         cell.configure(entry: entry, tier: tier)
+        cell.playEntranceIfNeeded(key: entry.id)
         return cell
     }
 

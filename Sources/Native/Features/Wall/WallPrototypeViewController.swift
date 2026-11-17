@@ -98,22 +98,32 @@ final class WallPrototypeViewController: UIViewController,
         Task { [weak self] in
             guard let self else { return }
             do {
-                // 3.7 (6) 渐进加载（真机问题：大歌单全量串行拉完才肯
-                // 显示，338 首要等 4 个串行往返）：先取详情拿真实总数
-                // 立刻立墙，曲目按页 3 路并发补入、每页落地就上墙。
-                // 同时去掉原型期的 400 首上限：总数以详情为准，全量
-                // 分页（正式的 id 骨架+按需补页模型在详情 MVP 落）。
+                // 3.7 (7) 单趟立墙（实测推翻分页必要性）：/playlist/
+                // detail 的响应直接内嵌全部曲目对象（338/338 首全在，
+                // 含 picUrl），一次往返数据全齐、封面立刻全量开取。
+                // 3.7 (6) 的分页拼接只留作缺口兜底：超大歌单内嵌被
+                // 截断时，从已得数量处继续分页补齐。
                 let detail = try await NativeDataClient.shared.fetchPlaylistDetail(id: playlistId)
                 let total = detail.trackCount
+                let seed = detail.tracks.map { Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl) }
                 await MainActor.run {
+                    self.entries = seed
                     self.wallLayout.totalEntries = total
-                    self.statusLabel.text = "墙原型：共 \(total) 首 · 加载中 0"
+                    self.statusLabel.text = seed.count >= total
+                        ? "墙原型：\(total) 首 · 拖动平移 · 点按展开"
+                        : "墙原型：共 \(total) 首 · 加载中 \(seed.count)"
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
                 }
-                let pageSize = 100
-                var offset = 0
+                // 页大小 400（3.7 (7) 实测）：往返的固定开销占大头
+                // （EdgeOne→网易云单次 4–9 秒、与页大小关系不大），
+                // limit=400 一次拿全 338 首 9.0 秒 / 712KB；100 一页
+                // 4.5–6.4 秒、四页并发两批也要 11 秒以上，且后页封面
+                // 必须等数据页落地才能开取。≤400 首的歌单自此单趟
+                // 到齐；更大的仍走下面的并发前缀拼接。
+                let pageSize = 400
+                var offset = seed.count
                 while offset < total {
                     // 3 路并发取页；结果按 offset 收齐，只拼连续前缀：
                     // 中间页失败就在缺口处停下，下一轮从缺口重取，
@@ -243,6 +253,7 @@ final class WallPrototypeViewController: UIViewController,
         let tier = entry.picUrl.map { NativeCoverLoader.wallTier(raw: $0, pixelExtent: pixelExtent) }
             ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
         cell.configure(entry: entry, tier: tier)
+        cell.playEntranceIfNeeded(key: entry.id)
         return cell
     }
 
@@ -302,6 +313,11 @@ final class WallPosterCell: UICollectionViewCell {
     private let subtitleLabel = UILabel()
     private var loadTask: Task<Void, Never>?
     private var currentUrl: String?
+
+    /// 入场淡入已播过的条目（按条目 id 去重、跨 cell 复用有效）：
+    /// 同一面墙里平铺重复的同一条目只在首现时淡入，后续实例直接
+    /// 显示，平移时不反复闪。
+    private static var entranceSeen = Set<String>()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -376,23 +392,57 @@ final class WallPosterCell: UICollectionViewCell {
               let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else {
             currentUrl = nil
             imageView.image = nil
+            stopPlaceholderPulse()
             return
         }
         currentUrl = urlString
         // 缓存命中同步上图：reloadData/复用重建时不先清空、不异步等一帧，
         // 这是拖动闪黑的主修复。
         if let cached = NativeCoverLoader.shared.cachedImage(for: urlString) {
+            stopPlaceholderPulse()
             imageView.image = cached
             return
         }
         imageView.image = nil
+        startPlaceholderPulse()
         loadTask = Task { [weak self] in
             let image = await NativeCoverLoader.shared.image(for: urlString, tier: tier)
             guard let self else { return }
             await MainActor.run {
                 guard self.currentUrl == urlString else { return }
+                self.stopPlaceholderPulse()
                 self.imageView.image = image
             }
+        }
+    }
+
+    /// 未出图占位的呼吸微光（Miller 定：加载不能干等）：只在无图且
+    /// 加载在途时跑；图片到达、加载失败（image 为 nil 时同样停）、
+    /// cell 复用时都停，不留常驻动画。
+    private func startPlaceholderPulse() {
+        guard imageView.layer.animation(forKey: "foliaPulse") == nil else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 0.55
+        pulse.toValue = 0.92
+        pulse.duration = 1.05
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        imageView.layer.add(pulse, forKey: "foliaPulse")
+    }
+
+    private func stopPlaceholderPulse() {
+        imageView.layer.removeAnimation(forKey: "foliaPulse")
+    }
+
+    /// 首现淡入（每条目每进程一次）：只动 alpha，不碰 transform，
+    /// 与展开重排、按压缩放互不干扰。
+    func playEntranceIfNeeded(key: String) {
+        guard !key.isEmpty, !Self.entranceSeen.contains(key) else { return }
+        Self.entranceSeen.insert(key)
+        contentView.alpha = 0
+        UIView.animate(withDuration: 0.32, delay: 0, options: [.curveEaseOut]) {
+            self.contentView.alpha = 1
         }
     }
 
@@ -402,6 +452,8 @@ final class WallPosterCell: UICollectionViewCell {
         loadTask = nil
         currentUrl = nil
         imageView.image = nil
+        stopPlaceholderPulse()
+        contentView.alpha = 1
         titleLabel.text = nil
         subtitleLabel.text = nil
     }
