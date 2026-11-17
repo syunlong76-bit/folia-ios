@@ -258,10 +258,13 @@ final class LocalServer {
     private func sendFile(url: URL, request: HTTPRequest, handler: ConnectionHandler) {
         do {
             let rawData = try Data(contentsOf: url)
-            // 3.6 (7) P1：JS 供包时做墙解码登记表钳制定点替换（fail-open）
+            // 3.6 (7) P1：JS 供包时做墙解码登记表钳制定点替换（fail-open）。
+            // 3.6 (8) 止损停用：实查登记表只存 URL 字符串、不持有位图，
+            // 钳制压不到真实内存（WebKit 图片缓存），且大书库登记抖动
+            // 放大取图请求、出图更慢（review-367 取证 + DS 第十七轮）。
             var patchCap: Int? = nil
             let data: Data
-            if url.pathExtension.lowercased() == "js" {
+            if WallRegistryPatch.isEnabled, url.pathExtension.lowercased() == "js" {
                 let (patched, usedCap) = WallRegistryPatch.apply(to: rawData, fileName: url.lastPathComponent)
                 data = patched
                 patchCap = usedCap
@@ -1168,6 +1171,10 @@ enum CoverPolicy {
 /// 循环）。全文件恰好命中 1 次才替换；未命中原样供包（fail-open），
 /// 命中与未命中都只记一次日志（按 文件名+cap 去重，防刷屏）。
 private enum WallRegistryPatch {
+    /// 3.6 (8) 止损：停用（见 sendFile 处注释）。代码保留备查，CI 锚点
+    /// 检查仍在（scripts/check-registry-patch.py），防锚点腐烂。
+    static let isEnabled = false
+
     private static let regex: NSRegularExpression? = try? NSRegularExpression(
         pattern: #"([A-Za-z_$][\w$]*)=(\d{2,4}),([A-Za-z_$][\w$]*)=new Map,([A-Za-z_$][\w$]*)=new Map,([A-Za-z_$][\w$]*)=new Map,([A-Za-z_$][\w$]*)=\(e,t\)=>\{for\(e\.delete\(t\),e\.set\(t,!0\);e\.size>\1"#)
 

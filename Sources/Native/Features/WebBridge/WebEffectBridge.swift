@@ -599,12 +599,10 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             lastMemorySnapshotAt = now
             captureViewSnapshotThrottled()
         }
-        // 3.6 (7) P3：页面侧不可见图驱逐（函数由注入脚本定义）。延迟
-        // 一拍再跑：驱逐要遍历全图算布局，与上面的截图是同轮两件贵活，
-        // 错开避免在内存警告当口叠加开销（独立审查低）。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-            self?.evictOffscreenImages()
-        }
+        // 3.6 (7) P3 页面侧驱逐已于 3.6 (8) 止损停用：墙祖先类名排除在
+        // 生产类名（lattice/bravais）下失效、可能误伤书库墙 <img> 海报，
+        // 且驱逐收益从未证实（review-367 取证 + DS 第十七轮）。注入脚本
+        // 与 evictOffscreenImages 保留备查，不再调用。
     }
 
     /// 3.6 (7) P3：让页面卸下视口外 /img 封面的解码（脚本侧恢复逻辑
