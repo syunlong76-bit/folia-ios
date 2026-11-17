@@ -280,7 +280,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     let webView: WKWebView
 
     @Published private(set) var isPageLoaded = false
-    /// 进程自愈防抖触发后的致命错误（1 分钟 ≥3 次 terminate，自动 reload 已停）。
+    /// 真致命错误（包体缺失等不可恢复项）。3.6 (6) 起进程终止不再写它：
+    /// 终止走无限退避自愈，永不向用户呈现「已停止自动恢复」。
     @Published private(set) var lastFatalError: String?
 
     /// 网页请求收起播放页（JS `minimize` 动作）。由 MainViewController 注入。
@@ -308,15 +309,17 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 引擎时间落到目标附近（在线 tolerance 2s）或 3s 超时，再回推真实位置。
     private var pendingSeek: (target: TimeInterval, startedAt: Date)?
 
-    /// 进程自愈防抖：60 秒窗口内的 terminate 时间戳。
+    /// 进程自愈退避：180 秒窗口内的 terminate 时间戳（3.6 (6)，DS
+    /// 第十三轮定版）。退避序号与 CoverPolicy 连杀信号都只从这一个
+    /// 数组出（单一计数源头）；旧记录滑出窗口即自然清零，不再有挂起态。
     private var terminateDates: [Date] = []
-    private var autoReloadSuspended = false
     /// 后台时进程被杀：不在后台硬重载（系统还会再杀），回前台再恢复。
     private var pendingReloadAfterTermination = false
 
     /// 视图恢复（3.6 (4)，治 #4/#5）：本次重载是否由进程终止触发（决定
-    /// didFinish 后要不要下发 restoreView）；恢复尝试计数防死循环（同一
-    /// 会话最多 2 次，用户手动导航到别的集合后清零）。
+    /// didFinish 后要不要下发 restoreView）。3.6 (6) 起恢复下发不再设
+    /// 次数上限（旧上限与重载挂起叠加成「回主页」事故），尝试数只记日志；
+    /// 用户手动导航到别的集合后计数清零。
     private var terminationReloadPending = false
     private var viewRestoreAttempts = 0
     private var lastRestoredViewKey: String?
@@ -394,6 +397,44 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         config.userContentController.addUserScript(WKUserScript(
                 source: calloutSuppressSource, injectionTime:.atDocumentStart, forMainFrameOnly: false))
 
+        // 封面异步解码（3.6 (6)，DS 第十三轮 Q3 定版）：只给经壳 /img
+        // 代理的封面图补 decoding="async"，让解码离开主线程关键路径；
+        // 不加 loading="lazy"（会与前端自有滚动恢复/轮播预加载打架），
+        // 不改任何 DOM 结构。dataset 标记防观察器重复处理同一元素。
+        let asyncDecodeSource = """
+        (function () {
+          function mark(img) {
+            if (!img || img.dataset.foliaAsyncDecode) return;
+            img.dataset.foliaAsyncDecode = '1';
+            try { img.decoding = 'async'; } catch (e) {}
+          }
+          function consider(node) {
+            if (!node || node.nodeType !== 1) return;
+            if (node.tagName === 'IMG') {
+              var s = node.getAttribute('src') || '';
+              if (s.indexOf('/img/') >= 0) mark(node);
+            } else if (node.querySelectorAll) {
+              var imgs = node.querySelectorAll('img');
+              for (var i = 0; i < imgs.length; i++) {
+                var s2 = imgs[i].getAttribute('src') || '';
+                if (s2.indexOf('/img/') >= 0) mark(imgs[i]);
+              }
+            }
+          }
+          consider(document.documentElement);
+          var mo = new MutationObserver(function (muts) {
+            for (var i = 0; i < muts.length; i++) {
+              var m = muts[i];
+              if (m.type === 'attributes') { consider(m.target); }
+              for (var j = 0; j < m.addedNodes.length; j++) consider(m.addedNodes[j]);
+            }
+          });
+          mo.observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(
+                source: asyncDecodeSource, injectionTime:.atDocumentEnd, forMainFrameOnly: true))
+
         // foliaAction 注册必须在创建 WKWebView 之前——
         // 先 config.userContentController.add，后 WKWebView(frame:configuration:)。
         // 事后改 config 不生效，网页回传会全部收不到。
@@ -438,19 +479,38 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         NotificationCenter.default.addObserver(
             self, selector: #selector(appDidBecomeActive),
             name: UIApplication.didBecomeActiveNotification, object: nil)
+        // 内存警告 → CoverPolicy 闸门级（只降取图并发 + 修剪缓存，
+        // 不降清晰度；3.6 (6)，DS Q6 两级拆分）。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidReceiveMemoryWarning),
+            name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
 
         bindPlaybackEngine()
         bindRenderStateCenter()
         loadLocalEffectBundle()
     }
 
+    @objc private func appDidReceiveMemoryWarning() {
+        CoverPolicy.triggerGateLevel(source: "memoryWarning")
+    }
+
     @objc private func appDidBecomeActive() {
-        guard pendingReloadAfterTermination, !autoReloadSuspended else { return }
+        flushPendingReloadIfVisible()
+    }
+
+    /// 推迟中的终止恢复补发（3.6 (6)，独立审查中-2）：终止时不可见只置
+    /// 标志，若应用一直保持 active、只是 webView 暂时不在 window 里，
+    /// didBecomeActive 永不触发、页面会永久死亡。补发点共三个：
+    /// didBecomeActive、WebEffectView.updateUIView（视图重新入窗时
+    /// SwiftUI 会调）、退避闭包到期复查。都汇到这里统一判定可见性。
+    func flushPendingReloadIfVisible() {
+        guard pendingReloadAfterTermination else { return }
+        guard UIApplication.shared.applicationState == .active, webView.window != nil else { return }
         pendingReloadAfterTermination = false
         terminationReloadPending = true
         logStore.write(level: "warn", module: "bridge",
-            message: "WebEffect deferred reload on becoming active")
-        FoliaFileLog.write("bridge", "deferred reload on becoming active (termination recovery)")
+            message: "WebEffect deferred reload flushed on becoming visible")
+        FoliaFileLog.write("bridge", "deferred reload flushed (termination recovery)")
         showSnapshotMask()
         if webView.url != nil {
             webView.reload()
@@ -491,14 +551,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     }
 
     /// 终止重载完成（didFinish）后调用：把已存视图下发页面恢复。
-    /// 尝试上限 2 次/会话，超限只记日志不再发（防恢复-再被杀死循环）。
+    /// 3.6 (6) 起不再设尝试上限：旧上限耗尽后页面停在首页，与重载挂起
+    /// 叠加成真机「回主页」事故；恢复-再被杀的循环由重载侧退避限速，
+    /// 恢复下发本身只是导航，无需再设一道闸。
     private func dispatchViewRestoreIfNeeded() {
         guard let view = savedCollectionView() else {
-            hideSnapshotMask()
-            return
-        }
-        guard viewRestoreAttempts < 2 else {
-            FoliaFileLog.write("bridge", "view restore skipped: attempts exhausted")
             hideSnapshotMask()
             return
         }
@@ -524,7 +581,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         }
     }
 
-    private func showSnapshotMask() {
+    private func showSnapshotMask(caption: String? = nil, minDuration: TimeInterval = 4) {
         guard let superview = webView.superview, snapshotMaskView == nil else { return }
         let mask = UIImageView(frame: webView.frame)
         mask.image = lastViewSnapshot
@@ -532,10 +589,29 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         mask.backgroundColor = UIColor(red: 0.035, green: 0.035, blue: 0.043, alpha: 1)
         mask.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         mask.isUserInteractionEnabled = false
+        // 高退避时的非阻断提示（3.6 (6)，DS Q4）：只在遮罩底部加一行
+        // 小字说明仍在自动恢复，不新增交互控件、不出现「已停止」语义。
+        if let caption {
+            let label = UILabel()
+            label.text = caption
+            label.font = .systemFont(ofSize: 12)
+            label.textColor = UIColor.white.withAlphaComponent(0.65)
+            label.textAlignment = .center
+            label.translatesAutoresizingMaskIntoConstraints = false
+            mask.addSubview(label)
+            NSLayoutConstraint.activate([
+                label.centerXAnchor.constraint(equalTo: mask.centerXAnchor),
+                label.bottomAnchor.constraint(equalTo: mask.bottomAnchor, constant: -28),
+            ])
+        }
         superview.addSubview(mask)
         snapshotMaskView = mask
-        // 硬兜底：4 秒后无论如何撤下，绝不困住用户。
-        DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
+        // 硬兜底：到期无论如何撤下，绝不困住用户。3.6 (6) 起兜底时长随
+        // 调用方 minDuration 走（独立审查中-3）：高退避时遮罩要陪跑到
+        // 重载发起，否则 caption 只活 4 秒、剩下时间用户面对空白页。
+        // 上限 40 秒保留防困死语义。
+        let fallback = min(max(4, minDuration), 40)
+        DispatchQueue.main.asyncAfter(deadline: .now() + fallback) { [weak self] in
             self?.hideSnapshotMask()
         }
     }
@@ -589,9 +665,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         webView.load(URLRequest(url: url))
     }
 
-    /// 防抖触发后的人工重试入口（诊断面板 / 设置页调用）。
+    /// 人工重试入口（诊断面板 / 设置页调用）：清退避计数与致命错误后重载。
     func retryAfterFatalError() {
-        autoReloadSuspended = false
         terminateDates.removeAll()
         lastFatalError = nil
         // 手动恢复后清掉后台终止的待恢复标志，否则下次回前台会多一次无谓重载（审查低 11）。
@@ -1174,41 +1249,51 @@ extension WebEffectBridge: WKNavigationDelegate {
             message: "WebEffect navigation failed: \(error.localizedDescription)")
     }
 
-    /// 特效页进程自愈：terminate → reload → didFinish 后快照恢复。
-    /// 防抖：60 秒内 ≥3 次停止自动 reload 并落盘报错，防包体损坏时死循环重载。
-    /// 3.6 (3) 两点修正：①立即重载会撞上系统刚杀进程的内存回收期，延迟
-    /// 0.6 秒再重载；②后台时被杀不在后台硬重载（多半立刻再被杀，还白耗
-    /// 电），标记待恢复，回前台（didBecomeActive）再重载，音频不受影响。
+    /// 特效页进程自愈：terminate → 退避后 reload → didFinish 后快照恢复。
+    /// 3.6 (6) 定版（DS 第十三轮）：永不挂起。旧规则（60 秒 ≥3 次停恢复）
+    /// 在封面墙连杀场景里必然触发，用户被永久挡在「已停止自动恢复」页、
+    /// 手动重载又冷启回主页——恢复机制本身成了事故源。改为 180 秒窗口
+    /// 退避 [0.6, 1.5, 3, 6, 12, 30] 秒、其后恒 30 秒，旧记录滑出窗口
+    /// 自然清零；确定性必杀页最坏 30 秒一次重载，电量可接受。
+    /// 保留 3.6 (3) 两点：①不立即重载（撞系统内存回收期）；②后台/不可见
+    /// 时被杀不硬重载，标记待恢复、回前台再重载，音频不受影响。
+    /// 连杀信号（30 秒内 ≥2 次）同时触发 CoverPolicy 降档级（墙档 320）。
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         isPageLoaded = false
         lastSentRenderActive = nil
         unackedEvent = nil
         let now = Date()
         terminateDates.append(now)
-        terminateDates.removeAll { now.timeIntervalSince($0) > 60}
-        if terminateDates.count >= 3 {
-            autoReloadSuspended = true
-            let message = "WebEffect content process terminated \(terminateDates.count)x in 60s; auto-reload suspended"
-            lastFatalError = message
-            logStore.write(level: "error", module: "bridge", message: message)
-            return
+        terminateDates.removeAll { now.timeIntervalSince($0) > 180 }
+        let recentCount = terminateDates.filter { now.timeIntervalSince($0) <= 30 }.count
+        if recentCount >= 2 {
+            CoverPolicy.triggerLowTier(source: "terminations")
         }
-        FoliaFileLog.write("bridge", "webContentProcessDidTerminate count60s=\(terminateDates.count) state=\(UIApplication.shared.applicationState == .active ? "active" : "background")")
-        if UIApplication.shared.applicationState != .active {
+        let backoffTable: [TimeInterval] = [0.6, 1.5, 3, 6, 12, 30]
+        let delay = backoffTable[min(terminateDates.count - 1, backoffTable.count - 1)]
+        FoliaFileLog.write("bridge", "webContentProcessDidTerminate count180s=\(terminateDates.count) backoff=\(delay)s state=\(UIApplication.shared.applicationState == .active ? "active" : "background")")
+        let visible = UIApplication.shared.applicationState == .active && webView.window != nil
+        if !visible {
             pendingReloadAfterTermination = true
             logStore.write(level: "warn", module: "bridge",
-                message: "WebEffect content process terminated in background; deferring reload")
+                message: "WebEffect content process terminated while not visible; deferring reload")
             return
         }
         terminationReloadPending = true
-        showSnapshotMask()
+        showSnapshotMask(caption: delay >= 12 ? "页面多次中断，正在低频自动恢复…" : nil,
+                         minDuration: delay + 2)
         logStore.write(level: "warn", module: "bridge",
-            message: "WebEffect content process terminated; reloading in 0.6s")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            message: "WebEffect content process terminated; reloading in \(delay)s")
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self else { return }
-            // 独立审查 L2：重载被挂起时把标志清掉，别让它残留到下一次
-            // 无关的 didFinish 上误触发一次视图恢复。
-            if self.autoReloadSuspended { self.terminationReloadPending = false; return }
+            // 到期复查可见性（独立审查低-1）：退避期间用户可能已切后台，
+            // 不可见就转入推迟、不硬重载（回前台/重新入窗时补发）。
+            guard UIApplication.shared.applicationState == .active, self.webView.window != nil else {
+                self.terminationReloadPending = false
+                self.pendingReloadAfterTermination = true
+                self.hideSnapshotMask()
+                return
+            }
             if self.webView.url != nil {
                 self.webView.reload()
             } else {
@@ -1224,5 +1309,10 @@ struct WebEffectView: UIViewRepresentable {
     let webView: WKWebView
 
     func makeUIView(context: Context) -> WKWebView { webView}
-    func updateUIView(_ uiView: WKWebView, context: Context) {}
+    func updateUIView(_ uiView: WKWebView, context: Context) {
+        // 视图重新入窗时的终止恢复补发点（3.6 (6)，独立审查中-2）。
+        if uiView.window != nil {
+            WebEffectBridge.shared.flushPendingReloadIfVisible()
+        }
+    }
 }

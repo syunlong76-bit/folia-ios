@@ -718,11 +718,18 @@ private enum Proxy {
         return 300
     }
 
-    /// 纯列表端点判定（参数保留，当前档位已不随它变化，见改写器头注）。
-    private static func isListContext(target: String) -> Bool {
-        let path = target.components(separatedBy: "?").first ?? target
-        return path.contains("/playlist/detail") || path.contains("/album")
-            || path.contains("/artist/") || path.contains("/toplist") || path.contains("search")
+    /// 封面分档上下文（3.6 (6)，DS 第十三轮对账定版，废弃旧 isListContext
+    /// 口径）：只有白名单内的集合列表端点把 coverImgUrl 降到墙档；详情类
+    /// 与未枚举端点一律维持现行档位，防详情头图被误降（DS Q7 点名风险）。
+    /// 榜单详情实际走 playlist/detail（详情口径保 768）；artist/ 的大图走
+    /// picUrl/avatarUrl，其 coverImgUrl 只是专辑/歌单小卡，归列表。
+    private static func isWallListTarget(_ target: String) -> Bool {
+        let path = (target.components(separatedBy: "?").first ?? target).lowercased()
+        if path.contains("/playlist/detail") || path.contains("/song/detail") { return false }
+        return path.contains("/user/playlist") || path.contains("/toplist")
+            || path.contains("search") || path.contains("/personalized")
+            || path.contains("/artist/") || path.contains("/recommend")
+            || path.contains("/dj/program") || path.contains("/album/list")
     }
 
     private static func freshCacheData(target: String, cookieHash: String, ttl: TimeInterval) -> Data? {
@@ -769,7 +776,37 @@ private enum Proxy {
                                 body: Data("Bad upstream URL".utf8))
                 return
             }
+            // 例外（3.6 (6) W5）：song/url 语义只读、重放无副作用，POST 也
+            // 允许一次性跨上游重试（其余写请求维持不重放）。录屏里取流
+            // 500 未复现，先靠重试降偶发 + finish 的 id/upstream 埋点定位。
+            let songURLRetry: URL? = (pathOnly.contains("/song/url") && netlifyURL != nil
+                                      && sole == netlifyURL && !(platform.map { edgeOneDown($0) } ?? false))
+                ? edgeOneURL : nil
             perform(url: sole, request: request) { data, http, error in
+                if let retryURL = songURLRetry,
+                   let rejection = rejection(data: data, http: http, error: error) {
+                    FoliaFileLog.write("api", "POST \(pathOnly) song/url retry reason=\(rejection.tag) primaryStatus=\(http?.statusCode ?? 0)")
+                    perform(url: retryURL, request: request) { data2, http2, error2 in
+                        // 重试结果必须复检（独立审查中-1）：EdgeOne 直连在
+                        // 大陆会被预览域名 401 拦截，未复检直接透传会把
+                        // 401+HTML 交给页面，比原 500 更坏。重试被拒时记
+                        // 健康标记，并回落主上游的原始结果。
+                        if let retryRejection = rejection(data: data2, http: http2, error: error2) {
+                            if retryRejection == .platformBlock, let platform {
+                                markEdgeOneDown(platform)
+                            }
+                            FoliaFileLog.write("api", "POST \(pathOnly) song/url retry rejected reason=\(retryRejection.tag); keeping primary result")
+                            finish(data: data, http: http, error: error, url: sole,
+                                   request: request, handler: handler, startedAt: startedAt,
+                                   upstream: "netlify", cacheTarget: nil, cookieHash: cookieHash)
+                            return
+                        }
+                        finish(data: data2, http: http2, error: error2, url: retryURL,
+                               request: request, handler: handler, startedAt: startedAt,
+                               upstream: "edgeone-retry", cacheTarget: nil, cookieHash: cookieHash)
+                    }
+                    return
+                }
                 finish(data: data, http: http, error: error, url: sole,
                        request: request, handler: handler, startedAt: startedAt,
                        upstream: "netlify", cacheTarget: nil, cookieHash: cookieHash)
@@ -816,6 +853,28 @@ private enum Proxy {
         }
     }
 
+    /// song/url 请求里的首个歌曲 id（query 的 id= 或 body 的 "id"），仅供
+    /// 失败日志定位；取不到返回 nil，绝不记录 Cookie/完整参数。
+    private static func firstSongId(request: HTTPRequest) -> String? {
+        if let query = request.target.components(separatedBy: "?").dropFirst().first {
+            for pair in query.split(separator: "&") {
+                let kv = pair.split(separator: "=", maxSplits: 1)
+                if kv.count == 2, kv[0] == "id" {
+                    let digits = kv[1].prefix { $0.isNumber }
+                    if !digits.isEmpty { return String(digits) }
+                }
+            }
+        }
+        if !request.body.isEmpty,
+           let text = String(data: request.body, encoding: .utf8),
+           let match = try? NSRegularExpression(pattern: "\"id\"\\s*:\\s*\"?(\\d+)")
+               .firstMatch(in: text, range: NSRange(text.startIndex..., in: text)),
+           let range = Range(match.range(at: 1), in: text) {
+            return String(text[range])
+        }
+        return nil
+    }
+
     private static func perform(url: URL, request: HTTPRequest,
                                 completion: @escaping (Data?, HTTPURLResponse?, Error?) -> Void) {
         var upstream = URLRequest(url: url)
@@ -859,8 +918,15 @@ private enum Proxy {
         }
         // 慢请求与上游错误落持久日志。3.6 (5) 起所有非 2xx 都记：
         // 3.6 (4) 只记 5xx/慢请求，真机 401 拦截正好漏在阈值外。
+        // 3.6 (6) W5：song/url 的失败行补首个歌曲 id，下次真机复现可直接
+        // 定位是哪首歌、哪个上游（DS Q7：只记 id/upstream/耗时，不记
+        // Cookie 与完整参数）。
         if elapsedMs > 1000 || http.statusCode >= 400 {
-            FoliaFileLog.write("api", "\(request.method) \(pathOnly) \(http.statusCode) \(elapsedMs)ms upstream=\(upstream) bytes=\(data?.count ?? 0)")
+            var line = "\(request.method) \(pathOnly) \(http.statusCode) \(elapsedMs)ms upstream=\(upstream) bytes=\(data?.count ?? 0)"
+            if pathOnly.contains("/song/url"), let songId = firstSongId(request: request) {
+                line += " songId=\(songId)"
+            }
+            FoliaFileLog.write("api", line)
         }
         var outHeaders: [(String, String)] = []
         var setCookies: [String] = []
@@ -894,7 +960,7 @@ private enum Proxy {
         let isJSON = http.value(forHTTPHeaderField: "Content-Type")?.contains("json") ?? false
         if (200...299).contains(status), !body.isEmpty, isJSON {
             body = CoverURLRewriter.rewrite(body: body, port: LocalServer.shared.port,
-                                            listContext: isListContext(target: request.target))
+                                            wallTier: isWallListTarget(request.target) ? CoverPolicy.wallTier : nil)
         }
         // GET 缓存落盘：200 + JSON + 无 Set-Cookie（带 Cookie 的响应多为
         // 登录态流转，不缓存）+ 网易云业务码 200。存改写后的成品体，
@@ -979,7 +1045,10 @@ private enum Proxy {
                 _ = semaphore.wait(timeout: .now() + 30)
                 guard fetchedStatus == 200, var data = fetched, !data.isEmpty,
                       neteaseBusinessOK(data, target: target) else { return }
-                data = CoverURLRewriter.rewrite(body: data, port: LocalServer.shared.port, listContext: true)
+                // 预热目标是 playlist/detail（详情口径）：按 target 走统一
+                // 分档判定，不再写死列表上下文（3.6 (6)，DS Q1 点名）。
+                data = CoverURLRewriter.rewrite(body: data, port: LocalServer.shared.port,
+                                                wallTier: isWallListTarget(target) ? CoverPolicy.wallTier : nil)
                 try? data.write(to: cacheFile(target: target, cookieHash: cookieHash), options: .atomic)
             }
         }
@@ -1018,6 +1087,53 @@ private enum Proxy {
 /// WKWebView 内容进程内存冲爆被系统杀（Jetsam），页面反复重启。改的是
 /// 图片源分辨率（数据层），不改 CSS、不封 DPR、不关动画，不属于降级特效。
 /// 任何一步失败都 302 回原图地址，最差与不改写时一致，绝不让封面消失。
+
+/// 封面内存策略（3.6 (6)，DS 第十三轮定版）：两级触发，只存时间戳、
+/// 读取时按当前时间计算，过期自然失效；触发源一律落日志。
+/// - 闸门级：系统内存警告（WebEffectBridge 转发）→ 取图并发降到 2、
+///   保持 3 分钟 + 立即积极修剪图片缓存。不降清晰度：内存警告来源
+///   不定向，只凭它降档会让墙面长期发糊（DS Q6）。
+/// - 降档级：30 秒内网页进程连杀 ≥2 次（WebEffectBridge 的终止计数
+///   是单一源头，由它回调）→ 墙档 384→320、保持 10 分钟，闸门同降 2。
+enum CoverPolicy {
+    private static let lock = NSLock()
+    private static var gateLevelUntil = Date.distantPast
+    private static var lowTierUntil = Date.distantPast
+
+    /// 当前墙档（列表端点 coverImgUrl 用）：正常 384，降档期 320。
+    static var wallTier: Int {
+        lock.lock(); defer { lock.unlock() }
+        return Date() < lowTierUntil ? 320 : 384
+    }
+
+    /// 当前取图并发上限：任一级生效期间 2，否则 3（DS Q2 定版维持 3）。
+    static var gateLimit: Int {
+        lock.lock(); defer { lock.unlock() }
+        let now = Date()
+        return (now < gateLevelUntil || now < lowTierUntil) ? 2 : 3
+    }
+
+    static func triggerGateLevel(source: String) {
+        lock.lock()
+        gateLevelUntil = Date().addingTimeInterval(180)
+        lock.unlock()
+        FoliaFileLog.write("cover", "gate level on (limit=2 for 180s) source=\(source)")
+        CoverImageProxy.applyGateLimit()
+        CoverImageProxy.trimCacheNow()
+    }
+
+    static func triggerLowTier(source: String) {
+        lock.lock()
+        let alreadyActive = Date() < lowTierUntil
+        lowTierUntil = Date().addingTimeInterval(600)
+        lock.unlock()
+        if !alreadyActive {
+            FoliaFileLog.write("cover", "low tier on (wall=320 for 600s) source=\(source)")
+        }
+        CoverImageProxy.applyGateLimit()
+    }
+}
+
 private enum CoverImageProxy {
 
     /// 只代理音乐平台图片 CDN 的域名（后缀匹配），防被当开放代理用。
@@ -1030,13 +1146,77 @@ private enum CoverImageProxy {
         return URLSession(configuration: config)
     }()
 
-    /// 同时进行的取图+缩放上限（本地 CPU 与内存保护）。
-    private static let gate = DispatchSemaphore(value: 3)
+    /// 同时进行的取图+缩放上限（本地 CPU 与内存保护）。3.6 (6) 起改用
+    /// OperationQueue 动态限流（CoverPolicy 两级策略 3↔2，DS Q7：不另
+    /// 手写一套并发原语）；workQueue 只留给缓存修剪等杂活。
+    private static let fetchQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 3
+        queue.qualityOfService = .utility
+        return queue
+    }()
     private static let workQueue = DispatchQueue(label: "com.miller.folia.imgproxy", qos: .utility, attributes: .concurrent)
+
+    /// 把 CoverPolicy 当前并发上限同步进取图队列（幂等，请求入口顺手调）。
+    static func applyGateLimit() {
+        let limit = CoverPolicy.gateLimit
+        if fetchQueue.maxConcurrentOperationCount != limit {
+            fetchQueue.maxConcurrentOperationCount = limit
+        }
+    }
 
     /// 同图在途合并：key -> 等待者。
     private static let flightLock = NSLock()
     private static var inFlight: [String: [(Data?, String?) -> Void]] = [:]
+
+    /// 代理统计（3.6 (6) 诊断，DS 第十二轮 F 组轻量版）：全部在
+    /// flightLock 内读写；每 100 次请求落一行日志，不另起统计系统。
+    private static var statRequests = 0
+    private static var statHits = 0
+    private static var statMisses = 0
+    private static var statCoalesced = 0
+    private static var statFetches = 0
+    private static var statFetchMs = 0
+    private static var purgeChecked = false
+
+    /// 档位体系变更后的一次性清仓：3.6 (6) 新增墙档 384/320，旧档成品
+    /// （768 等）不会再被请求，留着只占 200MB 配额、压命中率。首个
+    /// /img 请求时按代次标记清一次，重建交给正常流量。
+    private static func purgeStaleTierCacheOnce() {
+        flightLock.lock()
+        if purgeChecked { flightLock.unlock(); return }
+        purgeChecked = true
+        flightLock.unlock()
+        let gen = UserDefaults.standard.integer(forKey: "folia.imgCacheGen")
+        guard gen < 2 else { return }
+        // 代次先落标记（同步、廉价）；实际删文件挪到后台队列（独立审查
+        // 低-2）：在连接线程上同步删 200MB 量级小文件会阻塞首图响应。
+        UserDefaults.standard.set(2, forKey: "folia.imgCacheGen")
+        let dir = cacheDir
+        workQueue.async {
+            if let files = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil) {
+                for file in files { try? FileManager.default.removeItem(at: file) }
+            }
+            FoliaFileLog.write("cover", "img cache purged for tier gen 2 (was \(gen))")
+        }
+    }
+
+    /// 请求计数与百次统计日志（handle 入口调用）。
+    private static func noteRequest() {
+        flightLock.lock()
+        statRequests += 1
+        let n = statRequests
+        var snapshot: (Int, Int, Int, Int, Int)?
+        if n % 100 == 0 {
+            snapshot = (statHits, statMisses, statCoalesced, statFetches, statFetchMs)
+        }
+        flightLock.unlock()
+        if let (hits, misses, coalesced, fetches, fetchMs) = snapshot {
+            let avg = fetches > 0 ? fetchMs / fetches : 0
+            FoliaFileLog.write("cover", "img stats req=\(n) hit=\(hits) miss=\(misses) coalesced=\(coalesced) fetches=\(fetches) avgFetchMs=\(avg) gate=\(CoverPolicy.gateLimit) wallTier=\(CoverPolicy.wallTier)")
+        }
+    }
 
     private static var cacheDir: URL {
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
@@ -1050,6 +1230,9 @@ private enum CoverImageProxy {
     }
 
     static func handle(request: HTTPRequest, handler: ConnectionHandler) {
+        purgeStaleTierCacheOnce()
+        applyGateLimit()
+        noteRequest()
         guard request.method == "GET" || request.method == "HEAD" else {
             handler.respond(status: 405, reason: "Method Not Allowed",
                             headers: [("Content-Type", "text/plain; charset=utf-8")],
@@ -1075,6 +1258,9 @@ private enum CoverImageProxy {
         // 磁盘命中直接回（HEAD 只回头）。
         let fileURL = cacheDir.appendingPathComponent(key + ".jpg")
         if let data = try? Data(contentsOf: fileURL), !data.isEmpty {
+            flightLock.lock()
+            statHits += 1
+            flightLock.unlock()
             respondImage(data: data, request: request, handler: handler)
             return
         }
@@ -1087,7 +1273,7 @@ private enum CoverImageProxy {
                 }
                 handler.respond(status: 200, reason: "OK",
                                 headers: [("Content-Type", contentType),
-                                          ("Cache-Control", "public, max-age=604800")],
+                                          ("Cache-Control", "public, max-age=2592000")],
                                 body: request.method == "HEAD" ? Data() : data,
                                 contentLengthOverride: request.method == "HEAD" ? data.count : nil)
             } else {
@@ -1103,12 +1289,12 @@ private enum CoverImageProxy {
         if request.method == "HEAD" {
             handler.respond(status: 200, reason: "OK",
                             headers: [("Content-Type", "image/jpeg"),
-                                      ("Cache-Control", "public, max-age=604800")],
+                                      ("Cache-Control", "public, max-age=2592000")],
                             body: Data(), contentLengthOverride: data.count)
         } else {
             handler.respond(status: 200, reason: "OK",
                             headers: [("Content-Type", "image/jpeg"),
-                                      ("Cache-Control", "public, max-age=604800")],
+                                      ("Cache-Control", "public, max-age=2592000")],
                             body: data)
         }
     }
@@ -1118,17 +1304,20 @@ private enum CoverImageProxy {
         flightLock.lock()
         if inFlight[key] != nil {
             inFlight[key]?.append(completion)
+            statCoalesced += 1
             flightLock.unlock()
             return
         }
         inFlight[key] = [completion]
+        statMisses += 1
         flightLock.unlock()
 
-        workQueue.async {
-            gate.wait()
+        fetchQueue.addOperation {
+            let fetchStarted = Date()
             let result = fetchAndScale(srcURL: srcURL, maxPixel: maxPixel)
-            gate.signal()
             flightLock.lock()
+            statFetches += 1
+            statFetchMs += Int(Date().timeIntervalSince(fetchStarted) * 1000)
             let waiters = inFlight.removeValue(forKey: key) ?? []
             flightLock.unlock()
             for waiter in waiters { waiter(result.0, result.1) }
@@ -1213,9 +1402,23 @@ private enum CoverImageProxy {
     /// 缓存总量超过约 200MB 时按修改时间删旧到约 150MB（低频触发即可）。
     private static var lastTrimAt = Date.distantPast
     private static func trimCacheIfNeeded() {
+        trimCache(ceiling: 200 * 1024 * 1024, floor: 150 * 1024 * 1024, force: false)
+    }
+
+    /// 内存警告时的积极修剪（CoverPolicy 闸门级触发调用）：绕过 60 秒
+    /// 节流，阈值更低（超 120MB 删到 80MB），先把能让出的磁盘/页缓存让出来。
+    static func trimCacheNow() {
+        trimCache(ceiling: 120 * 1024 * 1024, floor: 80 * 1024 * 1024, force: true)
+    }
+
+    private static func trimCache(ceiling: Int, floor: Int, force: Bool) {
         // lastTrimAt 的检查+赋值在 flightLock 内做，避免多连接完成回调并发读写（审查低 10）。
+        // force 也回写时间戳（独立审查低-3）：否则强制修剪后常规修剪会
+        // 紧接着再跑一次全目录扫描。
         flightLock.lock()
-        guard Date().timeIntervalSince(lastTrimAt) > 60 else { flightLock.unlock(); return }
+        if !force {
+            guard Date().timeIntervalSince(lastTrimAt) > 60 else { flightLock.unlock(); return }
+        }
         lastTrimAt = Date()
         flightLock.unlock()
         workQueue.async {
@@ -1230,9 +1433,9 @@ private enum CoverImageProxy {
                 total += size
                 entries.append((file, size, values?.contentModificationDate ?? .distantPast))
             }
-            guard total > 200 * 1024 * 1024 else { return }
+            guard total > ceiling else { return }
             for entry in entries.sorted(by: { $0.date < $1.date }) {
-                if total <= 150 * 1024 * 1024 { break }
+                if total <= floor { break }
                 try? fm.removeItem(at: entry.url)
                 total -= entry.size
             }
@@ -1256,8 +1459,10 @@ private enum CoverImageProxy {
 
 /// 把 JSON 响应里平台 CDN 的封面地址改写成本地 /img 代理地址。
 /// 尺寸档（3.6 (4)，与 DS 第十轮回评对账定版）：先按 JSON 字段名分档
-/// （coverImgUrl 头图/墙卡 768；picUrl 一律 640；img1v1Url/avatarUrl
+/// （coverImgUrl 头图 768；picUrl 一律 640；img1v1Url/avatarUrl
 /// 512），未命中字段名的走通用档（blur 480、avatar 512、其余 640）。
+/// 3.6 (6) 起 coverImgUrl 在集合列表端点改走墙档（见 rewrite 的
+/// wallTier 参数与 LocalServer.isWallListTarget）。
 /// 依据：1024² 单图解码约 4MB 是大歌单滚动时解码内存的主项；播放页
 /// 封面约 300pt 显示（@3x 理想 900），640 属轻微不足且有歌词特效覆
 /// 层，是砍不可见浪费而非降级感官——此点已列入真机验收确认项，
@@ -1278,11 +1483,11 @@ private enum CoverURLRewriter {
     /// 音频扩展名黑名单：任何情况下不改写（双保险）。
     private static let audioExtensions = [".mp3", ".m4a", ".flac", ".aac", ".ogg", ".wav", ".opus"]
 
-    /// listContext：该响应是否来自纯列表端点（playlist/detail、album、
-    /// artist、toplist、search）。参数保留供后续按端点细分档位；当前
-    /// picUrl 已统一 640（理由见类型头注），档位不再随它变化。
-    static func rewrite(body: Data, port: UInt16, listContext: Bool = false) -> Data {
-        _ = listContext
+    /// wallTier（3.6 (6)）：非 nil 表示该响应来自集合列表端点（调用方按
+    /// target 白名单判定），coverImgUrl 改用墙档（CoverPolicy 给出，
+    /// 正常 384 / 低内存 320）；nil（详情与未枚举端点）coverImgUrl 维持
+    /// 768，防详情头图误降。其余字段档位不随它变化。
+    static func rewrite(body: Data, port: UInt16, wallTier: Int? = nil) -> Data {
         guard port != 0, var text = String(data: body, encoding: .utf8) else { return body }
         // JSON 里 \/ 与 / 等价，先归一方便匹配（语义不变）。
         if text.contains("\\/") { text = text.replacingOccurrences(of: "\\/", with: "/") }
@@ -1300,7 +1505,7 @@ private enum CoverURLRewriter {
                 let original = String(text[urlRange])
                 let tier: Int
                 switch key {
-                case "coverImgUrl": tier = 768
+                case "coverImgUrl": tier = wallTier ?? 768
                 case "picUrl": tier = 640
                 default: tier = 512
                 }
