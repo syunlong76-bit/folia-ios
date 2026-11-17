@@ -187,9 +187,11 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
     }
 
     @objc private func openWallPrototype() {
-        let prototype = WallPrototypeViewController()
-        prototype.modalPresentationStyle = .fullScreen
-        present(prototype, animated: true)
+        // 阶段 4 起长按入口改开 Bravais 主页墙（歌单墙）；点歌单进其
+        // 曲目墙。单墙原型本身已在 3.7 (3) 验收关门。
+        let home = HomeWallViewController()
+        home.modalPresentationStyle = .fullScreen
+        present(home, animated: true)
     }
 
     @objc private func openSettings() {

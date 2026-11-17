@@ -13,6 +13,8 @@ final class WallPrototypeViewController: UIViewController,
         let id: String
         let title: String
         let picUrl: String?
+        /// 副行（如歌单的「歌单 · 285」）；曲目墙不用。
+        var subtitle: String? = nil
     }
 
     private let playlistId: String
@@ -259,6 +261,7 @@ final class WallPosterCell: UICollectionViewCell {
     private let shadowView = UIView()
     private let imageView = UIImageView()
     private let titleLabel = UILabel()
+    private let subtitleLabel = UILabel()
     private var loadTask: Task<Void, Never>?
     private var currentUrl: String?
 
@@ -285,6 +288,15 @@ final class WallPosterCell: UICollectionViewCell {
         titleLabel.layer.shadowRadius = 2
         titleLabel.layer.shadowOffset = .zero
         shadowView.addSubview(titleLabel)
+
+        subtitleLabel.font = .systemFont(ofSize: 9, weight: .regular)
+        subtitleLabel.textColor = UIColor.white.withAlphaComponent(0.75)
+        subtitleLabel.numberOfLines = 1
+        subtitleLabel.layer.shadowColor = UIColor.black.cgColor
+        subtitleLabel.layer.shadowOpacity = 0.8
+        subtitleLabel.layer.shadowRadius = 2
+        subtitleLabel.layer.shadowOffset = .zero
+        shadowView.addSubview(subtitleLabel)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -296,9 +308,15 @@ final class WallPosterCell: UICollectionViewCell {
             roundedRect: contentView.bounds, cornerRadius: 8).cgPath
         imageView.frame = shadowView.bounds
         let labelHeight: CGFloat = 16
+        let hasSubtitle = !(subtitleLabel.text ?? "").isEmpty
+        let titleY = shadowView.bounds.height - labelHeight - 4 - (hasSubtitle ? 13 : 0)
         titleLabel.frame = CGRect(
-            x: 6, y: shadowView.bounds.height - labelHeight - 4,
+            x: 6, y: titleY,
             width: shadowView.bounds.width - 12, height: labelHeight)
+        subtitleLabel.frame = CGRect(
+            x: 6, y: shadowView.bounds.height - 15,
+            width: shadowView.bounds.width - 12, height: 12)
+        subtitleLabel.isHidden = !hasSubtitle
     }
 
     /// 按压反馈：轻微缩放（原生点击手感的最低成本件）。
@@ -313,6 +331,8 @@ final class WallPosterCell: UICollectionViewCell {
 
     func configure(entry: WallPrototypeViewController.Entry, tier: Int) {
         titleLabel.text = entry.title
+        subtitleLabel.text = entry.subtitle
+        setNeedsLayout()
         loadTask?.cancel()
         guard let pic = entry.picUrl,
               let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else {
@@ -345,5 +365,6 @@ final class WallPosterCell: UICollectionViewCell {
         currentUrl = nil
         imageView.image = nil
         titleLabel.text = nil
+        subtitleLabel.text = nil
     }
 }
