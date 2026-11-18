@@ -54,10 +54,13 @@ final class WallPrototypeViewController: UIViewController,
     private var nativeTracks: [NativeTrack] = []
     private var allTrackIds: [String] = []
     private var playbackCancellables = Set<AnyCancellable>()
-    private var progressTimer: Timer?
-    /// 进度逐帧插值（13.4）：台面与展开卡的进度线由它推，
-    /// 0.3s 心跳只剩歌词窗口（离散行进，本就不需要逐帧）。
+    /// 进度逐帧插值（13.4）：台面与展开卡的进度线由它推；
+    /// 歌词窗口已移交 lyricClockDriver 逐帧推进（包一 P2/P3）。
     private let progressDriver = StageProgressDriver()
+    private let lyricClockDriver = LyricClockDriver()
+    private var lyricOverlay: LyricWindowView?
+    private var lyricSessionTrackId: String?
+    private var firstAudioTrackId: String?
     /// 台内主题层（13.5 定版形态）：画与动画收进台内，替代
     /// 13.4 被否的台上方主题带；长按台身循环切换、UserDefaults
     /// 持久化（见 MiniPlayerTheme）。
@@ -76,6 +79,8 @@ final class WallPrototypeViewController: UIViewController,
     private var lastLyricIndex: Int?
     /// 前奏预告态去重（3.7 (13) #2）：同 idx 下 active 翻转要重下发。
     private var lastLyricActive = true
+    /// 展开卡打点去重：组串未变时跳过重复 log。
+    private var lastExpandedCellCrumb: String?
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
@@ -258,6 +263,15 @@ final class WallPrototypeViewController: UIViewController,
             }
             self.updateExpandedCardProgress(fraction)
         }
+
+        let overlay = LyricWindowView()
+        overlay.isHidden = true
+        overlay.clock = { [weak self] in
+            self?.lyricClockDriver.interpolatedNow() ?? PlaybackEngine.shared.currentTime
+        }
+        if let bar = miniBar { view.insertSubview(overlay, belowSubview: bar) } else { view.addSubview(overlay) }
+        lyricOverlay = overlay
+        lyricClockDriver.onTick = { [weak self] now in self?.lyricSessionTick(now: now) }
 
         loadEntries()
     }
@@ -930,18 +944,15 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        progressTimer?.invalidate()
-        progressTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) {
-            [weak self] _ in self?.tickProgress()
-        }
+        lyricClockDriver.start()
         progressDriver.start()
         miniThemeLayer?.setHostVisible(true)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        progressTimer?.invalidate()
-        progressTimer = nil
+        lyricClockDriver.stop()
+        setLyricOverlayVisible(false)
         progressDriver.stop()
         miniThemeLayer?.setHostVisible(false)
         locateLink?.invalidate()
@@ -1194,6 +1205,7 @@ final class WallPrototypeViewController: UIViewController,
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
         centerCameraIfNeeded()
+        updateLyricOverlayFrame()
     }
 
     /// 相机增量折叠（3.7 (2) 修复）：3.7 (1) 的整格绕回模型有个致命
@@ -1223,6 +1235,7 @@ final class WallPrototypeViewController: UIViewController,
             collectionView.reloadData()
         }
         isWrapping = false
+        updateLyricOverlayFrame()
     }
 
     /// 实例集身份指纹：判断下标→实例的映射是否还成立。
@@ -1265,6 +1278,13 @@ final class WallPrototypeViewController: UIViewController,
         }
         cell.playEntranceIfNeeded(key: entry.id, delay: entranceDelay)
         applyPlaybackState(to: cell, instance: instance)
+        if instance.instanceId == wallLayout.expandedInstanceId {
+            let crumb = "\(indexPath.item)|\(instance.queueIndex)|\(tier)|\(!cell.hasCoverImage)|\(cell.hasPlaceholderCover)"
+            if crumb != lastExpandedCellCrumb {
+                lastExpandedCellCrumb = crumb
+                Breadcrumbs.log("wall expanded cell item=\(indexPath.item) queueIndex=\(instance.queueIndex) tier=\(tier) imageNil=\(!cell.hasCoverImage) placeholder=\(cell.hasPlaceholderCover)")
+            }
+        }
         return cell
     }
 
@@ -1293,13 +1313,6 @@ final class WallPrototypeViewController: UIViewController,
             liked: LikesStore.shared.isLiked(entry.id),
             progress: progress,
             loadState: loadState)
-        // 展开卡是当前曲且词已到手：作废歌词窗口索引，下一拍心跳重刷
-        // （收起时 cell 已清窗口，光靠索引去重会漏刷）。
-        if wallLayout.expandedInstanceId == instance.instanceId, isCurrent,
-           lyricCache[entry.id] != nil {
-            lastLyricIndex = nil
-        }
-        cell.lyricClock = { PlaybackEngine.shared.currentTime }
         let queueIndex = instance.queueIndex
         cell.onPlayTap = { [weak self] in self?.playTapped(queueIndex: queueIndex) }
         cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
@@ -1390,26 +1403,8 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// 0.3 秒心跳：只剩展开卡的歌词窗口推进（离散行进）。
-    /// 进度线（台面 + 展开卡）已移交 progressDriver 逐帧插值
-    /// （13.4，治 Miller 判的「卡」）。
-    private func tickProgress() {
-        let engine = PlaybackEngine.shared
-        guard let currentId = engine.currentTrack?.id, engine.duration > 0 else { return }
-        for case let cell as WallPosterCell in collectionView.visibleCells {
-            guard let indexPath = collectionView.indexPath(for: cell),
-                  indexPath.item < wallLayout.instances.count else { continue }
-            let instance = wallLayout.instances[indexPath.item]
-            guard instance.queueIndex < entries.count,
-                  entries[instance.queueIndex].id == currentId,
-                  wallLayout.expandedInstanceId == instance.instanceId else { continue }
-            updateLyricWindow(for: cell, trackId: currentId,
-                              currentTime: engine.currentTime)
-        }
-    }
-
     /// 展开卡进度线逐帧推进（progressDriver 回调）：只认展开中的
-    /// 当前曲卡，与 tickProgress 的歌词推进分工。
+    /// 当前曲卡，与 lyricSessionTick 的歌词推进分工。
     private func updateExpandedCardProgress(_ fraction: Double) {
         guard let currentId = PlaybackEngine.shared.currentTrack?.id else { return }
         for case let cell as WallPosterCell in collectionView.visibleCells {
@@ -1423,33 +1418,50 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// 滚动歌词（Miller 第 5 点，P0 隔离附加项）：展开卡是当前曲时，
-    /// 按引擎时钟推进 5 行窗口。只读时钟 + 现成歌词接口，取词失败
-    /// 或无词就不显示，碰不到队列/取流链。
-    private func updateLyricWindow(for cell: WallPosterCell, trackId: String,
-                                   currentTime: Double) {
-        guard let lines = lyricCache[trackId] else {
-            ensureLyrics(for: trackId)
+    /// 滚动歌词会话（包一 P2/P3）：由 lyricClockDriver 的逐帧插值
+    /// 时钟驱动，歌词渲染在独立 overlay 上、不绑 cell——展开实例
+    /// 不在 visibleCells、cell 被复用、展开别的卡时都不再灭词。
+    /// 行判定/提前量/时长夹取与旧实现完全一致。
+    private func lyricSessionTick(now: Double) {
+        let engine = PlaybackEngine.shared
+        guard let track = engine.currentTrack, engine.duration > 0 else {
+            setLyricOverlayVisible(false)
             return
         }
-        guard !lines.isEmpty else { return }
+        if engine.isPlaying, engine.currentTime > 0, firstAudioTrackId != track.id {
+            firstAudioTrackId = track.id
+            Breadcrumbs.log("lrc first-audio track=\(track.id) mediaTime=\(String(format: "%.3f", engine.currentTime)) mono=\(String(format: "%.3f", CACurrentMediaTime()))")
+        }
+        if lyricSessionTrackId != track.id {
+            lyricSessionTrackId = track.id
+            lastLyricIndex = nil
+        }
+        guard wallLayout.expandedInstanceId != nil else {
+            setLyricOverlayVisible(false)
+            return
+        }
+        guard let lines = lyricCache[track.id] else {
+            ensureLyrics(for: track.id)
+            setLyricOverlayVisible(false)
+            return
+        }
+        guard !lines.isEmpty else {
+            setLyricOverlayVisible(false)
+            return
+        }
         var idx = 0
         for (i, line) in lines.enumerated() {
-            if line.time <= currentTime + 0.15 { idx = i } else { break }
+            if line.time <= now + 0.15 { idx = i } else { break }
         }
         // 前奏预告态（3.7 (13) #2）：还没唱到首行时窗口只预告，
         // 不点亮不扫光；active 翻转也要重下发（同 idx 不能被去重吞掉）。
-        let lineActive = lines[idx].time <= currentTime + 0.15
-        if lastLyricTrackId == trackId, lastLyricIndex == idx,
+        let lineActive = lines[idx].time <= now + 0.15
+        updateLyricOverlayFrame()
+        setLyricOverlayVisible(true)
+        if lastLyricTrackId == track.id, lastLyricIndex == idx,
            lastLyricActive == lineActive { return }
-        let slide = lastLyricTrackId == trackId && lastLyricIndex == idx - 1
-        lastLyricTrackId = trackId
-        lastLyricIndex = idx
-        lastLyricActive = lineActive
-        // 6 行窗口：当前行居中（行 2），行 5 是滑入预备行。
-        let texts = (-2...3).map { offset -> String in
-            let j = idx + offset
-            return (j >= 0 && j < lines.count) ? lines[j].text : ""
+        if lastLyricIndex != idx || lastLyricTrackId != track.id {
+            Breadcrumbs.log("lrc line track=\(track.id) idx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].time)) judge=\(String(format: "%.3f", now)) engine=\(String(format: "%.3f", engine.currentTime)) delta=\(String(format: "%.3f", now - engine.currentTime))")
         }
         // 当前行时长：有下一行按行距夹取，末行按字数估（DS27 定版）。
         let duration: Double
@@ -1458,9 +1470,56 @@ final class WallPrototypeViewController: UIViewController,
         } else {
             duration = min(max(Double(lines[idx].text.count) * 0.4, 2.5), 8)
         }
-        cell.setLyricWindow(texts: texts, lineStart: lines[idx].time,
-                            lineDuration: duration, slide: slide,
-                            lineActive: lineActive)
+        // 6 行窗口：当前行居中（行 2），行 5 是滑入预备行。
+        let texts = (-2...3).map { offset -> String in
+            let j = idx + offset
+            return (j >= 0 && j < lines.count) ? lines[j].text : ""
+        }
+        let slide = lastLyricTrackId == track.id && lastLyricIndex == idx - 1
+        lastLyricTrackId = track.id
+        lastLyricIndex = idx
+        lastLyricActive = lineActive
+        lyricOverlay?.setWindow(texts: texts, lineStart: lines[idx].time,
+                                lineDuration: duration, slide: slide,
+                                lineActive: lineActive)
+    }
+
+    private func setLyricOverlayVisible(_ show: Bool) {
+        guard let overlay = lyricOverlay else { return }
+        if show {
+            overlay.isHidden = false
+        } else {
+            guard !overlay.isHidden else { return }
+            overlay.isHidden = true
+            overlay.clear()
+            lastLyricIndex = nil
+        }
+    }
+
+    /// overlay 帧对齐：展开实例就是当前播放曲且其 cell 在场时贴合
+    /// cell 帧；否则停靠在顶部居中（展开别的卡时歌词不灭、改停靠）。
+    private func updateLyricOverlayFrame() {
+        guard let overlay = lyricOverlay,
+              let expandedId = wallLayout.expandedInstanceId,
+              let item = wallLayout.instances.firstIndex(where: { $0.instanceId == expandedId })
+        else { return }
+        let instance = wallLayout.instances[item]
+        if instance.queueIndex < entries.count,
+           entries[instance.queueIndex].id == PlaybackEngine.shared.currentTrack?.id,
+           let cell = collectionView.cellForItem(at: IndexPath(item: item, section: 0)) {
+            overlay.frame = cell.convert(cell.bounds, to: view)
+            return
+        }
+        guard let attrs = collectionView.layoutAttributesForItem(
+            at: IndexPath(item: item, section: 0)) else { return }
+        let frameWidth = attrs.frame.width
+        guard frameWidth > 0 else { return }
+        let w = min(frameWidth, view.bounds.width - 24)
+        let h = attrs.frame.height * (w / frameWidth)
+        let docked = CGRect(x: (view.bounds.width - w) / 2,
+                            y: view.safeAreaInsets.top + 56,
+                            width: w, height: h)
+        if overlay.frame != docked { overlay.frame = docked }
     }
 
     private func ensureLyrics(for trackId: String) {
@@ -1591,17 +1650,38 @@ final class WallPrototypeViewController: UIViewController,
     func collectionView(_ collectionView: UICollectionView,
                         prefetchItemsAt indexPaths: [IndexPath]) {
         for indexPath in indexPaths {
-            guard indexPath.item < wallLayout.instances.count else { continue }
-            let instance = wallLayout.instances[indexPath.item]
-            guard instance.queueIndex < entries.count else { continue }
-            let entry = entries[instance.queueIndex]
-            guard let pic = entry.picUrl else { continue }
-            let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
-            let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
-            let tier = NativeCoverLoader.wallTier(raw: pic, pixelExtent: pixelExtent)
-            guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { continue }
-            if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { continue }
-            Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
+            prefetchInstance(at: indexPath)
+        }
+    }
+
+    private func prefetchInstance(at indexPath: IndexPath) {
+        guard indexPath.item < wallLayout.instances.count else { return }
+        let instance = wallLayout.instances[indexPath.item]
+        guard instance.queueIndex < entries.count else { return }
+        let entry = entries[instance.queueIndex]
+        guard let pic = entry.picUrl else { return }
+        let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
+        let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
+        let tier = NativeCoverLoader.wallTier(raw: pic, pixelExtent: pixelExtent)
+        guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { return }
+        if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { return }
+        Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
+    }
+
+    private func prefetchExpandedNeighbors(queueIndex: Int) {
+        var warmed = Set<Int>()
+        for neighbor in [queueIndex - 1, queueIndex + 1] {
+            guard entries.indices.contains(neighbor) else { continue }
+            for (item, instance) in wallLayout.instances.enumerated()
+            where instance.queueIndex == neighbor {
+                guard warmed.insert(instance.queueIndex).inserted else { continue }
+                prefetchInstance(at: IndexPath(item: item, section: 0))
+            }
+            if let pic = entries[neighbor].picUrl,
+               let url = NativeCoverLoader.shared.proxiedURLString(pic, tier: 1024),
+               NativeCoverLoader.shared.cachedImage(for: url) == nil {
+                Task { _ = await NativeCoverLoader.shared.image(for: url, tier: 1024) }
+            }
         }
     }
 
@@ -1636,6 +1716,19 @@ final class WallPrototypeViewController: UIViewController,
                 QueueManager.shared.prefetchStream(
                     for: foliaTrack(for: nativeTracks[instance.queueIndex]))
             }
+            for q in [instance.queueIndex - 1, instance.queueIndex, instance.queueIndex + 1] {
+                guard entries.indices.contains(q), let pic = entries[q].picUrl else { continue }
+                let tileHit: Bool
+                if let tileUrl = NativeCoverLoader.shared.proxiedURLString(pic, tier: NativeCoverLoader.wallTier(raw: pic, pixelExtent: 512)) {
+                    tileHit = NativeCoverLoader.shared.cachedImage(for: tileUrl) != nil
+                } else { tileHit = false }
+                let hiHit: Bool
+                if let hiUrl = NativeCoverLoader.shared.proxiedURLString(pic, tier: 1024) {
+                    hiHit = NativeCoverLoader.shared.cachedImage(for: hiUrl) != nil
+                } else { hiHit = false }
+                Breadcrumbs.log("wall expand target queueIndex=\(q) cachedTile=\(tileHit) cached1024=\(hiHit)")
+            }
+            prefetchExpandedNeighbors(queueIndex: instance.queueIndex)
         }
         wallLayout.refreshInstances()
         if setIdentity() == before {
@@ -1676,6 +1769,9 @@ final class WallPosterCell: UICollectionViewCell {
     private let subtitleLabel = UILabel()
     private var loadTask: Task<Void, Never>?
     private var currentUrl: String?
+    private var coverPlaceholder = false
+    var hasPlaceholderCover: Bool { coverPlaceholder }
+    var hasCoverImage: Bool { imageView.image != nil }
 
     // 展开卡控件（详情 MVP 第一刀）：播放/暂停、红心、迷你进度条；
     // 未展开只留「正在播放」角标。回调由 VC 按实例注入，普通卡
@@ -1689,27 +1785,6 @@ final class WallPosterCell: UICollectionViewCell {
     private let playingBadge = UIButton(type: .system)
     private let playSpinner = UIActivityIndicatorView(style: .medium)
     private let errorLabel = UILabel()
-    // 展开卡滚动歌词（3.7 (12) 全套，DS27 对账定版）：字号随卡宽
-    // 自适应 + Songti + 6 行容器滑入 + 当前行扫光（CADisplayLink
-    // 按引擎时钟推进）+ 呼吸缩放 + 柔光罩。动画只挂歌词子视图，
-    // 不碰 cell 根 transform（与按压缩放/入场动画互不干扰）。
-    private let lyricScrimView = UIView()
-    private let lyricGradient = CAGradientLayer()
-    private let lyricClipView = UIView()
-    private let lyricLinesContainer = UIView()
-    private var lyricPlainLabels: [Int: UILabel] = [:]
-    private let lyricSweepView = SweepLyricLineView()
-    private var lyricTexts: [String] = []
-    private var lyricLineHeight: CGFloat = 27
-    private var lyricCurrentFontSize: CGFloat = 16
-    private var lyricNeighborFontSize: CGFloat = 13
-    private var lastLyricClipWidth: CGFloat = -1
-    private var sweepDisplayLink: CADisplayLink?
-    private var sweepProxy: SweepLinkProxy?
-    private var sweepLineStart: Double = 0
-    private var sweepLineDuration: Double = 1
-    /// 歌词时钟（VC 注入 = 引擎 currentTime）：扫光据此推进，暂停即冻结。
-    var lyricClock: (() -> Double)?
     private var controlsVisible = false
     private var progressValue: Double = 0
 
@@ -1802,36 +1877,6 @@ final class WallPosterCell: UICollectionViewCell {
             UITapGestureRecognizer(target: self, action: #selector(playButtonTapped)))
         shadowView.addSubview(errorLabel)
 
-        // 柔光罩（歌词区可读性垫层）+ 裁剪窗 + 6 行容器（行 2 = 扫光行）。
-        lyricScrimView.isHidden = true
-        lyricScrimView.layer.cornerRadius = 10
-        lyricScrimView.clipsToBounds = true
-        lyricGradient.colors = [
-            UIColor.black.withAlphaComponent(0.30).cgColor,
-            UIColor.black.withAlphaComponent(0.08).cgColor
-        ]
-        lyricScrimView.layer.addSublayer(lyricGradient)
-        shadowView.addSubview(lyricScrimView)
-
-        lyricClipView.clipsToBounds = true
-        lyricClipView.isHidden = true
-        shadowView.addSubview(lyricClipView)
-        lyricClipView.addSubview(lyricLinesContainer)
-        for row in 0..<6 {
-            if row == 2 {
-                lyricLinesContainer.addSubview(lyricSweepView)
-            } else {
-                let label = UILabel()
-                label.textAlignment = .center
-                label.textColor = .white
-                label.layer.shadowColor = UIColor.black.cgColor
-                label.layer.shadowOpacity = 0.85
-                label.layer.shadowRadius = 2
-                label.layer.shadowOffset = .zero
-                lyricPlainLabels[row] = label
-                lyricLinesContainer.addSubview(label)
-            }
-        }
     }
 
     @objc private func playButtonTapped() { onPlayTap?() }
@@ -1865,136 +1910,8 @@ final class WallPosterCell: UICollectionViewCell {
         } else {
             errorLabel.isHidden = true
         }
-        // 收起卡不留歌词残影（展开态由 VC 的心跳重新刷入）。
-        if !expanded {
-            setLyricWindow(texts: [], lineStart: 0, lineDuration: 0, slide: false)
-        }
         setLiked(liked)
         setNeedsLayout()
-    }
-
-    /// 滚动歌词窗口（6 行：当前行居行 2、行 5 为滑入预备行）：
-    /// slide 为真且 cell 现渲染的中心行与新窗口行 1 对得上时，整列
-    /// 上滑一行再落位重渲染；其余情况直接落位。空窗口 = 整组收起。
-    func setLyricWindow(texts: [String], lineStart: Double,
-                        lineDuration: Double, slide: Bool,
-                        lineActive: Bool = true) {
-        let hasContent = texts.contains { !$0.isEmpty }
-        lyricScrimView.isHidden = !hasContent
-        lyricClipView.isHidden = !hasContent
-        guard hasContent else {
-            lyricTexts = []
-            stopSweep()
-            return
-        }
-        let canSlide = slide && lyricTexts.count == 6 && texts.count == 6
-            && !lyricTexts[2].isEmpty && lyricTexts[2] == texts[1]
-        lyricTexts = texts
-        if canSlide {
-            // 现渲染的行 1...5 恰好是新窗口的可见行，整列上滑一行。
-            UIView.animate(withDuration: 0.18, delay: 0,
-                           options: [.curveEaseOut]) {
-                self.lyricLinesContainer.transform =
-                    CGAffineTransform(translationX: 0, y: -self.lyricLineHeight)
-            } completion: { _ in
-                self.lyricLinesContainer.transform = .identity
-                self.renderLyricWindow()
-                if lineActive {
-                    self.beginSweep(lineStart: lineStart, lineDuration: lineDuration)
-                    self.playLyricBreathing()
-                } else {
-                    // 前奏预告：扫光停在 0（只剩暗字），不呼吸。
-                    self.stopSweep()
-                    self.lyricSweepView.progress = 0
-                }
-            }
-        } else {
-            lyricLinesContainer.layer.removeAllAnimations()
-            lyricLinesContainer.transform = .identity
-            renderLyricWindow()
-            if lineActive {
-                beginSweep(lineStart: lineStart, lineDuration: lineDuration)
-                playLyricBreathing()
-            } else {
-                stopSweep()
-                lyricSweepView.progress = 0
-            }
-        }
-        setNeedsLayout()
-    }
-
-    private func renderLyricWindow() {
-        let alphas: [CGFloat] = [0.28, 0.45, 1, 0.45, 0.28, 0.28]
-        for row in 0..<6 {
-            let text = row < lyricTexts.count ? lyricTexts[row] : ""
-            if row == 2 {
-                lyricSweepView.setText(lyricAttributed(text, center: true))
-            } else if let label = lyricPlainLabels[row] {
-                label.attributedText = lyricAttributed(text, center: false)
-                label.alpha = alphas[row]
-            }
-        }
-    }
-
-    /// Songti 排版（唱片内页感）：当前行粗体 + 字距 1.2，邻行细体
-    /// + 字距 0.6；字体名取不到时回系统粗/细体（DS27 定版）。
-    private func lyricAttributed(_ text: String, center: Bool) -> NSAttributedString {
-        let font: UIFont = center
-            ? (UIFont(name: "STSongti-SC-Bold", size: lyricCurrentFontSize)
-               ?? .systemFont(ofSize: lyricCurrentFontSize, weight: .bold))
-            : (UIFont(name: "STSongti-SC-Light", size: lyricNeighborFontSize)
-               ?? .systemFont(ofSize: lyricNeighborFontSize, weight: .light))
-        return NSAttributedString(string: text, attributes: [
-            .font: font,
-            .foregroundColor: UIColor.white,
-            .kern: center ? 1.2 : 0.6
-        ])
-    }
-
-    /// 扫光起跑：CADisplayLink 每帧按引擎时钟算进度（0.3 秒心跳
-    /// 只够换行、不够驱动扫光，DS27 定版）。link 经弱代理转发
-    /// （3.7 (13) #1）：直连 cell 会被 link 强持无法释放。
-    private func beginSweep(lineStart: Double, lineDuration: Double) {
-        sweepLineStart = lineStart
-        sweepLineDuration = max(lineDuration, 0.1)
-        lyricSweepView.progress = 0
-        sweepDisplayLink?.invalidate()
-        let proxy = SweepLinkProxy()
-        proxy.owner = self
-        let link = CADisplayLink(target: proxy, selector: #selector(SweepLinkProxy.tick))
-        proxy.link = link
-        sweepProxy = proxy
-        link.add(to: .main, forMode: .common)
-        sweepDisplayLink = link
-        sweepTick()
-    }
-
-    func sweepTick() {
-        guard window != nil, let clock = lyricClock else { stopSweep(); return }
-        let p = (clock() - sweepLineStart) / sweepLineDuration
-        lyricSweepView.progress = min(max(p, 0), 1)
-        if p >= 1 { stopSweep() }
-    }
-
-    private func stopSweep() {
-        sweepDisplayLink?.invalidate()
-        sweepDisplayLink = nil
-        sweepProxy = nil
-    }
-
-    /// 呼吸缩放：只作用当前行视图，滑入落位后 1.04 弹簧落回。
-    private func playLyricBreathing() {
-        lyricSweepView.layer.removeAllAnimations()
-        lyricSweepView.transform = .identity
-        UIView.animate(withDuration: 0.10, delay: 0, options: [.curveEaseOut]) {
-            self.lyricSweepView.transform = CGAffineTransform(scaleX: 1.04, y: 1.04)
-        } completion: { _ in
-            UIView.animate(withDuration: 0.22, delay: 0,
-                           usingSpringWithDamping: 0.6, initialSpringVelocity: 0.3,
-                           options: []) {
-                self.lyricSweepView.transform = .identity
-            }
-        }
     }
 
     func setLiked(_ liked: Bool) {
@@ -2048,30 +1965,6 @@ final class WallPosterCell: UICollectionViewCell {
             errorLabel.frame = CGRect(x: 6, y: barTop - 19,
                                       width: bounds.width - 12, height: 15)
         }
-        // 滚动歌词：字号随歌词区宽度自适应（DS27 公式），宽度变化
-        // 超 1pt 才重算并重渲染；窗口居卡片中上部（避开底部控件行）。
-        let clipWidth = max(bounds.width - 20, 0)
-        if clipWidth > 0, abs(clipWidth - lastLyricClipWidth) > 1 {
-            lastLyricClipWidth = clipWidth
-            lyricCurrentFontSize = min(max(clipWidth * 0.048, 13), 22)
-            lyricNeighborFontSize = max(lyricCurrentFontSize * 0.78, 11)
-            lyricLineHeight = (lyricCurrentFontSize * 1.65).rounded()
-            if !lyricTexts.isEmpty { renderLyricWindow() }
-        }
-        let lyricTop = bounds.height * 0.40 - lyricLineHeight * 2.5
-        let clipFrame = CGRect(x: 10, y: lyricTop, width: clipWidth,
-                               height: lyricLineHeight * 5)
-        lyricScrimView.frame = clipFrame
-        lyricGradient.frame = lyricScrimView.bounds
-        lyricClipView.frame = clipFrame
-        lyricLinesContainer.frame = CGRect(x: 0, y: 0, width: clipWidth,
-                                           height: lyricLineHeight * 6)
-        for row in 0..<6 {
-            let frame = CGRect(x: 0, y: CGFloat(row) * lyricLineHeight,
-                               width: clipWidth, height: lyricLineHeight)
-            if row == 2 { lyricSweepView.frame = frame }
-            else { lyricPlainLabels[row]?.frame = frame }
-        }
         playingBadge.frame = CGRect(x: bounds.width - 30, y: 4, width: 24, height: 24)
     }
 
@@ -2093,6 +1986,7 @@ final class WallPosterCell: UICollectionViewCell {
         guard let pic = entry.picUrl,
               let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else {
             currentUrl = nil
+            coverPlaceholder = false
             imageView.image = nil
             stopPlaceholderPulse()
             return
@@ -2101,19 +1995,30 @@ final class WallPosterCell: UICollectionViewCell {
         // 缓存命中同步上图：reloadData/复用重建时不先清空、不异步等一帧，
         // 这是拖动闪黑的主修复。
         if let cached = NativeCoverLoader.shared.cachedImage(for: urlString) {
+            coverPlaceholder = false
             stopPlaceholderPulse()
             imageView.image = cached
             return
         }
-        imageView.image = nil
-        startPlaceholderPulse()
+        if let placeholder = NativeCoverLoader.shared.cachedImageAnyTier(raw: pic, excludingTier: tier) {
+            coverPlaceholder = true
+            stopPlaceholderPulse()
+            imageView.image = placeholder
+        } else {
+            coverPlaceholder = false
+            imageView.image = nil
+            startPlaceholderPulse()
+        }
         loadTask = Task { [weak self] in
             let image = await NativeCoverLoader.shared.image(for: urlString, tier: tier)
             guard let self else { return }
             await MainActor.run {
                 guard self.currentUrl == urlString else { return }
                 self.stopPlaceholderPulse()
-                self.imageView.image = image
+                if let image {
+                    self.coverPlaceholder = false
+                    self.imageView.image = image
+                }
             }
         }
     }
@@ -2150,15 +2055,12 @@ final class WallPosterCell: UICollectionViewCell {
         }
     }
 
-    deinit {
-        sweepDisplayLink?.invalidate()
-    }
-
     override func prepareForReuse() {
         super.prepareForReuse()
         loadTask?.cancel()
         loadTask = nil
         currentUrl = nil
+        coverPlaceholder = false
         imageView.image = nil
         stopPlaceholderPulse()
         contentView.alpha = 1
@@ -2176,86 +2078,6 @@ final class WallPosterCell: UICollectionViewCell {
         playSpinner.isHidden = true
         errorLabel.isHidden = true
         errorLabel.text = nil
-        stopSweep()
-        lyricClock = nil
-        lyricTexts = []
-        lyricLinesContainer.layer.removeAllAnimations()
-        lyricLinesContainer.transform = .identity
-        lyricSweepView.layer.removeAllAnimations()
-        lyricSweepView.transform = .identity
-        lyricSweepView.progress = 0
-        lyricScrimView.isHidden = true
-        lyricClipView.isHidden = true
         progressValue = 0
     }
 }
-
-/// CADisplayLink 弱代理（3.7 (13) #1）：link 强持 target，直连
-/// cell 会钉住 cell 无法释放；代理弱持 cell，cell 已释放时自停表。
-private final class SweepLinkProxy: NSObject {
-    weak var owner: WallPosterCell?
-    weak var link: CADisplayLink?
-
-    @objc func tick() {
-        guard let owner else {
-            link?.invalidate()
-            return
-        }
-        owner.sweepTick()
-    }
-}
-
-/// 当前行扫光视图（3.7 (12)）：暗字打底 + 亮字被 mask 按进度裁切，
-/// 唱到哪亮到哪。mask 按文本实际宽度居中起算（居中文本不能从
-/// label 左缘扫起）；进度由 cell 的 CADisplayLink 按引擎时钟推进。
-private final class SweepLyricLineView: UIView {
-    private let dimLabel = UILabel()
-    private let brightLabel = UILabel()
-    private let maskLayer = CALayer()
-    var progress: Double = 0 {
-        didSet { if progress != oldValue { updateMask() } }
-    }
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        for label in [dimLabel, brightLabel] {
-            label.textAlignment = .center
-            label.textColor = .white
-            addSubview(label)
-        }
-        dimLabel.alpha = 0.38
-        maskLayer.backgroundColor = UIColor.black.cgColor
-        brightLabel.layer.mask = maskLayer
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
-
-    func setText(_ attributed: NSAttributedString) {
-        dimLabel.attributedText = attributed
-        brightLabel.attributedText = attributed
-        updateMask()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        dimLabel.frame = bounds
-        brightLabel.frame = bounds
-        updateMask()
-    }
-
-    private func updateMask() {
-        guard bounds.width > 0,
-              let text = dimLabel.attributedText, text.length > 0 else {
-            maskLayer.frame = .zero
-            return
-        }
-        let attrs = text.attributes(at: 0, effectiveRange: nil)
-        let textWidth = ceil((text.string as NSString).size(withAttributes: attrs).width)
-        let span = min(textWidth, bounds.width)
-        let startX = textWidth >= bounds.width ? 0 : (bounds.width - textWidth) / 2
-        maskLayer.frame = CGRect(x: startX, y: 0,
-                                 width: span * CGFloat(progress),
-                                 height: bounds.height)
-    }
-}
-

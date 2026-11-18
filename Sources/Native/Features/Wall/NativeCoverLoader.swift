@@ -117,6 +117,21 @@ final class NativeCoverLoader {
         cache.object(forKey: urlString as NSString)
     }
 
+    /// 同图任一档位的已缓存图（P4 升档空窗兜底）：目标档未命中时用
+    /// 低档图顶上，不让大卡露空白。候选档 = 内嵌档（若有）+ 档位表 +
+    /// 顶档，跳过 excludingTier（调用方已查）。
+    func cachedImageAnyTier(raw: String, excludingTier: Int) -> UIImage? {
+        var candidates = Self.sizeSteps + [Self.maxSize]
+        if raw.hasPrefix("/img/"), let embedded = Self.embeddedTier(in: raw) {
+            candidates.insert(embedded, at: 0)
+        }
+        for tier in candidates where tier != excludingTier {
+            guard let url = proxiedURLString(raw, tier: tier) else { continue }
+            if let image = cache.object(forKey: url as NSString) { return image }
+        }
+        return nil
+    }
+
     /// 加载并按档降采样解码；同 URL 全局一份（NSCache）。
     func image(for urlString: String, tier: Int) async -> UIImage? {
         let key = urlString as NSString
