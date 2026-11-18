@@ -255,7 +255,7 @@ enum WallGeometry {
             let repeatY = jsRound((pointY - base.rect.y - base.rect.height / 2) / geometry.cellHeight)
             let candidate = buildInstance(geometry: geometry, totalEntries: totalEntries,
                                           absoluteColumn: repeatX * geometry.blocksPerRow + localColumn,
-                                          absoluteRow: repeatY * geometry.blocksPerRow + localRow,
+                                          absoluteRow: repeatY * geometry.blockRows + localRow,
                                           slotIndex: slotIndex, metrics: metrics)
             let dx = candidate.rect.x + candidate.rect.width / 2 - pointX
             let dy = candidate.rect.y + candidate.rect.height / 2 - pointY

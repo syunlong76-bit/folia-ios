@@ -96,6 +96,9 @@ final class WallPrototypeViewController: UIViewController,
     private var miniProgressFill: UIView!
     /// 进度拖动中：心跳不覆盖填充，松手 seek 后恢复。
     private var miniSeekDragging = false
+    private var miniProgressTrack: UIView!
+    private var miniProgressKnob: UIView!
+    private var miniKnobLeading: NSLayoutConstraint?
     /// 定位动画（CADisplayLink 驱动，DS31）：起点/目标/时长/收尾。
     private var locateLink: CADisplayLink?
     private var locateStartOrigin: CGPoint = .zero
@@ -240,23 +243,28 @@ final class WallPrototypeViewController: UIViewController,
     /// 交互：点封面 = 定位到正在播放的歌曲；点台身 = 进播放详情页
     /// （openStage 同路）；进度条可拖动 seek；按键只管切歌播停。
     private func buildMiniBar() {
-        // 3.7 (13.2) iOS 化改版：悬浮毛玻璃卡（系统材质 + 柔和阴影 +
-        // 大圆角），不再是贴边黑长条。bar 本体只做容器与阴影，
-        // 材质由第一层 UIVisualEffectView 承担并自裁圆角。
+        // 3.7 (13.3) E 液态玻璃版（Miller 在 A–I 九款里点选 E）：
+        // 全圆角玻璃胶囊——超薄系统材质 + 亮边描边 + 顶部高光线
+        // 模拟 iOS 26 Liquid Glass 的折射 rim；封面改圆形；进度
+        // 按 Miller 定版移到底部内缘：发光填充 + 发光圆钮把手，
+        // 底部整带可拖可点。bar 本体只做容器与阴影，材质由第一
+        // 层 UIVisualEffectView 承担并自裁圆角。
         let bar = UIView()
         bar.backgroundColor = .clear
-        bar.layer.cornerRadius = 24
+        bar.layer.cornerRadius = 35
         bar.layer.shadowColor = UIColor.black.cgColor
-        bar.layer.shadowOpacity = 0.28
-        bar.layer.shadowRadius = 16
-        bar.layer.shadowOffset = CGSize(width: 0, height: 6)
+        bar.layer.shadowOpacity = 0.25
+        bar.layer.shadowRadius = 20
+        bar.layer.shadowOffset = CGSize(width: 0, height: 8)
         bar.translatesAutoresizingMaskIntoConstraints = false
         bar.isHidden = true
         view.addSubview(bar)
         miniBar = bar
 
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterialDark))
-        blur.layer.cornerRadius = 24
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        blur.layer.cornerRadius = 35
+        blur.layer.borderWidth = 1
+        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
         blur.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(blur)
@@ -267,12 +275,38 @@ final class WallPrototypeViewController: UIViewController,
             blur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
+        // 玻璃高光：顶部一条亮线 + 整体一层极淡白罩，模拟玻璃
+        // 边缘的折射光。不拦手势。
+        let rimLight = UIView()
+        rimLight.backgroundColor = UIColor.white.withAlphaComponent(0.45)
+        rimLight.layer.cornerRadius = 0.5
+        rimLight.isUserInteractionEnabled = false
+        rimLight.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(rimLight)
+        let glassTint = UIView()
+        glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        glassTint.layer.cornerRadius = 35
+        glassTint.isUserInteractionEnabled = false
+        glassTint.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(glassTint)
+        NSLayoutConstraint.activate([
+            rimLight.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 30),
+            rimLight.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -30),
+            rimLight.topAnchor.constraint(equalTo: bar.topAnchor, constant: 1),
+            rimLight.heightAnchor.constraint(equalToConstant: 1),
+            glassTint.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            glassTint.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            glassTint.topAnchor.constraint(equalTo: bar.topAnchor),
+            glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+
         let progressTrack = UIView()
-        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.18)
-        progressTrack.layer.cornerRadius = 1.5
+        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
+        progressTrack.layer.cornerRadius = 2
         progressTrack.clipsToBounds = true
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(progressTrack)
+        miniProgressTrack = progressTrack
         let fill = UIView()
         fill.backgroundColor = .white
         fill.translatesAutoresizingMaskIntoConstraints = false
@@ -280,10 +314,24 @@ final class WallPrototypeViewController: UIViewController,
         progressTrack.addSubview(fill)
         miniProgressFill = fill
 
+        // 发光圆钮：挂在轨道层外（轨道 clipsToBounds 会裁掉光晕），
+        // 位置由 setMiniProgress 按填充比例同步。
+        let knob = UIView()
+        knob.backgroundColor = .white
+        knob.layer.cornerRadius = 4.5
+        knob.layer.shadowColor = UIColor.white.cgColor
+        knob.layer.shadowOpacity = 0.9
+        knob.layer.shadowRadius = 4
+        knob.layer.shadowOffset = .zero
+        knob.isUserInteractionEnabled = false
+        knob.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(knob)
+        miniProgressKnob = knob
+
         miniCover = UIImageView()
         miniCover.contentMode = .scaleAspectFill
         miniCover.clipsToBounds = true
-        miniCover.layer.cornerRadius = 12
+        miniCover.layer.cornerRadius = 22
         miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         miniCover.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniCover)
@@ -326,7 +374,7 @@ final class WallPrototypeViewController: UIViewController,
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
 
-        // 进度拖动手柄区：盖住顶部进度条并上下放宽到 20pt 好按。
+        // 进度拖动手柄区：盖住底部进度条并向上放宽到 20pt 好按。
         let seekHit = UIView()
         seekHit.backgroundColor = .clear
         seekHit.translatesAutoresizingMaskIntoConstraints = false
@@ -339,54 +387,72 @@ final class WallPrototypeViewController: UIViewController,
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
-            bar.heightAnchor.constraint(equalToConstant: 64),
+            bar.heightAnchor.constraint(equalToConstant: 70),
 
-            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
-            progressTrack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 7),
-            progressTrack.heightAnchor.constraint(equalToConstant: 3),
+            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
+            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20),
+            progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7),
+            progressTrack.heightAnchor.constraint(equalToConstant: 4),
             fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
             fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
             fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
 
-            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 12),
-            miniCover.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            miniCover.widthAnchor.constraint(equalToConstant: 48),
-            miniCover.heightAnchor.constraint(equalToConstant: 48),
+            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            knob.widthAnchor.constraint(equalToConstant: 9),
+            knob.heightAnchor.constraint(equalToConstant: 9),
+
+            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            miniCover.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            miniCover.widthAnchor.constraint(equalToConstant: 44),
+            miniCover.heightAnchor.constraint(equalToConstant: 44),
 
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
             miniTitle.trailingAnchor.constraint(equalTo: miniPrevButton.leadingAnchor, constant: -6),
-            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 14),
+            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 13),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -6),
-            miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
-            miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
             miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
-            miniPrevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            miniPrevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
             miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniSeekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             miniSeekHit.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            miniSeekHit.topAnchor.constraint(equalTo: bar.topAnchor),
+            miniSeekHit.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
             miniSeekHit.heightAnchor.constraint(equalToConstant: 20),
         ])
+        miniKnobLeading = knob.leadingAnchor.constraint(
+            equalTo: progressTrack.leadingAnchor, constant: -4.5)
+        miniKnobLeading?.isActive = true
         fill.transform = CGAffineTransform(scaleX: 0, y: 1)
 
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniBarTapped(_:)))
         bar.addGestureRecognizer(tap)
+    }
+
+    /// 进度填充与发光圆钮的唯一步进点：心跳、拖动、点按跳点都走
+    /// 这里，保证填充比例与圆钮位置永远一致。
+    private func setMiniProgress(_ fraction: Double) {
+        let clamped = CGFloat(min(max(fraction, 0), 1))
+        miniProgressFill.transform = CGAffineTransform(scaleX: clamped, y: 1)
+        let trackWidth = miniProgressTrack.bounds.width
+        if trackWidth > 0 {
+            miniKnobLeading?.constant = clamped * trackWidth - 4.5
+        }
     }
 
     @objc private func miniPlayTapped() {
@@ -401,21 +467,32 @@ final class WallPrototypeViewController: UIViewController,
         QueueManager.shared.playNext(manual: true)
     }
 
-    /// 台面点按分发（13.1）：按键与进度区各自处理；封面 = 定位；
-    /// 其余台身 = 进播放详情页。
+    /// 台面点按分发（13.1 定版、13.3 进度带改点按跳点）：按键各自
+    /// 处理；封面 = 定位；底部进度带 = 跳到点按位置；其余台身 =
+    /// 进播放详情页。封面判定仍先于进度带（两者仅在封面下缘约
+    /// 2pt 相接，先判进度带会让点封面下缘变成跳进度）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
         guard let bar = miniBar else { return }
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point) { return }
-        // 封面判定先于进度命中带：封面上沿与命中带重叠约 12pt，
-        // 先判命中带会让点封面上沿静默无反应（独立审查低-3）。
         if miniCover.frame.contains(point) {
             locateCurrentTrack()
             return
         }
-        if miniSeekHit.frame.contains(point) { return }
+        if miniSeekHit.frame.contains(point) {
+            // 13.3 新增点按跳点：13.2 的点按被静默吞掉，是 Miller
+            // 「没办法拖进度」反馈的来源之一。比例按轨道实际
+            // 帧算，不按整条台面宽。
+            let track = miniProgressTrack.frame
+            let engine = PlaybackEngine.shared
+            guard track.width > 0, engine.duration > 0 else { return }
+            let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
+            setMiniProgress(Double(fraction))
+            engine.seek(to: Double(fraction) * engine.duration)
+            return
+        }
         openStageFromWall()
     }
 
@@ -425,22 +502,34 @@ final class WallPrototypeViewController: UIViewController,
     /// 守卫先行会让标记永不复位、进度填充从此冻结（独立审查中-2）。
     /// 封面/按键的上沿落在命中带里，那里起手不抢手势（低-3）。
     @objc private func miniSeekPanned(_ gesture: UIPanGestureRecognizer) {
-        guard let hit = miniSeekHit, hit.bounds.width > 0 else { return }
+        guard miniSeekHit != nil, miniBar != nil else { return }
         let engine = PlaybackEngine.shared
-        let fraction = min(max(gesture.location(in: hit).x / hit.bounds.width, 0), 1)
+        // 比例按轨道实际帧算（13.3）：轨道左右各内缩 20pt，按整条
+        // 台面宽算会让拖动位置与填充对不上。轨道尚未布局（宽为 0）
+        // 时整体不处理：算不出比例硬走流程会把填充清零、松手把歌
+        // 跳回开头（13.3 独立审查低-1）；终结态仍先复位拖动标记。
+        let barPoint = gesture.location(in: miniBar)
+        let track = miniProgressTrack.frame
+        guard track.width > 0 else {
+            if gesture.state == .ended || gesture.state == .cancelled
+                || gesture.state == .failed {
+                miniSeekDragging = false
+            }
+            return
+        }
+        let fraction = min(max((barPoint.x - track.minX) / track.width, 0), 1)
         switch gesture.state {
         case .began:
-            let barPoint = gesture.location(in: miniBar)
             if miniCover.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
-            miniProgressFill.transform = CGAffineTransform(scaleX: fraction, y: 1)
+            setMiniProgress(Double(fraction))
         case .changed:
             guard miniSeekDragging else { return }
-            miniProgressFill.transform = CGAffineTransform(scaleX: fraction, y: 1)
+            setMiniProgress(Double(fraction))
         case .ended:
             guard miniSeekDragging else { return }
             miniSeekDragging = false
@@ -599,8 +688,12 @@ final class WallPrototypeViewController: UIViewController,
             Breadcrumbs.log("locate ok target=\(targetId) queueIndex=\(targetIndex)")
             return
         }
+        let gotTitle = expanded.flatMap {
+            $0.queueIndex < entries.count ? entries[$0.queueIndex].title : nil
+        }
         Breadcrumbs.log("locate verify FAIL expected=\(targetId) "
-            + "got=\(gotId ?? "nil") expandedQueueIndex=\(expanded?.queueIndex ?? -1)")
+            + "got=\(gotId ?? "nil") expandedQueueIndex=\(expanded?.queueIndex ?? -1) "
+            + "expectedTitle=\(locateTargetTitle ?? "") gotTitle=\(gotTitle ?? "nil")")
         // 纠正：同 queueIndex 的拷贝挑离视口中心最近的一份（低-1），
         // 改完复验 id，仍不符继续走重飞/失败路径，不静默收场。
         let scale = wallLayout.cameraScale
@@ -633,10 +726,16 @@ final class WallPrototypeViewController: UIViewController,
             locateCurrentTrackFrozen()
             return
         }
-        statusLabel.text = "定位失败，点封面再试一次"
+        // 失败提示直接报双歌名（13.3，DS35 最小证据要求）：用户一张
+        // 截图就能定案落点错在哪，不必再取日志。歌名各截 12 字防
+        // 长名把胶囊撑截断（13.3 独立审查低-3），全名在面包屑里。
+        let wantShort = String((locateTargetTitle ?? targetId).prefix(12))
+        let gotShort = String((gotTitle ?? "未知").prefix(12))
+        let failText = "定位失败：要找《\(wantShort)》，落到《\(gotShort)》"
+        statusLabel.text = failText
         statusLabel.isHidden = false
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            guard let self, self.statusLabel.text == "定位失败，点封面再试一次" else { return }
+            guard let self, self.statusLabel.text == failText else { return }
             self.statusLabel.text = "墙原型：\(self.wallLayout.totalEntries) 首 · 拖动平移 · 点按展开"
         }
     }
@@ -1156,7 +1255,7 @@ final class WallPrototypeViewController: UIViewController,
         // 拖动中不覆盖（13.1 可拖进度）。
         if let bar = miniBar, !bar.isHidden, !miniSeekDragging {
             let fraction = max(0, min(1, engine.currentTime / engine.duration))
-            miniProgressFill.transform = CGAffineTransform(scaleX: CGFloat(fraction), y: 1)
+            setMiniProgress(fraction)
         }
         for case let cell as WallPosterCell in collectionView.visibleCells {
             guard let indexPath = collectionView.indexPath(for: cell),

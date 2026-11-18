@@ -703,6 +703,14 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         }
     }
 
+    /// 待处理的开页意图（3.7 (13.3)，DS35 定案语义）：点台身时登记，
+    /// 立即派发一次；前端 hook 挂载时经 foliaAction 拉取
+    /// （getPendingOpenStage），原生按当前队列现建载荷回派同一
+    /// intentId；前端处理完回 ackOpenStage 清除。意图保留 5 秒
+    /// 过期。投递与关墙解耦：网页进程被杀重载吞掉事件，意图不丢；
+    /// 载荷在回派时现建，不存在旧快照把用户刚切的歌纠回去的问题。
+    private var pendingOpenStage: (intentId: String, createdAt: Date)?
+
     /// 原生墙请求打开播放页（DS26 Q4）：见 BridgeEvent.openStage 注释。
     /// 事件带原生播放快照（全队列元数据 + currentIndex + 平台
     /// id）。(13) β 定案前端走主态直达（回主态 + navigateToPlayer）；
@@ -711,6 +719,14 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 条目、找不到用快照元数据构造），不再只 warn。仍禁止按下标
     /// 到网页 store 取歌：两边队列不是同一份，下标对齐会错开歌。
     func requestOpenStage() {
+        let intentId = UUID().uuidString
+        pendingOpenStage = (intentId: intentId, createdAt: Date())
+        dispatchOpenStage(intentId: intentId)
+    }
+
+    /// 按当前队列现建快照并派发 openStage（intentId 随载荷走，
+    /// 前端据此跨通道去重与回执）。
+    private func dispatchOpenStage(intentId: String) {
         let queue = QueueManager.shared.queue
         let index = QueueManager.shared.currentIndex
         let items: [[String: Any]] = queue.map { track in
@@ -729,11 +745,32 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             return item
         }
         dispatchToJS(.openStage, payload: [
+            "intentId": intentId,
             "snapshot": [
                 "queue": items,
                 "currentIndex": queue.isEmpty ? -1 : index % queue.count
             ] as [String: Any]
         ])
+    }
+
+    /// 前端拉取待处理开页意图：无意图或已过期则静默；有效则按
+    /// 当前队列现建载荷、带同一 intentId 回派。
+    fileprivate func handleGetPendingOpenStage() {
+        guard let pending = pendingOpenStage else { return }
+        if Date().timeIntervalSince(pending.createdAt) > 5 {
+            pendingOpenStage = nil
+            return
+        }
+        FoliaFileLog.write("bridge", "openStage pulled intent=\(pending.intentId)")
+        dispatchOpenStage(intentId: pending.intentId)
+    }
+
+    /// 前端处理完开页后的回执：编号对上才清意图。
+    fileprivate func handleAckOpenStage(_ body: [String: Any]) {
+        guard let intentId = body["intentId"] as? String,
+              pendingOpenStage?.intentId == intentId else { return }
+        pendingOpenStage = nil
+        FoliaFileLog.write("bridge", "openStage acked intent=\(intentId)")
     }
 
     /// 平台原始 id：剥 ncm_/qq_/kg_ 前缀（原生墙自建队列是纯数字
@@ -1243,6 +1280,10 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             }
         case "minimize":
             onMinimizeRequested?()
+        case "getPendingOpenStage":
+            handleGetPendingOpenStage()
+        case "ackOpenStage":
+            handleAckOpenStage(body)
         case "log":
             // fire-and-forget：只转发 warn/error，info 不过桥；不要求回执。
             let level = body["level"] as? String ?? "warn"
