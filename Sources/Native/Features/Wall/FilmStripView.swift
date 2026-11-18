@@ -55,7 +55,7 @@ final class FilmStripView: UIView {
 
     /// 上屏且数据仍在途时调用；已 finish（数据先到）则永不播。
     func play() {
-        guard !playing, !finished else { return }
+        guard !playing, !finished, bandClips.isEmpty else { return }
         playing = true
         buildBands()
         let width = bounds.width
@@ -84,7 +84,8 @@ final class FilmStripView: UIView {
     /// 重进的新实例数据在途时不再纯黑——铺五带静止剧照压暗垫底，
     /// 不滑入、不 Ken Burns、不换带；加载落定仍走 finish 淡出。
     func showStillBackdrop() {
-        guard !playing, !finished, bandClips.isEmpty else { return }
+        guard !playing, !finished, bandClips.isEmpty,
+              bounds.width > 0, bounds.height > 0 else { return }
         buildBands()
         let dim = UIView(frame: bounds)
         dim.backgroundColor = UIColor.black.withAlphaComponent(0.35)

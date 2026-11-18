@@ -408,12 +408,14 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point)
-            || miniSeekHit.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point) { return }
+        // 封面判定先于进度命中带：封面上沿与命中带重叠约 12pt，
+        // 先判命中带会让点封面上沿静默无反应（独立审查低-3）。
         if miniCover.frame.contains(point) {
             locateCurrentTrack()
             return
         }
+        if miniSeekHit.frame.contains(point) { return }
         openStageFromWall()
     }
 
@@ -505,8 +507,14 @@ final class WallPrototypeViewController: UIViewController,
     private var locateTargetTitle: String?
     private var locateTargetIndex: Int?
     private var locateReflied = false
+    /// 本次飞行要展开的实例（校验时与当前展开态比对，区分落点错与
+    /// 用户已接管展开态——独立审查中-1）；代次防旧校验在新飞行途中
+    /// 误触发（低-2）。
+    private var locateFlightInstanceId: String?
+    private var locateGeneration = 0
 
     private func locateCurrentTrack() {
+        locateGeneration += 1
         guard let current = PlaybackEngine.shared.currentTrack else { return }
         let currentId = current.id
         // 全部匹配都数：id 若重复，firstIndex 会命中第一个而非本曲，
@@ -560,8 +568,10 @@ final class WallPrototypeViewController: UIViewController,
             }
             // 落点校验（3.7 (13.2)）：淡化落定后核对展开的确实是
             // 冻结目标，不是就纠正/重飞，全程面包屑（DS34）。
+            self.locateFlightInstanceId = target.instanceId
+            let gen = self.locateGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.verifyLocateLanding()
+                self?.verifyLocateLanding(generation: gen)
             }
         }
     }
@@ -569,9 +579,16 @@ final class WallPrototypeViewController: UIViewController,
     /// 落点校验与纠正（3.7 (13.2)）：展开实例的条目 id 与冻结目标
     /// 不符时，先在当前实例集里找同 queueIndex 的实例改展开；找不
     /// 到允许重飞一次；再失败记 FAIL 并给人话提示。
-    private func verifyLocateLanding() {
+    private func verifyLocateLanding(generation: Int) {
         guard let targetId = locateTargetId,
               let targetIndex = locateTargetIndex else { return }
+        // 代次过期（新定位已起飞）或展开态已被用户接管（收起/改展开
+        // 了别的卡）：不判落点错，收手（独立审查中-1/低-2）。
+        guard generation == locateGeneration,
+              wallLayout.expandedInstanceId == locateFlightInstanceId else {
+            Breadcrumbs.log("locate verify skipped gen=\(generation)/\(locateGeneration)")
+            return
+        }
         let expanded = wallLayout.instances.first {
             $0.instanceId == wallLayout.expandedInstanceId
         }
@@ -584,13 +601,30 @@ final class WallPrototypeViewController: UIViewController,
         }
         Breadcrumbs.log("locate verify FAIL expected=\(targetId) "
             + "got=\(gotId ?? "nil") expandedQueueIndex=\(expanded?.queueIndex ?? -1)")
-        if let correct = wallLayout.instances.first(where: { $0.queueIndex == targetIndex }) {
+        // 纠正：同 queueIndex 的拷贝挑离视口中心最近的一份（低-1），
+        // 改完复验 id，仍不符继续走重飞/失败路径，不静默收场。
+        let scale = wallLayout.cameraScale
+        let centerX = Double(wallLayout.worldOrigin.x)
+            + Double(collectionView.bounds.width) / scale / 2
+        let centerY = Double(wallLayout.worldOrigin.y)
+            + Double(collectionView.bounds.height) / scale / 2
+        let correct = wallLayout.instances
+            .filter { $0.queueIndex == targetIndex }
+            .min { a, b in
+                let da = pow(a.rect.x + a.rect.width / 2 - centerX, 2)
+                    + pow(a.rect.y + a.rect.height / 2 - centerY, 2)
+                let db = pow(b.rect.x + b.rect.width / 2 - centerX, 2)
+                    + pow(b.rect.y + b.rect.height / 2 - centerY, 2)
+                return da < db
+            }
+        if let correct,
+           correct.queueIndex < entries.count,
+           entries[correct.queueIndex].id == targetId {
             wallLayout.expandedInstanceId = correct.instanceId
+            locateFlightInstanceId = correct.instanceId
             wallLayout.refreshInstances()
             collectionView.reloadData()
-            let fixedId = correct.queueIndex < entries.count
-                ? entries[correct.queueIndex].id : "nil"
-            Breadcrumbs.log("locate corrected instance=\(correct.instanceId) entry=\(fixedId)")
+            Breadcrumbs.log("locate corrected instance=\(correct.instanceId) entry=\(targetId)")
             return
         }
         if !locateReflied {
@@ -610,6 +644,7 @@ final class WallPrototypeViewController: UIViewController,
     /// 重飞（校验纠正专用）：目标已冻结，直接按冻结下标找最近拷贝，
     /// 不重读 currentTrack（防切歌竞态把目标带偏，DS34）。
     private func locateCurrentTrackFrozen() {
+        locateGeneration += 1
         guard let targetIndex = locateTargetIndex else { return }
         let scale = wallLayout.cameraScale
         let viewWorldW = Double(collectionView.bounds.width) / scale
@@ -639,8 +674,10 @@ final class WallPrototypeViewController: UIViewController,
                               options: [.transitionCrossDissolve]) {
                 self.collectionView.reloadData()
             }
+            self.locateFlightInstanceId = target.instanceId
+            let gen = self.locateGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.verifyLocateLanding()
+                self?.verifyLocateLanding(generation: gen)
             }
         }
     }
@@ -1318,6 +1355,10 @@ final class WallPrototypeViewController: UIViewController,
 
     // MARK: - 点按展开
 
+    /// 最近一次展开的卡与时刻（双击第二击防误收起，13.2 审查中-2）。
+    private var lastExpandInstanceId: String?
+    private var lastExpandAt: CFTimeInterval = 0
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
         Breadcrumbs.log("wall tap item=\(indexPath.item) queueIndex=\(instance.queueIndex)")
@@ -1325,9 +1366,18 @@ final class WallPrototypeViewController: UIViewController,
         // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
         // 被点卡在原地长大、同块卡让位，镜头不动。
         if wallLayout.expandedInstanceId == instance.instanceId {
+            // 展开后 0.4 秒内又点同一张：这是双击的第二击，不收起——
+            // 先收起会让双击命中加固失去展开卡参照（独立审查中-2）。
+            if lastExpandInstanceId == instance.instanceId,
+               CACurrentMediaTime() - lastExpandAt < 0.4 {
+                Breadcrumbs.log("wall tap collapse suppressed (double-tap second hit)")
+                return
+            }
             wallLayout.expandedInstanceId = nil
         } else {
             wallLayout.expandedInstanceId = instance.instanceId
+            lastExpandInstanceId = instance.instanceId
+            lastExpandAt = CACurrentMediaTime()
             // 展开即预取（DS26 深度 1）：只解这一首的播放地址入缓存，
             // 用户真点播放时少等一程取流。元数据未补到的序号跳过。
             if instance.queueIndex < nativeTracks.count {
