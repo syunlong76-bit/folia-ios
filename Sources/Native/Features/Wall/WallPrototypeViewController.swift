@@ -604,7 +604,7 @@ final class WallPrototypeViewController: UIViewController,
             engine.seek(to: Double(fraction) * engine.duration)
             return
         }
-        openStageFromWall()
+        openNativeStageFromWall()
     }
 
     /// 进度拖动（13.1）：拖动中只更新填充，松手才 seek（防拖动
@@ -1309,6 +1309,27 @@ final class WallPrototypeViewController: UIViewController,
     /// 再请前端开播放页（主态直达），最后收起整摞原生墙——转场
     /// 只剩墙淡出，不再叠封面飞行动画（(12) 的伪 morph 与播放页
     /// 自带动画打架，Miller 点名不流畅，已删）。
+    /// 原生舞台入口（3.7 (14)，M2'）：迷你台台身与双击卡片改走
+    /// 原生舞台。墙不退场、不落回程票——舞台全屏盖在墙上、关闭
+    /// 即回墙；跳网页舞台（未迁样式/回退）时先关原生舞台，再走
+    /// openStageFromWall 原套（存票+收墙+凭票恢复）。
+    private func openNativeStageFromWall() {
+        Breadcrumbs.log("stage open (native) from playlist wall")
+        let stage = StageViewController()
+        stage.modalPresentationStyle = .fullScreen
+        stage.onRequestWebStage = { [weak self] in
+            guard let self else { return }
+            if self.presentedViewController != nil {
+                self.dismiss(animated: false) { [weak self] in
+                    self?.openStageFromWall()
+                }
+            } else {
+                self.openStageFromWall()
+            }
+        }
+        present(stage, animated: true)
+    }
+
     private func openStageFromWall() {
         let expanded = wallLayout.instances.first {
             $0.instanceId == wallLayout.expandedInstanceId
@@ -1358,7 +1379,7 @@ final class WallPrototypeViewController: UIViewController,
         if PlaybackEngine.shared.currentTrack?.id != entries[instance.queueIndex].id {
             startQueueAt(queueIndex: instance.queueIndex)
         }
-        openStageFromWall()
+        openNativeStageFromWall()
     }
 
     private func refreshVisiblePlaybackUI() {

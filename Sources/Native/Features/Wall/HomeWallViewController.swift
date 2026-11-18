@@ -692,7 +692,7 @@ final class HomeWallViewController: UIViewController,
         // 封面优先于底部进度带（与曲目墙分发序一致）：封面下缘
         // 与 seekHit 带约 2pt 重叠，点封面应开页不跳点。
         if miniCover.frame.contains(point) {
-            openStageFromHome()
+            openNativeStageFromHome()
             return
         }
         if miniSeekHit.frame.contains(point) {
@@ -704,7 +704,7 @@ final class HomeWallViewController: UIViewController,
             engine.seek(to: Double(fraction) * engine.duration)
             return
         }
-        openStageFromHome()
+        openNativeStageFromHome()
     }
 
     /// 进度拖动（与曲目墙同构）：拖动中只更新填充，松手才 seek；
@@ -792,6 +792,26 @@ final class HomeWallViewController: UIViewController,
 
     /// 从主页墙进播放页：存主页票（关页只回主页墙）+ 请前端
     /// 开页 + 收起整摞原生墙（与曲目墙 openStageFromWall 同构）。
+    /// 原生舞台入口（3.7 (14)，M2'）：与曲目墙同构——舞台全屏
+    /// 盖在主页墙上、关闭即回墙；跳网页舞台时先关原生舞台，
+    /// 再走 openStageFromHome 原套（存票+收墙+凭票恢复）。
+    private func openNativeStageFromHome() {
+        Breadcrumbs.log("stage open (native) from home wall")
+        let stage = StageViewController()
+        stage.modalPresentationStyle = .fullScreen
+        stage.onRequestWebStage = { [weak self] in
+            guard let self else { return }
+            if self.presentedViewController != nil {
+                self.dismiss(animated: false) { [weak self] in
+                    self?.openStageFromHome()
+                }
+            } else {
+                self.openStageFromHome()
+            }
+        }
+        present(stage, animated: true)
+    }
+
     private func openStageFromHome() {
         WallReturnTicketStore.pending = WallReturnTicket(
             kind: .home,
