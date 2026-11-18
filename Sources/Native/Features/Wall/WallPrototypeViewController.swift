@@ -29,6 +29,14 @@ final class WallPrototypeViewController: UIViewController,
     private var allTrackIds: [String] = []
     private var playbackCancellables = Set<AnyCancellable>()
     private var progressTimer: Timer?
+    /// 播放三态（DS26）：原生点播在途的曲目 id，起播确认或失败即清。
+    private var pendingTrackId: String?
+    /// 原生点播失败的曲目与短文案（展开卡失败条用）。
+    private var failedPlayback: (id: String, message: String)?
+    /// 滚动歌词缓存：trackId → [(time, text)]；空数组 = 已查无词。
+    private var lyricCache: [String: [(time: Double, text: String)]] = [:]
+    private var lyricFetchInFlight: Set<String> = []
+    private var lastLyricKey = ""
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
@@ -129,11 +137,30 @@ final class WallPrototypeViewController: UIViewController,
         // 的角标与展开卡控件，不整表刷新。
         PlaybackEngine.shared.$currentTrack
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.refreshVisiblePlaybackUI() }
+            .sink { [weak self] track in
+                guard let self else { return }
+                if let track, track.id == self.pendingTrackId {
+                    self.pendingTrackId = nil
+                }
+                self.refreshVisiblePlaybackUI()
+            }
             .store(in: &playbackCancellables)
         PlaybackEngine.shared.$isPlaying
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshVisiblePlaybackUI() }
+            .store(in: &playbackCancellables)
+        // 原生点播失败落地（DS26 三态的失败支）：只认领自己在途的
+        // 那次点播；网页侧发起的失败不归本墙管。
+        QueueManager.shared.$lastError
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] message in
+                guard let self, let message,
+                      let pending = self.pendingTrackId else { return }
+                self.pendingTrackId = nil
+                self.failedPlayback = (pending, message.contains("VIP")
+                    ? "VIP 或版权受限，点播放重试" : "播放失败，点播放重试")
+                self.refreshVisiblePlaybackUI()
+            }
             .store(in: &playbackCancellables)
 
         loadEntries()
@@ -403,15 +430,41 @@ final class WallPrototypeViewController: UIViewController,
         let isCurrent = engine.currentTrack?.id == entry.id
         let progress = isCurrent && engine.duration > 0
             ? engine.currentTime / engine.duration : 0
+        let loadState: WallPlayLoadState
+        if entry.id == pendingTrackId {
+            loadState = .connecting
+        } else if let failed = failedPlayback, failed.id == entry.id {
+            loadState = .failed(failed.message)
+        } else {
+            loadState = .idle
+        }
         cell.configurePlayback(
             expanded: wallLayout.expandedInstanceId == instance.instanceId,
             isCurrent: isCurrent,
             isPlaying: engine.isPlaying,
             liked: LikesStore.shared.isLiked(entry.id),
-            progress: progress)
+            progress: progress,
+            loadState: loadState)
+        // 展开卡是当前曲且词已到手：作废歌词窗口键，下一拍心跳重刷
+        // （收起时 cell 已清窗口，光靠键去重会漏刷）。
+        if wallLayout.expandedInstanceId == instance.instanceId, isCurrent,
+           lyricCache[entry.id] != nil {
+            lastLyricKey = ""
+        }
         let queueIndex = instance.queueIndex
         cell.onPlayTap = { [weak self] in self?.playTapped(queueIndex: queueIndex) }
         cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
+        cell.onBadgeTap = { [weak self] in self?.badgeTapped() }
+    }
+
+    /// 小喇叭点按：请前端打开播放页，并收起整摞原生墙。前端监听器
+    /// 落地前事件无声投递，用户落在网页层迷你播放器旁（DS26 降级
+    /// (b)）；落地后同一路径直接弹开舞台 (a)。
+    private func badgeTapped() {
+        WebEffectBridge.shared.requestOpenStage()
+        var host = self
+        while let presenter = host.presentingViewController { host = presenter }
+        if host !== self { host.dismiss(animated: true) }
     }
 
     private func refreshVisiblePlaybackUI() {
@@ -434,7 +487,69 @@ final class WallPrototypeViewController: UIViewController,
                   entries[instance.queueIndex].id == currentId,
                   wallLayout.expandedInstanceId == instance.instanceId else { continue }
             cell.updateProgress(engine.currentTime / engine.duration)
+            updateLyricWindow(for: cell, trackId: currentId,
+                              currentTime: engine.currentTime)
         }
+    }
+
+    /// 滚动歌词（Miller 第 5 点，P0 隔离附加项）：展开卡是当前曲时，
+    /// 按引擎时钟推进 5 行窗口。只读时钟 + 现成歌词接口，取词失败
+    /// 或无词就不显示，碰不到队列/取流链。
+    private func updateLyricWindow(for cell: WallPosterCell, trackId: String,
+                                   currentTime: Double) {
+        guard let lines = lyricCache[trackId] else {
+            ensureLyrics(for: trackId)
+            return
+        }
+        guard !lines.isEmpty else { return }
+        var idx = 0
+        for (i, line) in lines.enumerated() {
+            if line.time <= currentTime + 0.15 { idx = i } else { break }
+        }
+        let key = "\(trackId)#\(idx)"
+        guard key != lastLyricKey else { return }
+        lastLyricKey = key
+        let window = (-2...2).map { offset -> String in
+            let j = idx + offset
+            return (j >= 0 && j < lines.count) ? lines[j].text : ""
+        }
+        cell.setLyricWindow(window)
+    }
+
+    private func ensureLyrics(for trackId: String) {
+        guard lyricCache[trackId] == nil,
+              !lyricFetchInFlight.contains(trackId) else { return }
+        lyricFetchInFlight.insert(trackId)
+        Task { [weak self] in
+            let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: trackId)
+            let parsed = text.map { Self.parseLRC($0) } ?? []
+            await MainActor.run {
+                guard let self else { return }
+                self.lyricFetchInFlight.remove(trackId)
+                self.lyricCache[trackId] = parsed
+                self.lastLyricKey = ""
+            }
+        }
+    }
+
+    /// LRC 解析：[mm:ss.xx] 前缀行 → (秒， 文本）；多时间戳行只取
+    /// 首个，空文本行丢弃，结果按时间升序。
+    private static func parseLRC(_ raw: String) -> [(time: Double, text: String)] {
+        var out: [(time: Double, text: String)] = []
+        for line in raw.split(separator: "\n") {
+            let s = String(line)
+            guard s.hasPrefix("["), let close = s.firstIndex(of: "]") else { continue }
+            let stamp = s[s.index(after: s.startIndex)..<close]
+            let parts = stamp.split(separator: ":")
+            guard parts.count == 2,
+                  let minutes = Double(parts[0]),
+                  let seconds = Double(parts[1]) else { continue }
+            let text = String(s[s.index(after: close)...])
+                .trimmingCharacters(in: .whitespaces)
+            guard !text.isEmpty else { continue }
+            out.append((time: minutes * 60 + seconds, text: text))
+        }
+        return out.sorted { $0.time < $1.time }
     }
 
     /// 点播放：当前曲切换播放/暂停；否则按全量 trackIds 建队列
@@ -452,17 +567,25 @@ final class WallPrototypeViewController: UIViewController,
         let meta = Dictionary(nativeTracks.map { ($0.id, $0) },
                               uniquingKeysWith: { first, _ in first })
         let queue: [FoliaTrack] = ids.map { tid in
-            if let t = meta[tid] {
-                return FoliaTrack(
-                    id: t.id, sourceType: .netease, title: t.name,
-                    artist: t.artists, album: t.albumName ?? "",
-                    duration: Double(t.durationMs) / 1000,
-                    artworkURL: t.picUrl.flatMap { URL(string: $0) })
-            }
+            if let t = meta[tid] { return foliaTrack(for: t) }
             return FoliaTrack(id: tid, sourceType: .netease, title: "",
                               artist: "", duration: 0)
         }
-        QueueManager.shared.setQueue(queue, startingAt: start)
+        // 三态入场：先亮连接中，起播确认（currentTrack 落地）或失败
+        // （lastError）到达时由订阅清状态。
+        pendingTrackId = tappedId
+        failedPlayback = nil
+        refreshVisiblePlaybackUI()
+        QueueManager.shared.setQueue(queue, startingAt: start, source: "native-wall")
+    }
+
+    /// NativeTrack → FoliaTrack 的唯一构造点（点播队列与预取共用）。
+    private func foliaTrack(for track: NativeTrack) -> FoliaTrack {
+        FoliaTrack(
+            id: track.id, sourceType: .netease, title: track.name,
+            artist: track.artists, album: track.albumName ?? "",
+            duration: Double(track.durationMs) / 1000,
+            artworkURL: track.picUrl.flatMap { URL(string: $0) })
     }
 
     /// 红心：本地真源乐观切换 → /like 同步账号，失败回滚本地与界面。
@@ -511,6 +634,12 @@ final class WallPrototypeViewController: UIViewController,
             wallLayout.expandedInstanceId = nil
         } else {
             wallLayout.expandedInstanceId = instance.instanceId
+            // 展开即预取（DS26 深度 1）：只解这一首的播放地址入缓存，
+            // 用户真点播放时少等一程取流。元数据未补到的序号跳过。
+            if instance.queueIndex < nativeTracks.count {
+                QueueManager.shared.prefetchStream(
+                    for: foliaTrack(for: nativeTracks[instance.queueIndex]))
+            }
         }
         wallLayout.refreshInstances()
         if setIdentity() == before {
@@ -526,6 +655,17 @@ final class WallPrototypeViewController: UIViewController,
         // 可见 cell 的播放态（展开卡出控件、收起卡撤控件）。
         refreshVisiblePlaybackUI()
     }
+}
+
+/// 展开卡播放三态（DS26）：连接中转圈、失败出文案可重试，
+/// 不再出现「点了 11 秒没反应」的静默态。
+enum WallPlayLoadState {
+    case idle
+    case connecting
+    case failed(String)
+
+    var isConnecting: Bool { if case .connecting = self { return true }; return false }
+    var isFailed: Bool { if case .failed = self { return true }; return false }
 }
 
 /// 墙海报 cell：封面 + 底部标题。圆角用图层裁切、阴影用 shadowPath
@@ -546,11 +686,16 @@ final class WallPosterCell: UICollectionViewCell {
     // （主页墙歌单卡）永不配置、恒隐藏。
     var onPlayTap: (() -> Void)?
     var onLikeTap: (() -> Void)?
+    /// 正在播放角标点按（DS26 改真按钮）：VC 收墙 + 请前端开播放页。
+    var onBadgeTap: (() -> Void)?
     private let playButton = UIButton(type: .system)
     private let likeButton = UIButton(type: .system)
     private let progressTrack = UIView()
     private let progressFill = UIView()
-    private let playingBadge = UIImageView()
+    private let playingBadge = UIButton(type: .system)
+    private let playSpinner = UIActivityIndicatorView(style: .medium)
+    private let errorLabel = UILabel()
+    private let lyricLabels: [UILabel] = (0..<5).map { _ in UILabel() }
     private var controlsVisible = false
     private var progressValue: Double = 0
 
@@ -614,24 +759,57 @@ final class WallPosterCell: UICollectionViewCell {
         progressFill.backgroundColor = .white
         progressTrack.addSubview(progressFill)
 
-        playingBadge.image = UIImage(systemName: "speaker.wave.2.fill")
+        // 角标改真按钮（DS26 Q4）：此前是纯指示图、点不动，被 Miller
+        // 直接点名。点按 = 回网页播放页（VC 处理）。
+        playingBadge.setImage(UIImage(systemName: "speaker.wave.2.fill"), for: .normal)
         playingBadge.tintColor = .white
-        playingBadge.contentMode = .scaleAspectFit
         playingBadge.layer.shadowColor = UIColor.black.cgColor
         playingBadge.layer.shadowOpacity = 0.8
         playingBadge.layer.shadowRadius = 2
         playingBadge.layer.shadowOffset = .zero
+        playingBadge.addTarget(self, action: #selector(badgeButtonTapped), for: .touchUpInside)
         playingBadge.isHidden = true
         shadowView.addSubview(playingBadge)
+
+        playSpinner.color = .white
+        playSpinner.hidesWhenStopped = true
+        playSpinner.isHidden = true
+        shadowView.addSubview(playSpinner)
+
+        errorLabel.font = .systemFont(ofSize: 10, weight: .medium)
+        errorLabel.textColor = .white
+        errorLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        errorLabel.layer.cornerRadius = 4
+        errorLabel.clipsToBounds = true
+        errorLabel.textAlignment = .center
+        errorLabel.isHidden = true
+        errorLabel.isUserInteractionEnabled = true
+        errorLabel.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(playButtonTapped)))
+        shadowView.addSubview(errorLabel)
+
+        for label in lyricLabels {
+            label.textAlignment = .center
+            label.textColor = .white
+            label.layer.shadowColor = UIColor.black.cgColor
+            label.layer.shadowOpacity = 0.85
+            label.layer.shadowRadius = 2
+            label.layer.shadowOffset = .zero
+            label.isHidden = true
+            shadowView.addSubview(label)
+        }
     }
 
     @objc private func playButtonTapped() { onPlayTap?() }
     @objc private func likeButtonTapped() { onLikeTap?() }
+    @objc private func badgeButtonTapped() { onBadgeTap?() }
 
     /// 播放态配置（VC 在 cellForItem 与播放状态变化时调用）：展开卡
-    /// 显示控件行 + 进度，当前曲目显示角标，播放/暂停与红心按实况。
+    /// 显示控件行 + 进度，当前曲目显示角标，播放/暂停与红心按实况；
+    /// loadState 驱动三态（连接中转圈盖住播放键、失败出文案条）。
     func configurePlayback(expanded: Bool, isCurrent: Bool, isPlaying: Bool,
-                           liked: Bool, progress: Double) {
+                           liked: Bool, progress: Double,
+                           loadState: WallPlayLoadState = .idle) {
         controlsVisible = expanded
         playButton.isHidden = !expanded
         likeButton.isHidden = !expanded
@@ -641,8 +819,38 @@ final class WallPosterCell: UICollectionViewCell {
         playButton.setImage(
             UIImage(systemName: isCurrent && isPlaying ? "pause.fill" : "play.fill"),
             for: .normal)
+        if loadState.isConnecting {
+            playButton.setImage(nil, for: .normal)
+            if expanded { playSpinner.startAnimating() }
+        } else {
+            playSpinner.stopAnimating()
+        }
+        playSpinner.isHidden = !(expanded && loadState.isConnecting)
+        if case .failed(let message) = loadState {
+            errorLabel.text = message
+            errorLabel.isHidden = !expanded
+        } else {
+            errorLabel.isHidden = true
+        }
+        // 收起卡不留歌词残影（展开态由 VC 的心跳重新刷入）。
+        if !expanded { setLyricWindow([]) }
         setLiked(liked)
         setNeedsLayout()
+    }
+
+    /// 滚动歌词 5 行窗口（中间 = 当前行）：空/全空行 = 整组收起。
+    func setLyricWindow(_ lines: [String]) {
+        let hasContent = lines.contains { !$0.isEmpty }
+        let alphas: [CGFloat] = [0.35, 0.55, 1.0, 0.55, 0.35]
+        for (i, label) in lyricLabels.enumerated() {
+            label.isHidden = !hasContent
+            guard hasContent else { continue }
+            label.text = i < lines.count ? lines[i] : ""
+            let isCenter = i == 2
+            label.font = .systemFont(ofSize: isCenter ? 12.5 : 10.5,
+                                     weight: isCenter ? .semibold : .regular)
+            label.alpha = alphas[i]
+        }
     }
 
     func setLiked(_ liked: Bool) {
@@ -692,8 +900,18 @@ final class WallPosterCell: UICollectionViewCell {
             likeButton.frame = CGRect(x: bounds.width - 38, y: barTop + 2, width: 30, height: 30)
             progressTrack.frame = CGRect(x: 0, y: bounds.height - 3, width: bounds.width, height: 3)
             layoutProgressFill()
+            playSpinner.frame = playButton.frame
+            errorLabel.frame = CGRect(x: 6, y: barTop - 19,
+                                      width: bounds.width - 12, height: 15)
         }
-        playingBadge.frame = CGRect(x: bounds.width - 26, y: 6, width: 18, height: 18)
+        // 滚动歌词：5 行窗口居卡片中上部（避开底部标题与控件行）。
+        let lyricRowH: CGFloat = 15
+        let lyricTop = bounds.height * 0.40 - lyricRowH * 2.5
+        for (i, label) in lyricLabels.enumerated() {
+            label.frame = CGRect(x: 10, y: lyricTop + CGFloat(i) * lyricRowH,
+                                 width: bounds.width - 20, height: lyricRowH)
+        }
+        playingBadge.frame = CGRect(x: bounds.width - 30, y: 4, width: 24, height: 24)
     }
 
     /// 按压反馈：轻微缩放（原生点击手感的最低成本件）。
@@ -784,11 +1002,17 @@ final class WallPosterCell: UICollectionViewCell {
         subtitleLabel.text = nil
         onPlayTap = nil
         onLikeTap = nil
+        onBadgeTap = nil
         controlsVisible = false
         playButton.isHidden = true
         likeButton.isHidden = true
         progressTrack.isHidden = true
         playingBadge.isHidden = true
+        playSpinner.stopAnimating()
+        playSpinner.isHidden = true
+        errorLabel.isHidden = true
+        errorLabel.text = nil
+        for label in lyricLabels { label.isHidden = true; label.text = nil }
         progressValue = 0
     }
 }

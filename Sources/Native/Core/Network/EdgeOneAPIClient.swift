@@ -80,6 +80,33 @@ final class EdgeOneAPIClient {
         return try JSONDecoder().decode(T.self, from: data)
     }
 
+    /// 单节点单次尝试（DS26 拆分）：timeout 非 nil 时按单次请求覆盖
+    /// session 的 6 秒配置。非 2xx 抛 invalidResponse，余皆原样抛。
+    private func fetchOnce(
+        baseURL: URL,
+        path: String,
+        queryItems: [URLQueryItem],
+        timeout: TimeInterval?
+    ) async throws -> Data {
+        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
+            throw EdgeOneError.invalidResponse
+        }
+        if !queryItems.isEmpty { components.queryItems = queryItems }
+        guard let finalURL = components.url else {
+            throw EdgeOneError.invalidResponse
+        }
+        var request = URLRequest(url: finalURL)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let timeout { request.timeoutInterval = timeout }
+        let (data, response) = try await session.data(for: request)
+        guard let httpResp = response as? HTTPURLResponse,
+              (200...299).contains(httpResp.statusCode) else {
+            throw EdgeOneError.invalidResponse
+        }
+        return data
+    }
+
     /// 原始 JSON GET（不解码，供 M3 核对未验证平台的响应形状）。
     func requestData(
         provider: AudioSourceType,
@@ -94,23 +121,10 @@ final class EdgeOneAPIClient {
 
         for attempt in 0..<bases.count {
             let index = (startIndex + attempt) % bases.count
-            let baseURL = bases[index]
-            guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
-                continue
-            }
-            if !queryItems.isEmpty { components.queryItems = queryItems }
-            guard let finalURL = components.url else { continue }
-
-            var request = URLRequest(url: finalURL)
-            request.httpMethod = "GET"
-            request.setValue("application/json", forHTTPHeaderField: "Accept")
-
             do {
-                let (data, response) = try await session.data(for: request)
-                guard let httpResp = response as? HTTPURLResponse,
-                      (200...299).contains(httpResp.statusCode) else {
-                    throw EdgeOneError.invalidResponse
-                }
+                let data = try await fetchOnce(
+                    baseURL: bases[index], path: path,
+                    queryItems: queryItems, timeout: nil)
                 // 锁定当前可用节点，避免后续请求重复试错。
                 activeNodeIndex[provider] = index
                 return data
@@ -120,6 +134,54 @@ final class EdgeOneAPIClient {
             }
         }
         throw EdgeOneError.allNodesFailed
+    }
+
+    /// 双节点并行竞速 GET（DS26 Q3，只给取流用）：串行故障转移在主
+    /// 节点冷/慢时要等满 6 秒才切备节点，实测凑出 11–12 秒死等；
+    /// 改为两节点同时发、单次超时 3 秒、先成功先用，赢家锁定为
+    /// 后续请求的优先节点。两节点同参同结果，首个成功即权威。
+    func requestDataHedged(
+        provider: AudioSourceType,
+        path: String,
+        queryItems: [URLQueryItem] = [],
+        perNodeTimeout: TimeInterval = 3
+    ) async throws -> Data {
+        guard let pair = Self.nodes(for: provider) else {
+            throw EdgeOneError.providerUnverified(provider: provider, method: path)
+        }
+        let bases = [pair.primary, pair.backup]
+        let winner: (Int, Data)? = await withTaskGroup(
+            of: (Int, Result<Data, Error>).self
+        ) { group in
+            for (index, base) in bases.enumerated() {
+                group.addTask {
+                    do {
+                        let data = try await self.fetchOnce(
+                            baseURL: base, path: path,
+                            queryItems: queryItems, timeout: perNodeTimeout)
+                        return (index, .success(data))
+                    } catch {
+                        return (index, .failure(error))
+                    }
+                }
+            }
+            var firstSuccess: (Int, Data)?
+            for await (index, result) in group {
+                if case .success(let data) = result {
+                    firstSuccess = (index, data)
+                    // 先成先用：取消另一路（URLSession 任务响应取消，
+                    // 组排空很快），不再等慢节点跑满超时。
+                    group.cancelAll()
+                    break
+                }
+            }
+            return firstSuccess
+        }
+        guard let (index, data) = winner else {
+            throw EdgeOneError.allNodesFailed
+        }
+        activeNodeIndex[provider] = index
+        return data
     }
 
     // MARK: - 网易云业务方法（实测路由，2026-11-14 全部 200）
@@ -150,15 +212,18 @@ final class EdgeOneAPIClient {
             throw EdgeOneError.providerUnverified(provider: provider, method: "song/url/v1")
         }
         let rawId = songId.replacingOccurrences(of: "ncm_", with: "")
-        let resp = try await requestJSON(
+        // 取流走并行竞速（DS26）：串行故障转移实测凑出 11–12 秒死等，
+        // 起播等待封顶约 3 秒。
+        let data = try await requestDataHedged(
             provider: .netease,
             path: "/song/url/v1",
             queryItems: [
                 URLQueryItem(name: "id", value: rawId),
                 URLQueryItem(name: "level", value: "exhigh")
             ],
-            as: NeteaseSongURLResponse.self
+            perNodeTimeout: 3
         )
+        let resp = try JSONDecoder().decode(NeteaseSongURLResponse.self, from: data)
         guard let urlStr = resp.data?.first?.url,
               let url = URL(string: urlStr.replacingOccurrences(of: "http://", with: "https://")) else {
             throw EdgeOneError.streamURLMissing
@@ -440,6 +505,21 @@ final class EdgeOneAPIClient {
             Self.rangeSupportCache[host] = supportsRange
             Self.rangeSupportCacheLock.unlock()
         }
+        if supportsRange { return rawStreamURL }
+        var comps = URLComponents(url: rawStreamURL, resolvingAgainstBaseURL: false)
+        comps?.scheme = RangeStreamResourceLoader.customScheme
+        return comps?.url ?? rawStreamURL
+    }
+
+    /// 只读缓存版（DS26：Range 探测后置）：host 的 Range 支持已探明
+    /// 才返回改写结果；未探明返回 nil，调用方先按原地址起播、后台
+    /// 跑 resolvePlayableURL 把缓存探热，不让探测挡起播。
+    func cachedRangeResolvedURL(rawStreamURL: URL) -> URL? {
+        let host = rawStreamURL.host ?? ""
+        Self.rangeSupportCacheLock.lock()
+        let cached = Self.rangeSupportCache[host]
+        Self.rangeSupportCacheLock.unlock()
+        guard let supportsRange = cached else { return nil }
         if supportsRange { return rawStreamURL }
         var comps = URLComponents(url: rawStreamURL, resolvingAgainstBaseURL: false)
         comps?.scheme = RangeStreamResourceLoader.customScheme

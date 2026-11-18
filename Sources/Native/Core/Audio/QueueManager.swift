@@ -67,6 +67,63 @@ final class QueueManager: ObservableObject {
     private let engine = PlaybackEngine.shared
     private let apiClient = EdgeOneAPIClient.shared
 
+    /// 取流地址缓存（DS26 预取）：展开卡对当前曲预取一次，点播直接
+    /// 命中；TTL 10 分钟（与 song/url 的 expi 量级对齐）。锁保护，
+    /// 因装载 Task 在后台线程读写。
+    private var streamURLCache: [String: (url: URL, fetchedAt: Date)] = [:]
+    private var streamPrefetchInFlight: Set<String> = []
+    private let streamCacheLock = NSLock()
+    private static let streamCacheTTL: TimeInterval = 600
+
+    private func cachedStreamURL(for trackId: String) -> URL? {
+        streamCacheLock.lock()
+        defer { streamCacheLock.unlock() }
+        guard let entry = streamURLCache[trackId],
+              Date().timeIntervalSince(entry.fetchedAt) < Self.streamCacheTTL
+        else { return nil }
+        return entry.url
+    }
+
+    private func storeStreamURL(_ url: URL, for trackId: String) {
+        streamCacheLock.lock()
+        streamURLCache[trackId] = (url, Date())
+        streamCacheLock.unlock()
+    }
+
+    /// 预取一首的播放地址入缓存（不装载、不起播）。已缓存或在途则跳过。
+    func prefetchStream(for track: FoliaTrack) {
+        guard track.sourceType != .local else { return }
+        let id = track.id
+        streamCacheLock.lock()
+        let cacheHit = streamURLCache[id].map {
+            Date().timeIntervalSince($0.fetchedAt) < Self.streamCacheTTL
+        } ?? false
+        let shouldFetch = !cacheHit && !streamPrefetchInFlight.contains(id)
+        if shouldFetch { streamPrefetchInFlight.insert(id) }
+        streamCacheLock.unlock()
+        guard shouldFetch else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            var resolved: URL?
+            do {
+                let raw = try await self.apiClient.fetchSongStreamURL(
+                    provider: track.sourceType, songId: id)
+                if let cachedResolved = self.apiClient.cachedRangeResolvedURL(rawStreamURL: raw) {
+                    resolved = cachedResolved
+                } else {
+                    Task { _ = await self.apiClient.resolvePlayableURL(rawStreamURL: raw) }
+                    resolved = raw
+                }
+            } catch {
+                resolved = nil
+            }
+            self.streamCacheLock.lock()
+            self.streamPrefetchInFlight.remove(id)
+            if let resolved { self.streamURLCache[id] = (resolved, Date()) }
+            self.streamCacheLock.unlock()
+        }
+    }
+
     /// 连续失败计数；成功起播即清零。达到 queue.count 即整队一轮无一可播 → 熔断停播。
     private var consecutiveFailures = 0
     /// 切歌代际令牌：快速连续切歌时，过期 Task 的 load 结果直接丢弃。
@@ -139,9 +196,14 @@ final class QueueManager: ObservableObject {
 
     // MARK: - 队列操作
 
-    func setQueue(_ tracks: [FoliaTrack], startingAt index: Int = 0) {
+    /// source（DS26 丙路线最小埋点）：队列变更来源标记，进桥日志，
+    /// 日后若真出现队列竞争，凭来源/时序即可判责，不必再猜。
+    func setQueue(_ tracks: [FoliaTrack], startingAt index: Int = 0, source: String = "core") {
         runOnMain { [weak self] in
             guard let self else { return }
+            FoliaBridgeLogStore.shared.write(
+                level: "info", module: "queue",
+                message: "setQueue source=\(source) count=\(tracks.count) start=\(index)")
             self.queue = tracks
             self.currentIndex = tracks.isEmpty ? 0 : (index % tracks.count)
             self.consecutiveFailures = 0
@@ -302,12 +364,30 @@ final class QueueManager: ObservableObject {
 
     // MARK: - 唯一改曲路径
 
+    /// 装载失败四分（DS26 埋点）：取流被拒（VIP/版权/匿名拿不到地址）
+    /// 与网络超时在修法上完全不同，日志里必须分开记。
+    private static func loadErrorClass(_ error: Error) -> String {
+        if let edgeError = error as? EdgeOneError {
+            switch edgeError {
+            case .streamURLMissing: return "auth-missing"
+            case .allNodesFailed: return "timeout-or-nodes"
+            case .invalidResponse: return "network"
+            case .providerUnverified: return "other"
+            }
+        }
+        if let urlError = error as? URLError {
+            return urlError.code == .timedOut ? "timeout" : "network"
+        }
+        return "other"
+    }
+
     private func loadTrackAtCurrentIndex() {
         // 本方法只在主线程调（经 runOnMain）。
         guard let track = currentTrack else { return }
         loadGeneration += 1
         let generation = loadGeneration
         let manual = loadIsManual
+        let resolveStart = Date()
 
         Task {
             do {
@@ -326,14 +406,23 @@ final class QueueManager: ObservableObject {
                     PlayHistoryStore.shared.recordPlay(track)
                     // 封面不阻塞起播：先以 nil 起播，封面到后再补。
                     self.engine.load(track: track, playableURL: playableURL, artwork: nil)
+                    // 取流耗时埋点（DS26）：与失败分类成对，判冷热节点与缓存命中。
+                    let resolveMs = Int(Date().timeIntervalSince(resolveStart) * 1000)
+                    FoliaBridgeLogStore.shared.write(
+                        level: "info", module: "queue",
+                        message: "load ok track=\(track.id) resolveMs=\(resolveMs)")
                 }
                 await self.fetchArtworkIfNeeded(for: track, generation: generation)
             } catch {
                 await MainActor.run {
                     guard generation == self.loadGeneration else { return }
                     NSLog("[QueueManager] load failed for \(track.id): \(error.localizedDescription)")
+                    // 失败分类埋点（DS26）：timeout / auth-missing / network /
+                    // other 四分，下一轮按类定修法（尤其 (d) Cookie 路径
+                    // 是否立项，只看 auth-missing 占比）。
+                    let resolveMs = Int(Date().timeIntervalSince(resolveStart) * 1000)
                     FoliaBridgeLogStore.shared.write(level: "warn", module: "queue",
-                        message: "load failed track=\(track.id) manual=\(manual) error=\(error.localizedDescription)")
+                        message: "load failed track=\(track.id) manual=\(manual) class=\(Self.loadErrorClass(error)) resolveMs=\(resolveMs) error=\(error.localizedDescription)")
                     if manual {
                         // 用户点播的歌拿不到地址（VIP / 版权 / 下架）：停住报错，
                         // 不连环跳歌（3.2 录屏里歌名闪切的教训）。
@@ -354,8 +443,19 @@ final class QueueManager: ObservableObject {
     private func resolvePlayableURL(for track: FoliaTrack) async throws -> URL {
         switch track.sourceType {
         case .netease, .qq, .kugou:
+            if let cached = cachedStreamURL(for: track.id) { return cached }
             let rawURL = try await apiClient.fetchSongStreamURL(provider: track.sourceType, songId: track.id)
-            return await apiClient.resolvePlayableURL(rawStreamURL: rawURL)
+            // Range 探测后置（DS26）：探明过的 host 按缓存改写；未探明
+            // 先按原地址起播，后台探热供后续曲目，不挡本次起播。
+            let resolved: URL
+            if let cachedResolved = apiClient.cachedRangeResolvedURL(rawStreamURL: rawURL) {
+                resolved = cachedResolved
+            } else {
+                Task { _ = await apiClient.resolvePlayableURL(rawStreamURL: rawURL) }
+                resolved = rawURL
+            }
+            storeStreamURL(resolved, for: track.id)
+            return resolved
         case .local:
             guard let relPath = DatabaseManager.shared.localAudioRelPath(trackId: track.id) else {
                 throw QueueError.localFileMissing(trackId: track.id)

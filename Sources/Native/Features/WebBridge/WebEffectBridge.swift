@@ -46,6 +46,11 @@ enum BridgeEvent: String {
     /// 回弹主页）。桥脚本同时把 payload 暂存 window.__foliaRestoreView，
     /// 防事件先于页面 hook 挂载到达。
     case restoreView
+    /// 打开播放页（3.7 (11) 新增，只增不改）：原生墙小喇叭点按时发，
+    /// 请前端打开其播放页/歌词舞台（DS26 Q4 的 (a) 路）。前端监听器
+    /// 随下一次前端包更新落地；未落地前本事件无声投递，原生侧同时
+    /// 收起原生墙作降级 (b)，用户落在网页迷你播放器旁。
+    case openStage
 }
 
 // MARK: - 全量状态快照 DTO（native-arch.md §9/§13：以后新增桥字段只改 DTO + 前端类型）
@@ -698,6 +703,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         }
     }
 
+    /// 原生墙请求打开播放页（DS26 Q4）：见 BridgeEvent.openStage 注释。
+    func requestOpenStage() {
+        dispatchToJS(.openStage, payload: [:])
+    }
+
     private func captureViewSnapshotThrottled() {
         let now = Date()
         if let last = lastSnapshotCaptureAt, now.timeIntervalSince(last) < 4 { return }
@@ -1287,7 +1297,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             guard !tracks.isEmpty else { break }
             let start = (body["startIndex"] as? Int) ?? 0
             QueueManager.shared.setQueue(
-                tracks, startingAt: min(max(start, 0), tracks.count - 1))
+                tracks, startingAt: min(max(start, 0), tracks.count - 1),
+                source: "web-bridge")
         case "setQueue":
             // 3.6 全量前端队列变异后的全量重发：静默替换，不打断当前播放；
             // 补发快照让网页镜像的下标与原生一次对齐。
