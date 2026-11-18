@@ -181,7 +181,7 @@ final class PartitaStageRenderer: LyricStageRenderer {
         let generation = windowGeneration
         let anchor = idx ?? 0   // 前奏期把首行放在行 2 预告
         if animated && displayedAnchor != nil && !container.isHidden {
-            UIView.animate(withDuration: 0.18, options: [.curveEaseOut]) {
+            UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut]) {
                 self.container.transform = CGAffineTransform(translationX: 0, y: -self.lineHeight)
             } completion: { _ in
                 guard generation == self.windowGeneration else { return }
