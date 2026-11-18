@@ -595,12 +595,12 @@ final class StageViewController: UIViewController {
         let id = track.id
         let newState = LikesStore.shared.toggle(id)
         refreshLikeButton()
-        Task {
+        Task { [weak self] in
             do {
                 _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
             } catch {
                 LikesStore.shared.toggle(id)
-                refreshLikeButton()
+                self?.refreshLikeButton()
             }
         }
     }
@@ -681,6 +681,7 @@ final class StageViewController: UIViewController {
     private let linkProxy = DisplayLinkProxy()
 
     private func startDisplayLink() {
+        guard displayLink == nil else { return }
         linkProxy.owner = self
         let link = CADisplayLink(target: linkProxy, selector: #selector(DisplayLinkProxy.step(_:)))
         link.add(to: .main, forMode: .common)

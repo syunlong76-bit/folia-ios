@@ -32,6 +32,11 @@ final class SweepStageLineView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// 最近一次 setText 的富文本，测宽以它为准（与展开卡同口径：
+    /// 用富文本属性测，含字体与 kern；用 label.font 会测成默认
+    /// 系统字宽，扫光永远扫不满整行）。
+    private var measureSource: NSAttributedString?
+
     func setText(_ text: String, font: UIFont, kern: CGFloat, color: UIColor) {
         let attributes: [NSAttributedString.Key: Any] = [
             .font: font, .kern: kern, .foregroundColor: color
@@ -39,6 +44,7 @@ final class SweepStageLineView: UIView {
         let attributed = NSAttributedString(string: text, attributes: attributes)
         dimLabel.attributedText = attributed
         brightLabel.attributedText = attributed
+        measureSource = attributed
         updateMask()
     }
 
@@ -50,8 +56,8 @@ final class SweepStageLineView: UIView {
     }
 
     private func updateMask() {
-        guard bounds.width > 0, let text = dimLabel.text, let font = dimLabel.font else { return }
-        let textWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        guard bounds.width > 0, let attributed = measureSource else { return }
+        let textWidth = attributed.size().width
         let span = min(textWidth, bounds.width)
         let startX = (bounds.width - span) / 2
         maskLayer.frame = CGRect(
@@ -165,19 +171,28 @@ final class PartitaStageRenderer: LyricStageRenderer {
 
     // MARK: 窗口推进
 
+    /// 窗口推进代次：滑窗动画的 completion 回写前校验仍是最新
+    /// 一次推进，防 seek/快切后旧 completion 把窗口覆盖回旧行。
+    private var windowGeneration = 0
+
     private func advanceWindow(to idx: Int?, animated: Bool) {
         guard snapshot != nil else { return }
+        windowGeneration += 1
+        let generation = windowGeneration
         let anchor = idx ?? 0   // 前奏期把首行放在行 2 预告
         if animated && displayedAnchor != nil && !container.isHidden {
             UIView.animate(withDuration: 0.18, options: [.curveEaseOut]) {
                 self.container.transform = CGAffineTransform(translationX: 0, y: -self.lineHeight)
             } completion: { _ in
+                guard generation == self.windowGeneration else { return }
                 self.container.transform = .identity
                 self.displayedAnchor = anchor
                 self.renderWindow()
                 self.playBreathing()
             }
         } else {
+            container.layer.removeAllAnimations()
+            container.transform = .identity
             displayedAnchor = anchor
             renderWindow()
             if idx != nil { playBreathing() }

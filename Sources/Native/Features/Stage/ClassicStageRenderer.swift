@@ -15,7 +15,7 @@ final class LyricStageRootView: UIView {
 // 当前行滚到视口中央。点任意行 seek 到该行（走协议控制回传）。
 // 只经 LyricStage 协议拿数据：快照给曲目/歌词/调色板，逐帧位置
 // 由宿主 frameTick 喂入，时钟源不在本类。
-final class ClassicStageRenderer: LyricStageRenderer {
+final class ClassicStageRenderer: NSObject, LyricStageRenderer {
 
     let view: UIView
     let capabilities = LyricStageCapabilities(
@@ -33,8 +33,9 @@ final class ClassicStageRenderer: LyricStageRenderer {
     private var builtLineCount = -1
     private let emptyLabel = UILabel()
 
-    init() {
+    override init() {
         view = rootView
+        super.init()
         rootView.backgroundColor = .clear
         rootView.onLayout = { [weak self] in self?.performLayout() }
         scrollView.showsVerticalScrollIndicator = false
