@@ -24,6 +24,11 @@ final class HomeWallViewController: UIViewController,
     private var filmStrip: FilmStripView?
     private var didCenterCamera = false
     private var isWrapping = false
+    /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
+    private var loadAttempts = 0
+    private var loadFailed = false
+    /// 电影长卷每次启动只播一次（3.7 (13)）：重进主页墙不重播。
+    private static var filmStripPlayedThisLaunch = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -67,6 +72,9 @@ final class HomeWallViewController: UIViewController,
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
         statusLabel.textAlignment = .center
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.isUserInteractionEnabled = true
+        statusLabel.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(statusTapped)))
         view.addSubview(statusLabel)
         NSLayoutConstraint.activate([
             statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
@@ -97,15 +105,39 @@ final class HomeWallViewController: UIViewController,
         dismiss(animated: true)
     }
 
+    /// 失败态点按状态胶囊：重置计数重新加载（3.7 (13) #3）。
+    @objc private func statusTapped() {
+        guard loadFailed else { return }
+        loadFailed = false
+        loadAttempts = 0
+        statusLabel.text = "主页墙加载中…"
+        loadEntries()
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        Breadcrumbs.log("home appear")
+        Breadcrumbs.samplerStart()
         // 数据还没到才播长卷；先到（缓存快路径）则整段跳过。
-        if entries.isEmpty { filmStrip?.play() }
+        // 每次启动只播一次：重进主页墙直接见墙（3.7 (13)）。
+        if entries.isEmpty, !Self.filmStripPlayedThisLaunch {
+            Self.filmStripPlayedThisLaunch = true
+            filmStrip?.play()
+        } else if entries.isEmpty {
+            filmStrip?.finish()
+        }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        Breadcrumbs.samplerStop()
+        Breadcrumbs.log("home disappear")
     }
 
     // MARK: - 数据
 
     private func loadEntries() {
+        loadAttempts += 1
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -122,6 +154,9 @@ final class HomeWallViewController: UIViewController,
                 }
                 let playlists = try await NativeDataClient.shared.fetchUserPlaylists(userId: userId)
                 await MainActor.run {
+                    self.loadAttempts = 0
+                    self.loadFailed = false
+                    Breadcrumbs.log("home entries ok n=\(playlists.count)")
                     self.playlistIds = playlists.map(\.id)
                     self.entries = playlists.map { playlist in
                         WallPrototypeViewController.Entry(
@@ -138,9 +173,24 @@ final class HomeWallViewController: UIViewController,
                     self.filmStrip?.finish()
                 }
             } catch {
+                // 原始错误只进日志，标签只给人话（3.7 (13) #3：根因是
+                // 把 Error 整段插值上屏）；自动重试一次，之后点按重试。
                 await MainActor.run {
-                    self.statusLabel.text = "主页墙加载失败：\(error)"
-                    self.filmStrip?.finish()
+                    FoliaBridgeLogStore.shared.write(
+                        level: "error", module: "wall",
+                        message: "home load failed attempt=\(self.loadAttempts): \(error)")
+                    Breadcrumbs.log("home load failed attempt=\(self.loadAttempts)")
+                    if self.loadAttempts < 2 {
+                        self.statusLabel.text = "主页墙加载失败，正在重试…"
+                        self.filmStrip?.finish()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                            self?.loadEntries()
+                        }
+                    } else {
+                        self.loadFailed = true
+                        self.statusLabel.text = "主页墙加载失败，点按这里重试"
+                        self.filmStrip?.finish()
+                    }
                 }
             }
         }
@@ -242,6 +292,22 @@ final class HomeWallViewController: UIViewController,
         // 丝滑切入（3.7 (8)）：先预加载，最多等 250ms 让首批数据
         // 落地再 present——预热命中时墙带着内容直接切入，黑屏不
         // 出现；超时照常切入，由墙内氛围底兜住剩余等待。
+        wall.startPreload()
+        Task { [weak self] in
+            _ = await wall.awaitSeed(timeout: 0.25)
+            self?.present(wall, animated: true)
+        }
+    }
+
+    /// 回程恢复（3.7 (13) #6）：播放页关闭后由 MainViewController
+    /// 重呈主页墙时调用，按票直达原歌单曲目墙并恢复上下文。
+    func presentRestoredWall(ticket: WallReturnTicket) {
+        let wall = WallPrototypeViewController(
+            playlistId: ticket.playlistId,
+            title: ticket.title, coverUrl: ticket.coverUrl)
+        wall.modalPresentationStyle = .fullScreen
+        wall.modalTransitionStyle = .crossDissolve
+        wall.pendingReturnTicket = ticket
         wall.startPreload()
         Task { [weak self] in
             _ = await wall.awaitSeed(timeout: 0.25)

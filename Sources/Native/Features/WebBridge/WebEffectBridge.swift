@@ -704,11 +704,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     }
 
     /// 原生墙请求打开播放页（DS26 Q4）：见 BridgeEvent.openStage 注释。
-    /// 小喇叭直达播放页（3.7 (12)，DS27 D 定版）：事件带原生播放
-    /// 快照（全队列元数据 + currentIndex + 平台 id），前端按平台
-    /// id 校验/水合后再开舞台。禁止前端按下标到网页 store 取歌：
-    /// 两边队列不是同一份（原生是 id 列表、网页是富队列），下标
-    /// 对齐会错开歌（R27/R28 合并对账）。
+    /// 事件带原生播放快照（全队列元数据 + currentIndex + 平台
+    /// id），但 (13) β 定案：快照只作取证对账（前端比对网页当前
+    /// 曲与快照当前曲的平台 id、不一致打 warn），不开舞台取歌——
+    /// 前端走主态直达（回主态 + navigateToPlayer），舞台当前曲由
+    /// 主态决定。禁止前端按下标到网页 store 取歌：两边队列不是
+    /// 同一份（原生是 id 列表、网页是富队列），下标对齐会错开歌。
     func requestOpenStage() {
         let queue = QueueManager.shared.queue
         let index = QueueManager.shared.currentIndex
@@ -1275,6 +1276,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             // 当前集合视图上报（3.6 (4)）：持久化到 UserDefaults，进程被杀
             // 重载后据此恢复原页。view 为 null（或缺失）表示已回首页，清除。
             handleViewState(body["view"] as? [String: Any])
+        case "stageClosed":
+            // 原生墙打开的播放页已关闭（3.7 (13) #6）：转发给主 VC，
+            // 它按回程票恢复曲目墙；无票时主 VC 自行忽略。
+            logStore.write(level: "info", module: "bridge",
+                           message: "stageClosed received")
+            NotificationCenter.default.post(name: .foliaStageClosed, object: nil)
         case "transport":
             switch body["action"] as? String {
             case "play":

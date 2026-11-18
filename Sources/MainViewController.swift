@@ -29,6 +29,10 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // 回程票（3.7 (13) #6）：前端 stageClosed 过桥后按票恢复墙。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleStageClosed),
+            name: .foliaStageClosed, object: nil)
         // Folia 默认主题就是深色（Midnight Default）：全局强制深色外观，
         // 不随系统浅色模式翻白。
         overrideUserInterfaceStyle = .dark
@@ -192,6 +196,22 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
         let home = HomeWallViewController()
         home.modalPresentationStyle = .fullScreen
         present(home, animated: true)
+    }
+
+    /// 回程恢复（3.7 (13) #6）：播放页关闭且有票时，重呈主页墙
+    /// 并直达原曲目墙；无票（用户自己进的播放页）什么都不做。
+    @objc private func handleStageClosed() {
+        // 先确认能呈现再消费票据：主 VC 上还压着别的浮层（如设置
+        // 页）时票不能销毁，留待下一次机会（新票会覆盖旧票）。
+        guard presentedViewController == nil,
+              let ticket = WallReturnTicketStore.pending else { return }
+        WallReturnTicketStore.pending = nil
+        Breadcrumbs.log("stage closed, restoring wall playlist=\(ticket.playlistId)")
+        let home = HomeWallViewController()
+        home.modalPresentationStyle = .fullScreen
+        present(home, animated: true) {
+            home.presentRestoredWall(ticket: ticket)
+        }
     }
 
     @objc private func openSettings() {

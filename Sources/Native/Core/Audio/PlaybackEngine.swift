@@ -160,6 +160,7 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
     /// 唯一改曲入口。调用图写死：一切改曲 → QueueManager → loadTrackAtCurrentIndex → engine.load。
     /// playableURL 由 QueueManager 按 track id 现换（在线 URL 有效期仅 1200 秒，不落库）。
     func load(track: FoliaTrack, playableURL: URL, artwork: UIImage?) {
+        Breadcrumbs.log("engine load track=\(track.id)")
         flushListeningHistory(isCompleted: false)
         teardownCurrentItemObservers()
 

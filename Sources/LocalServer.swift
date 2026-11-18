@@ -31,6 +31,9 @@ final class LocalServer {
     var onReady: ((UInt16) -> Void)?
 
     private var listener: NWListener?
+    /// 同端口重试计数（3.7 (13) #3）：监听失败先在原端口重试，
+    /// 避免端口漂移后已加载的网页与数据客户端集体失联。
+    private var samePortRetries = 0
     private let listenerQueue = DispatchQueue(label: "com.miller.folia.localserver")
     private var liveHandlers = [ObjectIdentifier: ConnectionHandler]()
     private let handlersLock = NSLock()
@@ -64,14 +67,39 @@ final class LocalServer {
             switch state {
             case .ready:
                 self.port = port
+                self.samePortRetries = 0
                 NSLog("[LocalServer] listening on 127.0.0.1:\(port)")
+                FoliaBridgeLogStore.shared.write(
+                    level: "info", module: "server",
+                    message: "listening on 127.0.0.1:\(port)")
                 if let cb = self.onReady {
                     DispatchQueue.main.async { cb(port) }
                 }
             case .failed(let error):
                 NSLog("[LocalServer] failed on \(port): \(error)")
+                FoliaBridgeLogStore.shared.write(
+                    level: "error", module: "server",
+                    message: "listener failed on \(port): \(error)")
                 listener.cancel()
-                if retriesLeft > 0 {
+                // 端口被占：同端口重试不会恢复，立即漂移（DS31）。
+                if case .posix(let code) = error, code == .EADDRINUSE {
+                    self.samePortRetries = 0
+                    if retriesLeft > 0 {
+                        self.attempt(port: port + 1, retriesLeft: retriesLeft - 1)
+                    }
+                    return
+                }
+                if self.samePortRetries < 3 {
+                    // 先同端口重试（1 秒后）：端口不变，已加载的
+                    // 网页与数据客户端无需感知（3.7 (13) #3）。
+                    self.samePortRetries += 1
+                    let retryNo = self.samePortRetries
+                    self.listenerQueue.asyncAfter(deadline: .now() + 1) { [weak self] in
+                        NSLog("[LocalServer] same-port retry \(retryNo) on \(port)")
+                        self?.attempt(port: port, retriesLeft: retriesLeft)
+                    }
+                } else if retriesLeft > 0 {
+                    self.samePortRetries = 0
                     self.attempt(port: port + 1, retriesLeft: retriesLeft - 1)
                 }
             case .waiting(let error):

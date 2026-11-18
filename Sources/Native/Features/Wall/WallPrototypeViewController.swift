@@ -1,6 +1,28 @@
 import Combine
 import UIKit
 
+/// 回程票（3.7 (13) #6）：进播放页前存下曲目墙上下文，前端
+/// stageClosed 到达后 MainViewController 按票重呈主页墙并直达
+/// 本歌单曲目墙，恢复相机与展开项。
+struct WallReturnTicket {
+    let playlistId: String
+    let title: String?
+    let coverUrl: String?
+    let worldOrigin: CGPoint
+    let contentOffset: CGPoint
+    let expandedInstanceId: String?
+    let expandedQueueIndex: Int?
+}
+
+enum WallReturnTicketStore {
+    static var pending: WallReturnTicket?
+}
+
+extension Notification.Name {
+    /// 前端 stageClosed 已过桥（WebEffectBridge 转发）。
+    static let foliaStageClosed = Notification.Name("FoliaStageClosed")
+}
+
 /// M1 阶段 3：单墙原型（队列墙几何 + 真实歌单数据）。入口：主界面
 /// 设置齿轮长按（壳级调试入口，不影响正常使用）。只验证三件事：
 /// 自由平移的帧率与手感、封面按档出图、点按展开的同块重排。
@@ -39,6 +61,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 歌词窗口去重与滑入判定：同曲且索引恰好 +1 才滑入，其余 snap。
     private var lastLyricTrackId: String?
     private var lastLyricIndex: Int?
+    /// 前奏预告态去重（3.7 (13) #2）：同 idx 下 active 翻转要重下发。
+    private var lastLyricActive = true
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
@@ -54,6 +78,25 @@ final class WallPrototypeViewController: UIViewController,
     /// 首屏波次入场：种子落地时刻 + 已发出的波次序号。
     private var waveStart: Date?
     private var waveCount = 0
+    /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
+    private var loadAttempts = 0
+    private var loadFailed = false
+    /// 回程恢复（3.7 (13) #6）：重呈时由主页墙注入，种子落地后应用。
+    var pendingReturnTicket: WallReturnTicket?
+    /// 底部播放台（3.7 (13) #7）：网页风迷你播放器，点台身定位。
+    private var miniBar: UIView?
+    private var miniCover: UIImageView!
+    private var miniTitle: UILabel!
+    private var miniArtist: UILabel!
+    private var miniPlayButton: UIButton!
+    private var miniProgressFill: UIView!
+    /// 定位动画（CADisplayLink 驱动，DS31）：起点/目标/时长/收尾。
+    private var locateLink: CADisplayLink?
+    private var locateStartOrigin: CGPoint = .zero
+    private var locateStartTime: CFTimeInterval = 0
+    private var locateTargetOrigin: CGPoint = .zero
+    private var locateDuration: TimeInterval = 0.45
+    private var locateCompletion: (() -> Void)?
 
     init(playlistId: String = "19723756", title: String? = nil, coverUrl: String? = nil) {
         self.playlistId = playlistId
@@ -71,6 +114,12 @@ final class WallPrototypeViewController: UIViewController,
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         collectionView.backgroundColor = .black
+        // 双击进播放页（3.7 (13) #8b）：独立识别器，不给单击展开
+        // 加 require(toFail:) 延迟。
+        let doubleTap = UITapGestureRecognizer(
+            target: self, action: #selector(wallDoubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        collectionView.addGestureRecognizer(doubleTap)
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.prefetchDataSource = self
@@ -95,6 +144,9 @@ final class WallPrototypeViewController: UIViewController,
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
         statusLabel.textAlignment = .center
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
+        statusLabel.isUserInteractionEnabled = true
+        statusLabel.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(statusTapped)))
         view.addSubview(statusLabel)
         NSLayoutConstraint.activate([
             statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
@@ -148,11 +200,15 @@ final class WallPrototypeViewController: UIViewController,
                     self.pendingTrackId = nil
                 }
                 self.refreshVisiblePlaybackUI()
+                self.refreshMiniBar()
             }
             .store(in: &playbackCancellables)
         PlaybackEngine.shared.$isPlaying
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.refreshVisiblePlaybackUI() }
+            .sink { [weak self] _ in
+                self?.refreshVisiblePlaybackUI()
+                self?.refreshMiniBar()
+            }
             .store(in: &playbackCancellables)
         // 原生点播失败落地（DS26 三态的失败支）：只认领自己在途的
         // 那次点播；网页侧发起的失败不归本墙管。
@@ -168,7 +224,226 @@ final class WallPrototypeViewController: UIViewController,
             }
             .store(in: &playbackCancellables)
 
+        buildMiniBar()
+
         loadEntries()
+    }
+
+    /// 底部播放台（3.7 (13) #7）：照网页版迷你播放器的构成——
+    /// 封面缩略 + 标题/歌手 + 顶部细进度 + 播放暂停键。点台身 =
+    /// 定位到正在播放的歌曲（Miller 定版交互）；播放键只管播停。
+    private func buildMiniBar() {
+        let bar = UIView()
+        bar.backgroundColor = UIColor.black.withAlphaComponent(0.72)
+        bar.layer.cornerRadius = 16
+        bar.clipsToBounds = true
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.isHidden = true
+        view.addSubview(bar)
+        miniBar = bar
+
+        let progressTrack = UIView()
+        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+        progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(progressTrack)
+        let fill = UIView()
+        fill.backgroundColor = .white
+        fill.translatesAutoresizingMaskIntoConstraints = false
+        fill.layer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        progressTrack.addSubview(fill)
+        miniProgressFill = fill
+
+        miniCover = UIImageView()
+        miniCover.contentMode = .scaleAspectFill
+        miniCover.clipsToBounds = true
+        miniCover.layer.cornerRadius = 8
+        miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        miniCover.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniCover)
+
+        miniTitle = UILabel()
+        miniTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        miniTitle.textColor = .white
+        miniTitle.lineBreakMode = .byTruncatingTail
+        miniTitle.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniTitle)
+
+        miniArtist = UILabel()
+        miniArtist.font = .systemFont(ofSize: 11)
+        miniArtist.textColor = UIColor.white.withAlphaComponent(0.6)
+        miniArtist.lineBreakMode = .byTruncatingTail
+        miniArtist.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniArtist)
+
+        miniPlayButton = UIButton(type: .system)
+        miniPlayButton.tintColor = .white
+        miniPlayButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
+        miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
+        bar.addSubview(miniPlayButton)
+
+        NSLayoutConstraint.activate([
+            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+            bar.heightAnchor.constraint(equalToConstant: 60),
+
+            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            progressTrack.topAnchor.constraint(equalTo: bar.topAnchor),
+            progressTrack.heightAnchor.constraint(equalToConstant: 2),
+            fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+            fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
+
+            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
+            miniCover.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            miniCover.widthAnchor.constraint(equalToConstant: 42),
+            miniCover.heightAnchor.constraint(equalToConstant: 42),
+
+            miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 10),
+            miniTitle.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -8),
+            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 12),
+
+            miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
+            miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
+            miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
+
+            miniPlayButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
+            miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
+        ])
+        fill.transform = CGAffineTransform(scaleX: 0, y: 1)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(miniBarTapped(_:)))
+        bar.addGestureRecognizer(tap)
+    }
+
+    @objc private func miniPlayTapped() {
+        PlaybackEngine.shared.togglePlayPause()
+    }
+
+    @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
+        let point = gesture.location(in: miniBar)
+        if miniPlayButton.frame.contains(point) { return }
+        locateCurrentTrack()
+    }
+
+    /// 播放台内容同步：有当前曲才显示；封面优先引擎现图，缺了走
+    /// 封面链按当前曲 id 校验后补。
+    private func refreshMiniBar() {
+        guard let bar = miniBar else { return }
+        let engine = PlaybackEngine.shared
+        guard let track = engine.currentTrack else {
+            bar.isHidden = true
+            return
+        }
+        bar.isHidden = false
+        miniTitle.text = track.title
+        miniArtist.text = track.artist
+        miniPlayButton.setImage(
+            UIImage(systemName: engine.playbackState == .playing ? "pause.fill" : "play.fill"),
+            for: .normal)
+        if let art = engine.currentArtwork {
+            miniCover.image = art
+        } else if let url = track.artworkURL {
+            let raw = url.absoluteString
+            let tier = NativeCoverLoader.tier(forPixelExtent: 126)
+            if let proxied = NativeCoverLoader.shared.proxiedURLString(raw, tier: tier) {
+                if let cached = NativeCoverLoader.shared.cachedImage(for: proxied) {
+                    miniCover.image = cached
+                } else {
+                    miniCover.image = nil
+                    let trackId = track.id
+                    Task { [weak self] in
+                        let image = await NativeCoverLoader.shared.image(for: proxied, tier: tier)
+                        await MainActor.run {
+                            guard let self,
+                                  PlaybackEngine.shared.currentTrack?.id == trackId
+                            else { return }
+                            self.miniCover.image = image
+                        }
+                    }
+                }
+            }
+        } else {
+            miniCover.image = nil
+        }
+    }
+
+    /// 点播放台定位（3.7 (13) #7）：相机 0.45 秒平滑移到当前曲
+    /// 最近的一份拷贝并展开；当前曲不在本歌单时给人话提示。
+    private func locateCurrentTrack() {
+        guard let currentId = PlaybackEngine.shared.currentTrack?.id else { return }
+        guard let queueIndex = entries.firstIndex(where: { $0.id == currentId }) else {
+            statusLabel.text = "当前歌曲不在这个歌单里"
+            statusLabel.isHidden = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                guard let self, self.statusLabel.text == "当前歌曲不在这个歌单里" else { return }
+                self.statusLabel.text = "墙原型：\(self.wallLayout.totalEntries) 首 · 拖动平移 · 点按展开"
+            }
+            return
+        }
+        let scale = wallLayout.cameraScale
+        let viewWorldW = Double(collectionView.bounds.width) / scale
+        let viewWorldH = Double(collectionView.bounds.height) / scale
+        let centerX = Double(wallLayout.worldOrigin.x) + viewWorldW / 2
+        let centerY = Double(wallLayout.worldOrigin.y) + viewWorldH / 2
+        guard let target = WallGeometry.locateNearestInstance(
+            geometry: wallLayout.geometry, totalEntries: wallLayout.totalEntries,
+            queueIndex: queueIndex, pointX: centerX, pointY: centerY,
+            metrics: wallLayout.metrics) else { return }
+        Breadcrumbs.log("locate queueIndex=\(queueIndex)")
+        if wallLayout.expandedInstanceId != nil {
+            wallLayout.expandedInstanceId = nil
+            wallLayout.refreshInstances()
+            collectionView.reloadData()
+        }
+        let targetOrigin = CGPoint(
+            x: CGFloat(target.rect.x + target.rect.width / 2 - viewWorldW / 2),
+            y: CGFloat(target.rect.y + target.rect.height / 2 - viewWorldH / 2))
+        animateWorldOrigin(to: targetOrigin, duration: 0.45) { [weak self] in
+            guard let self else { return }
+            self.wallLayout.expandedInstanceId = target.instanceId
+            self.wallLayout.refreshInstances()
+            self.collectionView.reloadData()
+        }
+    }
+
+    /// 世界原点插值动画（定位专用）：CADisplayLink 按屏幕刷新
+    /// 驱动（DS31：Timer 与刷新不同步、真机易抖），逐帧走既有
+    /// 折叠同款更新（refreshInstances + 身份变了才 reloadData）。
+    private func animateWorldOrigin(to target: CGPoint, duration: TimeInterval,
+                                    completion: @escaping () -> Void) {
+        locateLink?.invalidate()
+        locateStartOrigin = wallLayout.worldOrigin
+        locateTargetOrigin = target
+        locateDuration = duration
+        locateStartTime = CACurrentMediaTime()
+        locateCompletion = completion
+        let link = CADisplayLink(target: self, selector: #selector(locateTick(_:)))
+        link.add(to: .main, forMode: .common)
+        locateLink = link
+    }
+
+    @objc private func locateTick(_ link: CADisplayLink) {
+        let raw = min((link.timestamp - locateStartTime) / locateDuration, 1)
+        let eased = raw < 0.5 ? 2 * raw * raw : 1 - pow(-2 * raw + 2, 2) / 2
+        let before = setIdentity()
+        wallLayout.worldOrigin = CGPoint(
+            x: locateStartOrigin.x + (locateTargetOrigin.x - locateStartOrigin.x) * CGFloat(eased),
+            y: locateStartOrigin.y + (locateTargetOrigin.y - locateStartOrigin.y) * CGFloat(eased))
+        wallLayout.refreshInstances()
+        if setIdentity() != before { collectionView.reloadData() }
+        if raw >= 1 {
+            link.invalidate()
+            locateLink = nil
+            let done = locateCompletion
+            locateCompletion = nil
+            done?()
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -183,13 +458,34 @@ final class WallPrototypeViewController: UIViewController,
         super.viewWillDisappear(animated)
         progressTimer?.invalidate()
         progressTimer = nil
+        locateLink?.invalidate()
+        locateLink = nil
+        locateCompletion = nil
     }
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        Breadcrumbs.log("tracks appear playlist=\(playlistId)")
+        Breadcrumbs.samplerStart()
+        refreshMiniBar()
         UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseOut]) {
             self.collectionView.transform = .identity
         }
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        Breadcrumbs.samplerStop()
+        Breadcrumbs.log("tracks disappear playlist=\(playlistId)")
+    }
+
+    /// 失败态点按状态胶囊：重置计数重新加载（3.7 (13) #3）。
+    @objc private func statusTapped() {
+        guard loadFailed else { return }
+        loadFailed = false
+        loadAttempts = 0
+        statusLabel.text = "墙原型加载中…"
+        loadEntries()
     }
 
     @objc private func closeTapped() {
@@ -229,6 +525,7 @@ final class WallPrototypeViewController: UIViewController,
     // MARK: - 数据
 
     private func loadEntries() {
+        loadAttempts += 1
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -264,9 +561,16 @@ final class WallPrototypeViewController: UIViewController,
                     self.statusLabel.isHidden = false
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
-                    self.centerCameraIfNeeded()
+                    if self.pendingReturnTicket != nil {
+                        self.applyReturnTicket()
+                    } else {
+                        self.centerCameraIfNeeded()
+                    }
                     // 丝滑切入收口：唤醒等数据的 present、氛围底退场、
                     // 首屏波次从此刻起算。
+                    self.loadAttempts = 0
+                    self.loadFailed = false
+                    Breadcrumbs.log("tracks seed ok n=\(seed.count)/\(total)")
                     self.seedReady = true
                     self.flushSeedWaiters()
                     self.waveStart = Date()
@@ -323,11 +627,27 @@ final class WallPrototypeViewController: UIViewController,
                     if reachedEnd || !progressed { break }
                 }
             } catch {
+                // 原始错误只进日志，标签只给人话（3.7 (13) #3）；
+                // 自动重试一次，之后点按重试。
                 await MainActor.run {
-                    self.statusLabel.text = "墙原型加载失败：\(error)"
+                    FoliaBridgeLogStore.shared.write(
+                        level: "error", module: "wall",
+                        message: "tracks load failed playlist=\(self.playlistId) attempt=\(self.loadAttempts): \(error)")
+                    Breadcrumbs.log("tracks load failed attempt=\(self.loadAttempts)")
                     self.statusLabel.isHidden = false
-                    self.flushSeedWaiters()
-                    self.backdrop?.dismiss()
+                    if self.loadAttempts < 2 {
+                        self.statusLabel.text = "加载失败，正在重试…"
+                        self.flushSeedWaiters()
+                        self.backdrop?.dismiss()
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                            self?.loadEntries()
+                        }
+                    } else {
+                        self.loadFailed = true
+                        self.statusLabel.text = "加载失败，点按这里重试"
+                        self.flushSeedWaiters()
+                        self.backdrop?.dismiss()
+                    }
                 }
             }
         }
@@ -348,6 +668,41 @@ final class WallPrototypeViewController: UIViewController,
         let cell = wallLayout.cellViewSize
         collectionView.contentOffset = CGPoint(x: cell.width, y: cell.height)
         wallLayout.invalidateLayout()
+    }
+
+    /// 回程票应用（3.7 (13) #6）：种子落地后恢复相机（worldOrigin
+    /// 与 contentOffset 成对）与展开项。展开实例 id 按确定性生成
+    /// 应原样命中；不在新实例集时退到同序号离视口中心最近的一份。
+    private func applyReturnTicket() {
+        guard let ticket = pendingReturnTicket else { return }
+        pendingReturnTicket = nil
+        didCenterCamera = true
+        wallLayout.cameraScale = Self.cameraScale(forWidth: collectionView.bounds.width)
+        wallLayout.worldOrigin = ticket.worldOrigin
+        wallLayout.expandedInstanceId = nil
+        wallLayout.refreshInstances()
+        collectionView.contentOffset = ticket.contentOffset
+        if let expandedId = ticket.expandedInstanceId,
+           wallLayout.instances.contains(where: { $0.instanceId == expandedId }) {
+            wallLayout.expandedInstanceId = expandedId
+        } else if let queueIndex = ticket.expandedQueueIndex {
+            let centerWorld = CGPoint(
+                x: Double(ticket.worldOrigin.x) + Double(collectionView.bounds.width) / wallLayout.cameraScale / 2,
+                y: Double(ticket.worldOrigin.y) + Double(collectionView.bounds.height) / wallLayout.cameraScale / 2)
+            let nearest = wallLayout.instances
+                .filter { $0.queueIndex == queueIndex }
+                .min { a, b in
+                    let da = hypot(a.rect.left + a.rect.width / 2 - Double(centerWorld.x),
+                                   a.rect.top + a.rect.height / 2 - Double(centerWorld.y))
+                    let db = hypot(b.rect.left + b.rect.width / 2 - Double(centerWorld.x),
+                                   b.rect.top + b.rect.height / 2 - Double(centerWorld.y))
+                    return da < db
+                }
+            wallLayout.expandedInstanceId = nearest?.instanceId
+        }
+        wallLayout.refreshInstances()
+        collectionView.reloadData()
+        Breadcrumbs.log("return ticket applied playlist=\(ticket.playlistId)")
     }
 
     override func viewDidLayoutSubviews() {
@@ -462,57 +817,45 @@ final class WallPrototypeViewController: UIViewController,
         let queueIndex = instance.queueIndex
         cell.onPlayTap = { [weak self] in self?.playTapped(queueIndex: queueIndex) }
         cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
-        cell.onBadgeTap = { [weak self] in self?.badgeTapped() }
     }
 
-    /// 小喇叭点按：请前端打开播放页，并收起整摞原生墙。3.7 (12)
-    /// 起前端监听器落地（openStage 带原生快照），同一路径直接弹
-    /// 开舞台。转场走 DS28 丙案过渡期最小版：先把当前曲封面从
-    /// 卡上飞成全屏（快照伪 morph，桥住硬切），落定再收墙开舞台；
-    /// 找不到可见的当前曲卡时直接收墙（无转场）。
-    private func badgeTapped() {
-        guard let flyView = makeStageFlightView() else {
-            openStageAndDismiss(animated: true)
-            return
+    /// 进播放页（3.7 (13) #5/#6/#8b）：双击卡片触发。先存回程票，
+    /// 再请前端开播放页（主态直达），最后收起整摞原生墙——转场
+    /// 只剩墙淡出，不再叠封面飞行动画（(12) 的伪 morph 与播放页
+    /// 自带动画打架，Miller 点名不流畅，已删）。
+    private func openStageFromWall() {
+        let expanded = wallLayout.instances.first {
+            $0.instanceId == wallLayout.expandedInstanceId
         }
-        view.addSubview(flyView)
-        UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseOut]) {
-            flyView.frame = self.view.bounds
-            flyView.layer.cornerRadius = 0
-        } completion: { _ in
-            // 飞行本身就是转场：收墙不再叠系统动画。
-            self.openStageAndDismiss(animated: false)
-            flyView.removeFromSuperview()
-        }
-    }
-
-    private func openStageAndDismiss(animated: Bool) {
+        WallReturnTicketStore.pending = WallReturnTicket(
+            playlistId: playlistId,
+            title: playlistTitle,
+            coverUrl: playlistCoverUrl,
+            worldOrigin: wallLayout.worldOrigin,
+            contentOffset: collectionView.contentOffset,
+            expandedInstanceId: wallLayout.expandedInstanceId,
+            expandedQueueIndex: expanded?.queueIndex)
+        Breadcrumbs.log("stage open, ticket saved playlist=\(playlistId)")
         WebEffectBridge.shared.requestOpenStage()
         var host: UIViewController = self
         while let presenter = host.presentingViewController { host = presenter }
-        if host !== self { host.dismiss(animated: animated) }
+        if host !== self { host.dismiss(animated: true) }
     }
 
-    /// 当前曲卡的封面快照（伪 morph 起点）：取可见 cell 的封面图
-    /// 与它在墙视图内的位置。
-    private func makeStageFlightView() -> UIImageView? {
-        guard let currentId = PlaybackEngine.shared.currentTrack?.id else { return nil }
-        for case let cell as WallPosterCell in collectionView.visibleCells {
-            guard let indexPath = collectionView.indexPath(for: cell),
-                  indexPath.item < wallLayout.instances.count else { continue }
-            let instance = wallLayout.instances[indexPath.item]
-            guard instance.queueIndex < entries.count,
-                  entries[instance.queueIndex].id == currentId,
-                  let image = cell.coverImage else { continue }
-            let frame = collectionView.convert(cell.frame, to: view)
-            let fly = UIImageView(image: image)
-            fly.contentMode = .scaleAspectFill
-            fly.clipsToBounds = true
-            fly.layer.cornerRadius = 8
-            fly.frame = frame
-            return fly
+    /// 双击卡片进播放页（3.7 (13) #8b）：双击的不是当前曲时先切
+    /// 队列再开页（原生队列同步落位，桥快照即新当前曲）；单击
+    /// 展开保持原样、不等双击判定，第一击的展开是无害前置。
+    @objc private func wallDoubleTapped(_ gesture: UITapGestureRecognizer) {
+        let point = gesture.location(in: collectionView)
+        guard let indexPath = collectionView.indexPathForItem(at: point),
+              indexPath.item < wallLayout.instances.count else { return }
+        let instance = wallLayout.instances[indexPath.item]
+        guard instance.queueIndex < entries.count else { return }
+        Breadcrumbs.log("wall double tap queueIndex=\(instance.queueIndex)")
+        if PlaybackEngine.shared.currentTrack?.id != entries[instance.queueIndex].id {
+            startQueueAt(queueIndex: instance.queueIndex)
         }
-        return nil
+        openStageFromWall()
     }
 
     private func refreshVisiblePlaybackUI() {
@@ -527,6 +870,11 @@ final class WallPrototypeViewController: UIViewController,
     private func tickProgress() {
         let engine = PlaybackEngine.shared
         guard let currentId = engine.currentTrack?.id, engine.duration > 0 else { return }
+        // 底部播放台进度（3.7 (13) #7）：同一心跳顺手推进。
+        if let bar = miniBar, !bar.isHidden {
+            let fraction = max(0, min(1, engine.currentTime / engine.duration))
+            miniProgressFill.transform = CGAffineTransform(scaleX: CGFloat(fraction), y: 1)
+        }
         for case let cell as WallPosterCell in collectionView.visibleCells {
             guard let indexPath = collectionView.indexPath(for: cell),
                   indexPath.item < wallLayout.instances.count else { continue }
@@ -554,10 +902,15 @@ final class WallPrototypeViewController: UIViewController,
         for (i, line) in lines.enumerated() {
             if line.time <= currentTime + 0.15 { idx = i } else { break }
         }
-        if lastLyricTrackId == trackId, lastLyricIndex == idx { return }
+        // 前奏预告态（3.7 (13) #2）：还没唱到首行时窗口只预告，
+        // 不点亮不扫光；active 翻转也要重下发（同 idx 不能被去重吞掉）。
+        let lineActive = lines[idx].time <= currentTime + 0.15
+        if lastLyricTrackId == trackId, lastLyricIndex == idx,
+           lastLyricActive == lineActive { return }
         let slide = lastLyricTrackId == trackId && lastLyricIndex == idx - 1
         lastLyricTrackId = trackId
         lastLyricIndex = idx
+        lastLyricActive = lineActive
         // 6 行窗口：当前行居中（行 2），行 5 是滑入预备行。
         let texts = (-2...3).map { offset -> String in
             let j = idx + offset
@@ -571,7 +924,8 @@ final class WallPrototypeViewController: UIViewController,
             duration = min(max(Double(lines[idx].text.count) * 0.4, 2.5), 8)
         }
         cell.setLyricWindow(texts: texts, lineStart: lines[idx].time,
-                            lineDuration: duration, slide: slide)
+                            lineDuration: duration, slide: slide,
+                            lineActive: lineActive)
     }
 
     private func ensureLyrics(for trackId: String) {
@@ -607,7 +961,32 @@ final class WallPrototypeViewController: UIViewController,
             guard !text.isEmpty else { continue }
             out.append((time: minutes * 60 + seconds, text: text))
         }
-        return out.sorted { $0.time < $1.time }
+        let sorted = out.sorted { $0.time < $1.time }
+        // 制作名单行只在首个正文行之前过滤（3.7 (13) #2，DS30
+        // 位置约束）：正文开始后出现的同形行是歌词本体，不动。
+        return Array(sorted.drop(while: { isCreditLine($0.text) }))
+    }
+
+    /// 制作名单行识别（3.7 (13) #2）：网易云 LRC 开头是制作名单
+    /// （作词/作曲/制作人/监制/混音/母带…），时间戳挤在亚秒级，
+    /// (12) 里被当歌词行逐行扫光。只认「名目 + 冒号」或英文
+    /// "X by" 形状；叙事行（如「妈妈：…」）不在名目表里。
+    private static let creditPrefixes = [
+        "作词", "作曲", "编曲", "制作人", "监制", "混音", "母带",
+        "录音", "和声", "配唱", "音乐总监", "出品", "发行",
+        "统筹", "企划", "演唱", "原唱", "OP", "SP"
+    ]
+
+    private static func isCreditLine(_ text: String) -> Bool {
+        for prefix in creditPrefixes where text.hasPrefix(prefix) {
+            // 冒号前可能带空格（「作词 : 林夕」），先削掉再判。
+            let rest = text.dropFirst(prefix.count)
+                .trimmingCharacters(in: .whitespaces)
+            if rest.hasPrefix("：") || rest.hasPrefix(":") { return true }
+        }
+        let lower = text.lowercased()
+        return lower.hasPrefix("lyrics by") || lower.hasPrefix("composed by")
+            || lower.hasPrefix("produced by") || lower.hasPrefix("arranged by")
     }
 
     /// 点播放：当前曲切换播放/暂停；否则按全量 trackIds 建队列
@@ -620,6 +999,14 @@ final class WallPrototypeViewController: UIViewController,
             PlaybackEngine.shared.togglePlayPause()
             return
         }
+        startQueueAt(queueIndex: queueIndex)
+    }
+
+    /// 队列真源切换（playTapped 与双击进播放页共用）：按全量 id
+    /// 骨架建队列、从目标曲起播，三态由订阅收尾。
+    private func startQueueAt(queueIndex: Int) {
+        guard queueIndex < entries.count else { return }
+        let tappedId = entries[queueIndex].id
         let ids = allTrackIds.isEmpty ? nativeTracks.map(\.id) : allTrackIds
         guard let start = ids.firstIndex(of: tappedId) else { return }
         let meta = Dictionary(nativeTracks.map { ($0.id, $0) },
@@ -685,6 +1072,7 @@ final class WallPrototypeViewController: UIViewController,
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
+        Breadcrumbs.log("wall tap item=\(indexPath.item) queueIndex=\(instance.queueIndex)")
         let before = setIdentity()
         // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
         // 被点卡在原地长大、同块卡让位，镜头不动。
@@ -744,8 +1132,6 @@ final class WallPosterCell: UICollectionViewCell {
     // （主页墙歌单卡）永不配置、恒隐藏。
     var onPlayTap: (() -> Void)?
     var onLikeTap: (() -> Void)?
-    /// 正在播放角标点按（DS26 改真按钮）：VC 收墙 + 请前端开播放页。
-    var onBadgeTap: (() -> Void)?
     private let playButton = UIButton(type: .system)
     private let likeButton = UIButton(type: .system)
     private let progressTrack = UIView()
@@ -769,6 +1155,7 @@ final class WallPosterCell: UICollectionViewCell {
     private var lyricNeighborFontSize: CGFloat = 13
     private var lastLyricClipWidth: CGFloat = -1
     private var sweepDisplayLink: CADisplayLink?
+    private var sweepProxy: SweepLinkProxy?
     private var sweepLineStart: Double = 0
     private var sweepLineDuration: Double = 1
     /// 歌词时钟（VC 注入 = 引擎 currentTime）：扫光据此推进，暂停即冻结。
@@ -836,15 +1223,15 @@ final class WallPosterCell: UICollectionViewCell {
         progressFill.backgroundColor = .white
         progressTrack.addSubview(progressFill)
 
-        // 角标改真按钮（DS26 Q4）：此前是纯指示图、点不动，被 Miller
-        // 直接点名。点按 = 回网页播放页（VC 处理）。
+        // 角标退回纯指示（3.7 (13) #8b，Miller 定）：进播放页改走
+        // 双击卡片，角标只表示「正在播放」、不可点。
         playingBadge.setImage(UIImage(systemName: "speaker.wave.2.fill"), for: .normal)
         playingBadge.tintColor = .white
         playingBadge.layer.shadowColor = UIColor.black.cgColor
         playingBadge.layer.shadowOpacity = 0.8
         playingBadge.layer.shadowRadius = 2
         playingBadge.layer.shadowOffset = .zero
-        playingBadge.addTarget(self, action: #selector(badgeButtonTapped), for: .touchUpInside)
+        playingBadge.isUserInteractionEnabled = false
         playingBadge.isHidden = true
         shadowView.addSubview(playingBadge)
 
@@ -897,12 +1284,8 @@ final class WallPosterCell: UICollectionViewCell {
         }
     }
 
-    /// 封面图（小喇叭伪 morph 的快照源，VC 只读）。
-    var coverImage: UIImage? { imageView.image }
-
     @objc private func playButtonTapped() { onPlayTap?() }
     @objc private func likeButtonTapped() { onLikeTap?() }
-    @objc private func badgeButtonTapped() { onBadgeTap?() }
 
     /// 播放态配置（VC 在 cellForItem 与播放状态变化时调用）：展开卡
     /// 显示控件行 + 进度，当前曲目显示角标，播放/暂停与红心按实况；
@@ -944,7 +1327,8 @@ final class WallPosterCell: UICollectionViewCell {
     /// slide 为真且 cell 现渲染的中心行与新窗口行 1 对得上时，整列
     /// 上滑一行再落位重渲染；其余情况直接落位。空窗口 = 整组收起。
     func setLyricWindow(texts: [String], lineStart: Double,
-                        lineDuration: Double, slide: Bool) {
+                        lineDuration: Double, slide: Bool,
+                        lineActive: Bool = true) {
         let hasContent = texts.contains { !$0.isEmpty }
         lyricScrimView.isHidden = !hasContent
         lyricClipView.isHidden = !hasContent
@@ -965,15 +1349,26 @@ final class WallPosterCell: UICollectionViewCell {
             } completion: { _ in
                 self.lyricLinesContainer.transform = .identity
                 self.renderLyricWindow()
-                self.beginSweep(lineStart: lineStart, lineDuration: lineDuration)
-                self.playLyricBreathing()
+                if lineActive {
+                    self.beginSweep(lineStart: lineStart, lineDuration: lineDuration)
+                    self.playLyricBreathing()
+                } else {
+                    // 前奏预告：扫光停在 0（只剩暗字），不呼吸。
+                    self.stopSweep()
+                    self.lyricSweepView.progress = 0
+                }
             }
         } else {
             lyricLinesContainer.layer.removeAllAnimations()
             lyricLinesContainer.transform = .identity
             renderLyricWindow()
-            beginSweep(lineStart: lineStart, lineDuration: lineDuration)
-            playLyricBreathing()
+            if lineActive {
+                beginSweep(lineStart: lineStart, lineDuration: lineDuration)
+                playLyricBreathing()
+            } else {
+                stopSweep()
+                lyricSweepView.progress = 0
+            }
         }
         setNeedsLayout()
     }
@@ -1007,19 +1402,24 @@ final class WallPosterCell: UICollectionViewCell {
     }
 
     /// 扫光起跑：CADisplayLink 每帧按引擎时钟算进度（0.3 秒心跳
-    /// 只够换行、不够驱动扫光，DS27 定版）。
+    /// 只够换行、不够驱动扫光，DS27 定版）。link 经弱代理转发
+    /// （3.7 (13) #1）：直连 cell 会被 link 强持无法释放。
     private func beginSweep(lineStart: Double, lineDuration: Double) {
         sweepLineStart = lineStart
         sweepLineDuration = max(lineDuration, 0.1)
         lyricSweepView.progress = 0
         sweepDisplayLink?.invalidate()
-        let link = CADisplayLink(target: self, selector: #selector(sweepTick))
+        let proxy = SweepLinkProxy()
+        proxy.owner = self
+        let link = CADisplayLink(target: proxy, selector: #selector(SweepLinkProxy.tick))
+        proxy.link = link
+        sweepProxy = proxy
         link.add(to: .main, forMode: .common)
         sweepDisplayLink = link
         sweepTick()
     }
 
-    @objc private func sweepTick() {
+    func sweepTick() {
         guard window != nil, let clock = lyricClock else { stopSweep(); return }
         let p = (clock() - sweepLineStart) / sweepLineDuration
         lyricSweepView.progress = min(max(p, 0), 1)
@@ -1029,6 +1429,7 @@ final class WallPosterCell: UICollectionViewCell {
     private func stopSweep() {
         sweepDisplayLink?.invalidate()
         sweepDisplayLink = nil
+        sweepProxy = nil
     }
 
     /// 呼吸缩放：只作用当前行视图，滑入落位后 1.04 弹簧落回。
@@ -1199,6 +1600,10 @@ final class WallPosterCell: UICollectionViewCell {
         }
     }
 
+    deinit {
+        sweepDisplayLink?.invalidate()
+    }
+
     override func prepareForReuse() {
         super.prepareForReuse()
         loadTask?.cancel()
@@ -1212,7 +1617,6 @@ final class WallPosterCell: UICollectionViewCell {
         subtitleLabel.text = nil
         onPlayTap = nil
         onLikeTap = nil
-        onBadgeTap = nil
         controlsVisible = false
         playButton.isHidden = true
         likeButton.isHidden = true
@@ -1233,6 +1637,21 @@ final class WallPosterCell: UICollectionViewCell {
         lyricScrimView.isHidden = true
         lyricClipView.isHidden = true
         progressValue = 0
+    }
+}
+
+/// CADisplayLink 弱代理（3.7 (13) #1）：link 强持 target，直连
+/// cell 会钉住 cell 无法释放；代理弱持 cell，cell 已释放时自停表。
+private final class SweepLinkProxy: NSObject {
+    weak var owner: WallPosterCell?
+    weak var link: CADisplayLink?
+
+    @objc func tick() {
+        guard let owner else {
+            link?.invalidate()
+            return
+        }
+        owner.sweepTick()
     }
 }
 
