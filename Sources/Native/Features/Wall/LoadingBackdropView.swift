@@ -101,7 +101,7 @@ final class LoadingBackdropView: UIView {
         frontView.layer.shadowOpacity = 0.55
         frontView.layer.shadowRadius = 24
         frontView.layer.shadowOffset = CGSize(width: 0, height: 10)
-        frontView.layer.doubleSided = false
+        frontView.layer.isDoubleSided = false
         flipView.addSubview(frontView)
 
         photoImageView.contentMode = .scaleAspectFill
@@ -112,7 +112,7 @@ final class LoadingBackdropView: UIView {
 
         backView.backgroundColor = UIColor(white: 0.93, alpha: 1)
         backView.layer.cornerRadius = 8
-        backView.layer.doubleSided = false
+        backView.layer.isDoubleSided = false
         backView.layer.transform = CATransform3DMakeRotation(.pi, 0, 1, 0)
         flipView.addSubview(backView)
 

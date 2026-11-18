@@ -88,7 +88,7 @@ final class FilmStripView: UIView {
         pending.removeAll()
         if let memoryObserver {
             NotificationCenter.default.removeObserver(memoryObserver)
-            memoryObserver = nil
+            self.memoryObserver = nil
         }
         UIView.animate(withDuration: 0.45, delay: 0, options: [.curveEaseOut]) {
             self.alpha = 0
