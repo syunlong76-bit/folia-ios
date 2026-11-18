@@ -240,17 +240,37 @@ final class WallPrototypeViewController: UIViewController,
     /// 交互：点封面 = 定位到正在播放的歌曲；点台身 = 进播放详情页
     /// （openStage 同路）；进度条可拖动 seek；按键只管切歌播停。
     private func buildMiniBar() {
+        // 3.7 (13.2) iOS 化改版：悬浮毛玻璃卡（系统材质 + 柔和阴影 +
+        // 大圆角），不再是贴边黑长条。bar 本体只做容器与阴影，
+        // 材质由第一层 UIVisualEffectView 承担并自裁圆角。
         let bar = UIView()
-        bar.backgroundColor = UIColor.black.withAlphaComponent(0.72)
-        bar.layer.cornerRadius = 16
-        bar.clipsToBounds = true
+        bar.backgroundColor = .clear
+        bar.layer.cornerRadius = 24
+        bar.layer.shadowColor = UIColor.black.cgColor
+        bar.layer.shadowOpacity = 0.28
+        bar.layer.shadowRadius = 16
+        bar.layer.shadowOffset = CGSize(width: 0, height: 6)
         bar.translatesAutoresizingMaskIntoConstraints = false
         bar.isHidden = true
         view.addSubview(bar)
         miniBar = bar
 
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemMaterialDark))
+        blur.layer.cornerRadius = 24
+        blur.clipsToBounds = true
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(blur)
+        NSLayoutConstraint.activate([
+            blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            blur.topAnchor.constraint(equalTo: bar.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.18)
+        progressTrack.layer.cornerRadius = 1.5
+        progressTrack.clipsToBounds = true
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(progressTrack)
         let fill = UIView()
@@ -263,20 +283,20 @@ final class WallPrototypeViewController: UIViewController,
         miniCover = UIImageView()
         miniCover.contentMode = .scaleAspectFill
         miniCover.clipsToBounds = true
-        miniCover.layer.cornerRadius = 8
+        miniCover.layer.cornerRadius = 12
         miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         miniCover.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniCover)
 
         miniTitle = UILabel()
-        miniTitle.font = .systemFont(ofSize: 13, weight: .semibold)
+        miniTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         miniTitle.textColor = .white
         miniTitle.lineBreakMode = .byTruncatingTail
         miniTitle.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniTitle)
 
         miniArtist = UILabel()
-        miniArtist.font = .systemFont(ofSize: 11)
+        miniArtist.font = .systemFont(ofSize: 12)
         miniArtist.textColor = UIColor.white.withAlphaComponent(0.6)
         miniArtist.lineBreakMode = .byTruncatingTail
         miniArtist.translatesAutoresizingMaskIntoConstraints = false
@@ -284,21 +304,24 @@ final class WallPrototypeViewController: UIViewController,
 
         miniPlayButton = UIButton(type: .system)
         miniPlayButton.tintColor = .white
-        miniPlayButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
+        miniPlayButton.setImage(UIImage(systemName: "play.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
         bar.addSubview(miniPlayButton)
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
-        miniPrevButton.setImage(UIImage(systemName: "backward.fill"), for: .normal)
+        miniPrevButton.setImage(UIImage(systemName: "backward.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
         miniPrevButton.translatesAutoresizingMaskIntoConstraints = false
         miniPrevButton.addTarget(self, action: #selector(miniPrevTapped), for: .touchUpInside)
         bar.addSubview(miniPrevButton)
 
         miniNextButton = UIButton(type: .system)
         miniNextButton.tintColor = .white
-        miniNextButton.setImage(UIImage(systemName: "forward.fill"), for: .normal)
+        miniNextButton.setImage(UIImage(systemName: "forward.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
         miniNextButton.translatesAutoresizingMaskIntoConstraints = false
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
@@ -316,25 +339,25 @@ final class WallPrototypeViewController: UIViewController,
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
-            bar.heightAnchor.constraint(equalToConstant: 60),
+            bar.heightAnchor.constraint(equalToConstant: 64),
 
-            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            progressTrack.topAnchor.constraint(equalTo: bar.topAnchor),
-            progressTrack.heightAnchor.constraint(equalToConstant: 2),
+            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
+            progressTrack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 7),
+            progressTrack.heightAnchor.constraint(equalToConstant: 3),
             fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
             fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
             fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
 
-            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 10),
+            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 12),
             miniCover.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
-            miniCover.widthAnchor.constraint(equalToConstant: 42),
-            miniCover.heightAnchor.constraint(equalToConstant: 42),
+            miniCover.widthAnchor.constraint(equalToConstant: 48),
+            miniCover.heightAnchor.constraint(equalToConstant: 48),
 
-            miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 10),
+            miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
             miniTitle.trailingAnchor.constraint(equalTo: miniPrevButton.leadingAnchor, constant: -6),
-            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 12),
+            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 14),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
@@ -441,7 +464,8 @@ final class WallPrototypeViewController: UIViewController,
         miniTitle.text = track.title
         miniArtist.text = track.artist
         miniPlayButton.setImage(
-            UIImage(systemName: engine.playbackState == .playing ? "pause.fill" : "play.fill"),
+            UIImage(systemName: engine.playbackState == .playing ? "pause.fill" : "play.fill",
+                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)),
             for: .normal)
         if let art = engine.currentArtwork {
             miniCover.image = art
@@ -474,9 +498,28 @@ final class WallPrototypeViewController: UIViewController,
     /// 移到当前曲最近的一份拷贝并展开（时长按距离缩放、展开步
     /// 交叉淡化，治 13 真机「衔接不丝滑」）；当前曲不在本歌单
     /// 时给人话提示。
+    /// 定位目标冻结（3.7 (13.2)，DS34）：点按瞬间定格目标 id/标题/
+    /// 下标，飞行、校验、纠正全程用冻结值——飞行途中若发生切歌，
+    /// 实时 currentTrack 已是下一首，拿它校验会把纠正带偏。
+    private var locateTargetId: String?
+    private var locateTargetTitle: String?
+    private var locateTargetIndex: Int?
+    private var locateReflied = false
+
     private func locateCurrentTrack() {
-        guard let currentId = PlaybackEngine.shared.currentTrack?.id else { return }
-        guard let queueIndex = entries.firstIndex(where: { $0.id == currentId }) else {
+        guard let current = PlaybackEngine.shared.currentTrack else { return }
+        let currentId = current.id
+        // 全部匹配都数：id 若重复，firstIndex 会命中第一个而非本曲，
+        // sameId>1 时面包屑立现（DS34 字段清单）。
+        let matches = entries.indices.filter { entries[$0].id == currentId }
+        locateTargetId = currentId
+        locateTargetTitle = current.title
+        locateTargetIndex = matches.first
+        locateReflied = false
+        Breadcrumbs.log("locate start target=\(currentId) title=\(current.title) "
+            + "queueIndex=\(matches.first ?? -1) sameId=\(matches.count) "
+            + "ui=\(miniTitle.text ?? "") entries=\(entries.count)/\(wallLayout.totalEntries)")
+        guard let queueIndex = matches.first else {
             statusLabel.text = "当前歌曲不在这个歌单里"
             statusLabel.isHidden = false
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
@@ -494,7 +537,6 @@ final class WallPrototypeViewController: UIViewController,
             geometry: wallLayout.geometry, totalEntries: wallLayout.totalEntries,
             queueIndex: queueIndex, pointX: centerX, pointY: centerY,
             metrics: wallLayout.metrics) else { return }
-        Breadcrumbs.log("locate queueIndex=\(queueIndex)")
         if wallLayout.expandedInstanceId != nil {
             wallLayout.expandedInstanceId = nil
             wallLayout.refreshInstances()
@@ -515,6 +557,90 @@ final class WallPrototypeViewController: UIViewController,
             UIView.transition(with: self.collectionView, duration: 0.25,
                               options: [.transitionCrossDissolve]) {
                 self.collectionView.reloadData()
+            }
+            // 落点校验（3.7 (13.2)）：淡化落定后核对展开的确实是
+            // 冻结目标，不是就纠正/重飞，全程面包屑（DS34）。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.verifyLocateLanding()
+            }
+        }
+    }
+
+    /// 落点校验与纠正（3.7 (13.2)）：展开实例的条目 id 与冻结目标
+    /// 不符时，先在当前实例集里找同 queueIndex 的实例改展开；找不
+    /// 到允许重飞一次；再失败记 FAIL 并给人话提示。
+    private func verifyLocateLanding() {
+        guard let targetId = locateTargetId,
+              let targetIndex = locateTargetIndex else { return }
+        let expanded = wallLayout.instances.first {
+            $0.instanceId == wallLayout.expandedInstanceId
+        }
+        let gotId = expanded.flatMap {
+            $0.queueIndex < entries.count ? entries[$0.queueIndex].id : nil
+        }
+        if gotId == targetId {
+            Breadcrumbs.log("locate ok target=\(targetId) queueIndex=\(targetIndex)")
+            return
+        }
+        Breadcrumbs.log("locate verify FAIL expected=\(targetId) "
+            + "got=\(gotId ?? "nil") expandedQueueIndex=\(expanded?.queueIndex ?? -1)")
+        if let correct = wallLayout.instances.first(where: { $0.queueIndex == targetIndex }) {
+            wallLayout.expandedInstanceId = correct.instanceId
+            wallLayout.refreshInstances()
+            collectionView.reloadData()
+            let fixedId = correct.queueIndex < entries.count
+                ? entries[correct.queueIndex].id : "nil"
+            Breadcrumbs.log("locate corrected instance=\(correct.instanceId) entry=\(fixedId)")
+            return
+        }
+        if !locateReflied {
+            locateReflied = true
+            Breadcrumbs.log("locate refly target=\(targetId) queueIndex=\(targetIndex)")
+            locateCurrentTrackFrozen()
+            return
+        }
+        statusLabel.text = "定位失败，点封面再试一次"
+        statusLabel.isHidden = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+            guard let self, self.statusLabel.text == "定位失败，点封面再试一次" else { return }
+            self.statusLabel.text = "墙原型：\(self.wallLayout.totalEntries) 首 · 拖动平移 · 点按展开"
+        }
+    }
+
+    /// 重飞（校验纠正专用）：目标已冻结，直接按冻结下标找最近拷贝，
+    /// 不重读 currentTrack（防切歌竞态把目标带偏，DS34）。
+    private func locateCurrentTrackFrozen() {
+        guard let targetIndex = locateTargetIndex else { return }
+        let scale = wallLayout.cameraScale
+        let viewWorldW = Double(collectionView.bounds.width) / scale
+        let viewWorldH = Double(collectionView.bounds.height) / scale
+        let centerX = Double(wallLayout.worldOrigin.x) + viewWorldW / 2
+        let centerY = Double(wallLayout.worldOrigin.y) + viewWorldH / 2
+        guard let target = WallGeometry.locateNearestInstance(
+            geometry: wallLayout.geometry, totalEntries: wallLayout.totalEntries,
+            queueIndex: targetIndex, pointX: centerX, pointY: centerY,
+            metrics: wallLayout.metrics) else { return }
+        if wallLayout.expandedInstanceId != nil {
+            wallLayout.expandedInstanceId = nil
+            wallLayout.refreshInstances()
+            collectionView.reloadData()
+        }
+        let targetOrigin = CGPoint(
+            x: CGFloat(target.rect.x + target.rect.width / 2 - viewWorldW / 2),
+            y: CGFloat(target.rect.y + target.rect.height / 2 - viewWorldH / 2))
+        let distance = hypot(targetOrigin.x - wallLayout.worldOrigin.x,
+                             targetOrigin.y - wallLayout.worldOrigin.y)
+        let duration = min(0.85, max(0.45, Double(distance) * 0.00035))
+        animateWorldOrigin(to: targetOrigin, duration: duration) { [weak self] in
+            guard let self else { return }
+            self.wallLayout.expandedInstanceId = target.instanceId
+            self.wallLayout.refreshInstances()
+            UIView.transition(with: self.collectionView, duration: 0.25,
+                              options: [.transitionCrossDissolve]) {
+                self.collectionView.reloadData()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                self?.verifyLocateLanding()
             }
         }
     }
@@ -956,9 +1082,21 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: collectionView)
         guard let indexPath = collectionView.indexPathForItem(at: point),
               indexPath.item < wallLayout.instances.count else { return }
-        let instance = wallLayout.instances[indexPath.item]
+        var instance = wallLayout.instances[indexPath.item]
+        // 命中加固（3.7 (13.2)）：第一击展开会重排布局，第二击的落点
+        // 按新布局命中可能落到邻卡；落点若在已展开卡的框内，以展开
+        // 卡为准——用户双击的只会是刚展开的那张。
+        if let expandedId = wallLayout.expandedInstanceId,
+           let expItem = wallLayout.instances.firstIndex(where: { $0.instanceId == expandedId }),
+           let attrs = collectionView.layoutAttributesForItem(
+               at: IndexPath(item: expItem, section: 0)),
+           attrs.frame.contains(point),
+           wallLayout.instances[expItem].queueIndex != instance.queueIndex {
+            Breadcrumbs.log("wall double tap hit corrected expanded=\(wallLayout.instances[expItem].queueIndex) raw=\(instance.queueIndex)")
+            instance = wallLayout.instances[expItem]
+        }
         guard instance.queueIndex < entries.count else { return }
-        Breadcrumbs.log("wall double tap queueIndex=\(instance.queueIndex)")
+        Breadcrumbs.log("wall double tap queueIndex=\(instance.queueIndex) id=\(entries[instance.queueIndex].id) title=\(entries[instance.queueIndex].title)")
         if PlaybackEngine.shared.currentTrack?.id != entries[instance.queueIndex].id {
             startQueueAt(queueIndex: instance.queueIndex)
         }

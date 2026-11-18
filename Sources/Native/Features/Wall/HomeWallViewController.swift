@@ -131,8 +131,9 @@ final class HomeWallViewController: UIViewController,
             stripPlayingHere = true
             filmStrip?.play()
         } else if entries.isEmpty, !stripPlayingHere {
-            // 本实例没播过（重进的新实例）：撤掉静止卷面直接见墙。
-            filmStrip?.finish("reentry")
+            // 本实例没播过（重进的新实例）：长卷不重播，改铺静态
+            // 剧照氛围底等数据（3.7 (13.2)，治重进数秒纯黑）。
+            filmStrip?.showStillBackdrop()
         }
         // 本实例正在播且仍在加载：什么都不做，等加载落定 finish。
     }

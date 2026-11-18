@@ -80,6 +80,19 @@ final class FilmStripView: UIView {
         }
     }
 
+    /// 重进主页墙的静态氛围底（3.7 (13.2)）：长卷每启动只播一次，
+    /// 重进的新实例数据在途时不再纯黑——铺五带静止剧照压暗垫底，
+    /// 不滑入、不 Ken Burns、不换带；加载落定仍走 finish 淡出。
+    func showStillBackdrop() {
+        guard !playing, !finished, bandClips.isEmpty else { return }
+        buildBands()
+        let dim = UIView(frame: bounds)
+        dim.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        dim.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        addSubview(dim)
+        Breadcrumbs.log("film still backdrop shown")
+    }
+
     /// 数据到达（或失败/未登录/内存警告）：整卷淡出并自拆。
     /// reason 必记面包屑（3.7 (13.1)，DS32）：黑屏归因要能区分
     /// 加载落定、重进跳过与内存警告三条 finish 路径。
