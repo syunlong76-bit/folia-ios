@@ -83,13 +83,19 @@ final class WallPrototypeViewController: UIViewController,
     private var loadFailed = false
     /// 回程恢复（3.7 (13) #6）：重呈时由主页墙注入，种子落地后应用。
     var pendingReturnTicket: WallReturnTicket?
-    /// 底部播放台（3.7 (13) #7）：网页风迷你播放器，点台身定位。
+    /// 底部播放台（3.7 (13) #7；13.1 改版）：网页风迷你播放器，
+    /// 点封面定位、点台身进播放页、进度可拖（Miller 13.1 定版）。
     private var miniBar: UIView?
     private var miniCover: UIImageView!
     private var miniTitle: UILabel!
     private var miniArtist: UILabel!
     private var miniPlayButton: UIButton!
+    private var miniPrevButton: UIButton!
+    private var miniNextButton: UIButton!
+    private var miniSeekHit: UIView!
     private var miniProgressFill: UIView!
+    /// 进度拖动中：心跳不覆盖填充，松手 seek 后恢复。
+    private var miniSeekDragging = false
     /// 定位动画（CADisplayLink 驱动，DS31）：起点/目标/时长/收尾。
     private var locateLink: CADisplayLink?
     private var locateStartOrigin: CGPoint = .zero
@@ -229,9 +235,10 @@ final class WallPrototypeViewController: UIViewController,
         loadEntries()
     }
 
-    /// 底部播放台（3.7 (13) #7）：照网页版迷你播放器的构成——
-    /// 封面缩略 + 标题/歌手 + 顶部细进度 + 播放暂停键。点台身 =
-    /// 定位到正在播放的歌曲（Miller 定版交互）；播放键只管播停。
+    /// 底部播放台（3.7 (13) #7；13.1 改版，Miller 2026-11-18 亲定）：
+    /// 封面缩略 + 标题/歌手 + 上一曲/播放暂停/下一曲 + 顶部可拖进度。
+    /// 交互：点封面 = 定位到正在播放的歌曲；点台身 = 进播放详情页
+    /// （openStage 同路）；进度条可拖动 seek；按键只管切歌播停。
     private func buildMiniBar() {
         let bar = UIView()
         bar.backgroundColor = UIColor.black.withAlphaComponent(0.72)
@@ -282,6 +289,29 @@ final class WallPrototypeViewController: UIViewController,
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
         bar.addSubview(miniPlayButton)
 
+        miniPrevButton = UIButton(type: .system)
+        miniPrevButton.tintColor = .white
+        miniPrevButton.setImage(UIImage(systemName: "backward.fill"), for: .normal)
+        miniPrevButton.translatesAutoresizingMaskIntoConstraints = false
+        miniPrevButton.addTarget(self, action: #selector(miniPrevTapped), for: .touchUpInside)
+        bar.addSubview(miniPrevButton)
+
+        miniNextButton = UIButton(type: .system)
+        miniNextButton.tintColor = .white
+        miniNextButton.setImage(UIImage(systemName: "forward.fill"), for: .normal)
+        miniNextButton.translatesAutoresizingMaskIntoConstraints = false
+        miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
+        bar.addSubview(miniNextButton)
+
+        // 进度拖动手柄区：盖住顶部进度条并上下放宽到 20pt 好按。
+        let seekHit = UIView()
+        seekHit.backgroundColor = .clear
+        seekHit.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(seekHit)
+        miniSeekHit = seekHit
+        let seekPan = UIPanGestureRecognizer(target: self, action: #selector(miniSeekPanned(_:)))
+        seekHit.addGestureRecognizer(seekPan)
+
         NSLayoutConstraint.activate([
             bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
@@ -303,17 +333,32 @@ final class WallPrototypeViewController: UIViewController,
             miniCover.heightAnchor.constraint(equalToConstant: 42),
 
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 10),
-            miniTitle.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -8),
+            miniTitle.trailingAnchor.constraint(equalTo: miniPrevButton.leadingAnchor, constant: -6),
             miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 12),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            miniPlayButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -6),
+            miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            miniNextButton.widthAnchor.constraint(equalToConstant: 34),
+            miniNextButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
             miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
             miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
             miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
+            miniPrevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
+            miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniSeekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            miniSeekHit.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            miniSeekHit.topAnchor.constraint(equalTo: bar.topAnchor),
+            miniSeekHit.heightAnchor.constraint(equalToConstant: 20),
         ])
         fill.transform = CGAffineTransform(scaleX: 0, y: 1)
 
@@ -325,10 +370,62 @@ final class WallPrototypeViewController: UIViewController,
         PlaybackEngine.shared.togglePlayPause()
     }
 
+    @objc private func miniPrevTapped() {
+        QueueManager.shared.playPrevious()
+    }
+
+    @objc private func miniNextTapped() {
+        QueueManager.shared.playNext(manual: true)
+    }
+
+    /// 台面点按分发（13.1）：按键与进度区各自处理；封面 = 定位；
+    /// 其余台身 = 进播放详情页。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
-        let point = gesture.location(in: miniBar)
-        if miniPlayButton.frame.contains(point) { return }
-        locateCurrentTrack()
+        guard let bar = miniBar else { return }
+        let point = gesture.location(in: bar)
+        if miniPlayButton.frame.contains(point)
+            || miniPrevButton.frame.contains(point)
+            || miniNextButton.frame.contains(point)
+            || miniSeekHit.frame.contains(point) { return }
+        if miniCover.frame.contains(point) {
+            locateCurrentTrack()
+            return
+        }
+        openStageFromWall()
+    }
+
+    /// 进度拖动（13.1）：拖动中只更新填充，松手才 seek（防拖动
+    /// 途中连环跳秒）；轻点进度区同样跳到该位置。终结状态先复位
+    /// 拖动标记再走任何守卫——拖动途中切歌使 duration 归零时，
+    /// 守卫先行会让标记永不复位、进度填充从此冻结（独立审查中-2）。
+    /// 封面/按键的上沿落在命中带里，那里起手不抢手势（低-3）。
+    @objc private func miniSeekPanned(_ gesture: UIPanGestureRecognizer) {
+        guard let hit = miniSeekHit, hit.bounds.width > 0 else { return }
+        let engine = PlaybackEngine.shared
+        let fraction = min(max(gesture.location(in: hit).x / hit.bounds.width, 0), 1)
+        switch gesture.state {
+        case .began:
+            let barPoint = gesture.location(in: miniBar)
+            if miniCover.frame.contains(barPoint)
+                || miniPlayButton.frame.contains(barPoint)
+                || miniPrevButton.frame.contains(barPoint)
+                || miniNextButton.frame.contains(barPoint) { return }
+            guard engine.duration > 0 else { return }
+            miniSeekDragging = true
+            miniProgressFill.transform = CGAffineTransform(scaleX: fraction, y: 1)
+        case .changed:
+            guard miniSeekDragging else { return }
+            miniProgressFill.transform = CGAffineTransform(scaleX: fraction, y: 1)
+        case .ended:
+            guard miniSeekDragging else { return }
+            miniSeekDragging = false
+            guard engine.duration > 0 else { return }
+            engine.seek(to: Double(fraction) * engine.duration)
+        case .cancelled, .failed:
+            miniSeekDragging = false
+        default:
+            break
+        }
     }
 
     /// 播放台内容同步：有当前曲才显示；封面优先引擎现图，缺了走
@@ -373,8 +470,10 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// 点播放台定位（3.7 (13) #7）：相机 0.45 秒平滑移到当前曲
-    /// 最近的一份拷贝并展开；当前曲不在本歌单时给人话提示。
+    /// 点播放台封面定位（3.7 (13) #7；13.1 改点封面）：相机平滑
+    /// 移到当前曲最近的一份拷贝并展开（时长按距离缩放、展开步
+    /// 交叉淡化，治 13 真机「衔接不丝滑」）；当前曲不在本歌单
+    /// 时给人话提示。
     private func locateCurrentTrack() {
         guard let currentId = PlaybackEngine.shared.currentTrack?.id else { return }
         guard let queueIndex = entries.firstIndex(where: { $0.id == currentId }) else {
@@ -404,11 +503,19 @@ final class WallPrototypeViewController: UIViewController,
         let targetOrigin = CGPoint(
             x: CGFloat(target.rect.x + target.rect.width / 2 - viewWorldW / 2),
             y: CGFloat(target.rect.y + target.rect.height / 2 - viewWorldH / 2))
-        animateWorldOrigin(to: targetOrigin, duration: 0.45) { [weak self] in
+        // 时长按距离缩放：远距离仍是 0.45 秒会显得猛冲急停（13.1）。
+        let distance = hypot(targetOrigin.x - wallLayout.worldOrigin.x,
+                             targetOrigin.y - wallLayout.worldOrigin.y)
+        let duration = min(0.85, max(0.45, Double(distance) * 0.00035))
+        animateWorldOrigin(to: targetOrigin, duration: duration) { [weak self] in
             guard let self else { return }
             self.wallLayout.expandedInstanceId = target.instanceId
             self.wallLayout.refreshInstances()
-            self.collectionView.reloadData()
+            // 展开是布局突变：交叉淡化盖住硬跳（13.1 衔接丝滑）。
+            UIView.transition(with: self.collectionView, duration: 0.25,
+                              options: [.transitionCrossDissolve]) {
+                self.collectionView.reloadData()
+            }
         }
     }
 
@@ -870,8 +977,9 @@ final class WallPrototypeViewController: UIViewController,
     private func tickProgress() {
         let engine = PlaybackEngine.shared
         guard let currentId = engine.currentTrack?.id, engine.duration > 0 else { return }
-        // 底部播放台进度（3.7 (13) #7）：同一心跳顺手推进。
-        if let bar = miniBar, !bar.isHidden {
+        // 底部播放台进度（3.7 (13) #7）：同一心跳顺手推进；
+        // 拖动中不覆盖（13.1 可拖进度）。
+        if let bar = miniBar, !bar.isHidden, !miniSeekDragging {
             let fraction = max(0, min(1, engine.currentTime / engine.duration))
             miniProgressFill.transform = CGAffineTransform(scaleX: CGFloat(fraction), y: 1)
         }
@@ -932,11 +1040,13 @@ final class WallPrototypeViewController: UIViewController,
         guard lyricCache[trackId] == nil,
               !lyricFetchInFlight.contains(trackId) else { return }
         lyricFetchInFlight.insert(trackId)
+        Breadcrumbs.log("lrc fetch start track=\(trackId)")
         Task { [weak self] in
             let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: trackId)
             let parsed = text.map { Self.parseLRC($0) } ?? []
             await MainActor.run {
                 guard let self else { return }
+                Breadcrumbs.log("lrc parsed track=\(trackId) lines=\(parsed.count)")
                 self.lyricFetchInFlight.remove(trackId)
                 self.lyricCache[trackId] = parsed
                 self.lastLyricIndex = nil

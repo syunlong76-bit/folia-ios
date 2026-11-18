@@ -114,6 +114,12 @@ final class HomeWallViewController: UIViewController,
         loadEntries()
     }
 
+    /// 本实例是否正在播长卷（3.7 (13.1) 黑屏修复，DS32 裁定 (a)）：
+    /// (13) 用启动级静态标记判 finish，viewDidAppear 二次触发时把
+    /// 还在播的长卷误关、留下数秒纯黑。finish 从此只由本实例的
+    /// 加载落定驱动，appear 只记账。
+    private var stripPlayingHere = false
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         Breadcrumbs.log("home appear")
@@ -122,10 +128,13 @@ final class HomeWallViewController: UIViewController,
         // 每次启动只播一次：重进主页墙直接见墙（3.7 (13)）。
         if entries.isEmpty, !Self.filmStripPlayedThisLaunch {
             Self.filmStripPlayedThisLaunch = true
+            stripPlayingHere = true
             filmStrip?.play()
-        } else if entries.isEmpty {
-            filmStrip?.finish()
+        } else if entries.isEmpty, !stripPlayingHere {
+            // 本实例没播过（重进的新实例）：撤掉静止卷面直接见墙。
+            filmStrip?.finish("reentry")
         }
+        // 本实例正在播且仍在加载：什么都不做，等加载落定 finish。
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -148,7 +157,7 @@ final class HomeWallViewController: UIViewController,
                 guard status.loggedIn, let userId = status.userId else {
                     await MainActor.run {
                         self.statusLabel.text = "主页墙：未登录（先在网页侧登录网易云）"
-                        self.filmStrip?.finish()
+                        self.filmStrip?.finish("not-logged-in")
                     }
                     return
                 }
@@ -170,7 +179,7 @@ final class HomeWallViewController: UIViewController,
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
-                    self.filmStrip?.finish()
+                    self.filmStrip?.finish("load-ok")
                 }
             } catch {
                 // 原始错误只进日志，标签只给人话（3.7 (13) #3：根因是
@@ -181,15 +190,15 @@ final class HomeWallViewController: UIViewController,
                         message: "home load failed attempt=\(self.loadAttempts): \(error)")
                     Breadcrumbs.log("home load failed attempt=\(self.loadAttempts)")
                     if self.loadAttempts < 2 {
+                        // 首次失败不是落定：长卷继续播着等重试（13.1）。
                         self.statusLabel.text = "主页墙加载失败，正在重试…"
-                        self.filmStrip?.finish()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                             self?.loadEntries()
                         }
                     } else {
                         self.loadFailed = true
                         self.statusLabel.text = "主页墙加载失败，点按这里重试"
-                        self.filmStrip?.finish()
+                        self.filmStrip?.finish("load-failed")
                     }
                 }
             }

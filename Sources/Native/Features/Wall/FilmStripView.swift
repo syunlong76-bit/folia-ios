@@ -39,7 +39,7 @@ final class FilmStripView: UIView {
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil, queue: .main) { [weak self] _ in
             // 内存兜底（DS27）：警告即整段跳过，不与墙争内存。
-            self?.finish()
+            self?.finish("memory-warning")
         }
     }
 
@@ -81,9 +81,12 @@ final class FilmStripView: UIView {
     }
 
     /// 数据到达（或失败/未登录/内存警告）：整卷淡出并自拆。
-    func finish() {
+    /// reason 必记面包屑（3.7 (13.1)，DS32）：黑屏归因要能区分
+    /// 加载落定、重进跳过与内存警告三条 finish 路径。
+    func finish(_ reason: String = "load-resolved") {
         guard !finished else { return }
         finished = true
+        Breadcrumbs.log("film finish reason=\(reason)")
         pending.forEach { $0.cancel() }
         pending.removeAll()
         if let memoryObserver {

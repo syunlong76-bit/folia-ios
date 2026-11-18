@@ -705,11 +705,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
 
     /// 原生墙请求打开播放页（DS26 Q4）：见 BridgeEvent.openStage 注释。
     /// 事件带原生播放快照（全队列元数据 + currentIndex + 平台
-    /// id），但 (13) β 定案：快照只作取证对账（前端比对网页当前
-    /// 曲与快照当前曲的平台 id、不一致打 warn），不开舞台取歌——
-    /// 前端走主态直达（回主态 + navigateToPlayer），舞台当前曲由
-    /// 主态决定。禁止前端按下标到网页 store 取歌：两边队列不是
-    /// 同一份（原生是 id 列表、网页是富队列），下标对齐会错开歌。
+    /// id）。(13) β 定案前端走主态直达（回主态 + navigateToPlayer）；
+    /// 13.1 起快照当前曲是落点权威：回主态后若网页当前曲平台 id
+    /// 与快照对不上，前端按平台 id 纠偏（在网页 playQueue 找富
+    /// 条目、找不到用快照元数据构造），不再只 warn。仍禁止按下标
+    /// 到网页 store 取歌：两边队列不是同一份，下标对齐会错开歌。
     func requestOpenStage() {
         let queue = QueueManager.shared.queue
         let index = QueueManager.shared.currentIndex
@@ -1016,6 +1016,9 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 队列摘要：当前 ±3 首的窗口 + 全队长度/窗口偏移（3.6 (3) 对账字段）。
     func pushQueueEvent() {
         let window = queueWindow()
+        // 闪退取证（3.7 (13.1)，DS32 清单）：推送是点播后 2 秒窗口内
+        // 最重的跨界动作，事件锚定的内存读数比 3 秒采样更能定案。
+        Breadcrumbs.log("queue push total=\(window.total) idx=\(QueueManager.shared.currentIndex)")
         dispatchToJS(.queue, payload: [
                 "currentIndex": QueueManager.shared.currentIndex,
                 "items": window.items.map { ["id": $0.id, "title": $0.title, "artist": $0.artist]},

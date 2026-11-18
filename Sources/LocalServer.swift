@@ -68,6 +68,7 @@ final class LocalServer {
             case .ready:
                 self.port = port
                 self.samePortRetries = 0
+                Breadcrumbs.log("server ready port=\(port)")
                 NSLog("[LocalServer] listening on 127.0.0.1:\(port)")
                 FoliaBridgeLogStore.shared.write(
                     level: "info", module: "server",
@@ -76,6 +77,7 @@ final class LocalServer {
                     DispatchQueue.main.async { cb(port) }
                 }
             case .failed(let error):
+                Breadcrumbs.log("server failed port=\(port)")
                 NSLog("[LocalServer] failed on \(port): \(error)")
                 FoliaBridgeLogStore.shared.write(
                     level: "error", module: "server",

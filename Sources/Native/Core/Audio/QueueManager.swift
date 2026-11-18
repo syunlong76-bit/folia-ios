@@ -204,6 +204,7 @@ final class QueueManager: ObservableObject {
             FoliaBridgeLogStore.shared.write(
                 level: "info", module: "queue",
                 message: "setQueue source=\(source) count=\(tracks.count) start=\(index)")
+            Breadcrumbs.log("setQueue n=\(tracks.count) at=\(index) src=\(source)")
             self.queue = tracks
             self.currentIndex = tracks.isEmpty ? 0 : (index % tracks.count)
             self.consecutiveFailures = 0
