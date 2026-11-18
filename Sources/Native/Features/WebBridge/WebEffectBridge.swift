@@ -1660,6 +1660,22 @@ extension WebEffectBridge: WKNavigationDelegate {
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         isPageLoaded = true
         lastSentRenderActive = nil
+        // 桥自检（3.7 (13.7)，R39 定案）：folia-bridge.js 未进页面时，
+        // 全部带回执的投递会被可选链静默吞掉——#1 点台进不了播放页
+        // 六个版本的真因。每次加载完查一次，缺失就大声记日志。
+        webView.evaluateJavaScript("typeof window.__FOLIA_BRIDGE__") { result, error in
+            if error != nil {
+                // 求值本身失败（页面恰在重载/终止竞速中）：不下结论，
+                // 避免一条假 MISSING 污染后续排障的日志判读。
+                Breadcrumbs.log("bridge self-check skipped (eval failed)")
+            } else if let kind = result as? String, kind == "object" {
+                Breadcrumbs.log("bridge self-check ok")
+            } else {
+                FoliaBridgeLogStore.shared.write(
+                    level: "warn", module: "crumb",
+                    message: "BRIDGE MISSING: window.__FOLIA_BRIDGE__ is \(String(describing: result))")
+            }
+        }
         // 透明白闪处置：完成后 150ms 渐入。
         UIView.animate(withDuration: 0.15) {
             webView.alpha = 1.0
