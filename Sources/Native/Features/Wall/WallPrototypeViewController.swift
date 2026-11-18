@@ -462,7 +462,7 @@ final class WallPrototypeViewController: UIViewController,
     /// (b)）；落地后同一路径直接弹开舞台 (a)。
     private func badgeTapped() {
         WebEffectBridge.shared.requestOpenStage()
-        var host = self
+        var host: UIViewController = self
         while let presenter = host.presentingViewController { host = presenter }
         if host !== self { host.dismiss(animated: true) }
     }
