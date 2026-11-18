@@ -29,6 +29,7 @@ final class SettingsViewController: UIViewController {
     private let portLabel = UILabel()
     private let lastResultLabel = UILabel()
     private let autoSwitch = UISwitch()
+    private let themeSwitch = UISwitch()
     private let checkButton = UIButton(type: .system)
     private let applyButton = UIButton(type: .system)
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -215,6 +216,44 @@ final class SettingsViewController: UIViewController {
         autoGroup.addArrangedSubview(hintWrap)
         cardStack.addArrangedSubview(autoGroup)
 
+        // 播放台特效分组卡（3.7 (13.5)）：总开关 + 说明。关掉后
+        // 两台一律素面、长按切换停用；选中的主题保留。
+        let themeGroup = makeGroupCard()
+        let themeRow = UIStackView()
+        themeRow.axis = .horizontal
+        themeRow.alignment = .center
+        themeRow.isLayoutMarginsRelativeArrangement = true
+        themeRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        let themeTitle = UILabel()
+        themeTitle.text = "播放台主题特效"
+        themeTitle.font = .systemFont(ofSize: 15)
+        themeTitle.textColor = FoliaUI.primary
+        themeSwitch.onTintColor = FoliaUI.accent
+        themeSwitch.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+        themeSwitch.isOn = MiniPlayerTheme.effectsEnabled
+        themeSwitch.addTarget(self, action: #selector(themeSwitchChanged), for: .valueChanged)
+        themeRow.addArrangedSubview(themeTitle)
+        themeRow.addArrangedSubview(UIView())
+        themeRow.addArrangedSubview(themeSwitch)
+        themeGroup.addArrangedSubview(themeRow)
+        themeGroup.addArrangedSubview(makeHairline())
+        let themeHint = UILabel()
+        themeHint.text = "开启后，长按播放台可循环切换花海、雪景、星空、海洋四款主题；关掉后播放台恢复素面，特效全部停用。"
+        themeHint.font = .systemFont(ofSize: 12)
+        themeHint.textColor = FoliaUI.secondary
+        themeHint.numberOfLines = 0
+        let themeHintWrap = UIView()
+        themeHintWrap.addSubview(themeHint)
+        themeHint.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            themeHint.topAnchor.constraint(equalTo: themeHintWrap.topAnchor, constant: 10),
+            themeHint.bottomAnchor.constraint(equalTo: themeHintWrap.bottomAnchor, constant: -12),
+            themeHint.leadingAnchor.constraint(equalTo: themeHintWrap.leadingAnchor, constant: 14),
+            themeHint.trailingAnchor.constraint(equalTo: themeHintWrap.trailingAnchor, constant: -14)
+        ])
+        themeGroup.addArrangedSubview(themeHintWrap)
+        cardStack.addArrangedSubview(themeGroup)
+
         // 检查更新：整宽胶囊按钮，spinner 叠在按钮右侧
         let checkWrap = UIView()
         checkWrap.translatesAutoresizingMaskIntoConstraints = false
@@ -341,6 +380,11 @@ final class SettingsViewController: UIViewController {
 
     @objc private func autoSwitchChanged() {
         UpdateManager.shared.autoUpdateEnabled = autoSwitch.isOn
+    }
+
+    @objc private func themeSwitchChanged() {
+        MiniPlayerTheme.effectsEnabled = themeSwitch.isOn
+        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
     }
 
     @objc private func checkTapped() {

@@ -14,6 +14,12 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
     private var gearButton: UIButton!
     private var gearHideWorkItem: DispatchWorkItem?
     private var fatalErrorView: UIView?
+    private var openStageNoticeView: UIView?
+    private var openStageNoticeLabel: UILabel?
+    private var openStageRetryButton: UIButton?
+    private var openStageRetryLeading: NSLayoutConstraint?
+    private var openStageRetryTrailing: NSLayoutConstraint?
+    private var openStageLabelTrailing: NSLayoutConstraint?
     private var cancellables = Set<AnyCancellable>()
 
     /// 齿轮静止时的不透明度（与深色页面融合）
@@ -89,6 +95,12 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
         view.addGestureRecognizer(panWake)
         scheduleGearHide()
 
+        // --- 开页提示条（3.7 (13.5)，DS38 Q7）：收墙后还没落地
+        // 时亮「正在打开」，闭环跑满仍失败亮「没打开 + 重试」。 ---
+        WebEffectBridge.shared.onOpenStageNotice = { [weak self] notice in
+            self?.updateOpenStageNotice(notice)
+        }
+
         // --- 桥致命错误（网页进程反复被杀、自动重载已停）：浮层 + 人工重试 ---
         WebEffectBridge.shared.$lastFatalError
             .receive(on: DispatchQueue.main)
@@ -100,6 +112,84 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
                 }
             }
             .store(in: &cancellables)
+    }
+
+    // MARK: - 开页提示条
+
+    private func updateOpenStageNotice(_ notice: WebEffectBridge.OpenStageNotice?) {
+        guard let notice else {
+            openStageNoticeView?.removeFromSuperview()
+            openStageNoticeView = nil
+            return
+        }
+        if openStageNoticeView == nil {
+            let pill = UIView()
+            pill.backgroundColor = UIColor.black.withAlphaComponent(0.78)
+            pill.layer.cornerRadius = 16
+            pill.layer.borderWidth = 0.5
+            pill.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+            pill.translatesAutoresizingMaskIntoConstraints = false
+
+            let label = UILabel()
+            label.textColor = .white
+            label.font = .systemFont(ofSize: 13, weight: .medium)
+            label.translatesAutoresizingMaskIntoConstraints = false
+
+            let retry = UIButton(type: .system)
+            retry.setTitle("重试", for: .normal)
+            retry.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+            retry.tintColor = .white
+            retry.translatesAutoresizingMaskIntoConstraints = false
+            retry.addTarget(self, action: #selector(retryOpenStage), for: .touchUpInside)
+
+            pill.addSubview(label)
+            pill.addSubview(retry)
+            view.addSubview(pill)
+            // opening 态没有重试按钮：按钮隐藏时改走 label 直达
+            // 右缘的约束，免得胶囊被隐藏按钮的宽度撑长（13.5
+            // 审查低-3）。
+            let retryLeading = retry.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10)
+            let retryTrailing = retry.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -12)
+            let labelTrailing = label.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -14)
+            labelTrailing.isActive = false
+            NSLayoutConstraint.activate([
+                pill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                pill.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
+                pill.heightAnchor.constraint(equalToConstant: 32),
+                label.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 14),
+                label.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+                retryLeading,
+                retryTrailing,
+                retry.centerYAnchor.constraint(equalTo: pill.centerYAnchor)
+            ])
+            openStageRetryLeading = retryLeading
+            openStageRetryTrailing = retryTrailing
+            openStageLabelTrailing = labelTrailing
+            openStageNoticeView = pill
+            openStageNoticeLabel = label
+            openStageRetryButton = retry
+        }
+        switch notice {
+        case .opening:
+            openStageNoticeLabel?.text = "正在打开播放页…"
+            openStageRetryButton?.isHidden = true
+            openStageRetryLeading?.isActive = false
+            openStageRetryTrailing?.isActive = false
+            openStageLabelTrailing?.isActive = true
+        case .failed:
+            openStageNoticeLabel?.text = "播放页没打开"
+            openStageRetryButton?.isHidden = false
+            openStageLabelTrailing?.isActive = false
+            openStageRetryLeading?.isActive = true
+            openStageRetryTrailing?.isActive = true
+        }
+        if let pill = openStageNoticeView {
+            view.bringSubviewToFront(pill)
+        }
+    }
+
+    @objc private func retryOpenStage() {
+        WebEffectBridge.shared.retryOpenStage()
     }
 
     // MARK: - 致命错误浮层

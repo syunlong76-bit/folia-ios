@@ -49,13 +49,21 @@ final class HomeWallViewController: UIViewController,
     private var miniSeekDragging = false
     private var playbackCancellables = Set<AnyCancellable>()
     private let progressDriver = StageProgressDriver()
-    /// 主题场景带（13.4 草地首期，DS37）：与曲目墙同构装配。
-    private var themeStrip: ThemeStripView?
+    /// 台内主题层（13.5 定版形态，与曲目墙同构装配）：画与
+    /// 动画收进台内，替代 13.4 被否的台上方主题带；长按台身
+    /// 循环切换、UserDefaults 持久化（见 MiniPlayerTheme）。
+    private var miniThemeLayer: MiniPlayerThemeLayer?
+    private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
+    private var miniKnobSkin: UIView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
         overrideUserInterfaceStyle = .dark
+        // 播放台特效总开关/主题变更（设置页）即时同步。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniPlayerThemeSettingsChanged),
+            name: .foliaMiniPlayerThemeChanged, object: nil)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         collectionView.backgroundColor = .black
@@ -131,32 +139,14 @@ final class HomeWallViewController: UIViewController,
             .store(in: &playbackCancellables)
 
         buildMiniBar()
-        buildThemeStrip()
         progressDriver.onFraction = { [weak self] fraction in
             guard let self else { return }
-            self.themeStrip?.setFraction(fraction)
             guard let bar = self.miniBar, !bar.isHidden,
                   !self.miniSeekDragging else { return }
             self.setMiniProgress(fraction)
         }
 
         loadEntries()
-    }
-
-    /// 主题带装配（与曲目墙同构）：与台同宽、贴台上方，高 104pt。
-    private func buildThemeStrip() {
-        guard let bar = miniBar else { return }
-        let strip = ThemeStripView()
-        strip.translatesAutoresizingMaskIntoConstraints = false
-        strip.isHidden = true
-        view.addSubview(strip)
-        NSLayoutConstraint.activate([
-            strip.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            strip.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            strip.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
-            strip.heightAnchor.constraint(equalToConstant: 104),
-        ])
-        themeStrip = strip
     }
 
     @objc private func closeTapped() {
@@ -183,7 +173,7 @@ final class HomeWallViewController: UIViewController,
         Breadcrumbs.log("home appear")
         Breadcrumbs.samplerStart()
         progressDriver.start()
-        themeStrip?.setPaused(false)
+        miniThemeLayer?.setHostVisible(true)
         refreshMiniBar()
         // 数据还没到才播长卷；先到（缓存快路径）则整段跳过。
         // 每次启动只播一次：重进主页墙直接见墙（3.7 (13)）。
@@ -203,7 +193,7 @@ final class HomeWallViewController: UIViewController,
         super.viewDidDisappear(animated)
         Breadcrumbs.samplerStop()
         progressDriver.stop()
-        themeStrip?.setPaused(true)
+        miniThemeLayer?.setHostVisible(false)
         Breadcrumbs.log("home disappear")
     }
 
@@ -417,6 +407,19 @@ final class HomeWallViewController: UIViewController,
             blur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
+        // 台内主题层（13.5）：垫在玻璃材质之上、高光/文字/
+        // 按钮之下，全幅圆角裁切；整层不拦手势。
+        let themeLayer = MiniPlayerThemeLayer()
+        themeLayer.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(themeLayer)
+        miniThemeLayer = themeLayer
+        NSLayoutConstraint.activate([
+            themeLayer.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            themeLayer.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            themeLayer.topAnchor.constraint(equalTo: bar.topAnchor),
+            themeLayer.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+
         let rimLight = UIView()
         rimLight.backgroundColor = UIColor.white.withAlphaComponent(0.45)
         rimLight.layer.cornerRadius = 0.5
@@ -577,11 +580,23 @@ final class HomeWallViewController: UIViewController,
         miniKnobLeading?.isActive = true
         fill.transform = CGAffineTransform(scaleX: 0, y: 1)
 
+        // 长按切主题（13.5）：tap 须等长按落空才触发（短点按
+        // 时触摸抬起即判长按失败，点按进播放页不加可感延迟）；
+        // seek 拖动不与长按互斥（长按静止触发时拖动尚未产生
+        // 位移，松手至多以长按点 seek 一次，与点按跳点同义）。
+        let longPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(miniBarLongPressed(_:)))
+        longPress.minimumPressDuration = 0.55
+        bar.addGestureRecognizer(longPress)
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniBarTapped(_:)))
+        tap.require(toFail: longPress)
         bar.addGestureRecognizer(tap)
+
+        applyMiniTheme()
     }
 
-    /// 进度填充与发光圆钮的唯一步进点（与曲目墙同构）。
+    /// 进度填充与发光圆钮的唯一步进点（与曲目墙同构）：主题
+    /// 层的积雪/鲨鳍/流星头位也在此转喂，同源同步。
     private func setMiniProgress(_ fraction: Double) {
         let clamped = CGFloat(min(max(fraction, 0), 1))
         miniProgressFill.transform = CGAffineTransform(scaleX: clamped, y: 1)
@@ -589,6 +604,68 @@ final class HomeWallViewController: UIViewController,
         if trackWidth > 0 {
             miniKnobLeading?.constant = clamped * trackWidth - 4.5
         }
+        miniThemeLayer?.setFraction(Double(clamped))
+    }
+
+    /// 主题应用（13.5）：主题层换装 + 圆点皮肤 + 填充色，只
+    /// 动视觉，不碰播放/进度/手势分发。
+    private func applyMiniTheme() {
+        miniThemeLayer?.apply(theme: miniTheme)
+        // 圆点皮肤：13pt 贴图居中压在既有 9pt knob 框上（knob
+        // 不裁剪、贴图溢出显示，中心仍与轨道头位对齐，原
+        // leading 公式 -4.5 不变）。
+        miniKnobSkin?.removeFromSuperview()
+        miniKnobSkin = nil
+        if let skin = MiniPlayerThemeLayer.knobSkinView(for: miniTheme) {
+            skin.translatesAutoresizingMaskIntoConstraints = false
+            miniProgressKnob.addSubview(skin)
+            NSLayoutConstraint.activate([
+                skin.centerXAnchor.constraint(equalTo: miniProgressKnob.centerXAnchor),
+                skin.centerYAnchor.constraint(equalTo: miniProgressKnob.centerYAnchor),
+                skin.widthAnchor.constraint(equalToConstant: 13),
+                skin.heightAnchor.constraint(equalToConstant: 13),
+            ])
+            miniKnobSkin = skin
+        }
+        let themed = miniTheme != .none
+        miniProgressKnob.backgroundColor = themed ? .clear : .white
+        miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
+        miniProgressFill.backgroundColor = Self.miniFillColor(for: miniTheme)
+    }
+
+    private static func miniFillColor(for theme: MiniPlayerTheme) -> UIColor {
+        switch theme {
+        case .meadow: return UIColor(red: 0.96, green: 0.72, blue: 0.25, alpha: 1)
+        case .star: return UIColor(red: 1, green: 0.91, blue: 0.62, alpha: 1)
+        default: return .white
+        }
+    }
+
+    /// 特效总开关/主题变更（设置页开关或另一台长按）后同步。
+    @objc private func miniPlayerThemeSettingsChanged() {
+        // 生效值没变就不重应用（长按方会自收自己的通知，防
+        // 背景图重复解码，13.5 审查低-5）。
+        let eff = MiniPlayerTheme.effective
+        guard eff != miniTheme else { return }
+        miniTheme = eff
+        applyMiniTheme()
+    }
+
+    /// 长按台身循环切主题（13.5）：按键区长按不切换（与点按
+    /// 分发一致，按键只管切歌播停）；切换即落盘，两台下次
+    /// 打开同主题。特效总开关关着时停用（设置页一键全关）。
+    @objc private func miniBarLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, let bar = miniBar,
+              MiniPlayerTheme.effectsEnabled else { return }
+        let point = gesture.location(in: bar)
+        if miniPlayButton.frame.contains(point)
+            || miniPrevButton.frame.contains(point)
+            || miniNextButton.frame.contains(point) { return }
+        miniTheme = miniTheme.next
+        MiniPlayerTheme.stored = miniTheme
+        applyMiniTheme()
+        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
     }
 
     @objc private func miniPlayTapped() {
@@ -675,12 +752,11 @@ final class HomeWallViewController: UIViewController,
         let engine = PlaybackEngine.shared
         guard let track = engine.currentTrack else {
             bar.isHidden = true
-            themeStrip?.isHidden = true
+            miniThemeLayer?.setBarVisible(false)
             return
         }
         bar.isHidden = false
-        themeStrip?.isHidden = false
-        themeStrip?.setTrack(id: track.id)
+        miniThemeLayer?.setBarVisible(true)
         miniTitle.text = track.title
         miniArtist.text = track.artist
         miniPlayButton.setImage(
@@ -727,9 +803,14 @@ final class HomeWallViewController: UIViewController,
             expandedInstanceId: nil,
             expandedQueueIndex: nil)
         Breadcrumbs.log("stage open from home wall")
-        WebEffectBridge.shared.requestOpenStage()
-        var host: UIViewController = self
-        while let presenter = host.presentingViewController { host = presenter }
-        if host !== self { host.dismiss(animated: true) }
+        // 13.5 闭环：收墙改由桥在 landed 或 1.2s 截止（先到者）
+        // 时回调；等待期锁交互防重复点（回调必到，不会锁死）。
+        view.isUserInteractionEnabled = false
+        WebEffectBridge.shared.requestOpenStage { [weak self] in
+            guard let self else { return }
+            var host: UIViewController = self
+            while let presenter = host.presentingViewController { host = presenter }
+            if host !== self { host.dismiss(animated: true) }
+        }
     }
 }

@@ -622,6 +622,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
 
     @objc private func appDidBecomeActive() {
         flushPendingReloadIfVisible()
+        // 开页闭环事件驱动补投（13.5）：回前台时意图未落地就补一发。
+        redispatchOpenStage(source: "foreground")
     }
 
     /// 推迟中的终止恢复补发（3.6 (6)，独立审查中-2）：终止时不可见只置
@@ -685,6 +687,13 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 叠加成真机「回主页」事故；恢复-再被杀的循环由重载侧退避限速，
     /// 恢复下发本身只是导航，无需再设一道闸。
     private func dispatchViewRestoreIfNeeded() {
+        // 开页意图优先（13.5，DS38 Q6）：意图未落地期间挂起
+        // restore，防它把页面从播放页拽回集合页；终局后下次
+        // 重载照常恢复（恢复目标仍存着）。
+        if let intent = openStageIntent, !intent.landed {
+            FoliaFileLog.write("bridge", "viewRestore suspended for openStage intent=\(openStageShortId(intent.intentId))")
+            return
+        }
         guard let view = savedCollectionView() else {
             hideSnapshotMask()
             return
@@ -703,26 +712,54 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         }
     }
 
-    /// 待处理的开页意图（3.7 (13.3)，DS35 定案语义）：点台身时登记，
-    /// 立即派发一次；前端 hook 挂载时经 foliaAction 拉取
-    /// （getPendingOpenStage），原生按当前队列现建载荷回派同一
-    /// intentId；前端处理完回 ackOpenStage 清除。投递与关墙解耦：
-    /// 网页进程被杀重载吞掉事件，意图不丢；载荷在回派时现建，
-    /// 不存在旧快照把用户刚切的歌纠回去的问题。
-    /// 13.4（DS36 对账）：13.3 真机实证首发会被 dispatchToJS 的
-    /// isPageLoaded 守卫静默丢弃（进程被杀重载期间），pull 又只
-    /// 发一次且可能早于 didFinish 再被丢，5 秒 TTL 也短于退避+
-    /// 重载+启动的现实耗时——三洞叠加落回网页主页。修法：TTL
-    /// 延至 openStageTTL；didFinish 后 +0.9s 补投有效意图（与
-    /// restore 同时机），补投成功则跳过本次 restore 下发（用户
-    /// 显式开页压过被动恢复，防恢复的长等待窗后发先至把人从
-    /// 播放页拽回集合页）；恢复目标不清，下次重载照常恢复。
-    private var pendingOpenStage: (intentId: String, createdAt: Date)?
+    /// 开页提示状态（3.7 (13.5)，DS38 Q7）：经 onOpenStageNotice
+    /// 交 MainViewController 显示顶部小条；nil 表示撤下。
+    enum OpenStageNotice {
+        case opening
+        case failed
+    }
 
-    /// 开页意图存活上限（13.4，DS36 对账取 60s）：覆盖进程自愈
-    /// 的单步退避（≤30s）+ 重载 + 前端启动；DS 荐 90s，取 60s
-    /// 是防陈旧补投（对账记录 ds-review-2026-11-18-r36-reconcile）。
+    /// 开页意图状态机（3.7 (13.5)，DS38 对账）：单一 active 意图。
+    /// 沿革：13.3 pending+pull+ack（意图不丢、载荷回派时现建，
+    /// 不存在旧快照把用户刚切的歌纠回去的问题）；13.4 TTL 延至
+    /// 60s + didFinish 补投（补投成功跳过本次 restore，防恢复的
+    /// 长等待窗后发先至把人从播放页拽回集合页）。13.4 真机仍败：
+    /// 通用 dispatchToJS 的 completionHandler=nil 让「投递→落地」
+    /// 整段无回执，投递失败与前端静默吞掉不可分。13.5 闭环：
+    /// ①投递走专属带回执通道（evaluateJavaScript 回调记结果/
+    /// 错误）；②前端处理回 ack、真落到播放页（view==='player'）
+    /// 回 landed，ack 不再清意图、landed 才清；③未 landed 时
+    /// 快速重试（1.5s / 5s，带 force 让前端放行同 intentId），
+    /// 其后转事件驱动补投（didFinish / 回前台 / 前端 pull，单一
+    /// 调度、0.9s 内合并）；④收墙与投递解耦但有截止：landed
+    /// 到达或登记后 1.2s（先到者）触发 onDismiss 收墙，超时未
+    /// landed 先收墙并提示「正在打开」，不把用户锁在墙上；
+    /// ⑤TTL 60s 终局失败亮可点重试的提示条。
+    private struct OpenStageIntent {
+        let intentId: String
+        let createdAt: Date
+        var attempts = 0
+        var acked = false
+        var landed = false
+        var lastDispatchAt: Date?
+        var dismissFired = false
+        var onDismiss: (() -> Void)?
+    }
+    private var openStageIntent: OpenStageIntent?
+
+    /// 开页提示回调（MainViewController 在 viewDidLoad 里挂）。
+    var onOpenStageNotice: ((OpenStageNotice?) -> Void)?
+
+    /// 开页意图存活上限（13.4 定 60s，13.5 沿用）：覆盖进程自愈
+    /// 的单步退避（≤30s）+ 重载 + 前端启动。
     private static let openStageTTL: TimeInterval = 60
+    /// 收墙等待上限（13.5，DS38 Q3）：landed 先到先收；超时先
+    /// 收墙 + 后台继续补投。
+    private static let openStageDismissDeadline: TimeInterval = 1.2
+
+    private func openStageShortId(_ intentId: String) -> String {
+        String(intentId.prefix(8))
+    }
 
     /// 原生墙请求打开播放页（DS26 Q4）：见 BridgeEvent.openStage 注释。
     /// 事件带原生播放快照（全队列元数据 + currentIndex + 平台
@@ -731,15 +768,105 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 与快照对不上，前端按平台 id 纠偏（在网页 playQueue 找富
     /// 条目、找不到用快照元数据构造），不再只 warn。仍禁止按下标
     /// 到网页 store 取歌：两边队列不是同一份，下标对齐会错开歌。
-    func requestOpenStage() {
+    /// onDismiss 由闭环在 landed 或 1.2s 截止（先到者）时调用一次。
+    func requestOpenStage(onDismiss: (() -> Void)? = nil) {
+        if var active = openStageIntent, !active.landed {
+            // 等待期重复请求幂等（DS38 Q3）：不新登记、不重投。
+            // 收墙截止已过的直接补收；未过的接管收墙回调（同一
+            // 面墙同一个收法）。
+            if active.dismissFired {
+                onDismiss?()
+            } else {
+                active.onDismiss = onDismiss ?? active.onDismiss
+                openStageIntent = active
+            }
+            FoliaFileLog.write("bridge", "openStage re-request folded into active intent=\(openStageShortId(active.intentId))")
+            return
+        }
         let intentId = UUID().uuidString
-        pendingOpenStage = (intentId: intentId, createdAt: Date())
-        dispatchOpenStage(intentId: intentId)
+        openStageIntent = OpenStageIntent(intentId: intentId, createdAt: Date(), onDismiss: onDismiss)
+        FoliaFileLog.write("bridge", "openStage intent created intent=\(openStageShortId(intentId))")
+        Breadcrumbs.log("openStage intent \(openStageShortId(intentId)) created")
+        deliverOpenStage(force: false)
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.openStageDismissDeadline) { [weak self] in
+            self?.openStageDismissDeadlineFired(intentId: intentId)
+        }
+        for (delay, label) in [(1.5, "retry1"), (5.0, "retry2")] {
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
+                self?.openStageRetryFired(intentId: intentId, label: label)
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.openStageTTL) { [weak self] in
+            self?.openStageTTLFired(intentId: intentId)
+        }
     }
 
-    /// 按当前队列现建快照并派发 openStage（intentId 随载荷走，
-    /// 前端据此跨通道去重与回执）。
-    private func dispatchOpenStage(intentId: String) {
+    /// 提示条上的手动重试（13.5）：撤提示、新意图重走闭环。
+    func retryOpenStage() {
+        onOpenStageNotice?(nil)
+        openStageIntent = nil
+        requestOpenStage()
+    }
+
+    private func openStageDismissDeadlineFired(intentId: String) {
+        guard var intent = openStageIntent, intent.intentId == intentId, !intent.landed else { return }
+        fireOpenStageDismiss(&intent)
+        openStageIntent = intent
+        onOpenStageNotice?(.opening)
+        FoliaFileLog.write("bridge", "openStage dismiss deadline fired (not landed yet) intent=\(openStageShortId(intentId)) attempts=\(intent.attempts) acked=\(intent.acked)")
+    }
+
+    private func openStageRetryFired(intentId: String, label: String) {
+        guard let intent = openStageIntent, intent.intentId == intentId, !intent.landed else { return }
+        // 单一调度（13.5 审查低-1）：与上一发间隔 <0.9s 的定时
+        // 重试合并掉，事件驱动补投会接住（DS38 Q6 并发只发一次）。
+        if let last = intent.lastDispatchAt, Date().timeIntervalSince(last) < 0.9 {
+            FoliaFileLog.write("bridge", "openStage \(label) merged (last dispatch <0.9s ago) intent=\(openStageShortId(intentId))")
+            return
+        }
+        FoliaFileLog.write("bridge", "openStage \(label) intent=\(openStageShortId(intentId)) attempts=\(intent.attempts) acked=\(intent.acked)")
+        deliverOpenStage(force: true)
+    }
+
+    private func openStageTTLFired(intentId: String) {
+        guard let intent = openStageIntent, intent.intentId == intentId, !intent.landed else { return }
+        openStageIntent = nil
+        onOpenStageNotice?(.failed)
+        FoliaFileLog.write("bridge", "openStage FAILED (TTL) intent=\(openStageShortId(intentId)) attempts=\(intent.attempts) acked=\(intent.acked)")
+        Breadcrumbs.log("openStage intent \(openStageShortId(intentId)) failed after \(intent.attempts) attempts acked=\(intent.acked)")
+    }
+
+    private func fireOpenStageDismiss(_ intent: inout OpenStageIntent) {
+        guard !intent.dismissFired else { return }
+        intent.dismissFired = true
+        intent.onDismiss?()
+        intent.onDismiss = nil
+    }
+
+    /// 事件驱动补投（13.5，DS38 Q4/Q6）：didFinish / 回前台 /
+    /// 前端 pull 汇到这里统一调度；与上一发间隔 <0.9s 的合并掉，
+    /// 防多源同刻双投。
+    private func redispatchOpenStage(source: String) {
+        guard let intent = openStageIntent, !intent.landed else { return }
+        if Date().timeIntervalSince(intent.createdAt) > Self.openStageTTL {
+            openStageTTLFired(intentId: intent.intentId)
+            return
+        }
+        if let last = intent.lastDispatchAt, Date().timeIntervalSince(last) < 0.9 { return }
+        FoliaFileLog.write("bridge", "openStage redispatch source=\(source) intent=\(openStageShortId(intent.intentId)) attempts=\(intent.attempts)")
+        deliverOpenStage(force: intent.attempts > 0)
+    }
+
+    /// 按当前队列现建快照并专属投递 openStage（13.5）：不走通用
+    /// dispatchToJS 的无回执通道——evaluateJavaScript 回调把
+    /// 结果/错误写进日志，「发了就信」到此为止。页面未就绪时
+    /// 不硬投（投了也落在死文档上），记一笔 skipped，靠
+    /// didFinish 补投与前端 pull 兜底。intentId 与 force 随载
+    /// 荷走，前端据此跨通道去重、重试放行与回执。
+    private func deliverOpenStage(force: Bool) {
+        guard var intent = openStageIntent, !intent.landed else { return }
+        let intentId = intent.intentId
+        let short = openStageShortId(intentId)
         let queue = QueueManager.shared.queue
         let index = QueueManager.shared.currentIndex
         let items: [[String: Any]] = queue.map { track in
@@ -757,52 +884,93 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             }
             return item
         }
-        // 取证（13.4）：记下派发当刻页面是否就绪——再丢事件时
-        // 一眼定案是被 isPageLoaded 守卫丢的还是前端没处理。
-        FoliaFileLog.write("bridge", "openStage dispatch intent=\(intentId) pageLoaded=\(isPageLoaded)")
-        dispatchToJS(.openStage, payload: [
+        intent.attempts += 1
+        intent.lastDispatchAt = Date()
+        openStageIntent = intent
+        let attempt = intent.attempts
+        guard isPageLoaded else {
+            FoliaFileLog.write("bridge", "openStage dispatch SKIPPED pageLoaded=false intent=\(short) attempt=\(attempt) force=\(force)")
+            return
+        }
+        let payload: [String: Any] = [
             "intentId": intentId,
+            "force": force,
             "snapshot": [
                 "queue": items,
                 "currentIndex": queue.isEmpty ? -1 : index % queue.count
             ] as [String: Any]
-        ])
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let jsonStr = String(data: data, encoding: .utf8) else {
+            FoliaFileLog.write("bridge", "openStage dispatch FAILED serialize intent=\(short) attempt=\(attempt)")
+            return
+        }
+        let js = "window.__FOLIA_BRIDGE__?.onNativeEvent('\(BridgeEvent.openStage.rawValue)', \(jsonStr));"
+        FoliaFileLog.write("bridge", "openStage dispatch intent=\(short) attempt=\(attempt) force=\(force)")
+        webView.evaluateJavaScript(js) { _, error in
+            if let error {
+                FoliaFileLog.write("bridge", "openStage evaluate ERROR intent=\(short) attempt=\(attempt): \(error.localizedDescription)")
+            } else {
+                FoliaFileLog.write("bridge", "openStage evaluate ok intent=\(short) attempt=\(attempt)")
+            }
+        }
     }
 
-    /// didFinish 后补投开页意图（13.4，DS36）：意图有效则按当前
-    /// 队列现建载荷回派同一 intentId 并返回 true（调用方据此
-    /// 跳过本次 restore）；过期则清意图并返回 false 让行。
+    /// didFinish 后补投开页意图（13.4 起，13.5 并入统一调度）：
+    /// 意图有效则补投并返回 true（调用方据此跳过本次 restore）；
+    /// 无意图/已落地/已终局则返回 false 让行。
     @discardableResult
     private func flushPendingOpenStageIfValid() -> Bool {
-        guard let pending = pendingOpenStage else { return false }
-        if Date().timeIntervalSince(pending.createdAt) > Self.openStageTTL {
-            pendingOpenStage = nil
-            FoliaFileLog.write("bridge", "openStage intent expired at flush intent=\(pending.intentId)")
+        guard let intent = openStageIntent, !intent.landed else { return false }
+        if Date().timeIntervalSince(intent.createdAt) > Self.openStageTTL {
+            openStageTTLFired(intentId: intent.intentId)
             return false
         }
-        FoliaFileLog.write("bridge", "openStage flushed on didFinish intent=\(pending.intentId)")
-        dispatchOpenStage(intentId: pending.intentId)
+        redispatchOpenStage(source: "didFinish")
         return true
     }
 
-    /// 前端拉取待处理开页意图：无意图或已过期则静默；有效则按
-    /// 当前队列现建载荷、带同一 intentId 回派。
+    /// 前端拉取待处理开页意图：意图有效且未落地则经统一调度
+    /// 回派（带同一 intentId、载荷现建）。
     fileprivate func handleGetPendingOpenStage() {
-        guard let pending = pendingOpenStage else { return }
-        if Date().timeIntervalSince(pending.createdAt) > Self.openStageTTL {
-            pendingOpenStage = nil
+        guard let intent = openStageIntent, !intent.landed else { return }
+        if Date().timeIntervalSince(intent.createdAt) > Self.openStageTTL {
+            openStageTTLFired(intentId: intent.intentId)
             return
         }
-        FoliaFileLog.write("bridge", "openStage pulled intent=\(pending.intentId)")
-        dispatchOpenStage(intentId: pending.intentId)
+        FoliaFileLog.write("bridge", "openStage pulled intent=\(openStageShortId(intent.intentId))")
+        redispatchOpenStage(source: "pull")
     }
 
-    /// 前端处理完开页后的回执：编号对上才清意图。
+    /// 前端处理完开页的回执（13.5 起只记账不清意图）：处理≠
+    /// 落地，意图活到 landed 或 TTL 终局。
     fileprivate func handleAckOpenStage(_ body: [String: Any]) {
         guard let intentId = body["intentId"] as? String,
-              pendingOpenStage?.intentId == intentId else { return }
-        pendingOpenStage = nil
-        FoliaFileLog.write("bridge", "openStage acked intent=\(intentId)")
+              var intent = openStageIntent, intent.intentId == intentId else { return }
+        intent.acked = true
+        openStageIntent = intent
+        FoliaFileLog.write("bridge", "openStage acked intent=\(openStageShortId(intentId)) attempts=\(intent.attempts)")
+    }
+
+    /// 前端真落到播放页的确认（13.5 新增，DS38 Q5：前端以
+    /// useAppViewStore 的 view==='player' 为准回发）：清意图、
+    /// 补收墙、撤提示。编号对不上（意图已终局）也至少撤提示——
+    /// 页面明明开着，失败条不能赖着。
+    fileprivate func handleLandedOpenStage(_ body: [String: Any]) {
+        guard let intentId = body["intentId"] as? String,
+              var intent = openStageIntent, intent.intentId == intentId else {
+            // 编号对不上：无 active 意图时撤掉可能残留的提示；
+            // 有 active 意图时不理会，防过期 landed 监视误撤新
+            // 意图的提示（13.5 审查低-2）。
+            if openStageIntent == nil { onOpenStageNotice?(nil) }
+            return
+        }
+        intent.landed = true
+        fireOpenStageDismiss(&intent)
+        openStageIntent = nil
+        onOpenStageNotice?(nil)
+        FoliaFileLog.write("bridge", "openStage LANDED intent=\(openStageShortId(intentId)) attempts=\(intent.attempts) acked=\(intent.acked)")
+        Breadcrumbs.log("openStage intent \(openStageShortId(intentId)) landed after \(intent.attempts) attempts")
     }
 
     /// 平台原始 id：剥 ncm_/qq_/kg_ 前缀（原生墙自建队列是纯数字
@@ -1316,6 +1484,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             handleGetPendingOpenStage()
         case "ackOpenStage":
             handleAckOpenStage(body)
+        case "openStageLanded":
+            handleLandedOpenStage(body)
         case "log":
             // fire-and-forget：只转发 warn/error，info 不过桥；不要求回执。
             let level = body["level"] as? String ?? "warn"
@@ -1516,7 +1686,7 @@ extension WebEffectBridge: WKNavigationDelegate {
                 if self.flushPendingOpenStageIfValid() { return }
                 self.dispatchViewRestoreIfNeeded()
             }
-        } else if pendingOpenStage != nil {
+        } else if openStageIntent != nil {
             // 非终止重载（首启/手动重载）同样补投有效意图（DS36：
             // 无害，条件仍是意图有效）。
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
