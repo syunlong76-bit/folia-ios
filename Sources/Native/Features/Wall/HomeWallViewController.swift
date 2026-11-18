@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 
 /// M1 阶段 4：Bravais 主页墙（用户歌单墙）原生表面。
@@ -29,6 +30,27 @@ final class HomeWallViewController: UIViewController,
     private var loadFailed = false
     /// 电影长卷每次启动只播一次（3.7 (13)）：重进主页墙不重播。
     private static var filmStripPlayedThisLaunch = false
+
+    // 底部播放台（3.7 (13.4) #4，Miller 点名）：与曲目墙同款
+    // E 液态玻璃台（构造同构、按仓库惯例有意重复）；差异是主页
+    // 没有定位语义——封面与台身都进播放页，回程存主页票。
+    private var miniBar: UIView?
+    private var miniCover: UIImageView!
+    private var miniTitle: UILabel!
+    private var miniArtist: UILabel!
+    private var miniPlayButton: UIButton!
+    private var miniPrevButton: UIButton!
+    private var miniNextButton: UIButton!
+    private var miniProgressTrack: UIView!
+    private var miniProgressFill: UIView!
+    private var miniProgressKnob: UIView!
+    private var miniKnobLeading: NSLayoutConstraint?
+    private var miniSeekHit: UIView!
+    private var miniSeekDragging = false
+    private var playbackCancellables = Set<AnyCancellable>()
+    private let progressDriver = StageProgressDriver()
+    /// 主题场景带（13.4 草地首期，DS37）：与曲目墙同构装配。
+    private var themeStrip: ThemeStripView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -98,7 +120,43 @@ final class HomeWallViewController: UIViewController,
             close.heightAnchor.constraint(equalToConstant: 26)
         ])
 
+        // 播放态同步：切歌/播停时刷新台面内容（与曲目墙同构）。
+        PlaybackEngine.shared.$currentTrack
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshMiniBar() }
+            .store(in: &playbackCancellables)
+        PlaybackEngine.shared.$isPlaying
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshMiniBar() }
+            .store(in: &playbackCancellables)
+
+        buildMiniBar()
+        buildThemeStrip()
+        progressDriver.onFraction = { [weak self] fraction in
+            guard let self else { return }
+            self.themeStrip?.setFraction(fraction)
+            guard let bar = self.miniBar, !bar.isHidden,
+                  !self.miniSeekDragging else { return }
+            self.setMiniProgress(fraction)
+        }
+
         loadEntries()
+    }
+
+    /// 主题带装配（与曲目墙同构）：与台同宽、贴台上方，高 104pt。
+    private func buildThemeStrip() {
+        guard let bar = miniBar else { return }
+        let strip = ThemeStripView()
+        strip.translatesAutoresizingMaskIntoConstraints = false
+        strip.isHidden = true
+        view.addSubview(strip)
+        NSLayoutConstraint.activate([
+            strip.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            strip.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
+            strip.heightAnchor.constraint(equalToConstant: 104),
+        ])
+        themeStrip = strip
     }
 
     @objc private func closeTapped() {
@@ -124,6 +182,9 @@ final class HomeWallViewController: UIViewController,
         super.viewDidAppear(animated)
         Breadcrumbs.log("home appear")
         Breadcrumbs.samplerStart()
+        progressDriver.start()
+        themeStrip?.setPaused(false)
+        refreshMiniBar()
         // 数据还没到才播长卷；先到（缓存快路径）则整段跳过。
         // 每次启动只播一次：重进主页墙直接见墙（3.7 (13)）。
         if entries.isEmpty, !Self.filmStripPlayedThisLaunch {
@@ -141,6 +202,8 @@ final class HomeWallViewController: UIViewController,
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
         Breadcrumbs.samplerStop()
+        progressDriver.stop()
+        themeStrip?.setPaused(true)
         Breadcrumbs.log("home disappear")
     }
 
@@ -323,5 +386,350 @@ final class HomeWallViewController: UIViewController,
             _ = await wall.awaitSeed(timeout: 0.25)
             self?.present(wall, animated: true)
         }
+    }
+
+    // MARK: - 底部播放台（13.4 #4：与曲目墙同款 E 液态玻璃）
+
+    private func buildMiniBar() {
+        let bar = UIView()
+        bar.backgroundColor = .clear
+        bar.layer.cornerRadius = 35
+        bar.layer.shadowColor = UIColor.black.cgColor
+        bar.layer.shadowOpacity = 0.25
+        bar.layer.shadowRadius = 20
+        bar.layer.shadowOffset = CGSize(width: 0, height: 8)
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        bar.isHidden = true
+        view.addSubview(bar)
+        miniBar = bar
+
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        blur.layer.cornerRadius = 35
+        blur.layer.borderWidth = 1
+        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        blur.clipsToBounds = true
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(blur)
+        NSLayoutConstraint.activate([
+            blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            blur.topAnchor.constraint(equalTo: bar.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+
+        let rimLight = UIView()
+        rimLight.backgroundColor = UIColor.white.withAlphaComponent(0.45)
+        rimLight.layer.cornerRadius = 0.5
+        rimLight.isUserInteractionEnabled = false
+        rimLight.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(rimLight)
+        let glassTint = UIView()
+        glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        glassTint.layer.cornerRadius = 35
+        glassTint.isUserInteractionEnabled = false
+        glassTint.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(glassTint)
+        NSLayoutConstraint.activate([
+            rimLight.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 30),
+            rimLight.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -30),
+            rimLight.topAnchor.constraint(equalTo: bar.topAnchor, constant: 1),
+            rimLight.heightAnchor.constraint(equalToConstant: 1),
+            glassTint.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            glassTint.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            glassTint.topAnchor.constraint(equalTo: bar.topAnchor),
+            glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+
+        let progressTrack = UIView()
+        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
+        progressTrack.layer.cornerRadius = 2
+        progressTrack.clipsToBounds = true
+        progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(progressTrack)
+        miniProgressTrack = progressTrack
+        let fill = UIView()
+        fill.backgroundColor = .white
+        fill.translatesAutoresizingMaskIntoConstraints = false
+        fill.layer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        progressTrack.addSubview(fill)
+        miniProgressFill = fill
+
+        let knob = UIView()
+        knob.backgroundColor = .white
+        knob.layer.cornerRadius = 4.5
+        knob.layer.shadowColor = UIColor.white.cgColor
+        knob.layer.shadowOpacity = 0.9
+        knob.layer.shadowRadius = 4
+        knob.layer.shadowOffset = .zero
+        knob.isUserInteractionEnabled = false
+        knob.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(knob)
+        miniProgressKnob = knob
+
+        miniCover = UIImageView()
+        miniCover.contentMode = .scaleAspectFill
+        miniCover.clipsToBounds = true
+        miniCover.layer.cornerRadius = 22
+        miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        miniCover.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniCover)
+
+        miniTitle = UILabel()
+        miniTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        miniTitle.textColor = .white
+        miniTitle.lineBreakMode = .byTruncatingTail
+        miniTitle.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniTitle)
+
+        miniArtist = UILabel()
+        miniArtist.font = .systemFont(ofSize: 12)
+        miniArtist.textColor = UIColor.white.withAlphaComponent(0.6)
+        miniArtist.lineBreakMode = .byTruncatingTail
+        miniArtist.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniArtist)
+
+        miniPlayButton = UIButton(type: .system)
+        miniPlayButton.tintColor = .white
+        miniPlayButton.setImage(UIImage(systemName: "play.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)), for: .normal)
+        miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
+        miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
+        bar.addSubview(miniPlayButton)
+
+        miniPrevButton = UIButton(type: .system)
+        miniPrevButton.tintColor = .white
+        miniPrevButton.setImage(UIImage(systemName: "backward.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+        miniPrevButton.translatesAutoresizingMaskIntoConstraints = false
+        miniPrevButton.addTarget(self, action: #selector(miniPrevTapped), for: .touchUpInside)
+        bar.addSubview(miniPrevButton)
+
+        miniNextButton = UIButton(type: .system)
+        miniNextButton.tintColor = .white
+        miniNextButton.setImage(UIImage(systemName: "forward.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+        miniNextButton.translatesAutoresizingMaskIntoConstraints = false
+        miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
+        bar.addSubview(miniNextButton)
+
+        let seekHit = UIView()
+        seekHit.backgroundColor = .clear
+        seekHit.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(seekHit)
+        miniSeekHit = seekHit
+        let seekPan = UIPanGestureRecognizer(target: self, action: #selector(miniSeekPanned(_:)))
+        seekHit.addGestureRecognizer(seekPan)
+
+        NSLayoutConstraint.activate([
+            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+            bar.heightAnchor.constraint(equalToConstant: 70),
+
+            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
+            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20),
+            progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7),
+            progressTrack.heightAnchor.constraint(equalToConstant: 4),
+            fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+            fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
+
+            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            knob.widthAnchor.constraint(equalToConstant: 9),
+            knob.heightAnchor.constraint(equalToConstant: 9),
+
+            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            miniCover.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            miniCover.widthAnchor.constraint(equalToConstant: 44),
+            miniCover.heightAnchor.constraint(equalToConstant: 44),
+
+            miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
+            miniTitle.trailingAnchor.constraint(equalTo: miniPrevButton.leadingAnchor, constant: -6),
+            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 13),
+
+            miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
+            miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
+            miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
+
+            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            miniNextButton.widthAnchor.constraint(equalToConstant: 34),
+            miniNextButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
+            miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
+            miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
+            miniPrevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
+            miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniSeekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            miniSeekHit.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            miniSeekHit.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            miniSeekHit.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        miniKnobLeading = knob.leadingAnchor.constraint(
+            equalTo: progressTrack.leadingAnchor, constant: -4.5)
+        miniKnobLeading?.isActive = true
+        fill.transform = CGAffineTransform(scaleX: 0, y: 1)
+
+        let tap = UITapGestureRecognizer(target: self, action: #selector(miniBarTapped(_:)))
+        bar.addGestureRecognizer(tap)
+    }
+
+    /// 进度填充与发光圆钮的唯一步进点（与曲目墙同构）。
+    private func setMiniProgress(_ fraction: Double) {
+        let clamped = CGFloat(min(max(fraction, 0), 1))
+        miniProgressFill.transform = CGAffineTransform(scaleX: clamped, y: 1)
+        let trackWidth = miniProgressTrack.bounds.width
+        if trackWidth > 0 {
+            miniKnobLeading?.constant = clamped * trackWidth - 4.5
+        }
+    }
+
+    @objc private func miniPlayTapped() {
+        PlaybackEngine.shared.togglePlayPause()
+    }
+
+    @objc private func miniPrevTapped() {
+        QueueManager.shared.playPrevious()
+    }
+
+    @objc private func miniNextTapped() {
+        QueueManager.shared.playNext(manual: true)
+    }
+
+    /// 台面点按分发（主页版）：按键各自处理；底部进度带 = 点按
+    /// 跳点；其余（封面 + 台身）= 进播放详情页——主页没有定位
+    /// 语义，Miller 要的就是在主页能进详情页（13.4 #4）。
+    @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
+        guard let bar = miniBar else { return }
+        let point = gesture.location(in: bar)
+        if miniPlayButton.frame.contains(point)
+            || miniPrevButton.frame.contains(point)
+            || miniNextButton.frame.contains(point) { return }
+        // 封面优先于底部进度带（与曲目墙分发序一致）：封面下缘
+        // 与 seekHit 带约 2pt 重叠，点封面应开页不跳点。
+        if miniCover.frame.contains(point) {
+            openStageFromHome()
+            return
+        }
+        if miniSeekHit.frame.contains(point) {
+            let track = miniProgressTrack.frame
+            let engine = PlaybackEngine.shared
+            guard track.width > 0, engine.duration > 0 else { return }
+            let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
+            setMiniProgress(Double(fraction))
+            engine.seek(to: Double(fraction) * engine.duration)
+            return
+        }
+        openStageFromHome()
+    }
+
+    /// 进度拖动（与曲目墙同构）：拖动中只更新填充，松手才 seek；
+    /// 终结状态先复位拖动标记再走守卫；轨道零宽整体不处理。
+    @objc private func miniSeekPanned(_ gesture: UIPanGestureRecognizer) {
+        guard miniSeekHit != nil, miniBar != nil else { return }
+        let engine = PlaybackEngine.shared
+        let barPoint = gesture.location(in: miniBar)
+        let track = miniProgressTrack.frame
+        guard track.width > 0 else {
+            if gesture.state == .ended || gesture.state == .cancelled
+                || gesture.state == .failed {
+                miniSeekDragging = false
+            }
+            return
+        }
+        let fraction = min(max((barPoint.x - track.minX) / track.width, 0), 1)
+        switch gesture.state {
+        case .began:
+            if miniCover.frame.contains(barPoint)
+                || miniPlayButton.frame.contains(barPoint)
+                || miniPrevButton.frame.contains(barPoint)
+                || miniNextButton.frame.contains(barPoint) { return }
+            guard engine.duration > 0 else { return }
+            miniSeekDragging = true
+            setMiniProgress(Double(fraction))
+        case .changed:
+            guard miniSeekDragging else { return }
+            setMiniProgress(Double(fraction))
+        case .ended:
+            guard miniSeekDragging else { return }
+            miniSeekDragging = false
+            guard engine.duration > 0 else { return }
+            engine.seek(to: Double(fraction) * engine.duration)
+        case .cancelled, .failed:
+            miniSeekDragging = false
+        default:
+            break
+        }
+    }
+
+    /// 播放台内容同步（与曲目墙同构）：有当前曲才显示。
+    private func refreshMiniBar() {
+        guard let bar = miniBar else { return }
+        let engine = PlaybackEngine.shared
+        guard let track = engine.currentTrack else {
+            bar.isHidden = true
+            themeStrip?.isHidden = true
+            return
+        }
+        bar.isHidden = false
+        themeStrip?.isHidden = false
+        themeStrip?.setTrack(id: track.id)
+        miniTitle.text = track.title
+        miniArtist.text = track.artist
+        miniPlayButton.setImage(
+            UIImage(systemName: engine.playbackState == .playing ? "pause.fill" : "play.fill",
+                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)),
+            for: .normal)
+        if let art = engine.currentArtwork {
+            miniCover.image = art
+        } else if let url = track.artworkURL {
+            let raw = url.absoluteString
+            let tier = NativeCoverLoader.tier(forPixelExtent: 126)
+            if let proxied = NativeCoverLoader.shared.proxiedURLString(raw, tier: tier) {
+                if let cached = NativeCoverLoader.shared.cachedImage(for: proxied) {
+                    miniCover.image = cached
+                } else {
+                    miniCover.image = nil
+                    let trackId = track.id
+                    Task { [weak self] in
+                        let image = await NativeCoverLoader.shared.image(for: proxied, tier: tier)
+                        await MainActor.run {
+                            guard let self,
+                                  PlaybackEngine.shared.currentTrack?.id == trackId
+                            else { return }
+                            self.miniCover.image = image
+                        }
+                    }
+                }
+            }
+        } else {
+            miniCover.image = nil
+        }
+    }
+
+    /// 从主页墙进播放页：存主页票（关页只回主页墙）+ 请前端
+    /// 开页 + 收起整摞原生墙（与曲目墙 openStageFromWall 同构）。
+    private func openStageFromHome() {
+        WallReturnTicketStore.pending = WallReturnTicket(
+            kind: .home,
+            playlistId: "",
+            title: nil,
+            coverUrl: nil,
+            worldOrigin: .zero,
+            contentOffset: .zero,
+            expandedInstanceId: nil,
+            expandedQueueIndex: nil)
+        Breadcrumbs.log("stage open from home wall")
+        WebEffectBridge.shared.requestOpenStage()
+        var host: UIViewController = self
+        while let presenter = host.presentingViewController { host = presenter }
+        if host !== self { host.dismiss(animated: true) }
     }
 }

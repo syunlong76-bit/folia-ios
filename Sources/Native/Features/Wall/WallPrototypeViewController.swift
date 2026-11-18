@@ -5,6 +5,10 @@ import UIKit
 /// stageClosed 到达后 MainViewController 按票重呈主页墙并直达
 /// 本歌单曲目墙，恢复相机与展开项。
 struct WallReturnTicket {
+    /// 来源（13.4，DS36：用 kind 枚举，不用 playlistId 哨兵空值）：
+    /// .playlist 关页后重呈主页墙并直达原曲目墙；.home 只重呈主页墙。
+    enum Kind { case playlist, home }
+    var kind: Kind = .playlist
     let playlistId: String
     let title: String?
     let coverUrl: String?
@@ -51,6 +55,12 @@ final class WallPrototypeViewController: UIViewController,
     private var allTrackIds: [String] = []
     private var playbackCancellables = Set<AnyCancellable>()
     private var progressTimer: Timer?
+    /// 进度逐帧插值（13.4）：台面与展开卡的进度线由它推，
+    /// 0.3s 心跳只剩歌词窗口（离散行进，本就不需要逐帧）。
+    private let progressDriver = StageProgressDriver()
+    /// 主题场景带（13.4 草地首期，DS37）：贴台上方 104pt 的
+    /// SpriteKit 横卷，与台同显隐、同 fraction 驱动。
+    private var themeStrip: ThemeStripView?
     /// 播放三态（DS26）：原生点播在途的曲目 id，起播确认或失败即清。
     private var pendingTrackId: String?
     /// 原生点播失败的曲目与短文案（展开卡失败条用）。
@@ -234,8 +244,34 @@ final class WallPrototypeViewController: UIViewController,
             .store(in: &playbackCancellables)
 
         buildMiniBar()
+        buildThemeStrip()
+        progressDriver.onFraction = { [weak self] fraction in
+            guard let self else { return }
+            if let bar = self.miniBar, !bar.isHidden, !self.miniSeekDragging {
+                self.setMiniProgress(fraction)
+            }
+            self.themeStrip?.setFraction(fraction)
+            self.updateExpandedCardProgress(fraction)
+        }
 
         loadEntries()
+    }
+
+    /// 主题带装配：与台同宽、贴台上方（上叠 4pt 让带底收口压住
+    /// 台顶缘），高 104pt（DS37 定版）。
+    private func buildThemeStrip() {
+        guard let bar = miniBar else { return }
+        let strip = ThemeStripView()
+        strip.translatesAutoresizingMaskIntoConstraints = false
+        strip.isHidden = true
+        view.addSubview(strip)
+        NSLayoutConstraint.activate([
+            strip.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            strip.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: 4),
+            strip.heightAnchor.constraint(equalToConstant: 104),
+        ])
+        themeStrip = strip
     }
 
     /// 底部播放台（3.7 (13) #7；13.1 改版，Miller 2026-11-18 亲定）：
@@ -549,9 +585,12 @@ final class WallPrototypeViewController: UIViewController,
         let engine = PlaybackEngine.shared
         guard let track = engine.currentTrack else {
             bar.isHidden = true
+            themeStrip?.isHidden = true
             return
         }
         bar.isHidden = false
+        themeStrip?.isHidden = false
+        themeStrip?.setTrack(id: track.id)
         miniTitle.text = track.title
         miniArtist.text = track.artist
         miniPlayButton.setImage(
@@ -821,12 +860,16 @@ final class WallPrototypeViewController: UIViewController,
         progressTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) {
             [weak self] _ in self?.tickProgress()
         }
+        progressDriver.start()
+        themeStrip?.setPaused(false)
     }
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         progressTimer?.invalidate()
         progressTimer = nil
+        progressDriver.stop()
+        themeStrip?.setPaused(true)
         locateLink?.invalidate()
         locateLink = nil
         locateCompletion = nil
@@ -1247,16 +1290,12 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// 0.3 秒心跳：只更新展开中的当前曲卡的迷你进度条。
+    /// 0.3 秒心跳：只剩展开卡的歌词窗口推进（离散行进）。
+    /// 进度线（台面 + 展开卡）已移交 progressDriver 逐帧插值
+    /// （13.4，治 Miller 判的「卡」）。
     private func tickProgress() {
         let engine = PlaybackEngine.shared
         guard let currentId = engine.currentTrack?.id, engine.duration > 0 else { return }
-        // 底部播放台进度（3.7 (13) #7）：同一心跳顺手推进；
-        // 拖动中不覆盖（13.1 可拖进度）。
-        if let bar = miniBar, !bar.isHidden, !miniSeekDragging {
-            let fraction = max(0, min(1, engine.currentTime / engine.duration))
-            setMiniProgress(fraction)
-        }
         for case let cell as WallPosterCell in collectionView.visibleCells {
             guard let indexPath = collectionView.indexPath(for: cell),
                   indexPath.item < wallLayout.instances.count else { continue }
@@ -1264,9 +1303,23 @@ final class WallPrototypeViewController: UIViewController,
             guard instance.queueIndex < entries.count,
                   entries[instance.queueIndex].id == currentId,
                   wallLayout.expandedInstanceId == instance.instanceId else { continue }
-            cell.updateProgress(engine.currentTime / engine.duration)
             updateLyricWindow(for: cell, trackId: currentId,
                               currentTime: engine.currentTime)
+        }
+    }
+
+    /// 展开卡进度线逐帧推进（progressDriver 回调）：只认展开中的
+    /// 当前曲卡，与 tickProgress 的歌词推进分工。
+    private func updateExpandedCardProgress(_ fraction: Double) {
+        guard let currentId = PlaybackEngine.shared.currentTrack?.id else { return }
+        for case let cell as WallPosterCell in collectionView.visibleCells {
+            guard let indexPath = collectionView.indexPath(for: cell),
+                  indexPath.item < wallLayout.instances.count else { continue }
+            let instance = wallLayout.instances[indexPath.item]
+            guard instance.queueIndex < entries.count,
+                  entries[instance.queueIndex].id == currentId,
+                  wallLayout.expandedInstanceId == instance.instanceId else { continue }
+            cell.updateProgress(fraction)
         }
     }
 

@@ -1,0 +1,73 @@
+import QuartzCore
+import UIKit
+
+/// 播放进度逐帧插值驱动（3.7 (13.4)，DS36 裁定抽共享）：迷你台
+/// 进度原先靠 0.3 秒心跳直接读引擎时间步进，真机被 Miller 判
+/// 「卡、不丝滑」；引擎 currentTime 本身是 200ms 周期缓存，逐帧
+/// 直读仍是台阶。本驱动用锚点插值：以引擎时间为锚、按显示刷新
+/// 逐帧外推（播放速率恒 1——PlaybackEngine.currentRate 只有
+/// 1/0 两态）；引擎时间与外推偏差超过 0.3 秒（seek、切歌、
+/// 漂移）即重锚。两个播放台（主页墙/曲目墙）共用一份，防数值
+/// 机制漂移；宿主不可见时必须 stop（DS36：防双台驱动叠加）。
+final class StageProgressDriver {
+    var onFraction: ((Double) -> Void)?
+
+    private var displayLink: CADisplayLink?
+    private var anchorTime: Double = 0
+    private var anchorWall: CFTimeInterval = 0
+    private var anchorTrackId: String?
+    private var lastFraction: Double = -1
+
+    func start() {
+        guard displayLink == nil else { return }
+        reanchor()
+        let link = CADisplayLink(target: LinkProxy(owner: self),
+                                 selector: #selector(LinkProxy.step))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    func stop() {
+        displayLink?.invalidate()
+        displayLink = nil
+        lastFraction = -1
+    }
+
+    deinit { stop() }
+
+    private func reanchor() {
+        let engine = PlaybackEngine.shared
+        anchorTime = engine.currentTime
+        anchorWall = CACurrentMediaTime()
+        anchorTrackId = engine.currentTrack?.id
+    }
+
+    fileprivate func stepFrame() {
+        let engine = PlaybackEngine.shared
+        guard let track = engine.currentTrack, engine.duration > 0 else { return }
+        if track.id != anchorTrackId { reanchor() }
+        let playing = engine.isPlaying
+        let predicted = playing
+            ? anchorTime + (CACurrentMediaTime() - anchorWall)
+            : anchorTime
+        // 引擎时间是 200ms 台阶真值：偏差在台阶幅度内属正常，
+        // 超过 0.3 秒才是 seek/切歌/漂移，重锚纠正。
+        if abs(engine.currentTime - predicted) > 0.3 { reanchor() }
+        let now = playing
+            ? anchorTime + (CACurrentMediaTime() - anchorWall)
+            : anchorTime
+        let fraction = min(max(now / engine.duration, 0), 1)
+        if abs(fraction - lastFraction) > 0.0004 {
+            lastFraction = fraction
+            onFraction?(fraction)
+        }
+    }
+
+    /// CADisplayLink 强持有 target：弱代理断环，driver 释放后
+    /// 代理收不到回调，link 在 driver deinit 时失效。
+    private final class LinkProxy: NSObject {
+        weak var owner: StageProgressDriver?
+        init(owner: StageProgressDriver) { self.owner = owner }
+        @objc func step() { owner?.stepFrame() }
+    }
+}

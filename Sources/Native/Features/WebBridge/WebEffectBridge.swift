@@ -706,10 +706,23 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 待处理的开页意图（3.7 (13.3)，DS35 定案语义）：点台身时登记，
     /// 立即派发一次；前端 hook 挂载时经 foliaAction 拉取
     /// （getPendingOpenStage），原生按当前队列现建载荷回派同一
-    /// intentId；前端处理完回 ackOpenStage 清除。意图保留 5 秒
-    /// 过期。投递与关墙解耦：网页进程被杀重载吞掉事件，意图不丢；
-    /// 载荷在回派时现建，不存在旧快照把用户刚切的歌纠回去的问题。
+    /// intentId；前端处理完回 ackOpenStage 清除。投递与关墙解耦：
+    /// 网页进程被杀重载吞掉事件，意图不丢；载荷在回派时现建，
+    /// 不存在旧快照把用户刚切的歌纠回去的问题。
+    /// 13.4（DS36 对账）：13.3 真机实证首发会被 dispatchToJS 的
+    /// isPageLoaded 守卫静默丢弃（进程被杀重载期间），pull 又只
+    /// 发一次且可能早于 didFinish 再被丢，5 秒 TTL 也短于退避+
+    /// 重载+启动的现实耗时——三洞叠加落回网页主页。修法：TTL
+    /// 延至 openStageTTL；didFinish 后 +0.9s 补投有效意图（与
+    /// restore 同时机），补投成功则跳过本次 restore 下发（用户
+    /// 显式开页压过被动恢复，防恢复的长等待窗后发先至把人从
+    /// 播放页拽回集合页）；恢复目标不清，下次重载照常恢复。
     private var pendingOpenStage: (intentId: String, createdAt: Date)?
+
+    /// 开页意图存活上限（13.4，DS36 对账取 60s）：覆盖进程自愈
+    /// 的单步退避（≤30s）+ 重载 + 前端启动；DS 荐 90s，取 60s
+    /// 是防陈旧补投（对账记录 ds-review-2026-11-18-r36-reconcile）。
+    private static let openStageTTL: TimeInterval = 60
 
     /// 原生墙请求打开播放页（DS26 Q4）：见 BridgeEvent.openStage 注释。
     /// 事件带原生播放快照（全队列元数据 + currentIndex + 平台
@@ -744,6 +757,9 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             }
             return item
         }
+        // 取证（13.4）：记下派发当刻页面是否就绪——再丢事件时
+        // 一眼定案是被 isPageLoaded 守卫丢的还是前端没处理。
+        FoliaFileLog.write("bridge", "openStage dispatch intent=\(intentId) pageLoaded=\(isPageLoaded)")
         dispatchToJS(.openStage, payload: [
             "intentId": intentId,
             "snapshot": [
@@ -753,11 +769,27 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         ])
     }
 
+    /// didFinish 后补投开页意图（13.4，DS36）：意图有效则按当前
+    /// 队列现建载荷回派同一 intentId 并返回 true（调用方据此
+    /// 跳过本次 restore）；过期则清意图并返回 false 让行。
+    @discardableResult
+    private func flushPendingOpenStageIfValid() -> Bool {
+        guard let pending = pendingOpenStage else { return false }
+        if Date().timeIntervalSince(pending.createdAt) > Self.openStageTTL {
+            pendingOpenStage = nil
+            FoliaFileLog.write("bridge", "openStage intent expired at flush intent=\(pending.intentId)")
+            return false
+        }
+        FoliaFileLog.write("bridge", "openStage flushed on didFinish intent=\(pending.intentId)")
+        dispatchOpenStage(intentId: pending.intentId)
+        return true
+    }
+
     /// 前端拉取待处理开页意图：无意图或已过期则静默；有效则按
     /// 当前队列现建载荷、带同一 intentId 回派。
     fileprivate func handleGetPendingOpenStage() {
         guard let pending = pendingOpenStage else { return }
-        if Date().timeIntervalSince(pending.createdAt) > 5 {
+        if Date().timeIntervalSince(pending.createdAt) > Self.openStageTTL {
             pendingOpenStage = nil
             return
         }
@@ -1478,7 +1510,17 @@ extension WebEffectBridge: WKNavigationDelegate {
             terminationReloadPending = false
             FoliaFileLog.write("bridge", "termination reload finished; scheduling view restore")
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
-                self?.dispatchViewRestoreIfNeeded()
+                guard let self else { return }
+                // 开页意图优先（13.4，DS36）：补投成功就跳过本次
+                // restore 下发，恢复目标仍存着、下次重载照常。
+                if self.flushPendingOpenStageIfValid() { return }
+                self.dispatchViewRestoreIfNeeded()
+            }
+        } else if pendingOpenStage != nil {
+            // 非终止重载（首启/手动重载）同样补投有效意图（DS36：
+            // 无害，条件仍是意图有效）。
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.9) { [weak self] in
+                self?.flushPendingOpenStageIfValid()
             }
         }
     }

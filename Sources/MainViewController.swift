@@ -206,7 +206,14 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
         guard presentedViewController == nil,
               let ticket = WallReturnTicketStore.pending else { return }
         WallReturnTicketStore.pending = nil
-        Breadcrumbs.log("stage closed, restoring wall playlist=\(ticket.playlistId)")
+        Breadcrumbs.log("stage closed, restoring kind=\(ticket.kind) playlist=\(ticket.playlistId)")
+        // 主页票（13.4）：从主页墙台面进的播放页，关页只回主页墙。
+        if ticket.kind == .home {
+            let home = HomeWallViewController()
+            home.modalPresentationStyle = .fullScreen
+            present(home, animated: true)
+            return
+        }
         let home = HomeWallViewController()
         home.modalPresentationStyle = .fullScreen
         present(home, animated: true) {
