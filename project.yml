@@ -45,7 +45,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "13"
+        CFBundleVersion: "13.1"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         UILaunchScreen: {}
