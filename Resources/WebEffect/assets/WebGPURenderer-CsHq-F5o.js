@@ -1,0 +1,1 @@
+import{WebGPURenderer as e}from"./lib-C4QPnsyE.js";export{e as WebGPURenderer};

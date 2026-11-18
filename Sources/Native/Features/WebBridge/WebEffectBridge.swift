@@ -704,8 +704,45 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     }
 
     /// 原生墙请求打开播放页（DS26 Q4）：见 BridgeEvent.openStage 注释。
+    /// 小喇叭直达播放页（3.7 (12)，DS27 D 定版）：事件带原生播放
+    /// 快照（全队列元数据 + currentIndex + 平台 id），前端按平台
+    /// id 校验/水合后再开舞台。禁止前端按下标到网页 store 取歌：
+    /// 两边队列不是同一份（原生是 id 列表、网页是富队列），下标
+    /// 对齐会错开歌（R27/R28 合并对账）。
     func requestOpenStage() {
-        dispatchToJS(.openStage, payload: [:])
+        let queue = QueueManager.shared.queue
+        let index = QueueManager.shared.currentIndex
+        let items: [[String: Any]] = queue.map { track in
+            var item: [String: Any] = [
+                "nativeId": track.id,
+                "platform": track.sourceType.rawValue,
+                "platformTrackId": Self.platformTrackId(of: track),
+                "title": track.title,
+                "artist": track.artist,
+                "album": track.album,
+                "duration": track.duration
+            ]
+            if let cover = track.artworkURL?.absoluteString {
+                item["cover"] = cover
+            }
+            return item
+        }
+        dispatchToJS(.openStage, payload: [
+            "snapshot": [
+                "queue": items,
+                "currentIndex": queue.isEmpty ? -1 : index % queue.count
+            ] as [String: Any]
+        ])
+    }
+
+    /// 平台原始 id：剥 ncm_/qq_/kg_ 前缀（原生墙自建队列是纯数字
+    /// id、无前缀，原样返回）。网页 SongResult.id 是平台纯数字，
+    /// 前端按它匹配。
+    private static func platformTrackId(of track: FoliaTrack) -> String {
+        for prefix in ["ncm_", "qq_", "kg_"] where track.id.hasPrefix(prefix) {
+            return String(track.id.dropFirst(prefix.count))
+        }
+        return track.id
     }
 
     private func captureViewSnapshotThrottled() {

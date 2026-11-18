@@ -460,6 +460,15 @@
                 // 预留：POC 通过前原生不发；收到也只忽略。
                 break;
             }
+            case 'openStage': {
+                // 直达播放页（3.7 (12)）：原生墙小喇叭点按，载荷带原生
+                // 播放快照（队列元数据 + currentIndex + 平台 id）。
+                // 先暂存再分发：应用层 hook 可能晚于本事件挂载，hook
+                // 挂载时会读暂存补做，不丢（与 restoreView 同纪律）。
+                window.__foliaOpenStage = payload;
+                window.dispatchEvent(new CustomEvent('folia:openStage', { detail: payload }));
+                break;
+            }
             case 'restoreView': {
                 // 视图恢复（3.6 (4)）：页面进程被杀重载后，原生把被杀前所在
                 // 的集合视图描述发回。先暂存再分发：页面 App 的恢复 hook 可能

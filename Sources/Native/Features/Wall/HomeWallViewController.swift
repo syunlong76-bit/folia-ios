@@ -20,6 +20,8 @@ final class HomeWallViewController: UIViewController,
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
+    /// 电影长卷入场（3.7 (12)）：数据在途时盖住空墙，数据到即退场。
+    private var filmStrip: FilmStripView?
     private var didCenterCamera = false
     private var isWrapping = false
 
@@ -45,6 +47,18 @@ final class HomeWallViewController: UIViewController,
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
+
+        // 电影长卷：盖在空墙上、垫在胶囊/关闭键下（后加的在上层）。
+        let strip = FilmStripView()
+        strip.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(strip)
+        NSLayoutConstraint.activate([
+            strip.topAnchor.constraint(equalTo: view.topAnchor),
+            strip.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            strip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            strip.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        filmStrip = strip
 
         statusLabel = UILabel()
         statusLabel.text = "主页墙加载中…"
@@ -83,6 +97,12 @@ final class HomeWallViewController: UIViewController,
         dismiss(animated: true)
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // 数据还没到才播长卷；先到（缓存快路径）则整段跳过。
+        if entries.isEmpty { filmStrip?.play() }
+    }
+
     // MARK: - 数据
 
     private func loadEntries() {
@@ -96,6 +116,7 @@ final class HomeWallViewController: UIViewController,
                 guard status.loggedIn, let userId = status.userId else {
                     await MainActor.run {
                         self.statusLabel.text = "主页墙：未登录（先在网页侧登录网易云）"
+                        self.filmStrip?.finish()
                     }
                     return
                 }
@@ -114,10 +135,12 @@ final class HomeWallViewController: UIViewController,
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
+                    self.filmStrip?.finish()
                 }
             } catch {
                 await MainActor.run {
                     self.statusLabel.text = "主页墙加载失败：\(error)"
+                    self.filmStrip?.finish()
                 }
             }
         }
