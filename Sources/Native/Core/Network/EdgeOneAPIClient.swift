@@ -206,28 +206,53 @@ final class EdgeOneAPIClient {
     /// 取流（/song/url/v1）。VIP 曲 fee=1 回 url:null/code:404 → 抛 streamURLMissing，
     /// 由 QueueManager 走失败跳歌 + 熔断，不写死过期 URL。
     /// 实测：id 1973665667《海屿你》（fee=8）回真实 URL code:200，expi=1200 秒。
+    /// 3.7 (30)：取流附登录会话 cookie，与数据链（NativeDataClient）
+    /// 同构走 `cookie` 查询参数。根因实测（2026-11-20）：网易云有一
+    /// 类非 VIP 歌只给登录会话发流地址——如 id 3348561713《你得先是
+    /// 你自己》（fee=8，登录态 App 内带「免」标可播）匿名请求两档
+    /// 音质均回 url:null/code:404/cannotListenReason:1；此前取流链
+    /// 全程匿名，这类歌被误判 streamURLMissing。cookie 复用
+    /// NativeDataClient.webCookie() 的既有缓存/现读机制；取不到
+    /// （未登录）时保持匿名请求，不报错、不阻断。附后仍回空才抛
+    /// streamURLMissing（真不可播）。cookie 本体是凭据绝不写日志，
+    /// 面包屑只记 yes/no。
     func fetchSongStreamURL(provider: AudioSourceType, songId: String) async throws -> URL {
         guard provider == .netease else {
             // TODO(M3)：QQ/酷狗取流路由与响应体未实测核对，先不提供，防误接。
             throw EdgeOneError.providerUnverified(provider: provider, method: "song/url/v1")
         }
         let rawId = songId.replacingOccurrences(of: "ncm_", with: "")
+        let cookie = await NativeDataClient.shared.webCookie()
+        let cookieFlag = cookie != nil ? "yes" : "no"
+        var queryItems = [
+            URLQueryItem(name: "id", value: rawId),
+            URLQueryItem(name: "level", value: "exhigh")
+        ]
+        if let cookie {
+            queryItems.append(URLQueryItem(name: "cookie", value: cookie))
+        }
         // 取流走并行竞速（DS26）：串行故障转移实测凑出 11–12 秒死等，
-        // 起播等待封顶约 3 秒。
-        let data = try await requestDataHedged(
-            provider: .netease,
-            path: "/song/url/v1",
-            queryItems: [
-                URLQueryItem(name: "id", value: rawId),
-                URLQueryItem(name: "level", value: "exhigh")
-            ],
-            perNodeTimeout: 3
-        )
-        let resp = try JSONDecoder().decode(NeteaseSongURLResponse.self, from: data)
+        // 起播等待封顶约 3 秒。竞速两节点共用同一份 queryItems，
+        // 同带同一 cookie。
+        let resp: NeteaseSongURLResponse
+        do {
+            let data = try await requestDataHedged(
+                provider: .netease,
+                path: "/song/url/v1",
+                queryItems: queryItems,
+                perNodeTimeout: 3
+            )
+            resp = try JSONDecoder().decode(NeteaseSongURLResponse.self, from: data)
+        } catch {
+            Breadcrumbs.log("stream.fetch songId=\(rawId) cookie=\(cookieFlag) result=failed")
+            throw error
+        }
         guard let urlStr = resp.data?.first?.url,
               let url = URL(string: urlStr.replacingOccurrences(of: "http://", with: "https://")) else {
+            Breadcrumbs.log("stream.fetch songId=\(rawId) cookie=\(cookieFlag) result=missing")
             throw EdgeOneError.streamURLMissing
         }
+        Breadcrumbs.log("stream.fetch songId=\(rawId) cookie=\(cookieFlag) result=ok")
         return url
     }
 

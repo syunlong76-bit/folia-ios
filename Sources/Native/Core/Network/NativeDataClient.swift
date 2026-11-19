@@ -62,7 +62,9 @@ final class NativeDataClient {
     }
 
     /// 当前会话串：缓存有就用，没有就现读一次 WebView。
-    private func webCookie() async -> String? {
+    /// 3.7 (30) 起取流链（EdgeOneAPIClient.fetchSongStreamURL）也复用
+    /// 本方法附 `cookie` 参数——同一缓存、同一失效路径，不另造一套。
+    func webCookie() async -> String? {
         sessionLock.lock()
         let cached = cachedWebCookie
         sessionLock.unlock()
