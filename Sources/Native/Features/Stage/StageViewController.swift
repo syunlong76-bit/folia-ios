@@ -395,6 +395,12 @@ final class StageViewController: UIViewController {
         }
         let next = factory()
         next.mount(context: context)
+        // gate 解码图像清单（3.7 (26)，R40 Q4 口径）：本期两
+        // 样式为 UIKit/文本类，渲染方自身解码图像 0 张、无
+        // Metal 纹理；舞台唯一解码图像是宿主背景封面（到货
+        // 时由 applyBackdrop 落 `stage gate backdrop decoded`
+        // 一行，含像素尺寸与估算 MB）。
+        Breadcrumbs.log("stage gate decoded style=\(styleId) rendererImages=0 textOnly=1 metalTextures=0")
         rendererContainer.addSubview(next.view)
         next.view.frame = rendererContainer.bounds
         next.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -730,6 +736,12 @@ final class StageViewController: UIViewController {
                 self?.jumpToWebStage(reason: "picker web style \(info.id)")
             }
         }
+        picker.onOpenWebStage = { [weak self] in
+            guard let self else { return }
+            self.dismiss(animated: true) { [weak self] in
+                self?.jumpToWebStage(reason: "picker open web stage entry")
+            }
+        }
         picker.modalPresentationStyle = .pageSheet
         if let sheet = picker.sheetPresentationController {
             sheet.detents = [.medium(), .large()]
@@ -789,10 +801,12 @@ final class StageViewController: UIViewController {
     }
 
     private func frameStatsText() -> String {
-        guard !frameDurations.isEmpty else { return "p95=n/a n=0" }
+        guard !frameDurations.isEmpty else { return "mean=n/a p95=n/a n=0" }
         let sorted = frameDurations.sorted()
         let index = min(sorted.count - 1, Int(ceil(Double(sorted.count) * 0.95)) - 1)
-        return String(format: "p95=%.1fms n=%d", sorted[index] * 1000, sorted.count)
+        let mean = frameDurations.reduce(0, +) / Double(frameDurations.count)
+        return String(format: "mean=%.1fms p95=%.1fms n=%d",
+                      mean * 1000, sorted[index] * 1000, sorted.count)
     }
 
     static func formatTime(_ seconds: TimeInterval) -> String {

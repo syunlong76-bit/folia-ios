@@ -1,76 +1,215 @@
 import UIKit
 
-/// 当前行扫光视图：暗字打底 + 亮字被遮罩按 progress 揭开。
-/// 视觉语言与展开卡 SweepLyricLineView 同源（暗字 alpha 0.38、
-/// 按文本实测宽度居中起算），放大到舞台尺寸。
-final class SweepStageLineView: UIView {
-    private let dimLabel = UILabel()
-    private let brightLabel = UILabel()
-    private let maskLayer = CALayer()
+// 云阶 partita（3.7 (26) 照搬对齐版，M2'）：按 folia-major 网页版
+// partita（VisualizerPartita + partitaLayout + PartitaChunk）的
+// 展示行为逐项实现，替换 (14) 借用展开卡视觉语言的自有风格
+// 5 行窗口版。对齐要点（依据文件见 (26) 回报附表）：
+//  - 画面只呈现当前一行：整行按语义单元切成不等长的 chunk，
+//    chunk 在单列里纵向堆叠（列水平居中），逐个 chunk 带交替
+//    左右的横向错位（stagger 20–100pt、种子 RNG 与网页同序）
+//    与交替侧的引导线（竖线 32pt + 横线 宽+36pt）。
+//  - chunk 三态：waiting 不可见（透明、scale 0.85、自引导线
+//    侧外移 40pt），到时弹簧落位；chunk 内词走共享 GlowWord
+//    三态机（小偏移 ±6pt/旋转 ±3°，词距 0.8rem）。
+//  - 字号 clamp(40, 5.5vmin, 72)，整行字素 >40 时 ×0.8；
+//    行容器进出场与 classic 同（scale/透明 0.3s）；整列呼吸
+//    浮动同 classic。下一行布局按网页预热窗（提前 0.18–1.2s）
+//    预构建缓存（上限 48 行）。
+// 时钟纪律不变：只消费宿主 frameTick 的锚点位置；seek 后所有
+// chunk/词状态按新位置逐帧重算（状态机无历史依赖）。
 
-    var progress: Double = 0 {
-        didSet { if progress != oldValue { updateMask() } }
+/// partita 布局（纯数据）：一行的 chunk 划分与几何。
+private struct PartitaLayout {
+    struct Chunk {
+        var units: [StageWordUnit]
+        var wordPoses: [StageWordPose]
+        var x: CGFloat
+        var y: CGFloat
+        var guideLeft: Bool
+        var width: CGFloat
+        var height: CGFloat
     }
+    var chunks: [Chunk]
+    var fontSize: CGFloat
+    var profile: StageLineProfile
+    var columnWidth: CGFloat
+    var columnHeight: CGFloat
+}
 
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        dimLabel.textAlignment = .center
-        dimLabel.alpha = 0.38
-        brightLabel.textAlignment = .center
-        maskLayer.backgroundColor = UIColor.black.cgColor
-        brightLabel.layer.mask = maskLayer
-        addSubview(dimLabel)
-        addSubview(brightLabel)
-        for label in [dimLabel, brightLabel] {
-            label.layer.shadowColor = UIColor.black.cgColor
-            label.layer.shadowOpacity = 0.6
-            label.layer.shadowRadius = 3
-            label.layer.shadowOffset = .zero
+/// 一个 chunk 的视图：词行 + 两条引导线 + chunk 级三态动画。
+private final class PartitaChunkView: UIView {
+
+    enum Status { case waiting, active, passed }
+
+    private let layout: PartitaLayout.Chunk
+    private let activeColor: UIColor
+    private let words: [GlowWordView]
+    private let vGuide = UIView()
+    private let hGuide = UIView()
+    private(set) var status: Status = .waiting
+
+    var start: TimeInterval { layout.units.first?.start ?? 0 }
+    var activeEnd: TimeInterval { layout.units.last?.end ?? 0 }
+
+    init(layout: PartitaLayout.Chunk, words: [GlowWordView], activeColor: UIColor) {
+        self.layout = layout
+        self.words = words
+        self.activeColor = activeColor
+        super.init(frame: CGRect(x: 0, y: 0, width: layout.width, height: layout.height))
+        isUserInteractionEnabled = false
+
+        // 词行：左内边距 8pt 起，词距 12.8pt（0.8rem），纵向居中。
+        var cursor: CGFloat = 8
+        for word in words {
+            word.frame.origin = CGPoint(
+                x: cursor, y: (layout.height - word.bounds.height) / 2)
+            addSubview(word)
+            cursor += word.bounds.width + 12.8
         }
+
+        // 引导线（网页 PartitaChunk）：竖线在 chunk 底侧外
+        // 8pt、高 32pt、自底向上生长；横线在底侧下 8pt、
+        // 宽 = chunk 宽 + 36pt、自引导线侧生长。waiting 时
+        // 缩放为 0 不可见；active 着 accent 色 + 光晕；
+        // passed 转白 0.22。
+        let guideColor = UIColor.white.withAlphaComponent(0.14)
+        vGuide.backgroundColor = guideColor
+        hGuide.backgroundColor = guideColor
+        let w = layout.width
+        let h = layout.height
+        if layout.guideLeft {
+            vGuide.bounds = CGRect(x: 0, y: 0, width: 1, height: 32)
+            vGuide.layer.anchorPoint = CGPoint(x: 0.5, y: 1)
+            vGuide.center = CGPoint(x: -8 + 0.5, y: h + 16)
+            hGuide.bounds = CGRect(x: 0, y: 0, width: w + 36, height: 1)
+            hGuide.layer.anchorPoint = CGPoint(x: 0, y: 0.5)
+            hGuide.center = CGPoint(x: -16, y: h + 8)
+        } else {
+            vGuide.bounds = CGRect(x: 0, y: 0, width: 1, height: 32)
+            vGuide.layer.anchorPoint = CGPoint(x: 0.5, y: 1)
+            vGuide.center = CGPoint(x: w + 8 - 0.5, y: h + 16)
+            hGuide.bounds = CGRect(x: 0, y: 0, width: w + 36, height: 1)
+            hGuide.layer.anchorPoint = CGPoint(x: 1, y: 0.5)
+            hGuide.center = CGPoint(x: w + 16, y: h + 8)
+        }
+        vGuide.transform = CGAffineTransform(scaleX: 1, y: 0.001)
+        hGuide.transform = CGAffineTransform(scaleX: 0.001, y: 1)
+        addSubview(vGuide)
+        addSubview(hGuide)
+        applyWaitingPose()
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    /// 最近一次 setText 的富文本，测宽以它为准（与展开卡同口径：
-    /// 用富文本属性测，含字体与 kern；用 label.font 会测成默认
-    /// 系统字宽，扫光永远扫不满整行）。
-    private var measureSource: NSAttributedString?
-
-    func setText(_ text: String, font: UIFont, kern: CGFloat, color: UIColor) {
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: font, .kern: kern, .foregroundColor: color
-        ]
-        let attributed = NSAttributedString(string: text, attributes: attributes)
-        dimLabel.attributedText = attributed
-        brightLabel.attributedText = attributed
-        measureSource = attributed
-        updateMask()
+    private func waitingTransform() -> CGAffineTransform {
+        let side: CGFloat = layout.guideLeft ? -40 : 40
+        return CGAffineTransform(translationX: layout.x + side, y: layout.y)
+            .scaledBy(x: 0.85, y: 0.85)
     }
 
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        dimLabel.frame = bounds
-        brightLabel.frame = bounds
-        updateMask()
+    private func settledTransform() -> CGAffineTransform {
+        CGAffineTransform(translationX: layout.x, y: layout.y)
     }
 
-    private func updateMask() {
-        guard bounds.width > 0, let attributed = measureSource else { return }
-        let textWidth = attributed.size().width
-        let span = min(textWidth, bounds.width)
-        let startX = (bounds.width - span) / 2
-        maskLayer.frame = CGRect(
-            x: startX, y: 0,
-            width: span * CGFloat(min(max(progress, 0), 1)), height: bounds.height)
+    private func applyWaitingPose() {
+        transform = waitingTransform()
+        alpha = 0
+    }
+
+    func update(position: TimeInterval, lookahead: TimeInterval) {
+        let target: Status
+        if position < start - lookahead {
+            target = .waiting
+        } else if position <= activeEnd {
+            target = .active
+        } else {
+            target = .passed
+        }
+        if target != status {
+            status = target
+            switch target {
+            case .waiting:
+                layer.removeAllAnimations()
+                UIView.animate(withDuration: 0.4) {
+                    self.transform = self.waitingTransform()
+                    self.alpha = 0
+                }
+                setGuides(grown: false, active: false)
+            case .active:
+                UIView.animate(withDuration: 0.55, delay: 0,
+                               usingSpringWithDamping: 0.707,
+                               initialSpringVelocity: 0,
+                               options: [.beginFromCurrentState]) {
+                    self.transform = self.settledTransform()
+                }
+                UIView.animate(withDuration: 0.1) { self.alpha = 1 }
+                setGuides(grown: true, active: true)
+            case .passed:
+                transform = settledTransform()
+                alpha = 1
+                setGuides(grown: true, active: false)
+            }
+        }
+        for word in words { word.update(position: position) }
+    }
+
+    /// 构建后按当前位定格（中途进台/seek 落位）。
+    func snap(position: TimeInterval, lookahead: TimeInterval) {
+        let target: Status
+        if position < start - lookahead {
+            target = .waiting
+        } else if position <= activeEnd {
+            target = .active
+        } else {
+            target = .passed
+        }
+        status = target
+        layer.removeAllAnimations()
+        switch target {
+        case .waiting:
+            applyWaitingPose()
+            setGuides(grown: false, active: false, animated: false)
+        case .active:
+            transform = settledTransform()
+            alpha = 1
+            setGuides(grown: true, active: true, animated: false)
+        case .passed:
+            transform = settledTransform()
+            alpha = 1
+            setGuides(grown: true, active: false, animated: false)
+        }
+        for word in words { word.snap(position: position) }
+    }
+
+    private func setGuides(grown: Bool, active: Bool, animated: Bool = true) {
+        let color: UIColor
+        if active {
+            color = activeColor
+        } else if status == .passed || grown {
+            color = UIColor.white.withAlphaComponent(0.22)
+        } else {
+            color = UIColor.white.withAlphaComponent(0.14)
+        }
+        let apply = {
+            self.vGuide.transform = CGAffineTransform(scaleX: 1, y: grown ? 1 : 0.001)
+            self.hGuide.transform = CGAffineTransform(scaleX: grown ? 1 : 0.001, y: 1)
+            self.vGuide.backgroundColor = color
+            self.hGuide.backgroundColor = color
+            for guide in [self.vGuide, self.hGuide] {
+                guide.layer.shadowColor = self.activeColor.cgColor
+                guide.layer.shadowRadius = 5
+                guide.layer.shadowOpacity = active ? 0.27 : 0
+                guide.layer.shadowOffset = .zero
+            }
+        }
+        if animated {
+            UIView.animate(withDuration: 0.4, delay: 0, options: [.curveEaseOut],
+                           animations: apply)
+        } else { apply() }
     }
 }
 
-// 滚动同步型样例（partita 原型，自有风格实现）：
-// 沿用展开卡已定版的歌词视觉语言并放大到全屏舞台——5 行窗口、
-// 当前行居中扫光（唱过的字亮起）、换行时整窗上滑一格 + 当前行
-// 呼吸缩放、邻行宋体细体按梯度变暗。同步靠宿主逐帧喂入的锚点
-// 位置：暂停即冻结（位置不变），seek 后按新位置重新定行。
 final class PartitaStageRenderer: LyricStageRenderer {
 
     let view: UIView
@@ -78,47 +217,25 @@ final class PartitaStageRenderer: LyricStageRenderer {
         supportsWordSync: false, requiresSpectrum: false, supportsLineSeek: false)
 
     private let rootView = LyricStageRootView()
-    private let clipView = UIView()
-    private let container = UIView()
-    private var plainLabels: [Int: UILabel] = [:]
-    private let sweepView = SweepStageLineView()
-    private let emptyLabel = UILabel()
-
+    private let floatView = UIView()
+    private var lineContainer: UIView?
+    private var chunkViews: [PartitaChunkView] = []
+    private var currentProfile: StageLineProfile?
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
     private var isActive = false
-    /// 当前行下标（nil = 前奏未开始）；displayedAnchor = 窗口行 2
-    /// 正在显示的行下标。
-    private var currentIndex: Int? = nil
-    private var displayedAnchor: Int? = nil
+    private var activeLineId: Int? = nil
     private var builtTrackId: String? = nil
-
-    private var currentFontSize: CGFloat = 26
-    private var neighborFontSize: CGFloat = 20
-    private var lineHeight: CGFloat = 43
+    private var builtLineCount = -1
+    private var layoutCache: [Int: PartitaLayout] = [:]
+    private var layoutCacheOrder: [Int] = []
+    private var layoutViewportSize: CGSize = .zero
 
     init() {
         view = rootView
         rootView.backgroundColor = .clear
+        rootView.addSubview(floatView)
         rootView.onLayout = { [weak self] in self?.performLayout() }
-        clipView.clipsToBounds = true
-        rootView.addSubview(clipView)
-        clipView.addSubview(container)
-        for row in 0..<6 where row != 2 {
-            let label = UILabel()
-            label.textAlignment = .center
-            label.layer.shadowColor = UIColor.black.cgColor
-            label.layer.shadowOpacity = 0.6
-            label.layer.shadowRadius = 3
-            label.layer.shadowOffset = .zero
-            container.addSubview(label)
-            plainLabels[row] = label
-        }
-        container.addSubview(sweepView)
-        emptyLabel.text = "暂无歌词"
-        emptyLabel.textAlignment = .center
-        emptyLabel.isHidden = true
-        rootView.addSubview(emptyLabel)
     }
 
     // MARK: LyricStageRenderer
@@ -129,111 +246,246 @@ final class PartitaStageRenderer: LyricStageRenderer {
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
         self.snapshot = snapshot
-        if snapshot.track?.id != builtTrackId {
+        // 布局依赖视口（行数按视口高、字号按短边）：视口变
+        // （旋转）时缓存与当前行一并失效重建。
+        let viewportChanged = snapshot.viewport.size != layoutViewportSize
+            && layoutViewportSize != .zero
+        if snapshot.track?.id != builtTrackId
+            || snapshot.lines.count != builtLineCount
+            || viewportChanged {
             builtTrackId = snapshot.track?.id
-            currentIndex = nil
-            displayedAnchor = nil
+            builtLineCount = snapshot.lines.count
+            layoutCache.removeAll()
+            layoutCacheOrder.removeAll()
+            clearLine()
         }
-        let hasLines = !snapshot.lines.isEmpty
-        emptyLabel.isHidden = hasLines
-        clipView.isHidden = !hasLines
-        emptyLabel.font = ClassicStageRenderer.songtiLight(size: 17)
-        emptyLabel.textColor = snapshot.palette.text.withAlphaComponent(0.5)
+        layoutViewportSize = snapshot.viewport.size
         rootView.setNeedsLayout()
     }
 
     func setLifecycle(_ state: LyricStageLifecycleState, active: Bool) {
         isActive = active && state != .destroyed
+        if isActive {
+            StageBreathingFloat.start(on: floatView)
+        } else {
+            StageBreathingFloat.stop(on: floatView)
+        }
     }
 
     func frameTick(position: TimeInterval) {
-        guard isActive, let snapshot, !snapshot.lines.isEmpty else { return }
-        let idx = LyricParser.currentIndex(in: snapshot.lines, at: position)
-        if idx != currentIndex {
-            let previous = currentIndex
-            currentIndex = idx
-            advanceWindow(to: idx, animated: previous != nil && idx != nil && idx! == previous! + 1)
+        guard isActive, let snapshot else { return }
+        let idx = ClassicStageRenderer.activeIndex(in: snapshot.lines, at: position)
+        if idx != activeLineId {
+            transitionLine(to: idx, position: position)
         }
-        // 扫光：当前行内的唱段比例（前奏期为 0）。
-        if let idx, snapshot.lines.indices.contains(idx) {
-            let line = snapshot.lines[idx]
-            let span = max(line.end - line.start, 0.1)
-            sweepView.progress = min(max((position - line.start) / span, 0), 1)
-        } else {
-            sweepView.progress = 0
+        if let profile = currentProfile {
+            for chunk in chunkViews {
+                chunk.update(position: position, lookahead: profile.wordLookahead)
+            }
         }
+        preheatIfNeeded(position: position)
     }
 
     func unmount() {
         isActive = false
+        StageBreathingFloat.stop(on: floatView)
         context = nil
     }
 
-    // MARK: 窗口推进
+    // MARK: 行切换
 
-    /// 窗口推进代次：滑窗动画的 completion 回写前校验仍是最新
-    /// 一次推进，防 seek/快切后旧 completion 把窗口覆盖回旧行。
-    private var windowGeneration = 0
+    private func clearLine() {
+        lineContainer?.removeFromSuperview()
+        lineContainer = nil
+        chunkViews = []
+        activeLineId = nil
+        currentProfile = nil
+    }
 
-    private func advanceWindow(to idx: Int?, animated: Bool) {
-        guard snapshot != nil else { return }
-        windowGeneration += 1
-        let generation = windowGeneration
-        let anchor = idx ?? 0   // 前奏期把首行放在行 2 预告
-        if animated && displayedAnchor != nil && !container.isHidden {
-            UIView.animate(withDuration: 0.18, delay: 0, options: [.curveEaseOut]) {
-                self.container.transform = CGAffineTransform(translationX: 0, y: -self.lineHeight)
-            } completion: { _ in
-                guard generation == self.windowGeneration else { return }
-                self.container.transform = .identity
-                self.displayedAnchor = anchor
-                self.renderWindow()
-                self.playBreathing()
+    private func transitionLine(to idx: Int?, position: TimeInterval) {
+        if let old = lineContainer {
+            lineContainer = nil
+            chunkViews = []
+            UIView.animate(withDuration: 0.3, delay: 0,
+                           options: [.curveEaseInOut]) {
+                old.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
+                old.alpha = 0
+            } completion: { _ in old.removeFromSuperview() }
+        }
+        activeLineId = idx
+        guard let idx, let snapshot,
+              snapshot.lines.indices.contains(idx) else {
+            currentProfile = nil
+            return
+        }
+        let line = snapshot.lines[idx]
+        let layout = layoutFor(line: line)
+        currentProfile = layout.profile
+        let container = UIView()
+        container.isUserInteractionEnabled = false
+        container.frame = CGRect(
+            x: (rootView.bounds.width - layout.columnWidth) / 2,
+            y: (rootView.bounds.height - layout.columnHeight) / 2,
+            width: layout.columnWidth, height: layout.columnHeight)
+        var chunks: [PartitaChunkView] = []
+        var y: CGFloat = 0
+        for chunkLayout in layout.chunks {
+            let words = chunkLayout.units.enumerated().map { (i, unit) in
+                GlowWordView(
+                    unit: unit, pose: chunkLayout.wordPoses[i],
+                    font: StageFonts.bold(size: layout.fontSize),
+                    baseColor: snapshot.palette.primary,
+                    activeColor: snapshot.palette.accent,
+                    profile: layout.profile)
             }
-        } else {
-            container.layer.removeAllAnimations()
+            let chunkView = PartitaChunkView(
+                layout: chunkLayout, words: words,
+                activeColor: snapshot.palette.accent)
+            chunkView.frame.origin = CGPoint(
+                x: (layout.columnWidth - chunkLayout.width) / 2, y: y)
+            y += chunkLayout.height + 9.6
+            container.addSubview(chunkView)
+            chunks.append(chunkView)
+        }
+        lineContainer = container
+        chunkViews = chunks
+        floatView.addSubview(container)
+        for chunk in chunks {
+            chunk.snap(position: position, lookahead: layout.profile.wordLookahead)
+        }
+        container.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+        container.alpha = 0
+        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut]) {
             container.transform = .identity
-            displayedAnchor = anchor
-            renderWindow()
-            if idx != nil { playBreathing() }
+            container.alpha = 1
         }
     }
 
-    private func renderWindow() {
-        guard let snapshot, let anchor = displayedAnchor else { return }
-        let alphas: [CGFloat] = [0.28, 0.45, 1, 0.45, 0.28, 0.28]
-        for row in 0..<6 {
-            let lineIndex = anchor + row - 2
-            let text = snapshot.lines.indices.contains(lineIndex)
-                ? snapshot.lines[lineIndex].text : ""
-            if row == 2 {
-                sweepView.setText(
-                    text,
-                    font: ClassicStageRenderer.songtiBold(size: currentFontSize),
-                    kern: 1.2, color: snapshot.palette.text)
-                sweepView.alpha = alphas[row]
-            } else if let label = plainLabels[row] {
-                label.attributedText = NSAttributedString(
-                    string: text,
-                    attributes: [
-                        .font: ClassicStageRenderer.songtiLight(size: neighborFontSize),
-                        .kern: 0.6, .foregroundColor: snapshot.palette.text
-                    ])
-                label.alpha = alphas[row]
-            }
+    // MARK: 布局构建（partitaLayout.ts 逐项对应）
+
+    private func layoutFor(line: LyricLine) -> PartitaLayout {
+        if let cached = layoutCache[line.id] { return cached }
+        let layout = buildLayout(line: line)
+        layoutCache[line.id] = layout
+        layoutCacheOrder.append(line.id)
+        if layoutCacheOrder.count > 48 {
+            let evict = layoutCacheOrder.removeFirst()
+            layoutCache.removeValue(forKey: evict)
         }
+        return layout
     }
 
-    private func playBreathing() {
-        sweepView.transform = .identity
-        UIView.animate(withDuration: 0.10, delay: 0, options: [.curveEaseOut]) {
-            self.sweepView.transform = CGAffineTransform(scaleX: 1.04, y: 1.04)
-        } completion: { _ in
-            UIView.animate(withDuration: 0.22, delay: 0, usingSpringWithDamping: 0.6,
-                           initialSpringVelocity: 0.3, options: []) {
-                self.sweepView.transform = .identity
+    private func buildLayout(line: LyricLine) -> PartitaLayout {
+        guard let snapshot else {
+            return PartitaLayout(chunks: [], fontSize: 40,
+                                 profile: StageLineProfile.profile(for: line),
+                                 columnWidth: 0, columnHeight: 0)
+        }
+        let profile = StageLineProfile.profile(for: line)
+        let units = StageLyricUnits.units(for: line)
+        let viewport = snapshot.viewport.size
+        let vmin = min(viewport.width, viewport.height)
+        let graphemeCount = line.text.reduce(0) {
+            $0 + ($1.isWhitespace ? 0 : 1)
+        }
+        let totalGraphemes = max(graphemeCount, units.count, 1)
+        let densityScale: CGFloat = totalGraphemes > 40 ? 0.8 : 1
+        let fontSize = (vmin > 0
+            ? max(40, min(5.5 * vmin / 100, 72)) : 40) * densityScale
+        let font = StageFonts.bold(size: fontSize)
+
+        // 行数：可用高 = 视口高 × 0.65，基准行高 100。
+        let windowHeight = viewport.height > 0 ? viewport.height : rootView.bounds.height
+        let targetRows = max(1, Int((windowHeight * 0.65 / 100).rounded(.down)))
+        let actualRows = min(units.count, targetRows)
+
+        // 种子 RNG（网页 buildSequentialColumns 的调用序：
+        // 切分阶段每非末 chunk 一次，之后每 chunk 两次
+        // （stagger 幅度、stagger 缩放），种子自 startTime 起 +1。
+        var seed = line.start
+        func nextRandom() -> Double {
+            let value = stageSeededRandom(seed)
+            seed += 1
+            return value
+        }
+
+        var chunkUnitsList: [[StageWordUnit]] = []
+        if actualRows > 0 {
+            var remainingUnits = units.count
+            var remainingChunks = actualRows
+            var unitIndex = 0
+            for c in 0..<actualRows {
+                let isLast = c == actualRows - 1
+                var chunkLength = 1
+                if isLast {
+                    chunkLength = remainingUnits
+                } else {
+                    let avg = Double(remainingUnits) / Double(remainingChunks)
+                    let maxLen = Int((avg * 1.5).rounded(.up))
+                    let randVal = nextRandom()
+                    chunkLength = max(1, min(maxLen,
+                        Int((avg + (randVal - 0.5) * avg).rounded())))
+                }
+                chunkLength = max(1, min(chunkLength,
+                                         remainingUnits - (remainingChunks - 1)))
+                chunkUnitsList.append(Array(units[unitIndex..<unitIndex + chunkLength]))
+                unitIndex += chunkLength
+                remainingUnits -= chunkLength
+                remainingChunks -= 1
             }
         }
+
+        var chunks: [PartitaLayout.Chunk] = []
+        var columnWidth: CGFloat = 0
+        var columnHeight: CGFloat = 0
+        let chunkHeight = fontSize * 1.22 + 6.4
+        for (rowIndex, chunkUnits) in chunkUnitsList.enumerated() {
+            let staggerMagnitude = CGFloat(20 + nextRandom() * 80)
+            let staggerX = rowIndex % 2 == 0 ? -staggerMagnitude : staggerMagnitude
+            let staggerScale = CGFloat(0.8 + nextRandom() * 0.9)
+            let rowBias = CGFloat(rowIndex) - CGFloat(actualRows - 1) / 2
+            // 词姿态（buildPartitaWordConfigs）：种子 = 首词
+            // start + 词序 × 7.13，偏移 ±6、旋转 ±3、passed ±10°。
+            var poses: [StageWordPose] = []
+            var contentWidth: CGFloat = 0
+            for (i, unit) in chunkUnits.enumerated() {
+                let wordSeed = (chunkUnits.first?.start ?? 0) + Double(i) * 7.13
+                let r = { (offset: Double) in
+                    stageSeededRandom(wordSeed + offset)
+                }
+                poses.append(StageWordPose(
+                    x: CGFloat(r(1) - 0.5) * 12,
+                    y: CGFloat(r(2) - 0.5) * 12,
+                    rotate: CGFloat(r(3) - 0.5) * 6,
+                    scale: staggerScale,
+                    passedRotate: CGFloat(r(8) - 0.5) * 20))
+                contentWidth += (unit.text as NSString)
+                    .size(withAttributes: [.font: font]).width + 12.8
+            }
+            let width = contentWidth + 16
+            chunks.append(PartitaLayout.Chunk(
+                units: chunkUnits, wordPoses: poses,
+                x: staggerX, y: rowBias * 2.5,
+                guideLeft: rowIndex % 2 == 0,
+                width: width, height: chunkHeight))
+            columnWidth = max(columnWidth, width)
+            columnHeight += chunkHeight + 9.6
+        }
+        if !chunks.isEmpty { columnHeight -= 9.6 }
+        return PartitaLayout(
+            chunks: chunks, fontSize: fontSize, profile: profile,
+            columnWidth: columnWidth, columnHeight: columnHeight)
+    }
+
+    /// 下一行预热（网页 PARTITA_PREHEAT_WINDOW：提前量
+    /// 0.18–1.2s 时预构建布局进缓存）。
+    private func preheatIfNeeded(position: TimeInterval) {
+        guard let snapshot, let idx = activeLineId,
+              snapshot.lines.indices.contains(idx + 1) else { return }
+        let next = snapshot.lines[idx + 1]
+        let lead = next.start - position
+        guard lead >= 0.18, lead <= 1.2 else { return }
+        _ = layoutFor(line: next)
     }
 
     // MARK: 布局
@@ -241,23 +493,11 @@ final class PartitaStageRenderer: LyricStageRenderer {
     private func performLayout() {
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
-        let newCurrent = min(max(bounds.width * 0.066, 20), 30)
-        if abs(newCurrent - currentFontSize) > 0.5 {
-            currentFontSize = newCurrent
-            neighborFontSize = max(currentFontSize * 0.78, 13)
-            lineHeight = (currentFontSize * 1.65).rounded()
+        floatView.frame = bounds
+        if let container = lineContainer {
+            container.frame.origin = CGPoint(
+                x: (bounds.width - container.bounds.width) / 2,
+                y: (bounds.height - container.bounds.height) / 2)
         }
-        let windowHeight = lineHeight * 5
-        let clipY = (bounds.height - windowHeight) / 2
-        clipView.frame = CGRect(x: 0, y: clipY, width: bounds.width, height: windowHeight)
-        container.frame = CGRect(x: 0, y: 0, width: bounds.width, height: lineHeight * 6)
-        for row in 0..<6 {
-            let frame = CGRect(
-                x: 16, y: CGFloat(row) * lineHeight,
-                width: bounds.width - 32, height: lineHeight)
-            if row == 2 { sweepView.frame = frame } else { plainLabels[row]?.frame = frame }
-        }
-        emptyLabel.frame = bounds
-        if displayedAnchor != nil { renderWindow() }
     }
 }

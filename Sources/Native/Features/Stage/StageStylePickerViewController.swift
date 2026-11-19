@@ -4,11 +4,14 @@ import UIKit
 // （顺序/名称与网页侧注册表一致）；已原生化的可选、未原生化的
 // 标「网页版」——点选即关原生舞台跳网页舞台。网页舞台打开时用
 // 它自己保存的样式（原生无指定通道，见实施报告），页头说明里
-// 如实写明。
+// 如实写明。列表末尾另设常设「网页版播放页」入口（3.7 (26)
+// 补 R40 对账的设置保留网页舞台入口一项）：不改当前样式
+// 记录，随时可直达网页舞台。
 final class StageStylePickerViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
 
     var onPickNative: ((String) -> Void)?
     var onPickWeb: ((LyricStageStyleInfo) -> Void)?
+    var onOpenWebStage: (() -> Void)?
 
     private let activeStyleId: String
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
@@ -59,12 +62,26 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
 
     // MARK: UITableViewDataSource
 
+    func numberOfSections(in tableView: UITableView) -> Int { 2 }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        styles.count
+        section == 0 ? styles.count : 1
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "style", for: indexPath)
+        if indexPath.section == 1 {
+            var config = UIListContentConfiguration.valueCell()
+            config.text = "网页版播放页"
+            config.secondaryText = "打开网页舞台（样式以网页版当前设置为准）"
+            config.textProperties.color = .white
+            config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.45)
+            cell.contentConfiguration = config
+            cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+            cell.accessoryType = .disclosureIndicator
+            cell.accessoryView = nil
+            return cell
+        }
         let style = styles[indexPath.row]
         var config = UIListContentConfiguration.valueCell()
         config.text = style.displayName
@@ -105,6 +122,10 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
+        if indexPath.section == 1 {
+            onOpenWebStage?()
+            return
+        }
         let style = styles[indexPath.row]
         if style.isNativeAvailable {
             onPickNative?(style.id)
