@@ -992,7 +992,7 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
         // 阴影挂独立影视图：气泡本体的 mask 会裁掉自身阴影。
         if isActiveState, let palette = snapshot?.palette {
             row.shadowView.layer.shadowColor = cappellaMix(
-                palette.background, palette.accent, 0.2,
+                palette.background, palette.accent, amount: 0.2,
                 alpha: CappellaConst.activeShadowAlpha).cgColor
             row.shadowView.layer.shadowOffset = CGSize(width: 0, height: 18)
             row.shadowView.layer.shadowRadius = 24 // CSS blur 48 的近似
@@ -1028,18 +1028,18 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
         let border: UIColor
         let text: UIColor
         if model.isRight {
-            background = cappellaMix(palette.accent, palette.primary, 0.18,
+            background = cappellaMix(palette.accent, palette.primary, amount: 0.18,
                                      alpha: 0.94)
-            border = cappellaMix(palette.accent, palette.primary, 0.34,
+            border = cappellaMix(palette.accent, palette.primary, amount: 0.34,
                                  alpha: 0.30)
             text = palette.background
         } else {
             let tone = CGFloat(((model.avatarIndex % 9) + 9) % 9) / 8
             let accentMix = 0.18 + tone * 0.62
             background = cappellaMix(palette.secondary, palette.accent,
-                                     accentMix, alpha: 1)
+                                     amount: accentMix, alpha: 1)
             border = cappellaMix(palette.secondary, palette.accent,
-                                 min(accentMix + 0.18, 1), alpha: 0.26)
+                                 amount: min(accentMix + 0.18, 1), alpha: 0.26)
             text = palette.primary
         }
         row.setColors(background: background, border: border, text: text,
