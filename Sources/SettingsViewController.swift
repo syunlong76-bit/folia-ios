@@ -299,10 +299,9 @@ final class SettingsViewController: UIViewController {
         stickerGroup.addArrangedSubview(stickerHeadRow)
         stickerGroup.addArrangedSubview(makeHairline())
         let dogTileWrap = UIView()
+        // (25) 去背景：dog-17 源即透明底，容器只做布局、无底板。
         let dogTile = UIView()
-        dogTile.backgroundColor = .white
-        dogTile.layer.cornerRadius = 14
-        dogTile.clipsToBounds = true
+        dogTile.backgroundColor = .clear
         dogTile.translatesAutoresizingMaskIntoConstraints = false
         let dogSticker = StickerView()
         dogSticker.translatesAutoresizingMaskIntoConstraints = false
@@ -341,7 +340,7 @@ final class SettingsViewController: UIViewController {
         stickerGroup.addArrangedSubview(companionRow)
         stickerGroup.addArrangedSubview(makeHairline())
         let companionHint = UILabel()
-        companionHint.text = "开启后，播放页里会有一只小狗沿舞台边缘散步：点它会跳一下，长按可以让它休息（在这里重新开启）。每首歌换一只，偶尔有小猫路过。"
+        companionHint.text = "开启后，播放页的框里会有小宠物陪你听歌：双击歌词区可以再叫一只出来（最多三只），点宠物头顶有小反应、点身上会说话；按住拖动可以给它占个座，拖出框外松手就送它走。每首歌主陪伴会换一只。"
         companionHint.font = .systemFont(ofSize: 12)
         companionHint.textColor = FoliaUI.secondary
         companionHint.numberOfLines = 0
@@ -381,13 +380,12 @@ final class SettingsViewController: UIViewController {
             spinner.centerYAnchor.constraint(equalTo: checkWrap.centerYAnchor),
             spinner.trailingAnchor.constraint(equalTo: checkWrap.trailingAnchor, constant: -16)
         ])
-        // 贴纸层（3.7 (24)）：检查更新进行中，按钮右侧浮狗贴
-        // 纸（dog-20 探头张望，白 tile 承载）。容器不拦截触
-        // 摸，按钮热区不受影响；检查结束随 spinner 一同隐藏。
+        // 贴纸层（3.7 (24)；(25) 去背景）：检查更新进行中，
+        // 按钮右侧浮狗贴纸（dog-20 探头张望，抠图透明底直
+        // 贴）。容器不拦截触摸，按钮热区不受影响；检查结束
+        // 随 spinner 一同隐藏。
         let checkTile = UIView()
-        checkTile.backgroundColor = .white
-        checkTile.layer.cornerRadius = 12
-        checkTile.clipsToBounds = true
+        checkTile.backgroundColor = .clear
         checkTile.isUserInteractionEnabled = false
         checkTile.isHidden = true
         checkTile.translatesAutoresizingMaskIntoConstraints = false

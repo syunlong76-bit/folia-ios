@@ -70,6 +70,10 @@ final class HomeWallViewController: UIViewController,
     private var stickerBufferView: StickerView?
     private var stickerBufferEpisode = 0
     private var stickerBufferVisible = false
+    // 切歌缓冲改触发（3.7 (25)）：点切歌 5s 计时窗 + .waiting 兜底。
+    private var stickerBufferTapDeadline: Date?
+    private var stickerBufferHideTimer: Timer?
+    private var stickerBufferWaiting = false
 
     // 底部播放台（3.7 (13.4) #4，Miller 点名）：与曲目墙同款
     // E 液态玻璃台（构造同构、按仓库惯例有意重复）；差异是主页
@@ -827,11 +831,13 @@ final class HomeWallViewController: UIViewController,
 
     @objc private func miniPrevTapped() {
         resetMiniIdleTimer()
+        stickerNoteTrackChangeTap()
         QueueManager.shared.playPrevious()
     }
 
     @objc private func miniNextTapped() {
         resetMiniIdleTimer()
+        stickerNoteTrackChangeTap()
         QueueManager.shared.playNext(manual: true)
     }
 
@@ -1227,10 +1233,11 @@ final class HomeWallViewController: UIViewController,
 // - 断网/加载失败：最终失败态居中 cat-03（站立流泪打转，
 //   80pt，播一次；失败持续存在时每 8 秒低频重播）。
 // - 切歌缓冲：引擎 .waiting 且有当前曲时，迷你台封面角上方
-//   小只——dog-05（原地翻滚，循环）与 cat-08（翻滚，每回
-//   合播一次）按回合轮换，58pt。
+//   小只——dog-05（原地翻滚）与 cat-08（翻滚）按回合轮换，
+//   58pt；触发口径 3.7 (25) 改为点切歌即出、约 5s 收，
+//   .waiting 仅作兜底（见 stickerNoteTrackChangeTap 状态机）。
 // 全部只读既有状态（entryDataState / playbackState），不回写
-// 任何状态机；狗素材带浅色贴纸底（映射口径：狗须浅色底面）。
+// 任何状态机；全部贴纸透明底直贴、无底板（3.7 (25) 定案）。
 
 extension HomeWallViewController {
 
@@ -1287,11 +1294,9 @@ extension HomeWallViewController {
         }
         runner.layer.removeAllAnimations()
         if useDog {
-            runner.showsTileBackground = true
             runner.frame = CGRect(x: -110, y: 8, width: 100, height: 100)
             runner.setSticker("dog-21", mode: .loop)
         } else {
-            runner.showsTileBackground = false
             runner.frame = CGRect(x: -80, y: 36, width: 72, height: 72)
             runner.setSticker("cat-13", mode: .once(holdLast: true))
         }
@@ -1350,29 +1355,71 @@ extension HomeWallViewController {
         stickerFailureView?.isHidden = true
     }
 
-    // MARK: 切歌缓冲
+    // MARK: 切歌缓冲（3.7 (25) 改触发，状态机）
+    //
+    // - 点切歌（迷你台上下曲/点歌起播）→ stickerNoteTrackChangeTap：
+    //   立即出贴纸（回合轮换 dog-05/cat-08，均循环），开 5s 计时
+    //   窗；窗内再点切歌 → 换回合贴纸并重置 5s。歌曲真正起播不
+    //   提前收（满 5s 口径）。
+    // - 5s 到点：引擎已非 .waiting → 淡出隐藏；仍 .waiting →
+    //   转兜底态继续显示，待离开 .waiting 才收。
+    // - 无计时窗时 .waiting 到来 → 兜底直显（旧行为），离开
+    //   .waiting 即收。两路冲突以计时窗为准（窗内 .waiting 的
+    //   进出不改显隐）。
+
+    func stickerNoteTrackChangeTap() {
+        stickerEnsureViews()
+        stickerBufferEpisode += 1
+        stickerShowBufferSticker()
+        stickerBufferTapDeadline = Date().addingTimeInterval(5)
+        stickerBufferHideTimer?.invalidate()
+        stickerBufferHideTimer = Timer.scheduledTimer(
+            withTimeInterval: 5, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.stickerBufferTapDeadline = nil
+            if !self.stickerBufferWaiting {
+                self.stickerHideBufferSticker()
+            }
+        }
+    }
+
+    private func stickerShowBufferSticker() {
+        guard let buffer = stickerBufferView else { return }
+        let asset = stickerBufferEpisode % 2 == 1 ? "dog-05" : "cat-08"
+        buffer.layer.removeAllAnimations()
+        if buffer.assetName != asset || !stickerBufferVisible {
+            buffer.onFinished = nil
+            buffer.setSticker(asset, mode: .loop)
+        }
+        buffer.alpha = 1
+        buffer.isHidden = false
+        stickerBufferVisible = true
+        stickerLayoutOverlays()
+    }
+
+    private func stickerHideBufferSticker() {
+        guard let buffer = stickerBufferView, stickerBufferVisible else { return }
+        stickerBufferVisible = false
+        UIView.animate(withDuration: 0.3, animations: {
+            buffer.alpha = 0
+        }, completion: { _ in
+            buffer.isHidden = true
+            buffer.alpha = 1
+        })
+    }
 
     func stickerBufferStateChanged(_ state: PlaybackState) {
-        let shouldShow = state == .waiting
-            && PlaybackEngine.shared.currentTrack != nil
-        if shouldShow, !stickerBufferVisible {
-            stickerBufferVisible = true
-            stickerEnsureViews()
-            stickerBufferEpisode += 1
-            guard let buffer = stickerBufferView else { return }
-            if stickerBufferEpisode % 2 == 1 {
-                buffer.showsTileBackground = true
-                buffer.setSticker("dog-05", mode: .loop)
-            } else {
-                buffer.showsTileBackground = false
-                buffer.onFinished = { [weak buffer] in buffer?.isHidden = true }
-                buffer.setSticker("cat-08", mode: .once(holdLast: false))
+        stickerBufferWaiting = state == .waiting
+        if state == .waiting {
+            // 兜底直显：仅在无点切歌计时窗、且当前有曲时。
+            if stickerBufferTapDeadline == nil, !stickerBufferVisible,
+               PlaybackEngine.shared.currentTrack != nil {
+                stickerEnsureViews()
+                stickerBufferEpisode += 1
+                stickerShowBufferSticker()
             }
-            buffer.isHidden = false
-            stickerLayoutOverlays()
-        } else if !shouldShow, stickerBufferVisible {
-            stickerBufferVisible = false
-            stickerBufferView?.isHidden = true
+        } else if stickerBufferTapDeadline == nil {
+            stickerHideBufferSticker()
         }
     }
 
@@ -1395,6 +1442,15 @@ extension HomeWallViewController {
             buffer.frame = CGRect(
                 x: bar.frame.minX + 4, y: bar.frame.minY - 64,
                 width: 58, height: 58)
+        }
+        // 穿模治理（3.7 (25)）：跑动 dock 压到迷你台之下——跑过
+        // 时从台身后穿过，不压台面文字与按键。
+        if let dock = stickerDock, let bar = miniBar,
+           dock.superview === view, bar.superview === view,
+           let dockIdx = view.subviews.firstIndex(of: dock),
+           let barIdx = view.subviews.firstIndex(of: bar),
+           dockIdx > barIdx {
+            view.insertSubview(dock, belowSubview: bar)
         }
     }
 }

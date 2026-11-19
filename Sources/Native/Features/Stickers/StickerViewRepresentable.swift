@@ -5,17 +5,14 @@ import SwiftUI
 struct StickerViewRepresentable: UIViewRepresentable {
     let asset: String
     var mode: StickerView.PlayMode = .loop
-    var showsTileBackground = false
 
     func makeUIView(context: Context) -> StickerView {
         let view = StickerView()
-        view.showsTileBackground = showsTileBackground
         view.setSticker(asset, mode: mode)
         return view
     }
 
     func updateUIView(_ view: StickerView, context: Context) {
-        view.showsTileBackground = showsTileBackground
         if view.assetName != asset || view.playMode != mode {
             view.setSticker(asset, mode: mode)
         }

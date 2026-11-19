@@ -817,17 +817,18 @@ private extension LyricStageCommand.Kind {
 
 // MARK: - 贴纸层（3.7 (24)，纯新增视图层）
 //
-// 场景（scene-mapping.md 终版）：
+// 场景（scene-mapping.md 终版；3.7 (25) 修订）：
 // - 拉歌词：取词在途时 renderer 容器右上内侧亮 dog-06 角标
-//   （探头张望，40pt，循环；狗白底以浅色圆角贴纸底承载）。
+//   （探头张望，40pt，循环；抠图透明底直贴、无底板）。
 // - 没找到歌词：取词落定且行为空时，cat-11（流泪转圈）
 //   72pt 居中于容器中央上方（「暂无歌词」标签上方），播
 //   一次停末帧。
-// - 点红心：点亮时 dog-11（抱爱心）64pt 浮在红心按钮左侧，
-//   播 2 圈后淡出。
-// - 播放陪伴：CompanionPetView 沿 renderer 容器周界漫游
-//   （狗池按曲轮换、每 5 首猫客串），长按收起并持久化关闭，
-//   设置页可重新开启。
+// - 点红心：点亮时 dog-11（抱爱心）64pt 浮在容器右上内侧
+//   （取词角标在显时左移让位），播 2 圈后淡出；旧落点（红心
+//   按钮左侧）会压标题右端，(25) 迁走。
+// - 播放陪伴：CompanionPetView 在容器内下半活动带玩耍（框
+//   内漫游/双宠互动/双击召唤/点按对话/拖动占座），细则见
+//   CompanionPetView 文件头。设置页开关关闭时整层停用。
 // 显隐只由取词/点赞既有落点的一行钩子驱动；歌词数据、时钟
 // 与渲染逻辑零改动。
 
@@ -835,7 +836,6 @@ extension StageViewController {
 
     func stickerInstall() {
         let badge = StickerView()
-        badge.showsTileBackground = true
         badge.isHidden = true
         view.addSubview(badge)
         stickerFetchBadge = badge
@@ -844,16 +844,23 @@ extension StageViewController {
         view.addSubview(noLyrics)
         stickerNoLyrics = noLyrics
         let like = StickerView()
-        like.showsTileBackground = true
         like.isHidden = true
         view.addSubview(like)
         stickerLike = like
         let pet = CompanionPetView()
-        pet.onDismissedByLongPress = {
-            Breadcrumbs.log("companion pet retired by long press")
+        pet.onResidentRetired = {
+            Breadcrumbs.log("companion pet retired (dragged out)")
         }
         view.addSubview(pet)
         companionPet = pet
+        // 双击召唤（3.7 (25)）：识别器挂在歌词容器上，宠物层
+        // 本身透传触摸（hitTest 只认领宠物/对话框），歌词行
+        // 点按 seek 不受影响（识别器不取消容器内既有触摸）。
+        pet.summonTapRecognizer.cancelsTouchesInView = false
+        rendererContainer.addGestureRecognizer(pet.summonTapRecognizer)
+        // 对话框「点别处关闭」：挂在舞台根视图的旁观识别器，
+        // 不取消任何既有触摸（歌词行 seek/按钮照常）。
+        view.addGestureRecognizer(pet.dismissTapRecognizer)
         stickerLayoutOverlays()
     }
 
@@ -905,9 +912,14 @@ extension StageViewController {
                 width: 72, height: 72)
         }
         if let like = stickerLike {
+            // 穿模治理（3.7 (25)）：迁到容器右上内侧纯封面/歌词
+            // 空区；取词角标同在右上时左移 48 让位，不叠贴。
+            var likeX = region.maxX - 12 - 64
+            if let badge = stickerFetchBadge, !badge.isHidden {
+                likeX -= 48
+            }
             like.frame = CGRect(
-                x: likeButton.frame.minX - 8 - 64,
-                y: likeButton.frame.midY - 32,
+                x: likeX, y: region.minY + 12,
                 width: 64, height: 64)
         }
         companionPet?.roamRegion = region

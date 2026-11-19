@@ -154,6 +154,10 @@ final class WallPrototypeViewController: UIViewController,
     private var stickerBufferView: StickerView?
     private var stickerBufferEpisode = 0
     private var stickerBufferVisible = false
+    // 切歌缓冲改触发（3.7 (25)）：点切歌 5s 计时窗 + .waiting 兜底。
+    private var stickerBufferTapDeadline: Date?
+    private var stickerBufferHideTimer: Timer?
+    private var stickerBufferWaiting = false
     /// 回程恢复（3.7 (13) #6）：重呈时由主页墙注入，种子落地后应用。
     var pendingReturnTicket: WallReturnTicket?
     /// 底部播放台（3.7 (13) #7；13.1 改版）：网页风迷你播放器，
@@ -716,11 +720,13 @@ final class WallPrototypeViewController: UIViewController,
 
     @objc private func miniPrevTapped() {
         resetMiniIdleTimer()
+        stickerNoteTrackChangeTap()
         QueueManager.shared.playPrevious()
     }
 
     @objc private func miniNextTapped() {
         resetMiniIdleTimer()
+        stickerNoteTrackChangeTap()
         QueueManager.shared.playNext(manual: true)
     }
 
@@ -2158,6 +2164,9 @@ final class WallPrototypeViewController: UIViewController,
             return FoliaTrack(id: tid, sourceType: .netease, title: "",
                               artist: "", duration: 0)
         }
+        // 贴纸层（3.7 (25)）：点歌起播 = 点切歌手势，缓冲贴纸
+        // 计时窗由此开窗（状态机见文件尾 extension）。
+        stickerNoteTrackChangeTap()
         // 三态入场：先亮连接中，起播确认（currentTrack 落地）或失败
         // （lastError）到达时由订阅清状态。
         pendingTrackId = tappedId
@@ -2510,7 +2519,6 @@ final class WallPosterCell: UICollectionViewCell {
             sticker = existing
         } else {
             sticker = StickerView()
-            sticker.showsTileBackground = true
             shadowView.addSubview(sticker)
             likeSticker = sticker
         }
@@ -2578,13 +2586,16 @@ final class WallPosterCell: UICollectionViewCell {
             playSpinner.frame = playButton.frame
             errorLabel.frame = CGRect(x: 6, y: barTop - 19,
                                       width: bounds.width - 12, height: 15)
-            // 贴纸层（3.7 (24)）：失败贴纸 80pt 居中压在错误条
-            // 上方；红心贴纸 64pt 浮在红心按钮上方。
+            // 贴纸层穿模治理（3.7 (25)）：失败贴纸 64pt 移到
+            // 卡内左上角纯封面区——避错误条（barTop-19）、标题
+            // 带（titleY 起）、底部控件行与右上角播放角标；
+            // 红心贴纸 64pt 仍居红心按钮正上方，但下沿抬到标题
+            // 带上沿之上 4pt，长标题尾行也不被压。
             failureSticker?.frame = CGRect(
-                x: (bounds.width - 80) / 2, y: barTop - 19 - 4 - 80,
-                width: 80, height: 80)
+                x: 8, y: 8, width: 64, height: 64)
             likeSticker?.frame = CGRect(
-                x: bounds.width - 38 - 17, y: barTop + 2 - 6 - 64,
+                x: bounds.width - 38 - 17,
+                y: max(8, titleY - 4 - 64),
                 width: 64, height: 64)
         }
         playingBadge.frame = CGRect(x: bounds.width - 30, y: 4, width: 24, height: 24)
@@ -2793,29 +2804,68 @@ extension WallPrototypeViewController {
         stickerLayoutOverlays()
     }
 
-    // MARK: 切歌缓冲
+    // MARK: 切歌缓冲（3.7 (25) 改触发，状态机与主页墙同构）
+    //
+    // - 点切歌（迷你台上下曲/点卡起播/双击起播）→ 立即出贴纸
+    //   （回合轮换 dog-05/cat-08，均循环），开 5s 计时窗；窗内
+    //   再点切歌 → 换回合贴纸并重置 5s；起播不提前收。
+    // - 5s 到点：已非 .waiting → 淡出；仍 .waiting → 转兜底，
+    //   待离开 .waiting 才收。
+    // - 无计时窗时 .waiting 到来 → 兜底直显，离开即收。冲突
+    //   以计时窗为准。
+
+    func stickerNoteTrackChangeTap() {
+        stickerEnsureViews()
+        stickerBufferEpisode += 1
+        stickerShowBufferSticker()
+        stickerBufferTapDeadline = Date().addingTimeInterval(5)
+        stickerBufferHideTimer?.invalidate()
+        stickerBufferHideTimer = Timer.scheduledTimer(
+            withTimeInterval: 5, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            self.stickerBufferTapDeadline = nil
+            if !self.stickerBufferWaiting {
+                self.stickerHideBufferSticker()
+            }
+        }
+    }
+
+    private func stickerShowBufferSticker() {
+        guard let buffer = stickerBufferView else { return }
+        let asset = stickerBufferEpisode % 2 == 1 ? "dog-05" : "cat-08"
+        buffer.layer.removeAllAnimations()
+        if buffer.assetName != asset || !stickerBufferVisible {
+            buffer.onFinished = nil
+            buffer.setSticker(asset, mode: .loop)
+        }
+        buffer.alpha = 1
+        buffer.isHidden = false
+        stickerBufferVisible = true
+        stickerLayoutOverlays()
+    }
+
+    private func stickerHideBufferSticker() {
+        guard let buffer = stickerBufferView, stickerBufferVisible else { return }
+        stickerBufferVisible = false
+        UIView.animate(withDuration: 0.3, animations: {
+            buffer.alpha = 0
+        }, completion: { _ in
+            buffer.isHidden = true
+            buffer.alpha = 1
+        })
+    }
 
     func stickerBufferStateChanged(_ state: PlaybackState) {
-        let shouldShow = state == .waiting
-            && PlaybackEngine.shared.currentTrack != nil
-        if shouldShow, !stickerBufferVisible {
-            stickerBufferVisible = true
-            stickerEnsureViews()
-            stickerBufferEpisode += 1
-            guard let buffer = stickerBufferView else { return }
-            if stickerBufferEpisode % 2 == 1 {
-                buffer.showsTileBackground = true
-                buffer.setSticker("dog-05", mode: .loop)
-            } else {
-                buffer.showsTileBackground = false
-                buffer.onFinished = { [weak buffer] in buffer?.isHidden = true }
-                buffer.setSticker("cat-08", mode: .once(holdLast: false))
+        stickerBufferWaiting = state == .waiting
+        if state == .waiting {
+            if stickerBufferTapDeadline == nil, !stickerBufferVisible,
+               PlaybackEngine.shared.currentTrack != nil {
+                stickerEnsureViews()
+                stickerBufferEpisode += 1
+                stickerShowBufferSticker()
             }
-            buffer.isHidden = false
-            stickerLayoutOverlays()
-        } else if !shouldShow, stickerBufferVisible {
-            stickerBufferVisible = false
-            stickerBufferView?.isHidden = true
+        } else if stickerBufferTapDeadline == nil {
+            stickerHideBufferSticker()
         }
     }
 

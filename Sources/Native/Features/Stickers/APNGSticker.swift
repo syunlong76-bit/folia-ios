@@ -1,7 +1,8 @@
 import UIKit
 import ImageIO
 
-// 贴纸基础设施（3.7 (24)，纯新增）：APNG 解码 + 帧播放视图。
+// 贴纸基础设施（3.7 (24)，纯新增；3.7 (25) 修方向+去背景）：
+// APNG 解码 + 帧播放视图。
 //
 // 资产口径（scene-mapping.md 终版）：素材包 APNG 全部为
 // dispose=NONE / blend=SOURCE（convert.py 产物，verify-report
@@ -9,9 +10,16 @@ import ImageIO
 // 两种 blend，逐帧合成全画布帧后播放——只播素材本体帧，
 // 不改帧、不补帧、不自编动作。
 //
-// 狗贴纸为白底素材：映射口径「出场位置须是白色/浅色底面」。
-// 深色宿主（舞台/墙/设置卡）上以浅色圆角贴纸底（tile）承载，
-// StickerView.showsTileBackground 即此落实；猫为透明底不用。
+// 方向（3.7 (25) 定案）：合成上下文不许再装 y 翻转——(24)
+// 的 translate+scale(1,-1) 让每帧内容在位图里垂直镜像，
+// 全贴纸上下颠倒（Miller 真机实证）。现口径：无翻转绘制，
+// APNG 的 y（自顶向下）在 Quartz 左下原点空间换算为
+// canvasH - y - height，内容与位置同时归正。
+//
+// 背景（3.7 (25) 定案）：全部贴纸透明底直接贴，无任何承载
+// 底板。白底狗素材（dog-09/11/12/14/16/20/24/25/27）已在
+// 打包前逐帧抠图（边缘连通近白 flood-fill + 1px 羽化）回填
+// 同名文件；其余素材源即透明。(24) 的浅色 tile 承载作废。
 
 /// 解码结果（类包装，供 NSCache 持有）。
 final class APNGDecoded {
@@ -140,14 +148,16 @@ enum APNGDecoder {
             bitsPerComponent: 8, bytesPerRow: 0, space: colorSpace,
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return nil }
-        ctx.translateBy(x: 0, y: CGFloat(canvasH))
-        ctx.scaleBy(x: 1, y: -1)
+        // 无翻转（3.7 (25)）：位图行 0 即成图顶行，帧内容按
+        // Quartz 原生方向绘制即与源同向；子矩形 y 换算到左下
+        // 原点空间（canvasH - y - height），位置与源一致。
         ctx.interpolationQuality = .none
 
         var frames: [CGImage] = []
         var durations: [TimeInterval] = []
         for (index, spec) in specs.enumerated() {
-            let rect = CGRect(x: spec.x, y: spec.y, width: spec.width, height: spec.height)
+            let rect = CGRect(x: spec.x, y: canvasH - spec.y - spec.height,
+                              width: spec.width, height: spec.height)
             let snapshot = spec.dispose == 2 ? ctx.makeImage() : nil
             ctx.saveGState()
             ctx.setBlendMode(spec.blend == 0 ? .copy : .normal)
@@ -297,43 +307,20 @@ final class StickerView: UIView {
     /// 播完回调（once / loops 模式；loop 模式不触发）。
     var onFinished: (() -> Void)?
 
-    /// 狗贴纸（白底素材）置 true：本视图即浅色圆角贴纸底，
-    /// 图内缩 4pt；猫（透明底）保持 false。
-    var showsTileBackground = false {
-        didSet { applyTileStyle() }
-    }
-
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
+        backgroundColor = .clear
         imageView.contentMode = .scaleAspectFit
         imageView.isUserInteractionEnabled = false
         addSubview(imageView)
-        applyTileStyle()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        let inset: CGFloat = showsTileBackground ? 4 : 0
-        imageView.frame = bounds.insetBy(dx: inset, dy: inset)
-    }
-
-    private func applyTileStyle() {
-        if showsTileBackground {
-            backgroundColor = .white
-            layer.cornerRadius = 12
-            layer.shadowColor = UIColor.black.cgColor
-            layer.shadowOpacity = 0.25
-            layer.shadowRadius = 6
-            layer.shadowOffset = CGSize(width: 0, height: 2)
-        } else {
-            backgroundColor = .clear
-            layer.cornerRadius = 0
-            layer.shadowOpacity = 0
-        }
-        setNeedsLayout()
+        imageView.frame = bounds
     }
 
     /// 换贴纸（同名同模式重复调用只确保播放，不重解码不重置）。
