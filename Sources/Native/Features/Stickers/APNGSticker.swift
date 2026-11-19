@@ -307,6 +307,26 @@ final class StickerView: UIView {
     /// 播完回调（once / loops 模式；loop 模式不触发）。
     var onFinished: (() -> Void)?
 
+    /// 轮廓柔光（3.7 (28)）：CALayer 阴影跟随 contents 的 alpha
+    /// 轮廓（素材本体帧的透明形状），给浅色/线条型贴纸在深色
+    /// 封面上留一圈极淡亮边保可读性。参数：白色、opacity 0.45、
+    /// radius 2.5、offset 零——240px 素材在 64pt 显示下约合
+    /// 1pt 柔边，只见轮廓不见边框。默认关，落点按需开。
+    var silhouetteHaloEnabled: Bool = false {
+        didSet { applySilhouetteHalo() }
+    }
+
+    private func applySilhouetteHalo() {
+        if silhouetteHaloEnabled {
+            imageView.layer.shadowColor = UIColor.white.cgColor
+            imageView.layer.shadowOpacity = 0.45
+            imageView.layer.shadowRadius = 2.5
+            imageView.layer.shadowOffset = .zero
+        } else {
+            imageView.layer.shadowOpacity = 0
+        }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false

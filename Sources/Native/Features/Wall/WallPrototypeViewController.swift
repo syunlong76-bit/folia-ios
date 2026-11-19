@@ -158,6 +158,8 @@ final class WallPrototypeViewController: UIViewController,
     private var stickerBufferTapDeadline: Date?
     private var stickerBufferHideTimer: Timer?
     private var stickerBufferWaiting = false
+    // 跳过闪现（3.7 (28)）：令牌防旧的待发隐藏误伤新一轮显示。
+    private var stickerSkipFlashToken = 0
     /// 回程恢复（3.7 (13) #6）：重呈时由主页墙注入，种子落地后应用。
     var pendingReturnTicket: WallReturnTicket?
     /// 底部播放台（3.7 (13) #7；13.1 改版）：网页风迷你播放器，
@@ -226,6 +228,10 @@ final class WallPrototypeViewController: UIViewController,
         NotificationCenter.default.addObserver(
             self, selector: #selector(miniPlayerThemeSettingsChanged),
             name: .foliaMiniPlayerThemeChanged, object: nil)
+        // 确定性不可播被自动跳过（3.7 (28)）：闪现提示贴纸。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(stickerTrackSkippedUnplayable),
+            name: .foliaTrackSkippedUnplayable, object: nil)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         collectionView.backgroundColor = .black
@@ -2199,8 +2205,10 @@ final class WallPrototypeViewController: UIViewController,
         guard queueIndex < entries.count else { return }
         let id = entries[queueIndex].id
         let newState = LikesStore.shared.toggle(id)
-        // 贴纸层（3.7 (24)，纯新增）：点亮红心时展开卡上浮贴纸。
+        // 贴纸层（3.7 (24)，纯新增）：点亮红心时展开卡上浮贴纸；
+        // 取消收藏补依依不舍贴纸（3.7 (28)），同一落点成对。
         if newState { stickerCelebrateLike(queueIndex: queueIndex) }
+        else { stickerUncelebrateLike(queueIndex: queueIndex) }
         refreshVisiblePlaybackUI()
         Task {
             do {
@@ -2502,11 +2510,18 @@ final class WallPosterCell: UICollectionViewCell {
     /// 甩泪）与轮换 cat-10（嚎哭趴倒）、cat-05 截段（f0–f17）
     /// 交替，序列 cat-20 → cat-10 → cat-20 → cat-05 循环，
     /// 保证主选占比且同一只不连着出现两遍。均播一次停末帧。
+    /// 失败贴纸轮换取只（持久失败态与 (28) 跳过闪现共用同一
+    /// 轮换序，保证同一只不连着出现两遍）。
+    static func nextFailureStickerAsset() -> String {
+        let pool = ["cat-20", "cat-10", "cat-20", "cat-05"]
+        let asset = pool[failureEpisode % pool.count]
+        failureEpisode += 1
+        return asset
+    }
+
     private func showFailureSticker() {
         failureStickerShown = true
-        let pool = ["cat-20", "cat-10", "cat-20", "cat-05"]
-        let asset = pool[Self.failureEpisode % pool.count]
-        Self.failureEpisode += 1
+        let asset = Self.nextFailureStickerAsset()
         let sticker: StickerView
         if let existing = failureSticker {
             sticker = existing
@@ -2534,6 +2549,9 @@ final class WallPosterCell: UICollectionViewCell {
         }
         sticker.alpha = 1
         sticker.isHidden = false
+        // 轮廓柔光（3.7 (28)）：dog-11 线条型浅色主体，深色
+        // 封面上靠一圈极淡亮边保轮廓可辨。
+        sticker.silhouetteHaloEnabled = true
         sticker.setSticker("dog-11", mode: .loops(2))
         sticker.onFinished = { [weak sticker] in
             UIView.animate(withDuration: 0.3) {
@@ -2544,6 +2562,68 @@ final class WallPosterCell: UICollectionViewCell {
             }
         }
         setNeedsLayout()
+    }
+
+    /// 取消收藏（3.7 (28) 新增，与收藏庆祝成对）：同一落点冒
+    /// cat-04（单爪抹泪，映射里「取消收藏」场景的定案主选），
+    /// 播一次停末帧、多停留 1.1s 再淡出。由 VC 的 likeTapped
+    /// 在新状态为未收藏时调用。
+    func showUnlikeSticker() {
+        let sticker: StickerView
+        if let existing = likeSticker {
+            sticker = existing
+        } else {
+            sticker = StickerView()
+            shadowView.addSubview(sticker)
+            likeSticker = sticker
+        }
+        sticker.alpha = 1
+        sticker.isHidden = false
+        sticker.silhouetteHaloEnabled = false
+        sticker.setSticker("cat-04", mode: .once(holdLast: true))
+        sticker.onFinished = { [weak sticker] in
+            UIView.animate(withDuration: 0.3, delay: 1.1, options: []) {
+                sticker?.alpha = 0
+            } completion: { _ in
+                sticker?.isHidden = true
+                sticker?.alpha = 1
+            }
+        }
+        setNeedsLayout()
+    }
+
+    // 跳过闪现（3.7 (28)）：独立视图，与持久失败贴纸同落点
+    // （卡内左上角），不碰 failureStickerShown 状态机。
+    private var skipSticker: StickerView?
+    private var skipFlashWork: DispatchWorkItem?
+
+    /// 确定性不可播被自动跳过时闪现一次无版权贴纸作提示。
+    /// 持久失败贴纸在显时不叠加。
+    func flashSkipSticker() {
+        guard !failureStickerShown else { return }
+        let sticker: StickerView
+        if let existing = skipSticker {
+            sticker = existing
+        } else {
+            sticker = StickerView()
+            shadowView.addSubview(sticker)
+            skipSticker = sticker
+        }
+        sticker.alpha = 1
+        sticker.isHidden = false
+        sticker.setSticker(Self.nextFailureStickerAsset(), mode: .once(holdLast: true))
+        setNeedsLayout()
+        skipFlashWork?.cancel()
+        let work = DispatchWorkItem { [weak sticker] in
+            UIView.animate(withDuration: 0.3) {
+                sticker?.alpha = 0
+            } completion: { _ in
+                sticker?.isHidden = true
+                sticker?.alpha = 1
+            }
+        }
+        skipFlashWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.4, execute: work)
     }
 
     func setLiked(_ liked: Bool) {
@@ -2602,6 +2682,8 @@ final class WallPosterCell: UICollectionViewCell {
             // 红心贴纸 64pt 仍居红心按钮正上方，但下沿抬到标题
             // 带上沿之上 4pt，长标题尾行也不被压。
             failureSticker?.frame = CGRect(
+                x: 8, y: 8, width: 64, height: 64)
+            skipSticker?.frame = CGRect(
                 x: 8, y: 8, width: 64, height: 64)
             likeSticker?.frame = CGRect(
                 x: bounds.width - 38 - 17,
@@ -2727,6 +2809,11 @@ final class WallPosterCell: UICollectionViewCell {
         failureSticker?.isHidden = true
         likeSticker?.isHidden = true
         likeSticker?.alpha = 1
+        // 跳过闪现（3.7 (28)）：复用时一并收起并取消待发淡出。
+        skipFlashWork?.cancel()
+        skipFlashWork = nil
+        skipSticker?.isHidden = true
+        skipSticker?.alpha = 1
     }
 }
 
@@ -2879,6 +2966,49 @@ extension WallPrototypeViewController {
         }
     }
 
+    // MARK: 跳过闪现（3.7 (28)）
+
+    /// 确定性不可播被自动跳过：迷你台落点 + 展开卡落点各闪现
+    /// 一次无版权贴纸作提示（复用既有失败贴纸轮换与落点，
+    /// 不新造 UI）。本墙不在屏上时不闪。
+    @objc func stickerTrackSkippedUnplayable() {
+        guard view.window != nil else { return }
+        stickerFlashSkipAtMiniBar()
+        if let expandedId = wallLayout.expandedInstanceId,
+           let item = wallLayout.instances.firstIndex(where: {
+               $0.instanceId == expandedId
+           }),
+           let cell = collectionView.cellForItem(
+               at: IndexPath(item: item, section: 0)) as? WallPosterCell {
+            cell.flashSkipSticker()
+        }
+    }
+
+    /// 迷你台左上落点闪现：缓冲状态机忙时（点切歌 5s 窗 /
+    /// .waiting 兜底在显）不抢视图——台面已有反馈；空闲时在
+    /// 同一落点闪现 1.3s。令牌防待发隐藏误伤后续正常显示。
+    private func stickerFlashSkipAtMiniBar() {
+        guard !stickerBufferVisible, stickerBufferTapDeadline == nil,
+              !stickerBufferWaiting else { return }
+        stickerEnsureViews()
+        guard let buffer = stickerBufferView else { return }
+        stickerSkipFlashToken += 1
+        let token = stickerSkipFlashToken
+        buffer.layer.removeAllAnimations()
+        buffer.onFinished = nil
+        buffer.setSticker(WallPosterCell.nextFailureStickerAsset(),
+                          mode: .once(holdLast: true))
+        buffer.alpha = 1
+        buffer.isHidden = false
+        stickerLayoutOverlays()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak self, weak buffer] in
+            guard let self, self.stickerSkipFlashToken == token,
+                  !self.stickerBufferVisible,
+                  self.stickerBufferTapDeadline == nil else { return }
+            buffer?.isHidden = true
+        }
+    }
+
     // MARK: 红心庆祝（展开卡）
 
     func stickerCelebrateLike(queueIndex: Int) {
@@ -2890,6 +3020,19 @@ extension WallPrototypeViewController {
                   at: IndexPath(item: item, section: 0)) as? WallPosterCell
         else { return }
         cell.showLikeCelebration()
+    }
+
+    /// 取消收藏贴纸入口（3.7 (28)）：与 stickerCelebrateLike
+    /// 同一展开卡定位，cell 内同落点冒 cat-04。
+    func stickerUncelebrateLike(queueIndex: Int) {
+        guard let expandedId = wallLayout.expandedInstanceId,
+              let item = wallLayout.instances.firstIndex(where: {
+                  $0.instanceId == expandedId && $0.queueIndex == queueIndex
+              }),
+              let cell = collectionView.cellForItem(
+                  at: IndexPath(item: item, section: 0)) as? WallPosterCell
+        else { return }
+        cell.showUnlikeSticker()
     }
 
     // MARK: 定位

@@ -16,6 +16,12 @@ enum QueueError: Error {
     case allTracksFailed
 }
 
+extension Notification.Name {
+    /// 确定性不可播被自动跳过（3.7 (28)）：userInfo 带 trackId。
+    /// 墙面据此在既有失败贴纸落点闪现一次无版权贴纸作提示。
+    static let foliaTrackSkippedUnplayable = Notification.Name("FoliaTrackSkippedUnplayable")
+}
+
 /// 唯一改曲入口。PlaybackEngine 要求主线程调用：本类方法凡触 engine 者，
 /// 先经 runOnMain 回到主线程再执行（调用方多为锁屏命令 / 桥回调 / engine 回调，
 /// 正常都在主线程，hop 只是兜底）；取流等耗时工作在 Task 里做，状态变更与
@@ -40,7 +46,9 @@ final class QueueManager: ObservableObject {
     @Published var playMode: PlayMode = .loopAll
 
     /// 最近一次「用户点播的歌无法播放」的错误文案（UI 展示用）。
-    /// 点播失败不再连环跳歌：停住、报错，等用户自己选下一首（3.2 教训）。
+    /// 点播失败分两路（3.7 (28) 修订）：确定性不可播（VIP/版权/
+    /// 无音源等接口明确信号）顺跳下一首可播的，不停住；瞬时失败
+    /// （网络超时/节点故障）仍按 3.2 教训停住报错，不连环跳歌。
     @Published private(set) var lastError: String?
 
     /// 本次 load 是否来自用户点播（setQueue / insertAndPlay / playAtIndex）。
@@ -425,13 +433,29 @@ final class QueueManager: ObservableObject {
                     FoliaBridgeLogStore.shared.write(level: "warn", module: "queue",
                         message: "load failed track=\(track.id) manual=\(manual) class=\(Self.loadErrorClass(error)) resolveMs=\(resolveMs) error=\(error.localizedDescription)")
                     if manual {
-                        // 用户点播的歌拿不到地址（VIP / 版权 / 下架）：停住报错，
-                        // 不连环跳歌（3.2 录屏里歌名闪切的教训）。
-                        self.consecutiveFailures = 0
-                        self.manualSelectionPending = false
-                        self.engine.stop()
-                        self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
-                        self.onManualLoadFailed?(track)
+                        if Self.isDeterministicallyUnplayable(error) {
+                            // 点播到的歌确定性不可播（3.7 (28)）：顺跳
+                            // 下一首可播的，不停在失败态；连跳由熔断
+                            // 封顶（整队一轮无一可播才停并报错）。
+                            self.skipUnplayableLoad(error: error, track: track)
+                        } else {
+                            // 瞬时失败（网络超时/节点故障）：停住报错，
+                            // 不连环跳歌（3.2 录屏里歌名闪切的教训）。
+                            self.consecutiveFailures = 0
+                            self.manualSelectionPending = false
+                            self.engine.stop()
+                            self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+                            self.onManualLoadFailed?(track)
+                        }
+                    } else if Self.isDeterministicallyUnplayable(error) {
+                        // 自动推进/手动切歌落到不可播歌：同样顺跳，
+                        // 跳过闪现由墙面订阅通知处理；熔断判定在
+                        // handleFailure 内，本次将触发熔断时不闪现
+                        // （持久失败态接管提示）。
+                        if self.consecutiveFailures + 1 < self.queue.count {
+                            self.notifySkippedUnplayable(track)
+                        }
+                        self.handleFailure(error)
                     } else {
                         self.handleFailure(error)
                     }
@@ -477,6 +501,60 @@ final class QueueManager: ObservableObject {
                   self.engine.currentTrack?.id == track.id else { return }
             self.engine.updateCurrentArtwork(image)
         }
+    }
+
+    // MARK: - 确定性不可播分类 + 点播顺跳（3.7 (28)）
+
+    /// 确定性不可播判定：只认接口明确信号——取流被拒（VIP/版权
+    /// 致 url 为空，EdgeOneError.streamURLMissing）、平台取流未
+    /// 提供（providerUnverified，重试永不会成功）、本地文件缺失
+    /// （QueueError.localFileMissing）。网络超时、双节点失败、
+    /// 响应异常、URLError 一律不算：那是瞬时失败，抖动一下就
+    /// 跳歌会把可播的歌误杀。引擎播流阶段的失败（onTrackFailed）
+    /// 无接口信号可判，不走本分类，保持既有处理。
+    private static func isDeterministicallyUnplayable(_ error: Error) -> Bool {
+        if let edgeError = error as? EdgeOneError {
+            switch edgeError {
+            case .streamURLMissing, .providerUnverified: return true
+            case .allNodesFailed, .invalidResponse: return false
+            }
+        }
+        if let queueError = error as? QueueError {
+            switch queueError {
+            case .localFileMissing: return true
+            case .emptyQueue, .allTracksFailed: return false
+            }
+        }
+        return false
+    }
+
+    /// 跳过闪现通知（墙面在既有失败贴纸落点闪现一次作提示）。
+    private func notifySkippedUnplayable(_ track: FoliaTrack) {
+        Breadcrumbs.log("queue skip unplayable track=\(track.id)")
+        NotificationCenter.default.post(
+            name: .foliaTrackSkippedUnplayable, object: self,
+            userInfo: ["trackId": track.id])
+    }
+
+    /// 点播顺跳：用户点中的歌确定性不可播时调用（主线程）。
+    /// 熔断口径与自动跳歌共用 consecutiveFailures：整队一轮无一
+    /// 可播 → 停住、报错、回既有失败态；未熔断 → 发闪现通知后
+    /// 按当前模式推进下一首（playNext 内含随机模式取序；单曲
+    /// 循环模式下本曲不可播同样顺跳，不死循环重播本曲）。
+    private func skipUnplayableLoad(error: Error, track: FoliaTrack) {
+        consecutiveFailures += 1
+        manualSelectionPending = false
+        if consecutiveFailures >= queue.count {
+            consecutiveFailures = 0
+            engine.stop()
+            NSLog("[QueueManager] manual skip exhausted queue: \(error.localizedDescription)")
+            lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+            onManualLoadFailed?(track)
+            onFatalError?(error)
+            return
+        }
+        notifySkippedUnplayable(track)
+        playNext(manual: false)
     }
 
     // MARK: - 失败跳歌 + 熔断

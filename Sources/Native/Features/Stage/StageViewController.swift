@@ -666,8 +666,10 @@ final class StageViewController: UIViewController {
         let id = track.id
         let newState = LikesStore.shared.toggle(id)
         refreshLikeButton()
-        // 贴纸层（3.7 (24)，纯新增）：点亮时红心左侧浮贴纸。
+        // 贴纸层（3.7 (24)，纯新增）：点亮时红心左侧浮贴纸；
+        // 取消收藏补依依不舍贴纸（3.7 (28)），同一落点成对。
         if newState { stickerShowLikeCelebration() }
+        else { stickerShowUnlikeSticker() }
         Task { [weak self] in
             do {
                 _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
@@ -879,9 +881,32 @@ extension StageViewController {
         guard let like = stickerLike else { return }
         like.alpha = 1
         like.isHidden = false
+        // 轮廓柔光（3.7 (28)）：dog-11 线条型浅色主体，深色
+        // 封面上靠一圈极淡亮边保轮廓可辨。
+        like.silhouetteHaloEnabled = true
         like.setSticker("dog-11", mode: .loops(2))
         like.onFinished = { [weak like] in
             UIView.animate(withDuration: 0.3) {
+                like?.alpha = 0
+            } completion: { _ in
+                like?.isHidden = true
+                like?.alpha = 1
+            }
+        }
+        stickerLayoutOverlays()
+    }
+
+    /// 取消收藏（3.7 (28) 新增，与收藏庆祝成对）：同一落点冒
+    /// cat-04（单爪抹泪，映射里「取消收藏」场景的定案主选），
+    /// 播一次停末帧、多停留 1.1s 再淡出。
+    func stickerShowUnlikeSticker() {
+        guard let like = stickerLike else { return }
+        like.alpha = 1
+        like.isHidden = false
+        like.silhouetteHaloEnabled = false
+        like.setSticker("cat-04", mode: .once(holdLast: true))
+        like.onFinished = { [weak like] in
+            UIView.animate(withDuration: 0.3, delay: 1.1, options: []) {
                 like?.alpha = 0
             } completion: { _ in
                 like?.isHidden = true

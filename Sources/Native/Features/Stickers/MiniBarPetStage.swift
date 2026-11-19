@@ -783,6 +783,9 @@ final class MiniBarPetStage: UIView {
         let view = StickerView()
         let asset = specified ?? Self.reactionPool.randomElement() ?? "dog-11"
         view.setSticker(asset, mode: .loop)
+        // 轮廓柔光（3.7 (28)）：反应贴纸若是 dog-11（亲亲回话
+        // 指定素材/反应池成员），深色墙面上保轮廓可辨。
+        view.silhouetteHaloEnabled = (asset == "dog-11")
         if !framesRunning { view.pause() }
         let size: CGFloat = 40
         var x = actor.frame.midX - size / 2

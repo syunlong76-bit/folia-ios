@@ -74,6 +74,8 @@ final class HomeWallViewController: UIViewController,
     private var stickerBufferTapDeadline: Date?
     private var stickerBufferHideTimer: Timer?
     private var stickerBufferWaiting = false
+    // 跳过闪现（3.7 (28)）：令牌防旧的待发隐藏误伤新一轮显示。
+    private var stickerSkipFlashToken = 0
 
     // 底部播放台（3.7 (13.4) #4，Miller 点名）：与曲目墙同款
     // E 液态玻璃台（构造同构、按仓库惯例有意重复）；差异是主页
@@ -135,6 +137,10 @@ final class HomeWallViewController: UIViewController,
         NotificationCenter.default.addObserver(
             self, selector: #selector(miniPlayerThemeSettingsChanged),
             name: .foliaMiniPlayerThemeChanged, object: nil)
+        // 确定性不可播被自动跳过（3.7 (28)）：闪现提示贴纸。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(stickerTrackSkippedUnplayable),
+            name: .foliaTrackSkippedUnplayable, object: nil)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         collectionView.backgroundColor = .black
@@ -1430,6 +1436,34 @@ extension HomeWallViewController {
             }
         } else if stickerBufferTapDeadline == nil {
             stickerHideBufferSticker()
+        }
+    }
+
+    // MARK: 跳过闪现（3.7 (28)）
+
+    /// 确定性不可播被自动跳过：迷你台左上落点闪现一次无版权
+    /// 贴纸作提示（主页墙无展开曲目卡，只有这一落点）。本墙
+    /// 不在屏上时不闪；缓冲状态机忙时不抢视图（台面已有反馈）。
+    @objc func stickerTrackSkippedUnplayable() {
+        guard view.window != nil else { return }
+        guard !stickerBufferVisible, stickerBufferTapDeadline == nil,
+              !stickerBufferWaiting else { return }
+        stickerEnsureViews()
+        guard let buffer = stickerBufferView else { return }
+        stickerSkipFlashToken += 1
+        let token = stickerSkipFlashToken
+        buffer.layer.removeAllAnimations()
+        buffer.onFinished = nil
+        buffer.setSticker(WallPosterCell.nextFailureStickerAsset(),
+                          mode: .once(holdLast: true))
+        buffer.alpha = 1
+        buffer.isHidden = false
+        stickerLayoutOverlays()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.3) { [weak self, weak buffer] in
+            guard let self, self.stickerSkipFlashToken == token,
+                  !self.stickerBufferVisible,
+                  self.stickerBufferTapDeadline == nil else { return }
+            buffer?.isHidden = true
         }
     }
 
