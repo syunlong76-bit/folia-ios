@@ -1,15 +1,28 @@
+import AVFoundation
 import QuartzCore
 import UIKit
 
-/// 歌词时序口径（3.7 (17)）：行判定提前量、扫光补偿与时钟重锚
-/// 阈值收在一处，改口径只改这里。
+/// 歌词时序口径：行判定提前量、扫光补偿与时钟重锚阈值收在
+/// 一处，改口径只改这里。
 enum LyricTiming {
-    /// 行判定提前量（秒）：沿 (15) 的 +0.15 判定口径；扫光起点
-    /// 同步前移同量，消除「行已点亮、扫光恒定拖尾」。
-    static let lead = 0.15
+    /// 行判定提前量（秒），单一可配置常量。3.7 (19) 归零：
+    /// +0.15 是 (15) 为补 200ms 台阶缓存锚的滞后中位数加的，
+    /// (17) 锚源换成真值直读后滞后已消失、提前量成净误差
+    /// （audit-3719 §三实锤：墙链因此比详情页恒早 150ms
+    /// 换行）。扫光起点同步吃同一常量，归零后两边自动同口径。
+    static let lead = 0.0
     /// 漂移重锚阈值（秒）：锚源改直读真实 playhead 后收紧
     /// （(15) 为 0.3，配台阶缓存时再小会频繁误锚）。
     static let reanchorThreshold = 0.12
+}
+
+/// 逐字时间戳（YRC 派生，3.7 (19)）：一行歌词内每个字/词的
+/// 起始时刻与时长（秒，绝对时间线）。墙链有 YRC 时扫光按此
+/// 推进（替换行级线性插值），与 Web 详情页同源时刻表。
+struct LyricWordStamp {
+    let start: Double
+    let duration: Double
+    let text: String
 }
 
 /// 当前行扫光视图（3.7 (12)）：暗字打底 + 亮字被 mask 按进度裁切，
@@ -41,6 +54,14 @@ private final class SweepLyricLineView: UIView {
         dimLabel.attributedText = attributed
         brightLabel.attributedText = attributed
         updateMask()
+    }
+
+    /// 按与 mask 相同的字体属性量任意字符串的宽（逐字扫光把
+    /// 「已唱前缀宽」换算成进度用，3.7 (19)）。
+    func measuredWidth(of text: String) -> CGFloat {
+        guard let full = dimLabel.attributedText, full.length > 0, !text.isEmpty else { return 0 }
+        let attrs = full.attributes(at: 0, effectiveRange: nil)
+        return ceil((text as NSString).size(withAttributes: attrs).width)
     }
 
     override func layoutSubviews() {
@@ -106,6 +127,9 @@ final class LyricWindowView: UIView {
     private var sweepProxy: LyricSweepLinkProxy?
     private var sweepLineStart: Double = 0
     private var sweepLineDuration: Double = 1
+    /// 当前行逐字戳（YRC 派生，3.7 (19)）：非 nil 时扫光按逐字
+    /// 真戳推进；nil = 行级 LRC 路径，维持线性插值。
+    private var sweepWords: [LyricWordStamp]?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -151,6 +175,7 @@ final class LyricWindowView: UIView {
 
     /// 等价旧 cell 的空窗口下发：整组收起并停扫光。
     func clear() {
+        sweepWords = nil
         setWindow(texts: [], lineStart: 0, lineDuration: 0, slide: false)
         lyricLinesContainer.layer.removeAllAnimations()
         lyricLinesContainer.transform = .identity
@@ -164,15 +189,18 @@ final class LyricWindowView: UIView {
     /// 上滑一行再落位重渲染；其余情况直接落位。空窗口 = 整组收起。
     func setWindow(texts: [String], lineStart: Double,
                         lineDuration: Double, slide: Bool,
-                        lineActive: Bool = true) {
+                        lineActive: Bool = true,
+                        lineWords: [LyricWordStamp]? = nil) {
         let hasContent = texts.contains { !$0.isEmpty }
         lyricScrimView.isHidden = !hasContent
         lyricClipView.isHidden = !hasContent
         guard hasContent else {
             lyricTexts = []
+            sweepWords = nil
             stopSweep()
             return
         }
+        sweepWords = lineWords
         let canSlide = slide && lyricTexts.count == 6 && texts.count == 6
             && !lyricTexts[2].isEmpty && lyricTexts[2] == texts[1]
         lyricTexts = texts
@@ -245,9 +273,10 @@ final class LyricWindowView: UIView {
     /// 只够换行、不够驱动扫光，DS27 定版）。link 经弱代理转发
     /// （3.7 (13) #1）：直连 cell 会被 link 强持无法释放。
     private func beginSweep(lineStart: Double, lineDuration: Double) {
-        // 扫光与行判定同口径（3.7 (17)）：行判定带 +lead 提前量，
-        // 扫光起点同步前移 lead；(15) 时扫光零补偿、恒定拖尾
-        // 0–300ms，是肉眼最易感知的「对不齐」来源。
+        // 扫光与行判定同口径：行判定带 lead 提前量，扫光起点
+        // 同步前移 lead（3.7 (19) 起 lead = 0，两边同为零）。
+        // 有逐字戳（sweepWords）时 sweepTick 改走逐字真戳，
+        // lineStart/lineDuration 只作行级回落口径。
         sweepLineStart = lineStart - LyricTiming.lead
         sweepLineDuration = max(lineDuration, 0.1)
         lyricSweepView.progress = 0
@@ -264,9 +293,43 @@ final class LyricWindowView: UIView {
 
     func sweepTick() {
         guard window != nil, let clock = self.clock else { stopSweep(); return }
-        let p = (clock() - sweepLineStart) / sweepLineDuration
+        let now = clock()
+        // 逐字扫光（3.7 (19)）：有 YRC 逐字戳时按真戳推进——
+        // 已唱完的字计全宽、正在唱的字按其时长比例计宽，合计
+        // 占整行文本宽的比例即 mask 进度；人声在一行内的停顿/
+        // 抢拍由戳本身承载，不再被行级线性插值抹平。
+        if let words = sweepWords, !words.isEmpty {
+            lyricSweepView.progress = wordSweepProgress(words: words, now: now)
+            if let last = words.last, now >= last.start + last.duration { stopSweep() }
+            return
+        }
+        let p = (now - sweepLineStart) / sweepLineDuration
         lyricSweepView.progress = min(max(p, 0), 1)
         if p >= 1 { stopSweep() }
+    }
+
+    /// 逐字进度：已唱前缀按扫光行同一字体属性量宽（前缀整体
+    /// 量宽而非逐字累加，避免字距重复计入），当前字按时长
+    /// 比例折算；分母为整行文本宽，与 mask 的 span 口径一致。
+    private func wordSweepProgress(words: [LyricWordStamp], now: Double) -> Double {
+        let fullText = lyricTexts.count > 2 ? lyricTexts[2] : ""
+        let total = lyricSweepView.measuredWidth(of: fullText)
+        guard total > 0 else { return 0 }
+        var sung = ""
+        for word in words {
+            if now >= word.start + word.duration {
+                sung += word.text
+            } else if now >= word.start {
+                let frac = (now - word.start) / word.duration
+                let width = lyricSweepView.measuredWidth(of: sung)
+                    + lyricSweepView.measuredWidth(of: word.text) * CGFloat(frac)
+                return min(max(Double(width / total), 0), 1)
+            } else {
+                break
+            }
+        }
+        let width = lyricSweepView.measuredWidth(of: sung)
+        return min(max(Double(width / total), 0), 1)
     }
 
     private func stopSweep() {
@@ -334,6 +397,14 @@ final class LyricWindowView: UIView {
 /// 即重锚（暂停冻结位置与恢复起跑点都以真值为准）；seek 在途
 /// （落点未定）期间暂停漂移重锚，防乐观锚点引发的行判定抖动，
 /// seek 完成回调落定后下一帧按真值自动重锚。
+///
+/// (19) 输出延迟补偿：本 driver 下发的是「呈现 now」——行判定
+/// 与扫光共用。听觉时刻 = 媒体时刻 − 输出延迟（声音经输出
+/// 通道到达耳朵比 item 时间线晚 AVAudioSession.outputLatency：
+/// 外放 ≈0、蓝牙 100–300ms）。补偿只在呈现出口减这一次：
+/// 引擎时间线与漂移检查全程用未补偿的媒体时刻，不污染锚源，
+/// 也不与 Web 链的 offset 校准钮叠加（那边是另一条呈现链）。
+/// 路由变化通知 + 每次重锚时刷新缓存值。
 final class LyricClockDriver {
     var onTick: ((Double) -> Void)?
 
@@ -344,9 +415,21 @@ final class LyricClockDriver {
     /// 采锚时的播放态：外推只在锚为播放态时走单调时钟；与引擎
     /// 当前播放态不一致（暂停/恢复翻转）即重锚，不靠漂移阈值兜底。
     private var anchorWasPlaying = false
+    /// 输出延迟缓存（秒）：呈现 now 统一减它；外放时 ≈0 属预期。
+    private var outputLatency: Double = AVAudioSession.sharedInstance().outputLatency
+    private var routeObserver: NSObjectProtocol?
 
     func start() {
         guard displayLink == nil else { return }
+        refreshOutputLatency()
+        if routeObserver == nil {
+            routeObserver = NotificationCenter.default.addObserver(
+                forName: AVAudioSession.routeChangeNotification,
+                object: AVAudioSession.sharedInstance(),
+                queue: .main) { [weak self] _ in
+                self?.refreshOutputLatency()
+            }
+        }
         reanchor()
         let link = CADisplayLink(target: LinkProxy(owner: self),
                                  selector: #selector(LinkProxy.step))
@@ -357,21 +440,31 @@ final class LyricClockDriver {
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
+        if let routeObserver {
+            NotificationCenter.default.removeObserver(routeObserver)
+            self.routeObserver = nil
+        }
     }
 
     deinit { stop() }
 
+    private func refreshOutputLatency() {
+        outputLatency = AVAudioSession.sharedInstance().outputLatency
+    }
+
     private func reanchor() {
         let engine = PlaybackEngine.shared
+        refreshOutputLatency()
         anchorTime = engine.rawPlayhead()
         anchorWall = CACurrentMediaTime()
         anchorTrackId = engine.currentTrack?.id
         anchorWasPlaying = engine.isPlaying
     }
 
-    /// 当前锚的插值时刻：锚为播放态时按单调时钟外推、暂停态
-    /// 冻结在锚点；无锚/无当前曲返回真实 playhead。
-    func interpolatedNow() -> Double {
+    /// 锚的媒体时刻（未补偿）：播放态按单调时钟外推、暂停态
+    /// 冻结在锚点；无锚/无当前曲返回真实 playhead。漂移检查与
+    /// 呈现出口分工——检查用媒体时刻，出口减输出延迟。
+    private func mediaNow() -> Double {
         let engine = PlaybackEngine.shared
         guard anchorTrackId != nil, engine.currentTrack != nil else {
             return engine.rawPlayhead()
@@ -381,12 +474,18 @@ final class LyricClockDriver {
             : anchorTime
     }
 
+    /// 当前呈现时刻 = 媒体时刻 − 输出延迟（行判定与扫光共用，
+    /// 全程只在此处与 stepFrame 出口减一次）。
+    func interpolatedNow() -> Double {
+        mediaNow() - outputLatency
+    }
+
     fileprivate func stepFrame() {
         let engine = PlaybackEngine.shared
         // 无曲/零时长时也要补发一帧：VC 的 hide 守卫靠 onTick 驱动，
         // 不补发则旧歌词会冻在 overlay 上无法收起。
         guard let track = engine.currentTrack, engine.duration > 0 else {
-            onTick?(engine.rawPlayhead())
+            onTick?(engine.rawPlayhead() - outputLatency)
             return
         }
         if track.id != anchorTrackId { reanchor() }
@@ -397,6 +496,7 @@ final class LyricClockDriver {
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
         // seek 在途时落点由 seek 完成回调回正，期间不重锚。
+        // 漂移检查比的是媒体时刻同口径，不含输出延迟补偿。
         if !engine.isSeekPending,
            abs(engine.rawPlayhead() - predicted) > LyricTiming.reanchorThreshold {
             reanchor()
@@ -404,7 +504,7 @@ final class LyricClockDriver {
         let now = anchorWasPlaying
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
-        onTick?(now)
+        onTick?(now - outputLatency)
     }
 
     /// CADisplayLink 强持有 target：弱代理断环，driver 释放后

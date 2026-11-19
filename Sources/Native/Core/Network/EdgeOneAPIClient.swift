@@ -243,6 +243,24 @@ final class EdgeOneAPIClient {
         return resp.lrc?.lyric ?? ""
     }
 
+    /// 歌词全量（3.7 (19)）：GET /api/netease/lyric/new 一次返回
+    /// lrc + yrc（实测 2026-11-19：id 529319768 → 200，yrc
+    /// version 12、逐字戳齐全）。墙链据此优先用 YRC 派生行时刻
+    /// 与逐字扫光，与 Web 详情页（同走 /lyric/new）同源时刻表；
+    /// yrc 缺失/为空时调用方回落 lrc。舞台/Web 桥仍用上面的
+    /// fetchLyricText，本方法只供墙链。
+    func fetchLyricBundle(songId: String) async throws -> (lrc: String, yrc: String?) {
+        let rawId = songId.replacingOccurrences(of: "ncm_", with: "")
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/lyric/new",
+            queryItems: [URLQueryItem(name: "id", value: rawId)],
+            as: NeteaseLyricNewResponse.self
+        )
+        let yrc = resp.yrc?.lyric
+        return (resp.lrc?.lyric ?? "", (yrc?.isEmpty == false) ? yrc : nil)
+    }
+
     /// 歌单详情。实测：GET /api/netease/playlist/detail?id=19723756（飙升榜）→ 200。
     func fetchPlaylistDetail(playlistId: String) async throws -> NeteasePlaylistDetail {
         let resp = try await requestJSON(
@@ -634,6 +652,12 @@ private struct NeteaseSongURLResponse: Decodable {
 private struct NeteaseLyricResponse: Decodable {
     let lrc: LrcBody?
     struct LrcBody: Decodable { let lyric: String? }
+}
+
+/// /lyric/new 响应：lrc 与 yrc 同构（{version, lyric}），只取文本。
+private struct NeteaseLyricNewResponse: Decodable {
+    let lrc: NeteaseLyricResponse.LrcBody?
+    let yrc: NeteaseLyricResponse.LrcBody?
 }
 
 private struct NeteasePlaylistDetailResponse: Decodable {

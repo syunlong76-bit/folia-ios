@@ -27,6 +27,17 @@ extension Notification.Name {
     static let foliaStageClosed = Notification.Name("FoliaStageClosed")
 }
 
+/// 歌词行（3.7 (19) 起的统一行模型）：time = 行起始（秒），
+/// words 非 nil = 该行带 YRC 逐字戳（扫光按真戳推进）；nil =
+/// 行级 LRC 路径（扫光线性插值）。有 YRC 时行时刻由 YRC 头戳
+/// 派生，与 Web 详情页同源（audit-3719 实测 LRC/YRC 时刻表
+/// 同曲可差 −98~+463ms，两面必须同源才可能同刻换行）。
+struct LyricLineData {
+    let time: Double
+    let text: String
+    let words: [LyricWordStamp]?
+}
+
 /// M1 阶段 3：单墙原型（队列墙几何 + 真实歌单数据）。入口：主界面
 /// 设置齿轮长按（壳级调试入口，不影响正常使用）。只验证三件事：
 /// 自由平移的帧率与手感、封面按档出图、点按展开的同块重排。
@@ -71,8 +82,8 @@ final class WallPrototypeViewController: UIViewController,
     private var pendingTrackId: String?
     /// 原生点播失败的曲目与短文案（展开卡失败条用）。
     private var failedPlayback: (id: String, message: String)?
-    /// 滚动歌词缓存：trackId → [(time, text)]；空数组 = 已查无词。
-    private var lyricCache: [String: [(time: Double, text: String)]] = [:]
+    /// 滚动歌词缓存：trackId → [LyricLineData]；空数组 = 已查无词。
+    private var lyricCache: [String: [LyricLineData]] = [:]
     private var lyricFetchInFlight: Set<String> = []
     /// 歌词窗口去重与滑入判定：同曲且索引恰好 +1 才滑入，其余 snap。
     private var lastLyricTrackId: String?
@@ -84,6 +95,10 @@ final class WallPrototypeViewController: UIViewController,
     /// 40pt 网格化原点，未变不重复落盘）。
     private var lyricAnchorInstanceId: String?
     private var lastLyricOverlayCrumb: String?
+    /// 锚出窗隐藏态（3.7 (19)）：原锚滑出 overscan 窗口后歌词
+    /// 淡出隐藏（不跨实例重锚、不清行窗），回窗淡入恢复；
+    /// 状态翻转由 setLyricAnchorHidden 落面包屑供真机对账。
+    private var lyricAnchorHidden = false
     /// 展开卡打点去重：组串未变时跳过重复 log。
     private var lastExpandedCellCrumb: String?
     private let wallLayout = WallLayout()
@@ -1441,6 +1456,12 @@ final class WallPrototypeViewController: UIViewController,
             lyricSessionTrackId = track.id
             lastLyricIndex = nil
             lyricAnchorInstanceId = nil
+            // 切歌重置锚隐藏态：淡出动画与 alpha 不许带进新曲。
+            if lyricAnchorHidden {
+                lyricAnchorHidden = false
+                lyricOverlay?.layer.removeAllAnimations()
+                lyricOverlay?.alpha = 1
+            }
         }
         guard wallLayout.expandedInstanceId != nil else {
             setLyricOverlayVisible(false)
@@ -1462,11 +1483,15 @@ final class WallPrototypeViewController: UIViewController,
         // 前奏预告态（3.7 (13) #2）：还没唱到首行时窗口只预告，
         // 不点亮不扫光；active 翻转也要重下发（同 idx 不能被去重吞掉）。
         let lineActive = lines[idx].time <= now + LyricTiming.lead
-        // 帧锚定（3.7 (17)）：歌词只在锚得到播放曲自己的封面卡
-        // 时显示；播放曲不在当前实例窗口内就不显示（随卡出画），
-        // 不再停靠视口、不再压到别曲封面上。
-        let anchored = updateLyricOverlayFrame()
-        setLyricOverlayVisible(anchored)
+        // 帧锚定（3.7 (17) 口径 + (19) 出窗策略）：歌词只在锚得
+        // 到播放曲自己的封面卡时显示。.anchored / .outOfWindow
+        // 的可见性由 updateLyricOverlayFrame 内的锚状态机管理
+        // （出窗淡出隐藏、不清行窗，回窗淡入恢复）；只有
+        // .noCandidate（窗内无播放曲实例且无原锚）走硬隐藏。
+        let anchorOutcome = updateLyricOverlayFrame()
+        if anchorOutcome == .noCandidate {
+            setLyricOverlayVisible(false)
+        }
         if lastLyricTrackId == track.id, lastLyricIndex == idx,
            lastLyricActive == lineActive { return }
         if lastLyricIndex != idx || lastLyricTrackId != track.id {
@@ -1490,7 +1515,8 @@ final class WallPrototypeViewController: UIViewController,
         lastLyricActive = lineActive
         lyricOverlay?.setWindow(texts: texts, lineStart: lines[idx].time,
                                 lineDuration: duration, slide: slide,
-                                lineActive: lineActive)
+                                lineActive: lineActive,
+                                lineWords: lines[idx].words)
     }
 
     private func setLyricOverlayVisible(_ show: Bool) {
@@ -1505,11 +1531,18 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// overlay 帧锚定（3.7 (17) 口径修正，Miller 13:04 定版）：
-    /// 歌词帧只锚「正在播放歌曲的封面卡实例」在墙坐标系中的世界
-    /// 矩形，平移时随卡一起移动；(15) 的视口顶部居中停靠分支已
-    /// 删除——展开别曲时歌词留在播放曲自己的卡上（不在视口就随
-    /// 卡出画），不许跟随视口、不许压到别曲封面上。
+    /// 锚定结果三态（3.7 (19)）：.anchored 已锚上并可见；
+    /// .outOfWindow 原锚出 overscan 窗口、已淡出隐藏（行窗保
+    /// 持，回窗恢复）；.noCandidate 窗内无播放曲实例且无原锚
+    /// （含无展开/无当前曲），由 tick 走硬隐藏。
+    private enum LyricAnchorOutcome {
+        case anchored, outOfWindow, noCandidate
+    }
+
+    /// overlay 帧锚定（3.7 (17) 口径，Miller 13:04 定版；(19)
+    /// 出窗策略经 DS R44 对账）：歌词帧只锚「正在播放歌曲的封
+    /// 面卡实例」在墙坐标系中的世界矩形，平移时随卡一起移动；
+    /// 不停靠视口、不压别曲封面。
     ///
     /// 帧换算与相机折叠模型对齐：布局属性帧 =（世界 − 原点）×
     /// scale + contentOffset，视觉帧 = 属性帧 − contentOffset +
@@ -1518,62 +1551,122 @@ final class WallPrototypeViewController: UIViewController,
     /// 不依赖 cell 是否在场，消除 reload 间隙的贴合/停靠横跳；
     /// 展开中的播放曲实例自动取到展开块矩形。
     ///
-    /// 同曲多实例选锚带 hysteresis：当前锚仍在实例集内就保持，
-    /// 避免平移跨过视口中点时换锚跳格；锚失效（出窗/切歌）才
-    /// 重选——展开中的播放曲实例优先，其次离视口中心最近。
-    /// 返回是否锚定成功（歌词可见性与此对齐）。
+    /// 候选集（3.7 (19) 收紧）：同曲多实例只允许两个候选——
+    /// 展开中的播放曲实例（接管成为新原锚）与原锚本身。原锚
+    /// 仍在实例窗口内就保持（hysteresis）；原锚滑出 overscan
+    /// 窗口时**隐藏不重锚**——(17) 的旧行为是就近改锚到同曲
+    /// 另一张平铺封面，歌词瞬移他卡（audit-3718 §三推测头号，
+    /// R44 采纳修法）；原锚或展开实例回窗时淡入恢复，隐藏期
+    /// 间 tick 照常推进行窗与扫光（不清行窗），恢复即是当前
+    /// 行与当前相位、无闪。无原锚时首次锚定取窗内离视口中心
+    /// 最近的实例成为原锚，此后不再跨实例。
     @discardableResult
-    private func updateLyricOverlayFrame() -> Bool {
+    private func updateLyricOverlayFrame() -> LyricAnchorOutcome {
         guard let overlay = lyricOverlay,
-              let trackId = PlaybackEngine.shared.currentTrack?.id else { return false }
-        let candidates = wallLayout.instances.filter {
+              wallLayout.expandedInstanceId != nil,
+              let trackId = PlaybackEngine.shared.currentTrack?.id else { return .noCandidate }
+        // 实例窗口 = 当前 instances 集（世界窗 + overscan 900）。
+        let inWindow = wallLayout.instances.filter {
             $0.queueIndex < entries.count && entries[$0.queueIndex].id == trackId
         }
-        guard !candidates.isEmpty else {
-            // 播放曲不在当前实例窗口内：无处可锚，帧不许停在旧
-            // 视口坐标冒充锚定（(15) 的冻结帧正是此形态）。
-            lyricAnchorInstanceId = nil
-            return false
+        let expanded = wallLayout.expandedInstanceId.flatMap { id in
+            inWindow.first { $0.instanceId == id }
         }
-        var anchor = candidates.first { $0.instanceId == lyricAnchorInstanceId }
-        if anchor == nil {
-            if let expandedId = wallLayout.expandedInstanceId,
-               let expanded = candidates.first(where: { $0.instanceId == expandedId }) {
-                anchor = expanded
-            } else {
-                // 视口中心的世界坐标：世界原点 + 视口尺寸/scale 的一半。
-                let centerWorld = CGPoint(
-                    x: Double(wallLayout.worldOrigin.x) + Double(view.bounds.width) / wallLayout.cameraScale / 2,
-                    y: Double(wallLayout.worldOrigin.y) + Double(view.bounds.height) / wallLayout.cameraScale / 2)
-                anchor = candidates.min { a, b in
-                    let da = hypot(a.rect.left + a.rect.width / 2 - Double(centerWorld.x),
-                                   a.rect.top + a.rect.height / 2 - Double(centerWorld.y))
-                    let db = hypot(b.rect.left + b.rect.width / 2 - Double(centerWorld.x),
-                                   b.rect.top + b.rect.height / 2 - Double(centerWorld.y))
-                    return da < db
-                }
+        let currentAnchor = lyricAnchorInstanceId.flatMap { id in
+            inWindow.first { $0.instanceId == id }
+        }
+        let target: QueueInstance?
+        var restoreReason = "back-in-window"
+        if let expanded, expanded.instanceId != lyricAnchorInstanceId {
+            // 展开接管：展开的正是播放曲卡，它成为新原锚。
+            target = expanded
+            restoreReason = "expanded-takeover"
+        } else if let currentAnchor {
+            target = currentAnchor
+        } else if lyricAnchorInstanceId != nil {
+            // 原锚出窗：隐藏，不跨实例重锚。
+            setLyricAnchorHidden(true, reason: "out-of-window")
+            return .outOfWindow
+        } else if let expanded {
+            target = expanded
+        } else if !inWindow.isEmpty {
+            // 首次锚定：窗内离视口中心最近的实例成为原锚。
+            let centerWorld = CGPoint(
+                x: Double(wallLayout.worldOrigin.x) + Double(view.bounds.width) / wallLayout.cameraScale / 2,
+                y: Double(wallLayout.worldOrigin.y) + Double(view.bounds.height) / wallLayout.cameraScale / 2)
+            target = inWindow.min { a, b in
+                let da = hypot(a.rect.left + a.rect.width / 2 - Double(centerWorld.x),
+                               a.rect.top + a.rect.height / 2 - Double(centerWorld.y))
+                let db = hypot(b.rect.left + b.rect.width / 2 - Double(centerWorld.x),
+                               b.rect.top + b.rect.height / 2 - Double(centerWorld.y))
+                return da < db
             }
+            restoreReason = "initial-anchor"
+        } else {
+            // 窗内无播放曲实例且无原锚：无处可锚，帧不许停在旧
+            // 视口坐标冒充锚定（(15) 的冻结帧正是此形态）。
+            return .noCandidate
         }
-        guard let anchor,
-              let item = wallLayout.instances.firstIndex(where: { $0.instanceId == anchor.instanceId }),
+        guard let target,
+              let item = wallLayout.instances.firstIndex(where: { $0.instanceId == target.instanceId }),
               let attrs = collectionView.layoutAttributesForItem(at: IndexPath(item: item, section: 0))
-        else { return false }
-        lyricAnchorInstanceId = anchor.instanceId
+        else {
+            // 实例在集内但属性帧暂取不到（布局间隙）：按出窗
+            // 处理，不冒充锚定。
+            setLyricAnchorHidden(true, reason: "attrs-missing")
+            return .outOfWindow
+        }
+        lyricAnchorInstanceId = target.instanceId
         let frame = CGRect(
             x: attrs.frame.minX - collectionView.contentOffset.x + collectionView.frame.minX,
             y: attrs.frame.minY - collectionView.contentOffset.y + collectionView.frame.minY,
             width: attrs.frame.width,
             height: attrs.frame.height)
         if overlay.frame != frame { overlay.frame = frame }
+        setLyricAnchorHidden(false, reason: restoreReason)
         // 帧面包屑：锚实例 id + 帧矩形（原点按 40pt 网格去重，
         // 平移时约每 40pt 一条，不刷屏）；供真机对账锚定是否恒
         // 为播放曲实例、帧是否随卡走。
-        let crumb = "\(anchor.instanceId)|\(Int(frame.minX / 40))|\(Int(frame.minY / 40))"
+        let crumb = "\(target.instanceId)|\(Int(frame.minX / 40))|\(Int(frame.minY / 40))"
         if crumb != lastLyricOverlayCrumb {
             lastLyricOverlayCrumb = crumb
-            Breadcrumbs.log("lrc overlay anchor=\(anchor.instanceId) frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height)) visible=\(!overlay.isHidden)")
+            Breadcrumbs.log("lrc overlay anchor=\(target.instanceId) frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height)) visible=\(!overlay.isHidden)")
         }
-        return true
+        return .anchored
+    }
+
+    /// 锚出窗隐藏/恢复的视觉状态机（3.7 (19)）：隐藏走 0.2s
+    /// 边缘淡出（不用硬切消失，与 iOS 动效口径一致）、动画完
+    /// 成才置 isHidden；恢复淡入。隐藏期间不清行窗、不重置
+    /// 行索引——tick 继续下发 setWindow，扫光按时钟自走，
+    /// 恢复时即是当前行当前相位。状态每次翻转落一行面包屑
+    /// （anchor-state=hide/restore + reason），供真机对账。
+    private func setLyricAnchorHidden(_ hidden: Bool, reason: String) {
+        guard let overlay = lyricOverlay else { return }
+        if hidden {
+            guard !lyricAnchorHidden else { return }
+            lyricAnchorHidden = true
+            Breadcrumbs.log("lrc overlay anchor-state=hide reason=\(reason) anchor=\(lyricAnchorInstanceId ?? "-")")
+            UIView.animate(withDuration: 0.2, animations: {
+                overlay.alpha = 0
+            }, completion: { _ in
+                // 动画期间若已恢复（flag 翻回），不许再藏。
+                if self.lyricAnchorHidden { overlay.isHidden = true }
+            })
+        } else {
+            if lyricAnchorHidden {
+                lyricAnchorHidden = false
+                Breadcrumbs.log("lrc overlay anchor-state=restore reason=\(reason) anchor=\(lyricAnchorInstanceId ?? "-")")
+                overlay.isHidden = false
+                UIView.animate(withDuration: 0.2) {
+                    overlay.alpha = 1
+                }
+            } else if overlay.isHidden {
+                // 硬隐藏（clear 路径）后的常规再现：直接显示。
+                overlay.alpha = 1
+                overlay.isHidden = false
+            }
+        }
     }
 
     private func ensureLyrics(for trackId: String) {
@@ -1582,11 +1675,31 @@ final class WallPrototypeViewController: UIViewController,
         lyricFetchInFlight.insert(trackId)
         Breadcrumbs.log("lrc fetch start track=\(trackId)")
         Task { [weak self] in
-            let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: trackId)
-            let parsed = text.map { Self.parseLRC($0) } ?? []
+            // 取数口径（3.7 (19)）：先 /lyric/new 一次拿 lrc+yrc，
+            // 有 YRC 走 YRC 解析（行时刻 + 逐字戳）；/lyric/new
+            // 失败或 YRC 解析为空才回落旧 /lyric 的 LRC 路径，
+            // 保证新接口异常时歌词不至于整面消失。
+            var parsed: [LyricLineData] = []
+            var source = "none"
+            if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: trackId) {
+                if let yrc = bundle.yrc {
+                    let yrcLines = Self.parseYRC(yrc)
+                    if !yrcLines.isEmpty {
+                        parsed = yrcLines
+                        source = "yrc"
+                    }
+                }
+                if source == "none" {
+                    parsed = Self.parseLRC(bundle.lrc)
+                    source = parsed.isEmpty ? "none" : "lrc"
+                }
+            } else if let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: trackId) {
+                parsed = Self.parseLRC(text)
+                source = parsed.isEmpty ? "none" : "lrc-fallback"
+            }
             await MainActor.run {
                 guard let self else { return }
-                Breadcrumbs.log("lrc parsed track=\(trackId) lines=\(parsed.count)")
+                Breadcrumbs.log("lrc parsed track=\(trackId) lines=\(parsed.count) source=\(source)")
                 self.lyricFetchInFlight.remove(trackId)
                 self.lyricCache[trackId] = parsed
                 self.lastLyricIndex = nil
@@ -1594,13 +1707,13 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// LRC 解析：[mm:ss.xx] 前缀行 → (秒， 文本）；多时间戳行只取
-    /// 首个，空文本行丢弃，结果按时间升序。
+    /// LRC 解析：[mm:ss.xx] 前缀行 → 行模型（words = nil）；多时间
+    /// 戳行只取首个，空文本行丢弃，结果按时间升序。
     /// [offset:±ms] 全局偏移（3.7 (17)）：带此标签的文件要求把
     /// 全部行时间整体平移 offset 毫秒（正值 = 歌词延后呈现，
     /// 行时间 = 时间戳 + offset）；旧实现不认此标签、解析失败
     /// 直接丢弃，带 offset 的歌整首恒定偏移数百毫秒。
-    private static func parseLRC(_ raw: String) -> [(time: Double, text: String)] {
+    private static func parseLRC(_ raw: String) -> [LyricLineData] {
         var offsetSeconds = 0.0
         for line in raw.split(separator: "\n") {
             let s = line.trimmingCharacters(in: .whitespaces)
@@ -1610,7 +1723,7 @@ final class WallPrototypeViewController: UIViewController,
                 offsetSeconds = ms / 1000
             }
         }
-        var out: [(time: Double, text: String)] = []
+        var out: [LyricLineData] = []
         for line in raw.split(separator: "\n") {
             let s = String(line)
             guard s.hasPrefix("["), let close = s.firstIndex(of: "]") else { continue }
@@ -1622,11 +1735,63 @@ final class WallPrototypeViewController: UIViewController,
             let text = String(s[s.index(after: close)...])
                 .trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { continue }
-            out.append((time: minutes * 60 + seconds + offsetSeconds, text: text))
+            out.append(LyricLineData(time: minutes * 60 + seconds + offsetSeconds,
+                                     text: text, words: nil))
         }
         let sorted = out.sorted { $0.time < $1.time }
         // 制作名单行只在首个正文行之前过滤（3.7 (13) #2，DS30
         // 位置约束）：正文开始后出现的同形行是歌词本体，不动。
+        return Array(sorted.drop(while: { isCreditLine($0.text) }))
+    }
+
+    /// YRC 解析（3.7 (19)）：行格式 [startMs,durMs](startMs,durMs,flag)字…
+    /// 行起始取头戳、逐字取元组戳（毫秒 → 秒）；行文本 = 逐字文本
+    /// 拼接。不以 [ 开头的行是 JSON 制作名单行（{"t":…,"c":…}），
+    /// 与 LRC 路径同口径跳过；带时间戳的名单行同样只在正文开始
+    /// 前按 isCreditLine 过滤。元组中途解析失败的行降级为行级
+    /// （words = nil，文本取已拼接部分），整表为空时调用方回落
+    /// LRC。YRC 是机器生成格式，实测（529319768）33 行元组全
+    /// 为三元组、无异常。
+    private static func parseYRC(_ raw: String) -> [LyricLineData] {
+        var out: [LyricLineData] = []
+        for rawLine in raw.split(separator: "\n") {
+            let line = String(rawLine)
+            guard line.hasPrefix("["), let headEnd = line.firstIndex(of: "]") else { continue }
+            let head = line[line.index(after: line.startIndex)..<headEnd]
+            let headParts = head.split(separator: ",")
+            guard headParts.count >= 2,
+                  let startMs = Double(headParts[0].trimmingCharacters(in: .whitespaces))
+            else { continue }
+            var words: [LyricWordStamp] = []
+            var text = ""
+            var cursor = line.index(after: headEnd)
+            var malformed = false
+            while cursor < line.endIndex {
+                guard line[cursor] == "(",
+                      let close = line[cursor...].firstIndex(of: ")") else {
+                    malformed = true
+                    break
+                }
+                let tuple = line[line.index(after: cursor)..<close]
+                let tp = tuple.split(separator: ",")
+                guard tp.count >= 2,
+                      let wordStart = Double(tp[0].trimmingCharacters(in: .whitespaces)),
+                      let wordDur = Double(tp[1].trimmingCharacters(in: .whitespaces))
+                else { malformed = true; break }
+                let textStart = line.index(after: close)
+                let textEnd = line[textStart...].firstIndex(of: "(") ?? line.endIndex
+                let wordText = String(line[textStart..<textEnd])
+                words.append(LyricWordStamp(start: wordStart / 1000,
+                                             duration: wordDur / 1000,
+                                             text: wordText))
+                text += wordText
+                cursor = textEnd
+            }
+            guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
+            out.append(LyricLineData(time: startMs / 1000, text: text,
+                                     words: (malformed || words.isEmpty) ? nil : words))
+        }
+        let sorted = out.sorted { $0.time < $1.time }
         return Array(sorted.drop(while: { isCreditLine($0.text) }))
     }
 
