@@ -414,7 +414,7 @@ final class CompanionPetView: UIView {
 
     // MARK: 三分交互（演员回调）
 
-    func petTapped(_ actor: PetActor, head: Bool) {
+    fileprivate func petTapped(_ actor: PetActor, head: Bool) {
         guard !isHidden else { return }
         if head {
             showReaction(above: actor)
@@ -423,7 +423,7 @@ final class CompanionPetView: UIView {
         }
     }
 
-    func petDragBegan(_ actor: PetActor) {
+    fileprivate func petDragBegan(_ actor: PetActor) {
         guard !isHidden else { return }
         hideDialog()
         if scriptPair?.0 === actor || scriptPair?.1 === actor {
@@ -437,11 +437,11 @@ final class CompanionPetView: UIView {
         }
     }
 
-    func petDragChanged(_ actor: PetActor, to point: CGPoint) {
+    fileprivate func petDragChanged(_ actor: PetActor, to point: CGPoint) {
         actor.center = point
     }
 
-    func petDragEnded(_ actor: PetActor, at point: CGPoint) {
+    fileprivate func petDragEnded(_ actor: PetActor, at point: CGPoint) {
         UIView.animate(withDuration: 0.2) { actor.transform = .identity }
         if !bounds.contains(point) {
             // 拖出框外松手 = 送走。
@@ -459,7 +459,7 @@ final class CompanionPetView: UIView {
         persistSeat(of: actor)
     }
 
-    func petDragCancelled(_ actor: PetActor) {
+    fileprivate func petDragCancelled(_ actor: PetActor) {
         UIView.animate(withDuration: 0.2) { actor.transform = .identity }
         actor.center = clampedCenter(actor.center)
         actor.mode = .idle
@@ -867,17 +867,4 @@ private enum StickerSeat {
     static let seatedKey = "folia.companion.seat.seated"
 }
 
-// MARK: - 贴纸设置（设置页与舞台共用真源）
-
-enum StickerSettings {
-    private static let companionKey = "folia.stickers.companionEnabled"
-    static var companionEnabled: Bool {
-        get {
-            if UserDefaults.standard.object(forKey: companionKey) == nil {
-                return true
-            }
-            return UserDefaults.standard.bool(forKey: companionKey)
-        }
-        set { UserDefaults.standard.set(newValue, forKey: companionKey) }
-    }
-}
+// 注：StickerSettings（陪伴开关真源）定义在 APNGSticker.swift。
