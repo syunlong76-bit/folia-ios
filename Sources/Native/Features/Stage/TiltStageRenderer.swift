@@ -327,9 +327,9 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
 
         var scaleMultiplier: CGFloat = 1
         let tiltWidths = segments.filter { $0.isTilt }
-            .map { measure($0.text, tiltMeasureFont) }
+            .map { measure($0.text, font: tiltMeasureFont) }
         let normalWidths = segments.filter { !$0.isTilt }
-            .map { measure($0.text, normalMeasureFont) }
+            .map { measure($0.text, font: normalMeasureFont) }
         let tiltWidth = tiltWidths.max() ?? 0
         let normalWidth = normalWidths.max() ?? 0
         let tiltOverflow = tiltWidth > 0 ? tiltWidth / availableWidth : 0
@@ -340,7 +340,7 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
             if maxOverflow >= 1.6 {
                 // RESPLIT_THRESHOLD：重切更多段再定缩放。
                 let targetWidth = availableWidth * (1.6 - 0.15)
-                let totalEstWidth = measure(fullText, normalMeasureFont)
+                let totalEstWidth = measure(fullText, font: normalMeasureFont)
                 let extra = min(4, max(segments.count + 1,
                                        Int((totalEstWidth / targetWidth).rounded(.up))))
                 if extra > segments.count {
@@ -349,9 +349,11 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
                     var reSegments: [TiltSegmentData] = []
                     var reOffset = 0
                     for rawText in reTexts {
-                        let leading = rawText.count
-                            - rawText.drop(while: { $0 == " " || $0 == "\t" }).count
-                        let trimmed = rawText.trimmingCharacters(in: .whitespaces)
+                        let dropped: Substring = rawText.drop(
+                            while: { $0 == " " || $0 == "\t" })
+                        let leading = rawText.count - dropped.count
+                        let trimmed = rawText.trimmingCharacters(
+                            in: CharacterSet.whitespaces)
                         reSegments.append(TiltSegmentData(
                             text: trimmed, isTilt: false,
                             isShortLastLine: false, charOffset: reOffset + leading))
@@ -368,12 +370,12 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
                     }
                     var postScale: CGFloat = 1
                     if let tiltSeg = reSegments.first(where: { $0.isTilt }) {
-                        let w = measure(tiltSeg.text, tiltMeasureFont)
+                        let w = measure(tiltSeg.text, font: tiltMeasureFont)
                         if w > availableWidth {
                             postScale = max(0.5, availableWidth / w)
                         }
                     } else if let widest = reSegments.filter({ !$0.isTilt })
-                        .map({ measure($0.text, normalMeasureFont) }).max() {
+                        .map({ measure($0.text, font: normalMeasureFont) }).max() {
                         if widest > availableWidth {
                             postScale = max(0.55, availableWidth / widest)
                         }
@@ -594,7 +596,7 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
 
     /// markShortLastLine：末段非 tilt、修剪后 ≤2 字且长度
     /// ×2 ≤ 前段长度时标短末段（渲染时字号 ×1.18）。
-    static func markShortLastLine(_ input: [TiltSegmentData]) -> [TiltSegmentData] {
+    fileprivate static func markShortLastLine(_ input: [TiltSegmentData]) -> [TiltSegmentData] {
         var segs = input
         guard segs.count >= 2 else { return segs }
         let last = segs[segs.count - 1]
@@ -850,8 +852,10 @@ private final class TiltSegmentView: UIView {
         let params = UICubicTimingParameters(
             controlPoint1: CGPoint(x: 0.25, y: 0.46),
             controlPoint2: CGPoint(x: 0.45, y: 0.94))
-        return UIViewPropertyAnimator(
-            duration: duration, timingParameters: params, animations: animations)
+        let animator = UIViewPropertyAnimator(
+            duration: duration, timingParameters: params)
+        animator.addAnimations(animations)
+        return animator
     }
 }
 
