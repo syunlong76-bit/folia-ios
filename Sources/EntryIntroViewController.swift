@@ -602,26 +602,25 @@ enum PortraitRestore {
         let now = CACurrentMediaTime()
         guard now - lastRequestAt > 0.3 else { return }
         lastRequestAt = now
-        attempt(scene: scene, source: source, attempt: 1)
+        attempt(scene: scene, source: source, tryCount: 1)
     }
 
-    private static func attempt(scene: UIWindowScene, source: String, attempt: Int) {
+    private static func attempt(scene: UIWindowScene, source: String, tryCount: Int) {
         scene.requestGeometryUpdate(
             .iOS(interfaceOrientations: .portrait)
         ) { error in
-            if let error {
-                Breadcrumbs.log("entry rotate portrait error source=\(source) attempt=\(attempt) \(failureContext(scene: scene)) error=\(error.localizedDescription)")
-            }
+            // errorHandler 只在失败时回调，error 为非 Optional。
+            Breadcrumbs.log("entry rotate portrait error source=\(source) attempt=\(tryCount) \(failureContext(scene: scene)) error=\(error.localizedDescription)")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             if scene.interfaceOrientation.isLandscape {
-                if attempt < 2 {
-                    attempt(scene: scene, source: source, attempt: attempt + 1)
+                if tryCount < 2 {
+                    PortraitRestore.attempt(scene: scene, source: source, tryCount: tryCount + 1)
                 } else {
                     Breadcrumbs.log("entry rotate portrait failed source=\(source) \(failureContext(scene: scene))")
                 }
             } else {
-                Breadcrumbs.log("entry rotate portrait ok source=\(source) attempt=\(attempt)")
+                Breadcrumbs.log("entry rotate portrait ok source=\(source) attempt=\(tryCount)")
             }
         }
     }
