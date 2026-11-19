@@ -22,9 +22,12 @@ final class HomeWallViewController: UIViewController,
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
     /// 入场视频槽位（3.7 (17)，替换 (12) 的电影长卷）：数据在途
-    /// 时由 EntryIntroPresenter 以横屏 modal 呈现 v5 油画视频，
-    /// 数据落定经 finishCurrent 提前退场；每进程只播一次的守卫
-    /// 在 Presenter 内（与 (13) 长卷的启动级守卫同语义、随槽迁移）。
+    /// 时由 EntryIntroPresenter 以横屏 modal 呈现 v5 油画视频；
+    /// 每进程只播一次的守卫在 Presenter 内（与 (13) 长卷的启动级
+    /// 守卫同语义、随槽迁移）。退出条件（3.7 (18) 定版）：只认
+    /// 关闭按钮与自然播完，数据落定不再触发退场——(17) 把
+    /// load-ok / load-failed / not-logged-in 三路落定接到
+    /// finishCurrent 的接线已全部拆除。
     private var didCenterCamera = false
     private var isWrapping = false
     /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
@@ -161,8 +164,9 @@ final class HomeWallViewController: UIViewController,
         // 路径）则整段跳过。每进程只播一次、重进不重播由
         // EntryIntroPresenter 的静态守卫保证——本方法在入场退场
         // 后会被再次调用（墙重新露面），守卫挡住双播；退场只由
-        // 加载落定（finishCurrent）或视频自身退出路径驱动，
-        // appear 不做任何关闭动作（(13.1) 长卷误关黑屏的教训）。
+        // 关闭按钮/自然播完/视频自身失败与看门狗驱动（3.7 (18)），
+        // appear 与数据落定都不做任何关闭动作（(13.1) 长卷误关
+        // 黑屏的教训）。
         if entries.isEmpty {
             EntryIntroPresenter.presentIfNeeded(from: self)
         }
@@ -190,7 +194,6 @@ final class HomeWallViewController: UIViewController,
                 guard status.loggedIn, let userId = status.userId else {
                     await MainActor.run {
                         self.statusLabel.text = "主页墙：未登录（先在网页侧登录网易云）"
-                        EntryIntroPresenter.finishCurrent(reason: "not-logged-in")
                     }
                     return
                 }
@@ -212,7 +215,6 @@ final class HomeWallViewController: UIViewController,
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
-                    EntryIntroPresenter.finishCurrent(reason: "load-ok")
                 }
             } catch {
                 // 原始错误只进日志，标签只给人话（3.7 (13) #3：根因是
@@ -223,7 +225,8 @@ final class HomeWallViewController: UIViewController,
                         message: "home load failed attempt=\(self.loadAttempts): \(error)")
                     Breadcrumbs.log("home load failed attempt=\(self.loadAttempts)")
                     if self.loadAttempts < 2 {
-                        // 首次失败不是落定：入场视频继续播着等重试（13.1）。
+                        // 首次失败先自动重试；加载失败（含最终失败）
+                        // 不触发入场退场，视频继续播到关闭/播完（3.7 (18)）。
                         self.statusLabel.text = "主页墙加载失败，正在重试…"
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                             self?.loadEntries()
@@ -231,7 +234,6 @@ final class HomeWallViewController: UIViewController,
                     } else {
                         self.loadFailed = true
                         self.statusLabel.text = "主页墙加载失败，点按这里重试"
-                        EntryIntroPresenter.finishCurrent(reason: "load-failed")
                     }
                 }
             }

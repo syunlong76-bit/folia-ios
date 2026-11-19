@@ -17,9 +17,12 @@ import UIKit
 ///   白色 ×，34pt），入场开始即显示可点；点它立即结束入场进墙——
 ///   墙数据未就绪时墙自呈既有加载态，不黑屏、不堵在入场面。
 /// - 画面点按不再跳过（12:07 定）：只认关闭按钮与自动退出，避免误触。
-/// - 退场语义与墙加载对齐：墙数据落定（load-ok / load-failed /
-///   not-logged-in）经 finishCurrent 提前退场进墙，不等视频播完；
-///   播完（到点）自动退；播放失败立即放行；另设看门狗（时长 + 2.5s）兜底。
+/// - 退场语义（3.7 (18) 定版，覆盖 (17) 的数据落定退场）：退出只认
+///   关闭按钮与自然播完；数据加载状态（完成/失败/未登录）一律不
+///   触发退场——默认每次开局都把视频放完，用户不想看自己点关闭。
+///   (17) 的 finishCurrent / finishEarly / finishRequested 数据落定
+///   通道已整段删除。保留的安全出口（视频自身问题，非加载）：
+///   播放失败立即放行、看门狗（时长 + 2.5s）兜底。
 /// - 退出转场遮旋转（12:07 追加）：先把入场层淡出到垫在下面的黑幕
 ///   （0.3s），方向恢复（转回竖屏）在黑幕遮蔽下完成，用户看不到画面
 ///   硬转 90°；旋转走完后黑幕再淡出（0.35s）露出竖屏主页墙。
@@ -31,9 +34,6 @@ enum EntryIntroPresenter {
 
     private static var hasPresented = false
     private static weak var current: EntryIntroViewController?
-    /// 落定信号先于呈现落地到达（数据快路径竞态）：呈现落地时
-    /// 直接跳过，不许数据已到还把视频盖上去。
-    private static var finishRequested = false
 
     /// 由主页墙进入页触发：在 presenter 之上呈现入场视频。
     /// 返回是否已受理（每进程一次、资源缺失、窗口未就绪均不受理）。
@@ -51,12 +51,6 @@ enum EntryIntroPresenter {
         hasPresented = true
         // 推迟一帧再呈现，确保 presenter 已进窗口层级
         DispatchQueue.main.async {
-            // 数据在呈现落地前就落定：整段跳过（与旧长卷「数据
-            // 先到则整段不播」同语义）。
-            guard !finishRequested else {
-                finishRequested = false
-                return
-            }
             // 黑幕：垫在入场 VC 之下、主页墙之上。退出时入场层先淡到它身上，
             // 转回竖屏在黑幕下完成，随后黑幕淡出露出主页墙。
             // 不拦截触摸：哪怕残留也不会挡住墙交互（另有兜底移除）。
@@ -82,18 +76,6 @@ enum EntryIntroPresenter {
         return true
     }
 
-    /// 墙数据落定（load-ok / load-failed / not-logged-in）时调用：
-    /// 入场还在播就提前退场进墙，不等视频播完（对齐旧长卷 finish
-    /// 语义）；入场未呈现/已退场则只记竞态标志，不堵路。
-    static func finishCurrent(reason: String) {
-        guard hasPresented else { return }
-        Breadcrumbs.log("entry finish reason=\(reason)")
-        if let vc = current {
-            vc.finishEarly()
-        } else {
-            finishRequested = true
-        }
-    }
 }
 
 final class EntryIntroViewController: UIViewController {
@@ -210,11 +192,6 @@ final class EntryIntroViewController: UIViewController {
 
     @objc private func handleCloseTap() {
         dismissIntro(reason: "closed", animated: true)
-    }
-
-    /// 外部落定信号（主页墙数据到达）：按自动退出口径提前结束入场。
-    func finishEarly() {
-        dismissIntro(reason: "data-ready", animated: true)
     }
 
     // MARK: - 退出与释放
