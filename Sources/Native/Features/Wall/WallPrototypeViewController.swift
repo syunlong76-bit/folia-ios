@@ -334,7 +334,7 @@ final class WallPrototypeViewController: UIViewController,
         // 按 Miller 定版移到底部内缘：发光填充 + 发光圆钮把手，
         // 底部整带可拖可点。bar 本体只做容器与阴影，材质由第一
         // 层 UIVisualEffectView 承担并自裁圆角。
-        let bar = UIView()
+        let bar = MiniBarHitView()
         bar.backgroundColor = .clear
         bar.layer.cornerRadius = 35
         bar.layer.shadowColor = UIColor.black.cgColor
@@ -906,6 +906,11 @@ final class WallPrototypeViewController: UIViewController,
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
+        // 收起态命中带（3.7 (21.1)）：视觉仍 16pt，纵向命中
+        // 扩到 44pt（上下各 14pt）；展开态归零，原分发不变。
+        // 全部形态切换（收起/展开/边沿复位）都经此收口，开关
+        // 与形态严格同步。
+        (miniBar as? MiniBarHitView)?.hitExpansionY = collapsed ? 14 : 0
     }
 
     private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
