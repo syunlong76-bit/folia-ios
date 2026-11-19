@@ -493,7 +493,21 @@ final class QueueManager: ObservableObject {
     /// 封面异步补齐：下载成功且仍是当前曲时，更新 engine 封面并重推锁屏。
     /// 代际判定回主线程做（loadGeneration 只在主线程写）。
     private func fetchArtworkIfNeeded(for track: FoliaTrack, generation: Int) async {
-        guard let artworkURL = track.artworkURL else { return }
+        guard let rawArtworkURL = track.artworkURL else { return }
+        // 3.7 (31) 锁屏无封面根因：歌单详情内嵌 tracks 的 al.picUrl 是
+        // http:// 明文（同图在 /song/detail 里是 https://，实测对照过），
+        // ATS 只给本机开例外，这条裸 URLSession 直下会被系统拦死且
+        // try? 吞错无痕——封面永远不到、锁屏恒灰方块。下载前先升
+        // https（与 EdgeOneAPIClient.toFoliaTrack、NativeCoverLoader
+        // 的既有口径一致）。墙面封面走 NativeCoverLoader 代理链不受
+        // 影响，坏的只有锁屏这条补齐链。
+        let artworkURL: URL
+        if rawArtworkURL.scheme == "http",
+           let upgraded = URL(string: "https://" + rawArtworkURL.absoluteString.dropFirst(7)) {
+            artworkURL = upgraded
+        } else {
+            artworkURL = rawArtworkURL
+        }
         guard let (data, _) = try? await URLSession.shared.data(from: artworkURL),
               let image = UIImage(data: data) else { return }
         await MainActor.run {

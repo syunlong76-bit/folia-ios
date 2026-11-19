@@ -32,6 +32,8 @@ final class NowPlayingController: NSObject {
     private var scaledArtworkTrackId: String?
     /// 正在后台缩放的曲目 id（防重复派发）。
     private var scalingArtworkTrackId: String?
+    /// nowplaying.info 面包屑去重键（曲目 id + 封面状态），状态不变不重复记。
+    private var lastNowPlayingInfoLogKey: String?
 
     private var commandsRegistered = false
 
@@ -56,26 +58,51 @@ final class NowPlayingController: NSObject {
         guard let track = engine.currentTrack else {
             center.nowPlayingInfo = nil
             center.playbackState = .paused
+            if lastNowPlayingInfoLogKey != "none" {
+                lastNowPlayingInfoLogKey = "none"
+                Breadcrumbs.log("nowplaying.info songId=none artwork=no source=none")
+            }
             return
         }
 
         let duration = engine.duration
         let clampedElapsed = max(0, min(elapsed, duration > 0 ? duration : elapsed))
 
+        // 3.7 (31) 字段审计补齐：MediaType/DefaultPlaybackRate/
+        // IsLiveStream 三个标准字段此前未写，一并补上（仅标准字段）。
         var info: [String: Any] = [
             MPMediaItemPropertyTitle: track.title,
             MPMediaItemPropertyArtist: track.artist,
             MPMediaItemPropertyAlbumTitle: track.album,
             MPMediaItemPropertyPlaybackDuration: duration,
             MPNowPlayingInfoPropertyElapsedPlaybackTime: clampedElapsed,
-            MPNowPlayingInfoPropertyPlaybackRate: rate
+            MPNowPlayingInfoPropertyPlaybackRate: rate,
+            MPNowPlayingInfoPropertyDefaultPlaybackRate: 1.0,
+            MPNowPlayingInfoPropertyMediaType: MPNowPlayingInfoMediaType.audio.rawValue,
+            MPNowPlayingInfoPropertyIsLiveStream: false
         ]
 
+        // 3.7 (31)：artwork 键永不缺席——真封面缩放好用真封面；未到
+        // （含正在后台缩放）先写代码生成的主题兜底图，真封面到位后
+        // 下一次 sync 自动替换。此前未缩放好时整键缺席，锁屏/灵动岛
+        // 只能显示系统灰方块占位。
+        let artworkState: String
         if let scaled = scaledArtwork, scaledArtworkTrackId == track.id {
             info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: scaled.size) { _ in scaled }
-        } else if let artwork = engine.currentArtwork {
-            // 封面尚未缩放：先写无封面字典，再后台缩放、缩放完重推一次。
-            maybeDownsampleArtwork(artwork, for: track.id)
+            artworkState = "cover"
+        } else {
+            if let artwork = engine.currentArtwork {
+                // 封面尚未缩放：后台缩放、缩放完重推一次（届时走 cover 分支）。
+                maybeDownsampleArtwork(artwork, for: track.id)
+            }
+            let fallback = Self.fallbackArtwork()
+            info[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: fallback.size) { _ in fallback }
+            artworkState = "fallback"
+        }
+        let infoLogKey = "\(track.id)|\(artworkState)"
+        if infoLogKey != lastNowPlayingInfoLogKey {
+            lastNowPlayingInfoLogKey = infoLogKey
+            Breadcrumbs.log("nowplaying.info songId=\(track.id) artwork=\(artworkState == "cover" ? "yes" : "no") source=\(artworkState)")
         }
 
         center.nowPlayingInfo = info
@@ -112,6 +139,38 @@ final class NowPlayingController: NSObject {
                 self.syncNowPlaying(elapsed: engine.currentTime, rate: engine.playbackState == .playing ? 1.0 : 0.0)
             }
         }
+    }
+
+    // MARK: - 兜底封面（3.7 (31)）
+
+    private static var cachedFallbackArtwork: UIImage?
+
+    /// 主题兜底封面：深蓝灰渐变 + 白色音符，代码生成、无外部素材，
+    /// 600×600 与真封面同尺寸口径。只生成一次后缓存。
+    private static func fallbackArtwork() -> UIImage {
+        if let cached = cachedFallbackArtwork { return cached }
+        let size = CGSize(width: 600, height: 600)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            let cg = context.cgContext
+            let colors = [
+                UIColor(red: 0.16, green: 0.19, blue: 0.28, alpha: 1).cgColor,
+                UIColor(red: 0.05, green: 0.06, blue: 0.10, alpha: 1).cgColor
+            ] as CFArray
+            if let gradient = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                                         colors: colors, locations: [0, 1]) {
+                cg.drawLinearGradient(gradient, start: .zero,
+                                      end: CGPoint(x: size.width, y: size.height), options: [])
+            }
+            let config = UIImage.SymbolConfiguration(pointSize: 230, weight: .light)
+            if let note = UIImage(systemName: "music.note", withConfiguration: config)?
+                .withTintColor(UIColor.white.withAlphaComponent(0.85), renderingMode: .alwaysOriginal) {
+                note.draw(at: CGPoint(x: (size.width - note.size.width) / 2,
+                                      y: (size.height - note.size.height) / 2))
+            }
+        }
+        cachedFallbackArtwork = image
+        return image
     }
 
     /// 等比缩放：只缩小不放大，最长边约 maxDimension。

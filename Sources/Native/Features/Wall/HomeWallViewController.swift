@@ -1222,6 +1222,12 @@ final class HomeWallViewController: UIViewController,
         present(stage, animated: true)
     }
 
+    /// 后台点入直达（3.7 (31)）：SceneDelegate 在「曾进后台 + 有活跃
+    /// 队列 + 本墙正是顶层」时调用，与本墙既有舞台入口同路。
+    func openNativeStageForBackgroundReturn() {
+        openNativeStageFromHome()
+    }
+
     private func openStageFromHome() {
         WallReturnTicketStore.pending = WallReturnTicket(
             kind: .home,

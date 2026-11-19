@@ -1746,6 +1746,13 @@ final class WallPrototypeViewController: UIViewController,
         present(stage, animated: true)
     }
 
+    /// 后台点入直达（3.7 (31)）：SceneDelegate 在「曾进后台 + 有活跃
+    /// 队列 + 本墙正是顶层」时调用，与迷你台/双击卡同路进原生舞台，
+    /// 不另造入口。
+    func openNativeStageForBackgroundReturn() {
+        openNativeStageFromWall()
+    }
+
     private func openStageFromWall() {
         let expanded = wallLayout.instances.first {
             $0.instanceId == wallLayout.expandedInstanceId

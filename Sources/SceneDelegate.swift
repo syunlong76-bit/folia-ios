@@ -36,8 +36,69 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {}
-    func sceneDidBecomeActive(_ scene: UIScene) {}
     func sceneWillResignActive(_ scene: UIScene) {}
     func sceneWillEnterForeground(_ scene: UIScene) {}
-    func sceneDidEnterBackground(_ scene: UIScene) {}
+
+    // MARK: - 后台点入直达播放详情页（3.7 (31)）
+
+    /// 是否经历过真正的后台驻留。只在 sceneDidEnterBackground 置位，
+    /// 冷启动、控制中心下拉、来电打断等「未进后台」的激活不触发直达。
+    private var enteredBackground = false
+
+    func sceneDidEnterBackground(_ scene: UIScene) {
+        enteredBackground = true
+    }
+
+    func sceneDidBecomeActive(_ scene: UIScene) {
+        guard enteredBackground else { return }
+        enteredBackground = false
+        // 等一拍让激活流程与视图层级落定，再做呈现决策。
+        DispatchQueue.main.async { [weak self] in
+            self?.routeToStageFromBackground()
+        }
+    }
+
+    /// 定版规则：从后台回到前台时，若有活跃队列（正在播或暂停着一首
+    /// 歌）→ 直接呈现播放详情页（原生舞台）。护栏：已在舞台不重复
+    /// 呈现；顶层被其它模态（设置页等）占着时跳过本次、不粗暴打断，
+    /// 等下一次后台往返再触发。每次决策记 nowplaying.route 面包屑。
+    private func routeToStageFromBackground() {
+        let hasQueue = PlaybackEngine.shared.currentTrack != nil
+        guard let root = window?.rootViewController else {
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=\(hasQueue) action=skip reason=no-root")
+            return
+        }
+        guard hasQueue else {
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=no action=skip reason=no-queue")
+            return
+        }
+        // 展开呈现链：root → presented → … → 顶层。
+        var chain: [UIViewController] = [root]
+        while let presented = chain.last?.presentedViewController {
+            chain.append(presented)
+        }
+        if chain.contains(where: { $0 is StageViewController }) {
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=skip reason=already-on-stage")
+            return
+        }
+        let topmost = chain.last
+        if let wall = topmost as? WallPrototypeViewController {
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=present-stage via=playlist-wall")
+            wall.openNativeStageForBackgroundReturn()
+        } else if let home = topmost as? HomeWallViewController {
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=present-stage via=home-wall")
+            home.openNativeStageForBackgroundReturn()
+        } else if topmost === root {
+            // 无墙在场（停在 Web 主界面）：舞台本体自包含（关闭即
+            // dismiss、跳网页舞台时 onRequestWebStage 为 nil 走
+            // dismiss 兜底），直接由根呈现，不另造舞台内部逻辑。
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=present-stage via=main")
+            let stage = StageViewController()
+            stage.modalPresentationStyle = .fullScreen
+            root.present(stage, animated: true)
+        } else {
+            // 墙上有模态（设置页等）或顶层是其它页面：跳过本次。
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=skip reason=modal-presented top=\(type(of: topmost!))")
+        }
+    }
 }
