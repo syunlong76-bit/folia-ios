@@ -134,6 +134,16 @@ final class StageViewController: UIViewController {
     private var backdropTrackId: String? = nil
     private var lyricsTask: Task<Void, Never>?
     private var backdropTask: Task<Void, Never>?
+
+    // 贴纸层（3.7 (24)，纯新增视图层）：拉歌词角标（renderer
+    // 容器右上）、无歌词陪衬（容器居中）、红心庆祝（红心按
+    // 钮左侧）、播放陪伴宠物（容器周界漫游）。方法全在文件
+    // 尾 extension；显隐只由既有取词/点赞落点的一行钩子驱动，
+    // 不改任何歌词/时钟逻辑。
+    private var stickerFetchBadge: StickerView?
+    private var stickerNoLyrics: StickerView?
+    private var stickerLike: StickerView?
+    private var companionPet: CompanionPetView?
     private let progressDriver = StageProgressDriver()
     private var displayLink: CADisplayLink?
     private var lastFrameTimestamp: CFTimeInterval = 0
@@ -168,10 +178,14 @@ final class StageViewController: UIViewController {
         subscribePlayback()
         refreshHeader()
         reanchor()
+        // 贴纸层（3.7 (24)，纯新增）：建贴纸视图与陪伴宠物。
+        stickerInstall()
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // 贴纸层（3.7 (24)，纯新增）：陪伴宠物开始漫游。
+        companionPet?.startRoaming()
         Breadcrumbs.samplerStart()
         Breadcrumbs.log("stage gate enter style=\(activeStyleId)")
         progressDriver.onFraction = { [weak self] fraction in
@@ -191,6 +205,8 @@ final class StageViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        // 贴纸层（3.7 (24)，纯新增）：陪伴宠物停漫游。
+        companionPet?.stopRoaming()
         progressDriver.stop()
         stopDisplayLink()
         driftTimer?.invalidate()
@@ -351,6 +367,8 @@ final class StageViewController: UIViewController {
         playButton.frame = CGRect(x: bounds.width / 2 - 32, y: transportY, width: 64, height: 64)
         prevButton.frame = CGRect(x: bounds.width / 2 - 116, y: transportY + 10, width: 44, height: 44)
         nextButton.frame = CGRect(x: bounds.width / 2 + 72, y: transportY + 10, width: 44, height: 44)
+        // 贴纸层（3.7 (24)，纯新增）：贴纸与陪伴宠物定位。
+        stickerLayoutOverlays()
     }
 
     // MARK: 样式解析与渲染方装配
@@ -442,6 +460,8 @@ final class StageViewController: UIViewController {
 
     private func handleTrackChanged(to track: FoliaTrack) {
         currentTrackId = track.id
+        // 贴纸层（3.7 (24)，纯新增）：陪伴宠物按曲换装判定。
+        companionPet?.setTrack(id: track.id)
         backdropTrackId = nil
         palette = .neutralDark
         backdropImageView.image = nil
@@ -490,15 +510,21 @@ final class StageViewController: UIViewController {
     private func loadLyrics(for track: FoliaTrack) {
         if linesCache[track.id] != nil {
             pushSnapshot()
+            // 贴纸层（3.7 (24)，纯新增钩子）：缓存命中即已落定。
+            stickerLyricsResolved(lines: linesCache[track.id] ?? [])
             return
         }
         if let hit = LyricRepository.shared.cachedEntry(for: track.id) {
             linesCache[track.id] = LyricParser.stageLines(
                 from: hit.lines, trackDuration: track.duration)
             pushSnapshot()
+            // 贴纸层（3.7 (24)，纯新增钩子）：仓库命中即已落定。
+            stickerLyricsResolved(lines: linesCache[track.id] ?? [])
             return
         }
         lyricsTask?.cancel()
+        // 贴纸层（3.7 (24)，纯新增钩子）：网络取词开始，亮角标。
+        stickerLyricsFetching()
         let trackId = track.id
         let duration = track.duration
         lyricsTask = Task { [weak self] in
@@ -508,6 +534,8 @@ final class StageViewController: UIViewController {
             self.linesCache[trackId] = lines
             Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count) source=\(entry.source)")
             self.pushSnapshot()
+            // 贴纸层（3.7 (24)，纯新增钩子）：取词落定。
+            self.stickerLyricsResolved(lines: lines)
         }
     }
 
@@ -640,6 +668,8 @@ final class StageViewController: UIViewController {
         let id = track.id
         let newState = LikesStore.shared.toggle(id)
         refreshLikeButton()
+        // 贴纸层（3.7 (24)，纯新增）：点亮时红心左侧浮贴纸。
+        if newState { stickerShowLikeCelebration() }
         Task { [weak self] in
             do {
                 _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
@@ -782,5 +812,104 @@ private extension LyricStageCommand.Kind {
         case .like: return "like"
         case .close: return "close"
         }
+    }
+}
+
+// MARK: - 贴纸层（3.7 (24)，纯新增视图层）
+//
+// 场景（scene-mapping.md 终版）：
+// - 拉歌词：取词在途时 renderer 容器右上内侧亮 dog-06 角标
+//   （探头张望，40pt，循环；狗白底以浅色圆角贴纸底承载）。
+// - 没找到歌词：取词落定且行为空时，cat-11（流泪转圈）
+//   72pt 居中于容器中央上方（「暂无歌词」标签上方），播
+//   一次停末帧。
+// - 点红心：点亮时 dog-11（抱爱心）64pt 浮在红心按钮左侧，
+//   播 2 圈后淡出。
+// - 播放陪伴：CompanionPetView 沿 renderer 容器周界漫游
+//   （狗池按曲轮换、每 5 首猫客串），长按收起并持久化关闭，
+//   设置页可重新开启。
+// 显隐只由取词/点赞既有落点的一行钩子驱动；歌词数据、时钟
+// 与渲染逻辑零改动。
+
+extension StageViewController {
+
+    func stickerInstall() {
+        let badge = StickerView()
+        badge.showsTileBackground = true
+        badge.isHidden = true
+        view.addSubview(badge)
+        stickerFetchBadge = badge
+        let noLyrics = StickerView()
+        noLyrics.isHidden = true
+        view.addSubview(noLyrics)
+        stickerNoLyrics = noLyrics
+        let like = StickerView()
+        like.showsTileBackground = true
+        like.isHidden = true
+        view.addSubview(like)
+        stickerLike = like
+        let pet = CompanionPetView()
+        pet.onDismissedByLongPress = {
+            Breadcrumbs.log("companion pet retired by long press")
+        }
+        view.addSubview(pet)
+        companionPet = pet
+        stickerLayoutOverlays()
+    }
+
+    func stickerLyricsFetching() {
+        stickerNoLyrics?.isHidden = true
+        guard let badge = stickerFetchBadge else { return }
+        if badge.isHidden {
+            badge.setSticker("dog-06", mode: .loop)
+            badge.isHidden = false
+        }
+    }
+
+    func stickerLyricsResolved(lines: [LyricLine]) {
+        stickerFetchBadge?.isHidden = true
+        if lines.isEmpty {
+            stickerNoLyrics?.setSticker("cat-11", mode: .once(holdLast: true))
+            stickerNoLyrics?.isHidden = false
+        } else {
+            stickerNoLyrics?.isHidden = true
+        }
+    }
+
+    func stickerShowLikeCelebration() {
+        guard let like = stickerLike else { return }
+        like.alpha = 1
+        like.isHidden = false
+        like.setSticker("dog-11", mode: .loops(2))
+        like.onFinished = { [weak like] in
+            UIView.animate(withDuration: 0.3) {
+                like?.alpha = 0
+            } completion: { _ in
+                like?.isHidden = true
+                like?.alpha = 1
+            }
+        }
+        stickerLayoutOverlays()
+    }
+
+    func stickerLayoutOverlays() {
+        let region = rendererContainer.frame
+        if let badge = stickerFetchBadge {
+            badge.frame = CGRect(
+                x: region.maxX - 12 - 40, y: region.minY + 12,
+                width: 40, height: 40)
+        }
+        if let noLyrics = stickerNoLyrics {
+            noLyrics.frame = CGRect(
+                x: region.midX - 36, y: region.midY - 56 - 36,
+                width: 72, height: 72)
+        }
+        if let like = stickerLike {
+            like.frame = CGRect(
+                x: likeButton.frame.minX - 8 - 64,
+                y: likeButton.frame.midY - 32,
+                width: 64, height: 64)
+        }
+        companionPet?.roamRegion = region
     }
 }

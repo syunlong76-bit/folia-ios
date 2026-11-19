@@ -34,6 +34,14 @@ final class SettingsViewController: UIViewController {
     private let applyButton = UIButton(type: .system)
     private let spinner = UIActivityIndicatorView(style: .medium)
 
+    // 贴纸层（3.7 (24)，纯新增）：检查更新狗贴纸 + 贴纸伙伴
+    // 分组（门面猫/狗 + 播放陪伴开关）。
+    private let companionSwitch = UISwitch()
+    private var checkDogTile: UIView?
+    private var checkDogSticker: StickerView?
+    private var settingsCatSticker: StickerView?
+    private var settingsCatShowingAlt = false
+
     private let backdropView = UIView()
     private let cardView = UIView()
     private var didRunEntrance = false
@@ -254,6 +262,101 @@ final class SettingsViewController: UIViewController {
         themeGroup.addArrangedSubview(themeHintWrap)
         cardStack.addArrangedSubview(themeGroup)
 
+        // 贴纸伙伴分组卡（3.7 (24)）：门面猫（cat-01，点按换
+        // cat-15 播一次再换回）+ 门面狗（dog-17，白 tile 承
+        // 载）+ 播放页陪伴开关。贴纸均为 APNG 原素材真帧。
+        let stickerGroup = makeGroupCard()
+        let stickerHeadRow = UIStackView()
+        stickerHeadRow.axis = .horizontal
+        stickerHeadRow.alignment = .center
+        stickerHeadRow.spacing = 12
+        stickerHeadRow.isLayoutMarginsRelativeArrangement = true
+        stickerHeadRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        let catSticker = StickerView()
+        catSticker.translatesAutoresizingMaskIntoConstraints = false
+        catSticker.setSticker("cat-01", mode: .loop)
+        catSticker.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(settingsCatTapped)))
+        NSLayoutConstraint.activate([
+            catSticker.widthAnchor.constraint(equalToConstant: 64),
+            catSticker.heightAnchor.constraint(equalToConstant: 64)
+        ])
+        settingsCatSticker = catSticker
+        let stickerTitle = UILabel()
+        stickerTitle.text = "贴纸伙伴"
+        stickerTitle.font = .systemFont(ofSize: 15)
+        stickerTitle.textColor = FoliaUI.primary
+        let stickerSub = UILabel()
+        stickerSub.text = "小猫小狗会在加载、失败、空状态等时刻出来陪你。"
+        stickerSub.font = .systemFont(ofSize: 12)
+        stickerSub.textColor = FoliaUI.secondary
+        stickerSub.numberOfLines = 0
+        let stickerTitles = UIStackView(arrangedSubviews: [stickerTitle, stickerSub])
+        stickerTitles.axis = .vertical
+        stickerTitles.spacing = 3
+        stickerHeadRow.addArrangedSubview(catSticker)
+        stickerHeadRow.addArrangedSubview(stickerTitles)
+        stickerGroup.addArrangedSubview(stickerHeadRow)
+        stickerGroup.addArrangedSubview(makeHairline())
+        let dogTileWrap = UIView()
+        let dogTile = UIView()
+        dogTile.backgroundColor = .white
+        dogTile.layer.cornerRadius = 14
+        dogTile.clipsToBounds = true
+        dogTile.translatesAutoresizingMaskIntoConstraints = false
+        let dogSticker = StickerView()
+        dogSticker.translatesAutoresizingMaskIntoConstraints = false
+        dogSticker.setSticker("dog-17", mode: .loop)
+        dogTile.addSubview(dogSticker)
+        dogTileWrap.addSubview(dogTile)
+        NSLayoutConstraint.activate([
+            dogTile.widthAnchor.constraint(equalToConstant: 104),
+            dogTile.heightAnchor.constraint(equalToConstant: 98),
+            dogTile.centerXAnchor.constraint(equalTo: dogTileWrap.centerXAnchor),
+            dogTile.topAnchor.constraint(equalTo: dogTileWrap.topAnchor, constant: 12),
+            dogTile.bottomAnchor.constraint(equalTo: dogTileWrap.bottomAnchor, constant: -12),
+            dogSticker.leadingAnchor.constraint(equalTo: dogTile.leadingAnchor, constant: 4),
+            dogSticker.trailingAnchor.constraint(equalTo: dogTile.trailingAnchor, constant: -4),
+            dogSticker.topAnchor.constraint(equalTo: dogTile.topAnchor, constant: 1),
+            dogSticker.bottomAnchor.constraint(equalTo: dogTile.bottomAnchor, constant: -1)
+        ])
+        stickerGroup.addArrangedSubview(dogTileWrap)
+        stickerGroup.addArrangedSubview(makeHairline())
+        let companionRow = UIStackView()
+        companionRow.axis = .horizontal
+        companionRow.alignment = .center
+        companionRow.isLayoutMarginsRelativeArrangement = true
+        companionRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        let companionTitle = UILabel()
+        companionTitle.text = "播放页陪伴"
+        companionTitle.font = .systemFont(ofSize: 15)
+        companionTitle.textColor = FoliaUI.primary
+        companionSwitch.onTintColor = FoliaUI.accent
+        companionSwitch.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+        companionSwitch.isOn = StickerSettings.companionEnabled
+        companionSwitch.addTarget(self, action: #selector(companionSwitchChanged), for: .valueChanged)
+        companionRow.addArrangedSubview(companionTitle)
+        companionRow.addArrangedSubview(UIView())
+        companionRow.addArrangedSubview(companionSwitch)
+        stickerGroup.addArrangedSubview(companionRow)
+        stickerGroup.addArrangedSubview(makeHairline())
+        let companionHint = UILabel()
+        companionHint.text = "开启后，播放页里会有一只小狗沿舞台边缘散步：点它会跳一下，长按可以让它休息（在这里重新开启）。每首歌换一只，偶尔有小猫路过。"
+        companionHint.font = .systemFont(ofSize: 12)
+        companionHint.textColor = FoliaUI.secondary
+        companionHint.numberOfLines = 0
+        let companionHintWrap = UIView()
+        companionHintWrap.addSubview(companionHint)
+        companionHint.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            companionHint.topAnchor.constraint(equalTo: companionHintWrap.topAnchor, constant: 10),
+            companionHint.bottomAnchor.constraint(equalTo: companionHintWrap.bottomAnchor, constant: -12),
+            companionHint.leadingAnchor.constraint(equalTo: companionHintWrap.leadingAnchor, constant: 14),
+            companionHint.trailingAnchor.constraint(equalTo: companionHintWrap.trailingAnchor, constant: -14)
+        ])
+        stickerGroup.addArrangedSubview(companionHintWrap)
+        cardStack.addArrangedSubview(stickerGroup)
+
         // 检查更新：整宽胶囊按钮，spinner 叠在按钮右侧
         let checkWrap = UIView()
         checkWrap.translatesAutoresizingMaskIntoConstraints = false
@@ -277,6 +380,32 @@ final class SettingsViewController: UIViewController {
             checkButton.trailingAnchor.constraint(equalTo: checkWrap.trailingAnchor),
             spinner.centerYAnchor.constraint(equalTo: checkWrap.centerYAnchor),
             spinner.trailingAnchor.constraint(equalTo: checkWrap.trailingAnchor, constant: -16)
+        ])
+        // 贴纸层（3.7 (24)）：检查更新进行中，按钮右侧浮狗贴
+        // 纸（dog-20 探头张望，白 tile 承载）。容器不拦截触
+        // 摸，按钮热区不受影响；检查结束随 spinner 一同隐藏。
+        let checkTile = UIView()
+        checkTile.backgroundColor = .white
+        checkTile.layer.cornerRadius = 12
+        checkTile.clipsToBounds = true
+        checkTile.isUserInteractionEnabled = false
+        checkTile.isHidden = true
+        checkTile.translatesAutoresizingMaskIntoConstraints = false
+        let checkDog = StickerView()
+        checkDog.translatesAutoresizingMaskIntoConstraints = false
+        checkTile.addSubview(checkDog)
+        checkWrap.addSubview(checkTile)
+        checkDogTile = checkTile
+        checkDogSticker = checkDog
+        NSLayoutConstraint.activate([
+            checkTile.widthAnchor.constraint(equalToConstant: 56),
+            checkTile.heightAnchor.constraint(equalToConstant: 56),
+            checkTile.centerYAnchor.constraint(equalTo: checkWrap.centerYAnchor),
+            checkTile.trailingAnchor.constraint(equalTo: checkWrap.trailingAnchor, constant: -52),
+            checkDog.leadingAnchor.constraint(equalTo: checkTile.leadingAnchor, constant: 4),
+            checkDog.trailingAnchor.constraint(equalTo: checkTile.trailingAnchor, constant: -4),
+            checkDog.topAnchor.constraint(equalTo: checkTile.topAnchor, constant: 4),
+            checkDog.bottomAnchor.constraint(equalTo: checkTile.bottomAnchor, constant: -4)
         ])
         cardStack.addArrangedSubview(checkWrap)
 
@@ -390,11 +519,31 @@ final class SettingsViewController: UIViewController {
     @objc private func checkTapped() {
         checkButton.isEnabled = false
         spinner.startAnimating()
+        // 贴纸层（3.7 (24)）：检查中亮狗贴纸。
+        checkDogTile?.isHidden = false
+        checkDogSticker?.setSticker("dog-20", mode: .loop)
         UpdateManager.shared.checkNow { [weak self] _ in
             guard let self = self else { return }
             self.spinner.stopAnimating()
+            // 贴纸层（3.7 (24)）：检查结束收狗贴纸。
+            self.checkDogTile?.isHidden = true
             self.checkButton.isEnabled = true
             self.refresh()
+        }
+    }
+
+    // 贴纸层（3.7 (24)）：陪伴开关与门面猫点按换装。
+    @objc private func companionSwitchChanged() {
+        StickerSettings.companionEnabled = companionSwitch.isOn
+    }
+
+    @objc private func settingsCatTapped() {
+        guard let cat = settingsCatSticker, !settingsCatShowingAlt else { return }
+        settingsCatShowingAlt = true
+        cat.setSticker("cat-15", mode: .once(holdLast: true))
+        cat.onFinished = { [weak self, weak cat] in
+            cat?.setSticker("cat-01", mode: .loop)
+            self?.settingsCatShowingAlt = false
         }
     }
 

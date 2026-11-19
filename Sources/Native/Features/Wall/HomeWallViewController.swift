@@ -46,7 +46,11 @@ final class HomeWallViewController: UIViewController,
     /// 代次守卫：只有最新一代 loadEntries 的落点能写本状态，
     /// 旧代在途请求（登录态探测超时等）迟到回写一律作废；
     /// entries 成功即 ready，仅 entries 本身最终失败才 failed。
-    private var entryDataState: EntryIntroDataState = .loading
+    private var entryDataState: EntryIntroDataState = .loading {
+        // 贴纸层（3.7 (24)，纯新增）：状态变化只驱动贴纸显隐，
+        // 不参与任何既有状态机逻辑。方法在文件尾 extension。
+        didSet { stickerDataStateChanged() }
+    }
     /// loadEntries 代次（每次调用 +1）：异步落点写状态/条目
     /// 前先验代，防旧请求迟到污染新状态。
     private var entryLoadGeneration = 0
@@ -54,6 +58,18 @@ final class HomeWallViewController: UIViewController,
     /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
     private var loadAttempts = 0
     private var loadFailed = false
+
+    // 贴纸层状态（3.7 (24)，纯新增视图层）：入场跑动（底部
+    // dock 内横向跑过）、失败陪衬（居中）、切歌缓冲（迷你台
+    // 封面角上方）。视图懒建，方法全在文件尾 extension。
+    private var stickerDock: UIView?
+    private var stickerRunnerView: StickerView?
+    private var stickerLastRunnerWasDog = false
+    private var stickerFailureView: StickerView?
+    private var stickerFailureReplayTimer: Timer?
+    private var stickerBufferView: StickerView?
+    private var stickerBufferEpisode = 0
+    private var stickerBufferVisible = false
 
     // 底部播放台（3.7 (13.4) #4，Miller 点名）：与曲目墙同款
     // E 液态玻璃台（构造同构、按仓库惯例有意重复）；差异是主页
@@ -172,6 +188,12 @@ final class HomeWallViewController: UIViewController,
         PlaybackEngine.shared.$isPlaying
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshMiniBar() }
+            .store(in: &playbackCancellables)
+        // 贴纸层（3.7 (24)，纯新增订阅）：切歌缓冲态驱动缓冲
+        // 贴纸显隐，只读引擎状态，不回写。
+        PlaybackEngine.shared.$playbackState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in self?.stickerBufferStateChanged(state) }
             .store(in: &playbackCancellables)
 
         buildMiniBar()
@@ -356,6 +378,8 @@ final class HomeWallViewController: UIViewController,
            abs(constraint.constant - portraitBarWidth) > 0.5 {
             constraint.constant = portraitBarWidth
         }
+        // 贴纸层（3.7 (24)，纯新增）：dock/失败/缓冲贴纸定位。
+        stickerLayoutOverlays()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -1190,6 +1214,187 @@ final class HomeWallViewController: UIViewController,
             var host: UIViewController = self
             while let presenter = host.presentingViewController { host = presenter }
             if host !== self { host.dismiss(animated: true) }
+        }
+    }
+}
+
+// MARK: - 贴纸层（3.7 (24)，纯新增视图层）
+//
+// 场景（scene-mapping.md 终版）：
+// - 主页墙入场/同步：加载中底部 dock 内横向跑过——dog-21
+//   （举枫叶跑动，100pt，循环横穿）与 cat-13（含泪迈步入场，
+//   72pt，走入后停住）按加载回合轮换。
+// - 断网/加载失败：最终失败态居中 cat-03（站立流泪打转，
+//   80pt，播一次；失败持续存在时每 8 秒低频重播）。
+// - 切歌缓冲：引擎 .waiting 且有当前曲时，迷你台封面角上方
+//   小只——dog-05（原地翻滚，循环）与 cat-08（翻滚，每回
+//   合播一次）按回合轮换，58pt。
+// 全部只读既有状态（entryDataState / playbackState），不回写
+// 任何状态机；狗素材带浅色贴纸底（映射口径：狗须浅色底面）。
+
+extension HomeWallViewController {
+
+    private func stickerEnsureViews() {
+        if stickerDock == nil {
+            let dock = UIView()
+            dock.isUserInteractionEnabled = false
+            view.addSubview(dock)
+            stickerDock = dock
+        }
+        if stickerFailureView == nil {
+            let failure = StickerView()
+            failure.isHidden = true
+            view.addSubview(failure)
+            stickerFailureView = failure
+        }
+        if stickerBufferView == nil {
+            let buffer = StickerView()
+            buffer.isHidden = true
+            view.addSubview(buffer)
+            stickerBufferView = buffer
+        }
+    }
+
+    func stickerDataStateChanged() {
+        stickerEnsureViews()
+        switch entryDataState {
+        case .loading:
+            stickerHideFailure()
+            stickerStartRunner()
+        case .ready:
+            stickerStopRunner()
+            stickerHideFailure()
+        case .failed:
+            stickerStopRunner()
+            stickerShowFailure()
+        }
+    }
+
+    // MARK: 入场跑动
+
+    private func stickerStartRunner() {
+        guard let dock = stickerDock else { return }
+        // 按加载回合轮换：狗跑动 / 猫走入交替。
+        stickerLastRunnerWasDog.toggle()
+        let useDog = stickerLastRunnerWasDog
+        let runner: StickerView
+        if let existing = stickerRunnerView {
+            runner = existing
+        } else {
+            runner = StickerView()
+            dock.addSubview(runner)
+            stickerRunnerView = runner
+        }
+        runner.layer.removeAllAnimations()
+        if useDog {
+            runner.showsTileBackground = true
+            runner.frame = CGRect(x: -110, y: 8, width: 100, height: 100)
+            runner.setSticker("dog-21", mode: .loop)
+        } else {
+            runner.showsTileBackground = false
+            runner.frame = CGRect(x: -80, y: 36, width: 72, height: 72)
+            runner.setSticker("cat-13", mode: .once(holdLast: true))
+        }
+        runner.isHidden = false
+        stickerLayoutOverlays()
+        if useDog {
+            stickerRunAcross()
+        } else {
+            UIView.animate(withDuration: 2.4, delay: 0, options: [.curveLinear]) {
+                runner.center = CGPoint(x: 110, y: runner.center.y)
+            }
+        }
+    }
+
+    private func stickerRunAcross() {
+        guard entryDataState == .loading,
+              let runner = stickerRunnerView, !runner.isHidden,
+              stickerLastRunnerWasDog,
+              let dock = stickerDock, dock.bounds.width > 0 else { return }
+        runner.center = CGPoint(x: -60, y: runner.center.y)
+        UIView.animate(withDuration: 3.6, delay: 0, options: [.curveLinear]) {
+            runner.center = CGPoint(x: dock.bounds.width + 60, y: runner.center.y)
+        } completion: { [weak self] _ in
+            self?.stickerRunAcross()
+        }
+    }
+
+    private func stickerStopRunner() {
+        stickerRunnerView?.layer.removeAllAnimations()
+        stickerRunnerView?.isHidden = true
+    }
+
+    // MARK: 失败陪衬
+
+    private func stickerShowFailure() {
+        guard let failure = stickerFailureView else { return }
+        failure.setSticker("cat-03", mode: .once(holdLast: true))
+        failure.isHidden = false
+        stickerLayoutOverlays()
+        stickerFailureReplayTimer?.invalidate()
+        stickerFailureReplayTimer = Timer.scheduledTimer(
+            withTimeInterval: 8, repeats: true) { [weak self] _ in
+                guard let self, self.entryDataState == .failed,
+                      self.view.window != nil else {
+                    self?.stickerFailureReplayTimer?.invalidate()
+                    self?.stickerFailureReplayTimer = nil
+                    return
+                }
+                self.stickerFailureView?.restart()
+            }
+    }
+
+    private func stickerHideFailure() {
+        stickerFailureReplayTimer?.invalidate()
+        stickerFailureReplayTimer = nil
+        stickerFailureView?.isHidden = true
+    }
+
+    // MARK: 切歌缓冲
+
+    func stickerBufferStateChanged(_ state: PlaybackState) {
+        let shouldShow = state == .waiting
+            && PlaybackEngine.shared.currentTrack != nil
+        if shouldShow, !stickerBufferVisible {
+            stickerBufferVisible = true
+            stickerEnsureViews()
+            stickerBufferEpisode += 1
+            guard let buffer = stickerBufferView else { return }
+            if stickerBufferEpisode % 2 == 1 {
+                buffer.showsTileBackground = true
+                buffer.setSticker("dog-05", mode: .loop)
+            } else {
+                buffer.showsTileBackground = false
+                buffer.onFinished = { [weak buffer] in buffer?.isHidden = true }
+                buffer.setSticker("cat-08", mode: .once(holdLast: false))
+            }
+            buffer.isHidden = false
+            stickerLayoutOverlays()
+        } else if !shouldShow, stickerBufferVisible {
+            stickerBufferVisible = false
+            stickerBufferView?.isHidden = true
+        }
+    }
+
+    // MARK: 定位
+
+    func stickerLayoutOverlays() {
+        let bounds = view.bounds
+        guard bounds.width > 0 else { return }
+        if let dock = stickerDock {
+            dock.frame = CGRect(
+                x: 0, y: bounds.height - view.safeAreaInsets.bottom - 116,
+                width: bounds.width, height: 116)
+        }
+        if let failure = stickerFailureView {
+            failure.frame = CGRect(
+                x: (bounds.width - 80) / 2, y: (bounds.height - 80) / 2 - 24,
+                width: 80, height: 80)
+        }
+        if let buffer = stickerBufferView, let bar = miniBar {
+            buffer.frame = CGRect(
+                x: bar.frame.minX + 4, y: bar.frame.minY - 64,
+                width: 58, height: 58)
         }
     }
 }

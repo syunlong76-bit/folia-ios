@@ -235,7 +235,9 @@ struct SearchWorkspaceView: View {
             voidState(text: "搜索失败，请重试。", showRetry: true)
         } else if currentResultCount == 0 {
             // 含未搜初始态：源码分支即 resultCount == 0 → 空态（home.noResults）。
-            voidState(text: "未找到相关结果", showRetry: false)
+            // 贴纸层（3.7 (24)，纯新增）：真搜过且无结果时出猫
+            // 贴纸，未搜初始态不出（sticker 传 hasSearched）。
+            voidState(text: "未找到相关结果", showRetry: false, sticker: hasSearched)
         } else {
             ScrollView {
                 LazyVStack(spacing: 0) {
@@ -291,8 +293,14 @@ struct SearchWorkspaceView: View {
     }
 
     /// 空 / 错误态：88px 空心圆（2px ink 边、opacity 0.4）+ 强调色斜杠（124×6、-32°）。
-    private func voidState(text: String, showRetry: Bool) -> some View {
+    /// sticker 为真时（3.7 (24) 新增，搜索无结果专用）在圆圈上方
+    /// 出 cat-02（举手无果）90pt，播一次停末帧；错误态不传。
+    private func voidState(text: String, showRetry: Bool, sticker: Bool = false) -> some View {
         VStack(spacing: 24) {
+            if sticker {
+                StickerViewRepresentable(asset: "cat-02", mode: .once(holdLast: true))
+                    .frame(width: 90, height: 90)
+            }
             ZStack {
                 Circle()
                     .stroke(ink.opacity(0.4), lineWidth: 2)

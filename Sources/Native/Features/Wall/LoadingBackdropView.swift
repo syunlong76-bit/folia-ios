@@ -1,17 +1,19 @@
 import UIKit
 
-/// 曲目墙加载背板（拍立得切入，3.7 (13) #4 改规格，Miller 定）：
-/// 点中歌单 → 封面套拍立得像框飞到中央 → 像框一直循环翻转
-/// （1 秒一圈）直到数据到达 → 停翻、整板淡出（0.3 秒）、曲目墙
-/// 接住。(12) 的「放大铺满全屏」段已删（Miller 指其糊）。
-/// 生命周期沿用 (8) 丝滑组合：等数据 ≤250ms 由 VC 的 present 时
-/// 机决定、胶囊 >600ms 才现（VC 侧）、数据到调 dismiss() 退场。
+/// 曲目墙加载背板（拍立得切入）：
+/// 点中歌单 → 封面套拍立得像框飞到中央 → 数据到达 → 整板淡出
+/// （0.3 秒）、曲目墙接住。(12) 的「放大铺满全屏」段已删
+/// （Miller 指其糊）；生命周期沿用 (8) 丝滑组合：等数据
+/// ≤250ms 由 VC 的 present 时机决定、胶囊 >600ms 才现
+/// （VC 侧）、数据到调 dismiss() 退场。
 ///
-/// 状态机：idle → flyIn → flip（逐圈链式，圈界是检查点）→
-/// fadingOut。数据在 flyIn 期到 = 快路径（跳过翻面直接退场）；
-/// 在 flip 期到记 pendingDismiss，当前圈翻完即停翻淡出（翻转
-/// 与淡出不重叠）。关闭在 flyIn/flip 期被拦截记 pendingClose，
-/// 圈界由 VC 执行（关闭与数据同时到达时关闭优先）。
+/// 3.7 (24) 改规格（Miller 19:59 点名，附图）：取消照片卡的
+/// 循环翻转动画——照片固定展示，只保留入场淡入 + 落位弹簧；
+/// 拍立得下白边居中落「小猫跳舞」贴纸（实况抠帧捂脸猫真动效
+/// 定版，cat-live APNG 2.0s 原帧循环，72pt 宽，贴纸中心压在
+/// 下白边中线：照片底沿 246 与卡底 282 之间），随加载态一同
+/// 淡出。旧翻面体的圈界记账（pendingDismiss/pendingClose）
+/// 随旋转取消一并退役：数据到即淡出、关闭即放行。
 ///
 /// 吉祥物预留接口（Miller 定：吉祥物后面考虑，接口留给大肥鱼）：
 /// mascotContainer 是加载态形象的挂载槽（标题下方）。
@@ -19,28 +21,26 @@ final class LoadingBackdropView: UIView {
 
     /// 吉祥物挂载槽（预留给大肥鱼）：标题下方区域，默认空。
     let mascotContainer = UIView()
-    /// 关闭被拦截后、到达圈界时回调（VC 据此执行关闭）。
+    /// 关闭回调（24 前为翻面圈界拦截后的执行口；旋转取消后
+    /// requestClose 恒放行，本回调不再被触发，保留接口兼容）。
     var onPendingClose: (() -> Void)?
 
-    private enum Phase { case idle, flyIn, flip, fadingOut, finished }
+    private enum Phase { case idle, appearing, shown, fadingOut, finished }
 
     /// 远景垫色（同图重模糊 + 重压暗，只负责给画面一点颜色）。
     private let bleedImageView = UIImageView()
-    /// 透视容器（m34 挂在它的 sublayerTransform 上）。
-    private let perspectiveContainer = UIView()
-    /// 翻面体：正反两面都是它的子视图。
-    private let flipView = UIView()
+    /// 拍立得卡容器（24 前是透视翻面体，现为固定展示）。
+    private let cardView = UIView()
     private let frontView = UIView()
     private let photoImageView = UIImageView()
-    private let backView = UIView()
     private let titleLabel = UILabel()
+    /// 小猫跳舞贴纸（cat-live，落拍立得下白边）。
+    private let catSticker = StickerView()
 
     private var phase: Phase = .idle
-    private var flipDelegate: AnimationDelegate?
     private var began = false
     private var dismissed = false
     private var pendingDismiss = false
-    private var pendingClose = false
 
     /// 拍立得几何：照片 236 见方、白边上/左/右 10、底 36。
     private static let cardSize = CGSize(width: 256, height: 282)
@@ -78,13 +78,10 @@ final class LoadingBackdropView: UIView {
             dim.trailingAnchor.constraint(equalTo: trailingAnchor)
         ])
 
-        // 拍立得：透视容器 → 翻面体 → 正（白框+照片）/背（相纸素背）。
-        var perspective = CATransform3DIdentity
-        perspective.m34 = -1 / 1400
-        perspectiveContainer.layer.sublayerTransform = perspective
-        perspectiveContainer.alpha = 0
-        addSubview(perspectiveContainer)
-        perspectiveContainer.addSubview(flipView)
+        // 拍立得：白框卡 + 照片，固定展示（无翻面体）。
+        cardView.alpha = 0
+        addSubview(cardView)
+        cardView.addSubview(frontView)
 
         frontView.backgroundColor = .white
         frontView.layer.cornerRadius = 8
@@ -92,20 +89,16 @@ final class LoadingBackdropView: UIView {
         frontView.layer.shadowOpacity = 0.55
         frontView.layer.shadowRadius = 24
         frontView.layer.shadowOffset = CGSize(width: 0, height: 10)
-        frontView.layer.isDoubleSided = false
-        flipView.addSubview(frontView)
-
         photoImageView.contentMode = .scaleAspectFill
         photoImageView.clipsToBounds = true
         photoImageView.backgroundColor = UIColor(white: 0.13, alpha: 1)
         photoImageView.frame = Self.photoRect
         frontView.addSubview(photoImageView)
 
-        backView.backgroundColor = UIColor(white: 0.93, alpha: 1)
-        backView.layer.cornerRadius = 8
-        backView.layer.isDoubleSided = false
-        backView.layer.transform = CATransform3DMakeRotation(.pi, 0, 1, 0)
-        flipView.addSubview(backView)
+        // 小猫跳舞贴纸：72pt 宽（cat-live 原生 270×250），居中
+        // 压在下白边上（中心 = 白边中线 y=264），随卡一同入场。
+        catSticker.setSticker("cat-live", mode: .loop)
+        frontView.addSubview(catSticker)
 
         titleLabel.text = title
         titleLabel.textColor = .white
@@ -126,18 +119,24 @@ final class LoadingBackdropView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let card = Self.cardSize
-        perspectiveContainer.frame = CGRect(
+        cardView.frame = CGRect(
             x: (bounds.width - card.width) / 2,
             y: (bounds.height - card.height) / 2 - 56,
             width: card.width, height: card.height)
-        flipView.frame = perspectiveContainer.bounds
-        frontView.frame = flipView.bounds
-        backView.frame = flipView.bounds
+        frontView.frame = cardView.bounds
         // 阴影走显式 path，避免每帧按 bounds 重算。
         frontView.layer.shadowPath = UIBezierPath(
             roundedRect: frontView.bounds, cornerRadius: 8).cgPath
+        // 贴纸：宽 72、高按素材比例 250/270 ≈ 66.7；水平居中，
+        // 垂直中心落在下白边中线（照片底 246 与卡底 282 的中点）。
+        let stickerWidth: CGFloat = 72
+        let stickerHeight = stickerWidth * 250 / 270
+        catSticker.frame = CGRect(
+            x: (card.width - stickerWidth) / 2,
+            y: 264 - stickerHeight / 2,
+            width: stickerWidth, height: stickerHeight)
         titleLabel.frame = CGRect(
-            x: 32, y: perspectiveContainer.frame.maxY + 22,
+            x: 32, y: cardView.frame.maxY + 22,
             width: bounds.width - 64, height: 44)
         mascotContainer.frame = CGRect(
             x: (bounds.width - 150) / 2, y: titleLabel.frame.maxY + 14,
@@ -152,124 +151,48 @@ final class LoadingBackdropView: UIView {
     // MARK: - 状态机
 
     /// 上屏即开场（预加载期在屏外创建，上屏前 dismiss 已调用则
-    /// 永不开场——快路径下背板根本不露面）。
+    /// 永不开场——快路径下背板根本不露面）。入场 = 淡入 +
+    /// 落位弹簧（缩放 0.92→1、下移回正），照片本体之后零位移。
     private func begin() {
         guard !began, !dismissed, phase == .idle else { return }
         began = true
-        phase = .flyIn
-        UIView.animate(withDuration: 0.25, delay: 0, options: [.curveEaseOut]) {
-            self.perspectiveContainer.alpha = 1
+        phase = .appearing
+        cardView.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            .translatedBy(x: 0, y: 14)
+        UIView.animate(withDuration: 0.5, delay: 0,
+                       usingSpringWithDamping: 0.82, initialSpringVelocity: 0.35,
+                       options: [.curveEaseOut]) {
+            self.cardView.alpha = 1
+            self.cardView.transform = .identity
         } completion: { _ in
-            guard self.phase == .flyIn else { return }
+            guard self.phase == .appearing else { return }
             if self.pendingDismiss {
-                // 数据在 flyIn 期就到：快路径，跳过翻面直接退场。
+                // 数据在入场期就到：快路径，落位后直接退场。
                 self.fadeOutNow()
                 return
             }
-            self.startFlip()
+            self.phase = .shown
         }
     }
 
-    /// 第一圈带放大入场（0.8 → 1.0），之后纯旋转逐圈链式循环，
-    /// 每圈 1 秒；圈界是 pendingDismiss / pendingClose 的检查点。
-    private func startFlip() {
-        phase = .flip
-        runFlipRevolution(withScaleRamp: true)
-    }
-
-    private func runFlipRevolution(withScaleRamp: Bool) {
-        func keyframe(_ angle: CGFloat, _ scale: CGFloat) -> CATransform3D {
-            var t = CATransform3DMakeRotation(angle, 0, 1, 0)
-            t = CATransform3DScale(t, scale, scale, 1)
-            return t
-        }
-        let startScale: CGFloat = withScaleRamp ? 0.8 : 1.0
-        let midScale: CGFloat = withScaleRamp ? 0.9 : 1.0
-        let flip = CAKeyframeAnimation(keyPath: "transform")
-        flip.values = [
-            NSValue(caTransform3D: keyframe(0, startScale)),
-            NSValue(caTransform3D: keyframe(.pi, midScale)),
-            NSValue(caTransform3D: keyframe(2 * .pi, 1.0))
-        ]
-        flip.keyTimes = [0, 0.5, 1]
-        flip.duration = 1.0
-        flip.timingFunctions = [
-            CAMediaTimingFunction(name: .easeInEaseOut),
-            CAMediaTimingFunction(name: .easeInEaseOut)
-        ]
-        flip.isRemovedOnCompletion = true
-        // CAAnimation 不强持 delegate，须由视图自己留住它到回调落地。
-        let delegate = AnimationDelegate { [weak self] in self?.flipRevolutionFinished() }
-        flipDelegate = delegate
-        flip.delegate = delegate
-        flipView.layer.add(flip, forKey: "foliaPolaroidFlip")
-        flipView.layer.transform = keyframe(2 * .pi, 1.0)
-    }
-
-    /// 一圈翻完（此刻正面朝前、transform 在恒等位）：先处理记账
-    /// （关闭优先于数据），都没事就接着翻下一圈。
-    /// 契约：pendingClose 分支触发 onPendingClose 后 phase 停在
-    /// .flip 且不再翻转，靠接线方（VC）在回调里 dismiss 整个墙
-    /// 收尾；改接线时必须维持这一点，否则背板会静止挂住。
-    private func flipRevolutionFinished() {
-        flipDelegate = nil
-        guard phase == .flip else { return }
-        if pendingClose {
-            onPendingClose?()
-            return
-        }
-        if pendingDismiss {
-            fadeOutNow()
-            return
-        }
-        runFlipRevolution(withScaleRamp: false)
-    }
-
-    /// 数据到达后退场：idle 立即淡出、flyIn 期走快路径、flip 期
-    /// 记账等当前圈翻完（翻转与淡出不重叠，3.7 (13) #4）。
+    /// 数据到达后退场：idle 立即淡出、appearing 期记账等落位
+    /// 完成、shown 立即淡出（全程与淡出不重叠的只有入场弹簧）。
     func dismiss() {
         guard !dismissed else { return }
         dismissed = true
         switch phase {
-        case .idle:
+        case .idle, .shown:
             fadeOutNow()
-        case .flyIn:
+        case .appearing:
             pendingDismiss = true
-        case .flip:
-            pendingDismiss = true
-            armFlipWatchdog()
         case .fadingOut, .finished:
             break
         }
     }
 
-    /// 关闭请求：flyIn/flip 期拦截并记账（返回 false），其余放行。
+    /// 关闭请求：旋转取消后无圈界可等，恒放行（VC 随即收墙）。
     func requestClose() -> Bool {
-        switch phase {
-        case .flyIn:
-            pendingClose = true
-            return false
-        case .flip:
-            pendingClose = true
-            armFlipWatchdog()
-            return false
-        default:
-            return true
-        }
-    }
-
-    /// 翻转看门狗（DS31）：圈界回调万一丢失，pending 状态不能
-    /// 永久挂起（背板不退场、墙也关不掉的软锁）。到期仍在 flip
-    /// 且有记账时强制执行（关闭优先）。
-    private func armFlipWatchdog() {
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-            guard let self, self.phase == .flip else { return }
-            if self.pendingClose {
-                self.onPendingClose?()
-            } else if self.pendingDismiss {
-                self.fadeOutNow()
-            }
-        }
+        return true
     }
 
     private func fadeOutNow() {
@@ -313,15 +236,5 @@ final class LoadingBackdropView: UIView {
     private func applyCover(_ image: UIImage) {
         photoImageView.image = image
         bleedImageView.image = image
-    }
-}
-
-/// CAAnimation 完成回调的最小承接（动画本身留在 layer 上，
-/// 落位靠 flipView.layer.transform 的预设终值，不依赖回调改状态）。
-private final class AnimationDelegate: NSObject, CAAnimationDelegate {
-    private let onStop: () -> Void
-    init(onStop: @escaping () -> Void) { self.onStop = onStop }
-    func animationDidStop(_ anim: CAAnimation, finished flag: Bool) {
-        if flag { onStop() }
     }
 }

@@ -140,7 +140,20 @@ final class WallPrototypeViewController: UIViewController,
     private var waveCount = 0
     /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
     private var loadAttempts = 0
-    private var loadFailed = false
+    private var loadFailed = false {
+        // 贴纸层（3.7 (24)，纯新增）：只驱动失败陪衬贴纸显隐。
+        didSet { stickerFailureStateChanged() }
+    }
+
+    // 贴纸层状态（3.7 (24)，纯新增视图层）：加载失败陪衬、
+    // 空歌单、切歌缓冲。视图懒建，方法全在文件尾 extension。
+    private var stickerFailureView: StickerView?
+    private var stickerFailureReplayTimer: Timer?
+    private var stickerEmptyView: StickerView?
+    private var stickerEmptyEpisode = 0
+    private var stickerBufferView: StickerView?
+    private var stickerBufferEpisode = 0
+    private var stickerBufferVisible = false
     /// 回程恢复（3.7 (13) #6）：重呈时由主页墙注入，种子落地后应用。
     var pendingReturnTicket: WallReturnTicket?
     /// 底部播放台（3.7 (13) #7；13.1 改版）：网页风迷你播放器，
@@ -304,6 +317,12 @@ final class WallPrototypeViewController: UIViewController,
                 self?.refreshVisiblePlaybackUI()
                 self?.refreshMiniBar()
             }
+            .store(in: &playbackCancellables)
+        // 贴纸层（3.7 (24)，纯新增订阅）：切歌缓冲态驱动缓冲
+        // 贴纸显隐，只读引擎状态，不回写。
+        PlaybackEngine.shared.$playbackState
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] state in self?.stickerBufferStateChanged(state) }
             .store(in: &playbackCancellables)
         // 原生点播失败落地（DS26 三态的失败支）：只认领自己在途的
         // 那次点播；网页侧发起的失败不归本墙管。
@@ -1328,7 +1347,8 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     @objc private func closeTapped() {
-        // 拍立得翻面中关闭被背板拦截记账，落定后经 onPendingClose 回来。
+        // 拍立得背板关闭契约（3.7 (24) 起）：旋转动画取消后
+        // requestClose 恒放行，点关闭即收墙。
         if let backdrop, !backdrop.requestClose() { return }
         dismiss(animated: true)
     }
@@ -1365,6 +1385,8 @@ final class WallPrototypeViewController: UIViewController,
 
     private func loadEntries() {
         loadAttempts += 1
+        // 贴纸层（3.7 (24)，纯新增）：新一轮加载先收空态贴纸。
+        stickerLoadStarted()
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -1414,6 +1436,8 @@ final class WallPrototypeViewController: UIViewController,
                     self.flushSeedWaiters()
                     self.waveStart = Date()
                     self.backdrop?.dismiss()
+                    // 贴纸层（3.7 (24)，纯新增）：空歌单出空态贴纸。
+                    if total == 0 { self.stickerShowEmptyPlaylist() }
                 }
                 // 页大小 400（3.7 (7) 实测）：往返的固定开销占大头
                 // （EdgeOne→网易云单次 4–9 秒、与页大小关系不大），
@@ -1556,6 +1580,8 @@ final class WallPrototypeViewController: UIViewController,
            abs(constraint.constant - portraitBarWidth) > 0.5 {
             constraint.constant = portraitBarWidth
         }
+        // 贴纸层（3.7 (24)，纯新增）：失败/空态/缓冲贴纸定位。
+        stickerLayoutOverlays()
     }
 
     /// 相机增量折叠（3.7 (2) 修复）：3.7 (1) 的整格绕回模型有个致命
@@ -2154,6 +2180,8 @@ final class WallPrototypeViewController: UIViewController,
         guard queueIndex < entries.count else { return }
         let id = entries[queueIndex].id
         let newState = LikesStore.shared.toggle(id)
+        // 贴纸层（3.7 (24)，纯新增）：点亮红心时展开卡上浮贴纸。
+        if newState { stickerCelebrateLike(queueIndex: queueIndex) }
         refreshVisiblePlaybackUI()
         Task {
             do {
@@ -2308,6 +2336,14 @@ final class WallPosterCell: UICollectionViewCell {
     private var controlsVisible = false
     private var progressValue: Double = 0
 
+    // 贴纸层（3.7 (24)，纯新增）：无版权/VIP 失败时错误条上方
+    // 居中出哭猫（轮换池见 showFailureSticker）；点亮红心时
+    // 红心上方浮 dog-11。均为叠加视图，不改既有控件逻辑。
+    private var failureSticker: StickerView?
+    private var failureStickerShown = false
+    private static var failureEpisode = 0
+    private var likeSticker: StickerView?
+
     /// 入场淡入已播过的条目（按条目 id 去重、跨 cell 复用有效）：
     /// 同一面墙里平铺重复的同一条目只在首现时淡入，后续实例直接
     /// 显示，平移时不反复闪。
@@ -2430,7 +2466,65 @@ final class WallPosterCell: UICollectionViewCell {
         } else {
             errorLabel.isHidden = true
         }
+        // 贴纸层（3.7 (24)，纯新增）：失败态进出只切贴纸显隐，
+        // 同一失败回合内重复 configure 不重播。
+        if case .failed = loadState, expanded {
+            if !failureStickerShown { showFailureSticker() }
+        } else if failureStickerShown {
+            failureStickerShown = false
+            failureSticker?.isHidden = true
+            failureSticker?.pause()
+        }
         setLiked(liked)
+        setNeedsLayout()
+    }
+
+    /// 无版权/VIP 贴纸轮换（映射定案）：主选 cat-20（头部特写
+    /// 甩泪）与轮换 cat-10（嚎哭趴倒）、cat-05 截段（f0–f17）
+    /// 交替，序列 cat-20 → cat-10 → cat-20 → cat-05 循环，
+    /// 保证主选占比且同一只不连着出现两遍。均播一次停末帧。
+    private func showFailureSticker() {
+        failureStickerShown = true
+        let pool = ["cat-20", "cat-10", "cat-20", "cat-05"]
+        let asset = pool[Self.failureEpisode % pool.count]
+        Self.failureEpisode += 1
+        let sticker: StickerView
+        if let existing = failureSticker {
+            sticker = existing
+        } else {
+            sticker = StickerView()
+            shadowView.addSubview(sticker)
+            failureSticker = sticker
+        }
+        sticker.setSticker(asset, mode: .once(holdLast: true))
+        sticker.isHidden = false
+        setNeedsLayout()
+    }
+
+    /// 点亮红心庆祝（映射定案）：dog-11 抱爱心在红心按钮上方
+    /// 浮出，播 2 圈（约 2.6s）后淡出。由 VC 的 likeTapped 在
+    /// 新状态为已收藏时调用。
+    func showLikeCelebration() {
+        let sticker: StickerView
+        if let existing = likeSticker {
+            sticker = existing
+        } else {
+            sticker = StickerView()
+            sticker.showsTileBackground = true
+            shadowView.addSubview(sticker)
+            likeSticker = sticker
+        }
+        sticker.alpha = 1
+        sticker.isHidden = false
+        sticker.setSticker("dog-11", mode: .loops(2))
+        sticker.onFinished = { [weak sticker] in
+            UIView.animate(withDuration: 0.3) {
+                sticker?.alpha = 0
+            } completion: { _ in
+                sticker?.isHidden = true
+                sticker?.alpha = 1
+            }
+        }
         setNeedsLayout()
     }
 
@@ -2484,6 +2578,14 @@ final class WallPosterCell: UICollectionViewCell {
             playSpinner.frame = playButton.frame
             errorLabel.frame = CGRect(x: 6, y: barTop - 19,
                                       width: bounds.width - 12, height: 15)
+            // 贴纸层（3.7 (24)）：失败贴纸 80pt 居中压在错误条
+            // 上方；红心贴纸 64pt 浮在红心按钮上方。
+            failureSticker?.frame = CGRect(
+                x: (bounds.width - 80) / 2, y: barTop - 19 - 4 - 80,
+                width: 80, height: 80)
+            likeSticker?.frame = CGRect(
+                x: bounds.width - 38 - 17, y: barTop + 2 - 6 - 64,
+                width: 64, height: 64)
         }
         playingBadge.frame = CGRect(x: bounds.width - 30, y: 4, width: 24, height: 24)
     }
@@ -2599,5 +2701,156 @@ final class WallPosterCell: UICollectionViewCell {
         errorLabel.isHidden = true
         errorLabel.text = nil
         progressValue = 0
+        // 贴纸层（3.7 (24)）：复用时收起两只贴纸。
+        failureStickerShown = false
+        failureSticker?.isHidden = true
+        likeSticker?.isHidden = true
+        likeSticker?.alpha = 1
+    }
+}
+
+// MARK: - 贴纸层（3.7 (24)，纯新增视图层）
+//
+// 场景（scene-mapping.md 终版）：
+// - 断网/加载失败：最终失败态居中 cat-03（80pt，播一次；
+//   失败持续存在时每 8 秒低频重播）——与主页墙同规。
+// - 歌单为空：种子落地且 total == 0 时居中 90pt，按打开
+//   回合轮换 cat-17（躺平，循环）/ cat-24（抱手机泪成滩，
+//   循环）/ cat-14（蜷躺抱手机，播一次停末帧；外卖袋道具
+//   文字为 Miller 破例可用，Q4 裁决）。
+// - 切歌缓冲：与主页墙同规（dog-05 / cat-08 回合轮换，
+//   迷你台封面角上方 58pt）。
+// 全部只读既有状态，不回写任何状态机。
+
+extension WallPrototypeViewController {
+
+    private func stickerEnsureViews() {
+        if stickerFailureView == nil {
+            let failure = StickerView()
+            failure.isHidden = true
+            view.addSubview(failure)
+            stickerFailureView = failure
+        }
+        if stickerEmptyView == nil {
+            let empty = StickerView()
+            empty.isHidden = true
+            view.addSubview(empty)
+            stickerEmptyView = empty
+        }
+        if stickerBufferView == nil {
+            let buffer = StickerView()
+            buffer.isHidden = true
+            view.addSubview(buffer)
+            stickerBufferView = buffer
+        }
+    }
+
+    // MARK: 失败陪衬
+
+    func stickerFailureStateChanged() {
+        stickerEnsureViews()
+        if loadFailed {
+            stickerFailureView?.setSticker("cat-03", mode: .once(holdLast: true))
+            stickerFailureView?.isHidden = false
+            stickerLayoutOverlays()
+            stickerFailureReplayTimer?.invalidate()
+            stickerFailureReplayTimer = Timer.scheduledTimer(
+                withTimeInterval: 8, repeats: true) { [weak self] _ in
+                    guard let self, self.loadFailed,
+                          self.view.window != nil else {
+                        self?.stickerFailureReplayTimer?.invalidate()
+                        self?.stickerFailureReplayTimer = nil
+                        return
+                    }
+                    self.stickerFailureView?.restart()
+                }
+        } else {
+            stickerFailureReplayTimer?.invalidate()
+            stickerFailureReplayTimer = nil
+            stickerFailureView?.isHidden = true
+        }
+    }
+
+    // MARK: 空歌单
+
+    func stickerLoadStarted() {
+        stickerEmptyView?.isHidden = true
+    }
+
+    func stickerShowEmptyPlaylist() {
+        stickerEnsureViews()
+        guard let empty = stickerEmptyView else { return }
+        stickerEmptyEpisode += 1
+        switch stickerEmptyEpisode % 3 {
+        case 1:
+            empty.setSticker("cat-17", mode: .loop)
+        case 2:
+            empty.setSticker("cat-24", mode: .loop)
+        default:
+            empty.setSticker("cat-14", mode: .once(holdLast: true))
+        }
+        empty.isHidden = false
+        stickerLayoutOverlays()
+    }
+
+    // MARK: 切歌缓冲
+
+    func stickerBufferStateChanged(_ state: PlaybackState) {
+        let shouldShow = state == .waiting
+            && PlaybackEngine.shared.currentTrack != nil
+        if shouldShow, !stickerBufferVisible {
+            stickerBufferVisible = true
+            stickerEnsureViews()
+            stickerBufferEpisode += 1
+            guard let buffer = stickerBufferView else { return }
+            if stickerBufferEpisode % 2 == 1 {
+                buffer.showsTileBackground = true
+                buffer.setSticker("dog-05", mode: .loop)
+            } else {
+                buffer.showsTileBackground = false
+                buffer.onFinished = { [weak buffer] in buffer?.isHidden = true }
+                buffer.setSticker("cat-08", mode: .once(holdLast: false))
+            }
+            buffer.isHidden = false
+            stickerLayoutOverlays()
+        } else if !shouldShow, stickerBufferVisible {
+            stickerBufferVisible = false
+            stickerBufferView?.isHidden = true
+        }
+    }
+
+    // MARK: 红心庆祝（展开卡）
+
+    func stickerCelebrateLike(queueIndex: Int) {
+        guard let expandedId = wallLayout.expandedInstanceId,
+              let item = wallLayout.instances.firstIndex(where: {
+                  $0.instanceId == expandedId && $0.queueIndex == queueIndex
+              }),
+              let cell = collectionView.cellForItem(
+                  at: IndexPath(item: item, section: 0)) as? WallPosterCell
+        else { return }
+        cell.showLikeCelebration()
+    }
+
+    // MARK: 定位
+
+    func stickerLayoutOverlays() {
+        let bounds = view.bounds
+        guard bounds.width > 0 else { return }
+        if let failure = stickerFailureView {
+            failure.frame = CGRect(
+                x: (bounds.width - 80) / 2, y: (bounds.height - 80) / 2 - 24,
+                width: 80, height: 80)
+        }
+        if let empty = stickerEmptyView {
+            empty.frame = CGRect(
+                x: (bounds.width - 90) / 2, y: (bounds.height - 90) / 2 - 24,
+                width: 90, height: 90)
+        }
+        if let buffer = stickerBufferView, let bar = miniBar {
+            buffer.frame = CGRect(
+                x: bar.frame.minX + 4, y: bar.frame.minY - 64,
+                width: 58, height: 58)
+        }
     }
 }
