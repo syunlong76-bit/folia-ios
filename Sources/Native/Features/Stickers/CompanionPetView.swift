@@ -187,7 +187,7 @@ final class CompanionPetView: UIView {
                                    (r.width + r.height) / perimeter,
                                    (2 * r.width + r.height) / perimeter]
         for corner in cornerTs {
-            if abs(perimeterT - corner) < 0.002, Double.random() < 0.3 {
+            if abs(perimeterT - corner) < 0.002, Double.random(in: 0..<1) < 0.3 {
                 idleUntil = link.timestamp + Double.random(in: 1.5...4)
             }
         }
