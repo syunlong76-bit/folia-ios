@@ -229,6 +229,12 @@ final class HomeWallViewController: UIViewController,
                 didPlayEntryIntro = true
             }
         }
+        // 方向恢复兜底（3.7 (23)，DS R49 Q6）：入场退场后的
+        // 竖屏请求主发点在 dismiss 完成回调（PortraitRestore），
+        // 本处是第二次露面的兜底——若彼时界面仍横屏（请求落
+        // 空/被打断），在此再发一次（与主发点 0.3s 去重、幂
+        // 等，竖屏时无操作）。修 (22) 前横屏卡死等转动的病。
+        PortraitRestore.requestIfLandscape(from: self, source: "home-appear")
         // 迷你台无操作计时（3.7 (21)）：回墙即续命（在场且
         // 完整形态才起，resetMiniIdleTimer 内部把关）。
         resetMiniIdleTimer()
@@ -707,25 +713,24 @@ final class HomeWallViewController: UIViewController,
         refreshMiniProgressChrome()
     }
 
-    /// 进度填充与圆点配色的形态收口（3.7 (22)，DS R48）：
+    /// 进度填充与圆点配色的形态收口（3.7 (22) 立、(23) 修）：
     /// 展开态 = 主题口径（皮肤 + 主题填充色）；收起态背景已
-    /// 移除，皮肤摘掉、圆点恢复白色发光、填充改强色兜底，
-    /// 免得浅色填充与皮肤贴图在无背景的墙面上糊掉。主题
-    /// 变更（包括收起态下经设置页变更）与形态切换都经此
-    /// 重算；进度本身仍由 setMiniProgress 唯一驱动，切歌
-    /// 经 refreshMiniBar 先展开、再收起时按新曲续步进。
+    /// 移除、只留极淡底轨，填充改强色兜底（miniCollapsedFillColor）。
+    /// 圆点皮肤 (22) 曾在收起态一并摘掉改白色发光点，Miller
+    /// 真机否决（「花海小圆点就是一朵花」）——(23) 恢复：收
+    /// 起态与展开态同款挂 knobSkinView，有皮肤时 knob 底色
+    /// 转清、关发光阴影；无主题（皮肤为 nil）才用白色发光
+    /// 点兜底。主题变更（包括收起态下经设置页变更）与形态
+    /// 切换都经此重算（收起态切主题/切歌经 applyMiniTheme /
+    /// setMiniBarForm 回到这里重挂皮肤）；进度本身仍由
+    /// setMiniProgress 唯一驱动。
     private func refreshMiniProgressChrome() {
         miniKnobSkin?.removeFromSuperview()
         miniKnobSkin = nil
-        if miniBarCollapsed {
-            miniProgressKnob.backgroundColor = .white
-            miniProgressKnob.layer.shadowOpacity = 0.9
-            miniProgressFill.backgroundColor = Self.miniCollapsedFillColor(for: miniTheme)
-            return
-        }
         // 圆点皮肤：13pt 贴图居中压在既有 9pt knob 框上（knob
         // 不裁剪、贴图溢出显示，中心仍与轨道头位对齐，原
-        // leading 公式 -4.5 不变）。
+        // leading 公式 -4.5 不变）；皮肤层不拦截触摸
+        // （knobSkinView 内已置 isUserInteractionEnabled=false）。
         if let skin = MiniPlayerThemeLayer.knobSkinView(for: miniTheme) {
             skin.translatesAutoresizingMaskIntoConstraints = false
             miniProgressKnob.addSubview(skin)
@@ -737,10 +742,12 @@ final class HomeWallViewController: UIViewController,
             ])
             miniKnobSkin = skin
         }
-        let themed = miniTheme != .none
+        let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        miniProgressFill.backgroundColor = Self.miniFillColor(for: miniTheme)
+        miniProgressFill.backgroundColor = miniBarCollapsed
+            ? Self.miniCollapsedFillColor(for: miniTheme)
+            : Self.miniFillColor(for: miniTheme)
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无

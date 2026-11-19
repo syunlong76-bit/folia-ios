@@ -381,7 +381,9 @@ final class MiniPlayerThemeLayer: UIView {
 
     private static func drawRenderer(size: CGSize) -> UIGraphicsImageRenderer {
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 3
+        // 按屏幕 scale 渲染（3.7 (23)）：此前写死 3，非 3x 屏
+        // 上皮肤图会发虚；跟随设备 scale 与系统贴图口径一致。
+        format.scale = UIScreen.main.scale
         format.opaque = false
         return UIGraphicsImageRenderer(size: size, format: format)
     }

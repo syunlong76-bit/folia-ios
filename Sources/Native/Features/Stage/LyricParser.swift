@@ -42,6 +42,34 @@ enum LyricParser {
         return lines
     }
 
+    /// 仓库行表 → 舞台形状（3.7 (23)）：舞台改经 LyricRepository
+    /// 取词后由此派生——行时刻与墙面同一张合并表（LRC 时刻，
+    /// 含 [offset:] 平移，旧舞台 parse 不认 offset 的缺口一并
+    /// 补上）；end 口径与 parse 一致（下一行 start、末行曲目
+    /// 时长或 +5 兜底）；逐字戳一并映射（此前舞台 words 恒
+    /// nil，现与墙面同源）。
+    static func stageLines(from data: [LyricLineData],
+                           trackDuration: TimeInterval) -> [LyricLine] {
+        var lines: [LyricLine] = []
+        lines.reserveCapacity(data.count)
+        for (index, row) in data.enumerated() {
+            let end: TimeInterval
+            if index + 1 < data.count {
+                end = max(data[index + 1].time, row.time + 0.1)
+            } else if trackDuration > row.time {
+                end = trackDuration
+            } else {
+                end = row.time + 5
+            }
+            let words = row.words?.map {
+                LyricWord(start: $0.start, end: $0.start + $0.duration, text: $0.text)
+            }
+            lines.append(LyricLine(id: index, start: row.time, end: end,
+                                   text: row.text, words: words))
+        }
+        return lines
+    }
+
     /// 当前行查找：最后一个 start <= position 的行下标；无歌词或
     /// 尚未开始返回 nil。前奏提前量由调用方决定（展开卡口径 +0.15s）。
     static func currentIndex(in lines: [LyricLine], at position: TimeInterval) -> Int? {

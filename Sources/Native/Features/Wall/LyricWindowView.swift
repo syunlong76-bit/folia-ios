@@ -22,7 +22,9 @@ enum LyricTiming {
     /// 改回 .yrc 即恢复 (19) 口径（YRC 翻行 + 原戳扫光）。
     /// 3.7 (21) 起本开关只决定「注册哪套行界给 boundary 锚定」
     /// （及降级时钟比对的表），翻行触发本身改由事件驱动
-    /// （LyricBoundaryFlipDriver）。
+    /// （LyricBoundaryFlipDriver）。3.7 (23) 起翻行改由呈现钟
+    /// judge 直驱（与扫光同钟逐帧判行），本开关决定 judge 与
+    /// boundary 校准源共同使用的合并行表来源，语义不变。
     enum FlipSource { case lrc, yrc }
     static let flipSource: FlipSource = .lrc
     /// settle 稳态重锚开关（3.7 (21)，DS R46 对账）：保留但严格
@@ -439,6 +441,14 @@ final class LyricWindowView: UIView {
 /// 事件驱动，本 driver 只驱动扫光/进度呈现；settle 重锚严格
 /// 隔离在本时钟内（LyricTiming.settleReanchorEnabled 开关），
 /// 翻行路径不读本时钟。
+///
+/// (23) 翻行回归本时钟（DS R49 改主推荐）：audit-3723 实测
+/// boundary 翻行落到屏幕晚行界 +0.27~0.37s 且与扫光同卡两
+/// 钟不一致——翻行改由本 driver 的 judge（即 onTick 下发的
+/// now）在 VC tick 内逐帧直驱判行，与扫光严格同钟；boundary
+/// 驱动降为校准/对账源。settle 的隔离对象随之变为扫光与翻
+/// 行共用的呈现钟本身（两者同读 judge，settle 校正同时利
+/// 两边，不再有第二条翻行路径可被隔离）。
 final class LyricClockDriver {
     var onTick: ((Double) -> Void)?
 

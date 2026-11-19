@@ -1,4 +1,6 @@
 import AVFoundation
+import Combine
+import QuartzCore
 import UIKit
 
 /// 入场视频数据状态（3.7 (20)）：主页墙的歌单数据加载机对入场
@@ -34,16 +36,37 @@ enum EntryIntroDataState {
 ///   白色 ×，34pt），入场开始即显示可点；点它立即结束入场进墙——
 ///   墙数据未就绪时墙自呈既有加载态，不黑屏、不堵在入场面。
 /// - 画面点按不再跳过（12:07 定）：只认关闭按钮与自动退出，避免误触。
-/// - 尾段叠化（3.7 (22)，Miller 定版 + DS R48 编排）：自然
-///   播完路径下，视频最后 1.0s 先做 alpha 叠化作预退场——
-///   门控为「数据状态已就绪」（仍在加载不起叠化、播完按既有
-///   口径循环，下一轮再判；失败路径不走叠化）；视频保持全屏
-///   只降 alpha，其下海报垫透出，旋转回正仍由退场段在海报
-///   遮盖下完成（叠化期间不旋转、不露错向/黑边）；叠化完成
-///   后续接现行 ≤0.6s 退场编排的剩余部分（视频淡出段已由
-///   叠化承担，合并去重，不重新引入海报独占）。点关闭保持
-///   现行快速退场、不走叠化。
-/// - 海报垫底 + 退场衔接（3.7 (20) 立项、(21) 并行化修正）：
+/// - 尾段叠化（3.7 (22) 立、(23) 直溶重做，DS R49 Q4/Q5）：
+///   (22) 的门控只在尾 1.0s 内采样、无迟到兜底，且溶出对象
+///   是海报垫（视频→海报→墙两段式）——真机帧差分实证叠化
+///   根本没运行（audit-3723 §2a）。(23) 改直溶：入场 VC 改
+///   overFullScreen + 透明背景，海报垫只作起播前占位（起播
+///   即撤），自然播完路径下视频层 alpha 在最后 1.0s 直接溶
+///   到其下的主页墙；门控武装前置条件 = present 前已强制目
+///   标墙 layoutIfNeeded 且首帧已提交；就绪检查从剩余
+///   ≤1.5s 起每 tick 查，就绪迟到以剩余时长（下限 0.3s）补
+///   溶；播完墙未就绪仍循环重播、不进叠化。点关闭保持快速
+///   退场、不走叠化。退场全程面包屑（dismiss begin/commit/
+///   done、wall firstframe、video alpha）供猎 (22) 遗留的约
+///   0.7–1s 黑场。
+/// - 方向恢复（3.7 (23)，DS R49 Q6）：(22) 前回竖屏请求只在
+///   退场开始发一次、彼时横屏专属入场 VC 仍压顶，退场后零
+///   重试——真机横屏卡死约 5s 等设备转动才回正（audit-3723
+///   §2b）。改：请求移到 dismiss 完成后发（PortraitRestore），
+///   墙 viewDidAppear 再兜底发一次（双触发幂等、0.3s 内去
+///   重）；动画结束 0.2s 后校验实际方向、仍横屏重试一次；
+///   失败落面包屑（mask/topVC/error），不再只 NSLog。
+/// - 双声纪律（3.7 (23)，Miller 19:11 定版 + DS R49 Q7）：
+///   进墙时歌曲正在播放 → 入场 player 静音照播、歌曲继续，
+///   且入场不调用 AVAudioSession setActive（会话归引擎）；
+///   未播放 → 入场照常 setCategory/setActive 放定版音乐。
+///   入场期间引擎被远程/锁屏起播 → 立即静音入场（幂等）；
+///   teardown 的 setActive(false) 只在本入场激活过会话且引
+///   擎未播放时执行。入场永不写 Now Playing（归引擎）。
+/// - 海报垫底 + 退场衔接（3.7 (20) 立项、(21) 并行化修正；
+///   (23) 起海报垫降为起播前占位、起播即撤，退场衔接改由
+///   直溶 + 整面淡出 + 墙面弹簧落位承担，下文 (20)/(21) 编
+///   排仅作沿革）：
 ///   入场 VC 之下、墙之上垫一层油画海报帧（母带 2.0s 帧，
 ///   Resources/EntryVideo/entry-poster.jpg）。(20) 的退场是全
 ///   串行分段 + revealHome 固定 delay 0.45s，海报全不透明静止
@@ -60,7 +83,9 @@ enum EntryIntroDataState {
 ///   统一——(16) 曾刻意定 .ambient（遵静音拨片），是全 App 唯一
 ///   遵拨片的发声面，拨片静音时画面照播、声音全哑（audit-3720
 ///   定案，(19) 真机无声即此）。退出时类别本就是 .playback，
-///   teardown 只停活通知他人，口径与启动一致。
+///   teardown 只停活通知他人，口径与启动一致。（(23) 起会话
+///   的激活/停活按上方双声纪律收紧：引擎在播时入场不激活、
+///   teardown 条件停活；类别口径不变。）
 enum EntryIntroPresenter {
 
     private static var isPresenting = false
@@ -117,12 +142,17 @@ enum EntryIntroPresenter {
         guard let window = presenter.view.window else { return false }
         isPresenting = true
         activeDataStateProvider = dataState
+        // 叠化门控武装前置（3.7 (23)）：present 前先强制目标墙
+        // 完成布局——直溶要求视频层之下就是已布局、首帧将就
+        // 绪的主页墙，不许溶到一张还没排版的墙上。
+        presenter.view.layoutIfNeeded()
         // 推迟一帧再呈现，确保 presenter 已进窗口层级
         DispatchQueue.main.async {
-            // 海报垫：垫在入场 VC 之下、主页墙之上。播放期它被
-            // 视频层盖住；退场时视频先淡到它身上，转回竖屏在
-            // 海报下完成，随后海报与墙面交叉淡入。不拦截触摸：
-            // 哪怕残留也不会挡住墙交互（另有兜底移除）。
+            // 海报垫（3.7 (23) 降为起播前占位）：垫在入场 VC
+            // 之下、主页墙之上，只覆盖「present 完成 → 视频首
+            // 帧」这一瞬；VC 起播确认后即撤除（见 startPlayback
+            // 的 veil 清理），退场直溶不再经它。不拦截触摸：
+            // 哪怕残留也不会挡住墙交互（退场另有兜底移除）。
             let veil = UIImageView(frame: window.bounds)
             if let posterPath = Bundle.main.path(forResource: "entry-poster",
                                                  ofType: "jpg",
@@ -141,7 +171,11 @@ enum EntryIntroPresenter {
 
             let vc = EntryIntroViewController(url: url)
             vc.exitVeil = veil
-            vc.modalPresentationStyle = .fullScreen
+            // overFullScreen（3.7 (23) 直溶前提）：呈现方（主页
+            // 墙）的 view 在入场全程留在窗口层级里，视频层溶
+            // 出时其下直接是墙；fullScreen 会在呈现完成后把墙
+            // view 移出层级，直溶无对象可溶。
+            vc.modalPresentationStyle = .overFullScreen
             current = vc
             presenter.present(vc, animated: false) {
                 // 呈现后再补一次几何请求，双保险把界面转到横屏
@@ -150,6 +184,16 @@ enum EntryIntroPresenter {
                 ) { error in
                     NSLog("[EntryIntro] requestGeometryUpdate landscape failed: \(error.localizedDescription)")
                 }
+                // 墙首帧提交确认（3.7 (23)）：一笔空事务的完成
+                // 回调在墙首帧提交到渲染服务后触发——落面包屑
+                // 并武装叠化门控（门控未武装不起叠化，防溶到
+                // 未就绪的墙）。
+                CATransaction.begin()
+                CATransaction.setCompletionBlock {
+                    Breadcrumbs.log("entry wall firstframe")
+                    vc.armDissolveGate()
+                }
+                CATransaction.commit()
             }
         }
         return true
@@ -174,12 +218,34 @@ final class EntryIntroViewController: UIViewController {
     private var isDismissing = false
     /// 已循环播次计数（面包屑对账用，首轮为 0）。
     private var loopCount = 0
-    /// 尾段叠化已起跑（3.7 (22)）：自然播完路径最后 1.0s 的
-    /// 预退场状态；起跑后 dismissIntro 的视频淡出段按已叠化
-    /// 合并去重。循环重播前必须复位并恢复画面不透明。
+    /// 尾段叠化已起跑（3.7 (22) 立、(23) 直溶）：自然播完路
+    /// 径最后 1.0s 的预退场状态；起跑后 dismissIntro 的整面
+    /// 淡出段按已叠化合并去重。循环重播前必须复位并恢复画
+    /// 面不透明。
     private var dissolveBegan = false
+    /// 叠化门控武装（3.7 (23)）：present 完成且目标墙首帧已
+    /// 提交后由 Presenter 调用 armDissolveGate 置位；未武装
+    /// 时 checkDissolveGate 不起叠化。
+    private var dissolveArmed = false
+    /// 海报垫已撤（3.7 (23)）：起播确认后撤除，只执行一次。
+    private var veilCleared = false
+    /// 本入场激活过音频会话（3.7 (23) 双声纪律）：引擎播放
+    /// 中进墙时入场不碰会话（归引擎），此旗标为假；teardown
+    /// 只在旗标为真且引擎未播放时才 setActive(false)。
+    private var sessionActivatedByEntry = false
+    /// 入场已被静音（引擎在播）：起播判定与在播期间订阅共用，
+    /// 幂等——静音后不再回头取消（规格只要求避让）。
+    private var mutedForEngine = false
+    /// 引擎播放态订阅（3.7 (23)）：入场期间引擎被远程/锁屏
+    /// 起播时立即静音入场；teardown 取消。
+    private var enginePlaySubscription: AnyCancellable?
     /// 叠化门控的周期观察者（0.1s）：查剩余时长与数据状态。
     private var timeObserver: Any?
+
+    /// 叠化门控武装（Presenter 在墙首帧提交后调用）。
+    func armDissolveGate() {
+        dissolveArmed = true
+    }
 
     private let playerView = PlayerLayerView()
     private let closeButton = UIButton(type: .custom)
@@ -201,7 +267,11 @@ final class EntryIntroViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        // 透明背景（3.7 (23) 直溶）：视频层溶出/整面淡出时其
+        // 下直接是主页墙（overFullScreen 保墙在层级内）；起播
+        // 前的空窗由海报垫（window 层、VC 之下）盖住，不靠黑
+        // 底。closeButton 等子视图不受影响。
+        view.backgroundColor = .clear
         playerView.playerLayer.videoGravity = .resizeAspectFill
         playerView.frame = view.bounds
         playerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -244,15 +314,34 @@ final class EntryIntroViewController: UIViewController {
         self.player = player
         playerView.playerLayer.player = player
 
-        // 音频：.playback 与全局统一（3.7 (20) 定案）——不遵静音
-        // 拨片，与 AppDelegate 启动口径、PlaybackEngine 一致。
-        let session = AVAudioSession.sharedInstance()
-        do {
-            try session.setCategory(.playback, mode: .default)
-            try session.setActive(true)
-        } catch {
-            NSLog("[EntryIntro] AVAudioSession playback failed: \(error.localizedDescription)")
+        // 音频（3.7 (23) 双声纪律，Miller 19:11 定版 + DS
+        // R49 Q7）：引擎正在放歌 → 入场静音照播、歌曲继续，
+        // 且入场不调用 setCategory/setActive（会话归引擎，
+        // 不抢不改）；未放歌 → 入场照常激活会话放定版音乐
+        // （.playback 与全局统一、(20) 定案不遵静音拨片）。
+        // 入场期间订阅引擎播放态：被远程/锁屏起播时立即静
+        // 音入场（幂等，见 muteForEnginePlayback）。
+        let engine = PlaybackEngine.shared
+        if engine.isPlaying {
+            player.isMuted = true
+            mutedForEngine = true
+            Breadcrumbs.log("entry audio muted reason=engine-playing-at-entry")
+        } else {
+            let session = AVAudioSession.sharedInstance()
+            do {
+                try session.setCategory(.playback, mode: .default)
+                try session.setActive(true)
+                sessionActivatedByEntry = true
+            } catch {
+                NSLog("[EntryIntro] AVAudioSession playback failed: \(error.localizedDescription)")
+            }
         }
+        enginePlaySubscription = engine.$isPlaying
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] playing in
+                guard playing else { return }
+                self?.muteForEnginePlayback()
+            }
 
         itemStatusObservation = item.observe(\.status, options: [.new]) { [weak self] item, _ in
             guard item.status == .failed else { return }
@@ -266,36 +355,61 @@ final class EntryIntroViewController: UIViewController {
             forName: Notification.Name.AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in self?.dismissIntro(reason: "failed", animated: false) }
 
-        // 尾段叠化门控（3.7 (22)）：0.1s 周期查剩余时长，进
-        // 入最后 1.0s 且数据已就绪才起叠化（见 checkDissolveGate）。
+        // 尾段叠化门控（3.7 (22) 立、(23) 直溶）：0.1s 周期查
+        // 剩余时长与数据状态（见 checkDissolveGate）；同一观
+        // 察者兼起播确认——首个 tick 见播放器真正在播即撤海
+        // 报垫（占位使命完成）。
         timeObserver = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
             queue: .main
-        ) { [weak self] _ in self?.checkDissolveGate() }
+        ) { [weak self] _ in
+            guard let self else { return }
+            if !self.veilCleared, self.player?.timeControlStatus == .playing {
+                self.veilCleared = true
+                self.exitVeil?.removeFromSuperview()
+                self.exitVeil = nil
+                Breadcrumbs.log("entry veil cleared")
+            }
+            self.checkDissolveGate()
+        }
 
         scheduleWatchdog()
         player.play()
     }
 
-    /// 尾段叠化门控（3.7 (22)，Miller 定版 + DS R48）：只在
-    /// 「自然播完将退出且主页墙数据已就绪」时起跑——剩余
-    /// ≤1.0s 时查数据状态：.ready 才起叠化；.loading 不起
-    /// （播完按既有口径循环掩盖，下一轮尾段再判）；.failed
-    /// 不起（退场落墙失败态，保持现行路径）。起跑后视频保
-    /// 持全屏只降 alpha（播放层淡出、海报垫透出），界面底
-    /// 色转清防黑底挡海报；旋转回正不在叠化中发生，仍由
-    /// 退场段在海报遮盖下完成，叠化期间不露错向/黑边。
+    /// 引擎在播时静音入场（3.7 (23)，幂等）：起播判定与在播
+    /// 订阅共用；只静音入场自己的 player，会话与引擎播放一
+    /// 概不碰。已静音/已退场/无 player 时无操作。
+    private func muteForEnginePlayback() {
+        guard !mutedForEngine, !isDismissing, let player else { return }
+        mutedForEngine = true
+        player.isMuted = true
+        Breadcrumbs.log("entry audio muted reason=engine-started-during-entry")
+    }
+
+    /// 尾段叠化门控（3.7 (23) 直溶重做，DS R49 Q4/Q5）：
+    /// 前提全齐才起跑——门控已武装（墙首帧就绪）、自然播完
+    /// 路径、主页墙数据 .ready。就绪检查从剩余 ≤1.5s 起每
+    /// tick 查：剩余 >1.0 时只候命（不提前溶）；进入 ≤1.0s
+    /// 且已就绪即起溶，时长 = 剩余时长夹 [0.3, 1.0]——就绪
+    /// 在叠化窗内迟到（剩余已不足 1.0）以剩余时长补溶、下
+    /// 限 0.3s 防一闪而过。.loading 不起（播完按既有口径循
+    /// 环掩盖，下一轮再判）；.failed 不起（退场落墙失败态）。
+    /// 溶出对象 = 视频层本身：VC 背景透明、其下即主页墙
+    /// （海报垫起播时已撤），溶完画面就是墙本身；旋转回正
+    /// 在 dismiss 完成后由 PortraitRestore 处理。
     private func checkDissolveGate() {
-        guard !isDismissing, !dissolveBegan, let player,
+        guard dissolveArmed, !isDismissing, !dissolveBegan, let player,
               let duration = player.currentItem?.duration.seconds,
               duration.isFinite, duration > 1.5 else { return }
         let remaining = duration - player.currentTime().seconds
-        guard remaining > 0.05, remaining <= 1.0 else { return }
+        guard remaining > 0.05, remaining <= 1.5 else { return }
         guard EntryIntroPresenter.currentDataState == .ready else { return }
+        guard remaining <= 1.0 else { return }
         dissolveBegan = true
-        Breadcrumbs.log("entry dissolve begin")
-        view.backgroundColor = .clear
-        UIView.animate(withDuration: remaining, delay: 0,
+        let dissolveDuration = min(max(remaining, 0.3), 1.0)
+        Breadcrumbs.log("entry dissolve begin dur=\(String(format: "%.2f", dissolveDuration)) remaining=\(String(format: "%.2f", remaining))")
+        UIView.animate(withDuration: dissolveDuration, delay: 0,
                        options: [.curveEaseInOut], animations: {
             self.playerView.alpha = 0
         })
@@ -326,12 +440,11 @@ final class EntryIntroViewController: UIViewController {
             dismissIntro(reason: "data-failed", animated: true)
         case .loading:
             // 叠化已起跑但状态翻回加载（门控后数据状态变化）：
-            // 先恢复画面不透明再循环，不许透着海报重播。
+            // 先恢复视频层不透明再循环，不许透着墙重播。
             if dissolveBegan {
                 dissolveBegan = false
                 playerView.layer.removeAllAnimations()
                 playerView.alpha = 1
-                view.backgroundColor = .black
             }
             loopCount += 1
             Breadcrumbs.log("entry loop round=\(loopCount)")
@@ -353,99 +466,86 @@ final class EntryIntroViewController: UIViewController {
         guard !isDismissing else { return }
         isDismissing = true
         Breadcrumbs.log("entry end \(reason)")
+        Breadcrumbs.log("entry dismiss begin reason=\(reason)")
         watchdog?.cancel()
         watchdog = nil
         view.isUserInteractionEnabled = false
 
         // 先把退出要用的对象都摘出来，动画回调里不依赖 self 存活
-        let veil = exitVeil
-        exitVeil = nil
-        let scene = view.window?.windowScene
         let presenter = presentingViewController
-        let rotateBack = {
-            scene?.requestGeometryUpdate(
-                .iOS(interfaceOrientations: .portrait)
-            ) { error in
-                NSLog("[EntryIntro] requestGeometryUpdate portrait failed: \(error.localizedDescription)")
-            }
-        }
+        // 海报垫若还在（起播未确认就退场，如播放失败）：直接
+        // 撤除——(23) 起它只是起播前占位，不参与退场衔接。
+        exitVeil?.removeFromSuperview()
+        exitVeil = nil
         // 本次退场引发的墙露面不重播入场（同一次进墙事件）。
         EntryIntroPresenter.suppressNext()
 
-        guard animated else {
-            // 播放失败：立即放行，不等转场
-            rotateBack()
-            teardownPlayer()
-            veil?.removeFromSuperview()
+        // 退场收尾（两路共用）：拆播放器 → 提交 dismiss → 落
+        // done 面包屑 → 方向恢复（(23)：请求移到 dismiss 完
+        // 成后发，彼时横屏专属的本 VC 已离顶层，请求可被受
+        // 理；墙 viewDidAppear 另有兜底同路）→ 墙帧提交确认。
+        let finishDismiss = {
+            Breadcrumbs.log("entry transition commit reason=\(reason)")
             if let presenter {
                 presenter.dismiss(animated: false) {
+                    Breadcrumbs.log("entry dismiss done reason=\(reason)")
                     EntryIntroPresenter.introDidFinish()
+                    PortraitRestore.requestIfLandscape(from: presenter, source: "dismiss-done")
+                    CATransaction.begin()
+                    CATransaction.setCompletionBlock {
+                        Breadcrumbs.log("entry wall frame presented")
+                    }
+                    CATransaction.commit()
                 }
             } else {
+                Breadcrumbs.log("entry dismiss done reason=\(reason)")
                 EntryIntroPresenter.introDidFinish()
             }
+        }
+
+        guard animated else {
+            // 播放失败：立即放行，不等转场
+            teardownPlayer()
+            finishDismiss()
             return
         }
 
-        // 退场衔接（3.7 (21) 并行无停留，audit-3721 A3）：全部
-        // 段落同帧起跑、互相重叠，总时长 ≤0.6s——
-        // ①旋转请求立即并行发出，在视频+海报双层遮盖下转完
-        // （(20) 把它压在淡出 completion 里、再靠固定 delay 猜
-        // 旋转耗时，海报因此全不透明独占 0.35–0.45s）；
-        // ②海报交叉淡出 + 墙面弹簧落位在视频淡出段内错峰
-        // 0.1/0.15s 起跑（beginRevealHome），海报只作中间层；
-        // ③视频层淡出 0.4s（关闭 0.3s），completion 只做拆
-        // 播放器与 dismiss，不再承载任何视觉段。
-        // 点关闭的按钮淡出并入主段并行（(20) 是串行前置 0.15s）。
-        // 尾段叠化合并（3.7 (22)）：自然播完且叠化已起跑时，
-        // 视频层已在最后 1.0s 淡尽，本段整面淡出只剩关闭按钮
-        // 要清，时长压到 0.15——与海报交叉淡出（错峰 0.15 起
-        // 跑 + 0.4）合计仍 ≤0.6s，不重新引入海报独占停留。
+        // 退场衔接（3.7 (23) 直溶版）：整面淡出直接落到主页墙
+        // （VC 透明背景 + overFullScreen，墙全程在层级内），
+        // 墙面弹簧落位同段并行（自 (21) 沿用：1.02 蓄势 →
+        // 弹簧回 1.00）；总时长 ≤0.6s 不变。尾段叠化已起跑
+        // 时视频层已溶尽，本段只清关闭按钮与整面残余，时长
+        // 压到 0.15（合并去重，不重新引入任何中间层独占）。
+        // 旋转回正不在本段发请求——见 finishDismiss 的 (23)
+        // 时机修正。
         let fast = reason == "closed"
         let fadeDuration = fast ? 0.3 : (dissolveBegan ? 0.15 : 0.4)
-        rotateBack()
+        Breadcrumbs.log("entry video alpha fade dur=\(String(format: "%.2f", fadeDuration)) dissolve=\(dissolveBegan)")
         if fast {
             UIView.animate(withDuration: 0.15, delay: 0, options: [.curveEaseOut], animations: {
                 self.closeButton.alpha = 0
             })
         }
-        Self.beginRevealHome(veil: veil, wallView: presenter?.view, fast: fast)
+        Self.beginWallSettle(wallView: presenter?.view, fast: fast)
         UIView.animate(withDuration: fadeDuration, delay: 0, options: [.curveEaseOut], animations: {
             self.view.alpha = 0
         }, completion: { [weak self] _ in
             self?.teardownPlayer()
-            if let presenter {
-                presenter.dismiss(animated: false) {
-                    EntryIntroPresenter.introDidFinish()
-                }
-            } else {
-                EntryIntroPresenter.introDidFinish()
-            }
+            finishDismiss()
         })
     }
 
-    /// 海报交叉淡出 + 墙面落位（3.7 (21) 并行版）：退场开始时
-    /// 即调用——墙面先置 1.02 蓄势，海报在视频淡出段内错峰
-    /// 起跑淡出（视频未淡尽时海报已在退，两层始终至少一层在
-    /// 动、至少一层半透明，海报永不全不透明独占），墙面弹簧
-    /// 同段落位；2.5s 兜底强制移除保留为纯安全出口。
-    private static func beginRevealHome(veil: UIView?, wallView: UIView?, fast: Bool) {
-        guard let veil else { return }
-        wallView?.transform = CGAffineTransform(scaleX: 1.02, y: 1.02)
-        let delay = fast ? 0.1 : 0.15
-        UIView.animate(withDuration: fast ? 0.35 : 0.4, delay: delay, options: [.curveEaseOut], animations: {
-            veil.alpha = 0
-        }, completion: { _ in
-            veil.removeFromSuperview()
-        })
-        UIView.animate(withDuration: fast ? 0.4 : 0.45, delay: delay,
+    /// 墙面落位（3.7 (21) 沿用、(23) 去海报段）：退场开始即调
+    /// 用——墙面先置 1.02 蓄势，整面淡出段内弹簧落位回
+    /// 1.00，给「溶回主页」一个落点感；无海报中介层。
+    private static func beginWallSettle(wallView: UIView?, fast: Bool) {
+        guard let wallView else { return }
+        wallView.transform = CGAffineTransform(scaleX: 1.02, y: 1.02)
+        UIView.animate(withDuration: fast ? 0.4 : 0.45, delay: fast ? 0.1 : 0.15,
                        usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
                        options: [.allowUserInteraction], animations: {
-            wallView?.transform = .identity
+            wallView.transform = .identity
         })
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-            veil.removeFromSuperview()
-        }
     }
 
     private func teardownPlayer() {
@@ -460,16 +560,79 @@ final class EntryIntroViewController: UIViewController {
         failObserver = nil
         itemStatusObservation?.invalidate()
         itemStatusObservation = nil
+        enginePlaySubscription?.cancel()
+        enginePlaySubscription = nil
         playerView.playerLayer.player = nil
         player = nil
 
-        // 音频会话收尾：停活并通知他人。类别在播放期已定为
-        // .playback、与 AppDelegate 启动口径相同，不再改写。
+        // 音频会话收尾（3.7 (23) 双声纪律）：只在本入场亲手
+        // 激活过会话、且引擎当前未播放时才停活通知他人——
+        // 引擎在播时会话归引擎，入场停活会误伤正在放的歌
+        // （(22) 前无条件停活的隐患，audit-3723 §2c 附带项）。
+        // 类别在播放期已定为 .playback，不改写。
+        guard sessionActivatedByEntry, !PlaybackEngine.shared.isPlaying else { return }
         let session = AVAudioSession.sharedInstance()
         do {
             try session.setActive(false, options: [.notifyOthersOnDeactivation])
         } catch {
             NSLog("[EntryIntro] AVAudioSession deactivate failed: \(error.localizedDescription)")
         }
+    }
+}
+
+/// 方向恢复（3.7 (23)，DS R49 Q6）：入场退场后把界面送回
+/// 竖屏。修 (22) 前的卡死机制（audit-3723 §2b）：回竖屏请
+/// 求只在退场开始发一次、彼时横屏专属的入场 VC 仍压顶层，
+/// 请求落空后全 App 零重试，墙又是全向掩码，系统永不主动
+/// 回正，只能等设备物理转动。本类口径：
+/// - 只在当前确实横屏时发请求（竖屏时无操作，天然幂等）；
+///   调用点两处——入场 dismiss 完成（EntryIntro）与墙
+///   viewDidAppear 兜底（HomeWall），双触发以 0.3s 去重窗
+///   合并为一次。
+/// - 发后 0.2s（转场动画量级）校验实际方向：仍横屏重试一
+///   次；最终结果落面包屑，失败时带顶层 VC 的 supported
+///   mask 与 error，不再只 NSLog 无从对账。
+enum PortraitRestore {
+
+    private static var lastRequestAt: CFTimeInterval = 0
+
+    static func requestIfLandscape(from vc: UIViewController, source: String) {
+        guard let scene = vc.view.window?.windowScene else { return }
+        guard scene.interfaceOrientation.isLandscape else { return }
+        let now = CACurrentMediaTime()
+        guard now - lastRequestAt > 0.3 else { return }
+        lastRequestAt = now
+        attempt(scene: scene, source: source, attempt: 1)
+    }
+
+    private static func attempt(scene: UIWindowScene, source: String, attempt: Int) {
+        scene.requestGeometryUpdate(
+            .iOS(interfaceOrientations: .portrait)
+        ) { error in
+            if let error {
+                Breadcrumbs.log("entry rotate portrait error source=\(source) attempt=\(attempt) \(failureContext(scene: scene)) error=\(error.localizedDescription)")
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+            if scene.interfaceOrientation.isLandscape {
+                if attempt < 2 {
+                    attempt(scene: scene, source: source, attempt: attempt + 1)
+                } else {
+                    Breadcrumbs.log("entry rotate portrait failed source=\(source) \(failureContext(scene: scene))")
+                }
+            } else {
+                Breadcrumbs.log("entry rotate portrait ok source=\(source) attempt=\(attempt)")
+            }
+        }
+    }
+
+    /// 失败上下文：顶层 VC 名 + 其 supportedInterfaceOrientations
+    /// 原始值（谁在挡竖屏一眼可辨）。
+    private static func failureContext(scene: UIWindowScene) -> String {
+        var top = scene.windows.first(where: { $0.isKeyWindow })?.rootViewController
+        while let presented = top?.presentedViewController { top = presented }
+        let name = top.map { String(describing: type(of: $0)) } ?? "none"
+        let mask = top?.supportedInterfaceOrientations.rawValue ?? 0
+        return "top=\(name) mask=\(mask)"
     }
 }

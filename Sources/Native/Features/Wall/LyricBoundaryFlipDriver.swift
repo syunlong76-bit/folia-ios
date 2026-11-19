@@ -41,6 +41,14 @@ import Foundation
 /// 采样，每 30 次或解绑/切歌收尾时汇总一行 `lrc flip latency
 /// p95=`。全部方法须主线程调用（VC tick 与 observer 的 .main
 /// 队列同线程）。
+///
+/// (23) 职责再收窄（DS R49 改主推荐）：翻行主路径移交呈现钟
+/// judge 直驱（VC tick 内逐帧按 judge 判当前行，与扫光同钟）；
+/// 本类降为**校准/对账源**——注册、护栏状态机、兜底代翻与
+/// 延迟采样全部保留（兜底状态仍供 VC 的 lineActive 兜底判据
+/// 与两源偏差对账），但 UI 当前行不再读本类的 currentIndex。
+/// 最近一次 boundary 翻行经 lastBoundaryFlip 暴露，VC 在
+/// judge 翻行同行时落两源 lag 之差供真机对账。
 final class LyricBoundaryFlipDriver {
 
     /// 兜底代翻阈值（秒）：行界在下一行开始后此时长仍未触发
@@ -88,6 +96,10 @@ final class LyricBoundaryFlipDriver {
     /// boundary 延迟采样（秒）：回调到达 playhead − 行界时刻。
     private var latencySamples: [Double] = []
     private var flipsSinceLatencyLog = 0
+    /// 最近一次 boundary 翻行（3.7 (23) 校准对账用）：行号 +
+    /// 该次回调延迟（playhead − 行界）；兜底代翻不记（非事件
+    /// 源）。VC 在 judge 翻到同一行时读它算两源偏差。
+    private(set) var lastBoundaryFlip: (index: Int, lag: Double)?
 
     // MARK: - 绑定生命周期
 
@@ -137,6 +149,7 @@ final class LyricBoundaryFlipDriver {
         degradedReason = nil
         currentIndex = 0
         consumedThrough = -1
+        lastBoundaryFlip = nil
         seekSettleUntil = nil
         wasSeekPending = false
         lastRawNow = nil
@@ -287,7 +300,9 @@ final class LyricBoundaryFlipDriver {
         consumedThrough = index
         currentIndex = index
         if src == .boundary && recordLatency {
-            latencySamples.append(max(0, rawNow - lineTimes[index]))
+            let lag = max(0, rawNow - lineTimes[index])
+            latencySamples.append(lag)
+            lastBoundaryFlip = (index: index, lag: lag)
         }
         Breadcrumbs.log("lrc flip src=\(src == .boundary ? "boundary" : "fallback") track=\(trackId) idx=\(index)")
         flipsSinceLatencyLog += 1

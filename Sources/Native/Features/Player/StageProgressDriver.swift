@@ -9,6 +9,11 @@ import UIKit
 /// 1/0 两态）；引擎时间与外推偏差超过 0.3 秒（seek、切歌、
 /// 漂移）即重锚。两个播放台（主页墙/曲目墙）共用一份，防数值
 /// 机制漂移；宿主不可见时必须 stop（DS36：防双台驱动叠加）。
+///
+/// (23) 锚源改真值（DS R49 Q2，与舞台 PlaybackAnchor 同改）：
+/// 锚与漂移比对都改读 rawPlayhead()（此前同用台阶缓存、自
+/// 比自锚，恒定滞后锁死）；漂移阈值收紧 0.25s、连续 2 帧
+/// 超限才重锚，漂移重锚落面包屑（启动/切歌重锚不落，防刷屏）。
 final class StageProgressDriver {
     var onFraction: ((Double) -> Void)?
 
@@ -17,6 +22,8 @@ final class StageProgressDriver {
     private var anchorWall: CFTimeInterval = 0
     private var anchorTrackId: String?
     private var lastFraction: Double = -1
+    /// 漂移连续超限帧数（3.7 (23)）：连续 2 帧 >0.25s 才重锚。
+    private var driftOverFrames = 0
 
     func start() {
         guard displayLink == nil else { return }
@@ -37,9 +44,10 @@ final class StageProgressDriver {
 
     private func reanchor() {
         let engine = PlaybackEngine.shared
-        anchorTime = engine.currentTime
+        anchorTime = engine.rawPlayhead()
         anchorWall = CACurrentMediaTime()
         anchorTrackId = engine.currentTrack?.id
+        driftOverFrames = 0
     }
 
     fileprivate func stepFrame() {
@@ -50,9 +58,19 @@ final class StageProgressDriver {
         let predicted = playing
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
-        // 引擎时间是 200ms 台阶真值：偏差在台阶幅度内属正常，
-        // 超过 0.3 秒才是 seek/切歌/漂移，重锚纠正。
-        if abs(engine.currentTime - predicted) > 0.3 { reanchor() }
+        // 漂移比对改 rawPlayhead 真值（3.7 (23)）：阈值 0.25s、
+        // 连续 2 帧超限才重锚（seek 的大跳变两帧内即纠正，
+        // 单帧抖动不误锚）；漂移重锚落一行面包屑供对账。
+        let drift = engine.rawPlayhead() - predicted
+        if abs(drift) > 0.25 {
+            driftOverFrames += 1
+            if driftOverFrames >= 2 {
+                Breadcrumbs.log("stage progress anchor drift=\(String(format: "%.3f", drift)) raw=\(String(format: "%.3f", engine.rawPlayhead())) cacheDelta=\(String(format: "%.3f", engine.rawPlayhead() - engine.currentTime))")
+                reanchor()
+            }
+        } else {
+            driftOverFrames = 0
+        }
         let now = playing
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime

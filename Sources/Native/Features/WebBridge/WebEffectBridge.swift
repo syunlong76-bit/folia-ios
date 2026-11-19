@@ -1232,19 +1232,15 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             return
         }
         Task {
-            do {
-                let text = try await EdgeOneAPIClient.shared.fetchLyricText(songId: track.id)
-                DispatchQueue.main.async {
-                    self.lyricsCache[track.id] = text
-                    if PlaybackEngine.shared.currentTrack?.id == track.id {
-                        self.pushLyricsEvent()
-                    }
-                }
-            } catch {
-                DispatchQueue.main.async {
-                    self.lyricsCache[track.id] = ""
-                    self.logStore.write(level: "warn", module: "lyrics",
-                        message: "lyric fetch failed track=\(track.id) error=\(error.localizedDescription)")
+            // 取词改经共享仓库（3.7 (23)）：与墙面/舞台同一张
+            // 缓存——任一面取过，本桥直接命中仓库的原始 LRC
+            // 文本，不再单独发一次 /lyric 请求。仓库负结果
+            // lrcText 为空串，与旧失败口径一致落 ""。
+            let entry = await LyricRepository.shared.entry(for: track.id)
+            DispatchQueue.main.async {
+                self.lyricsCache[track.id] = entry.lrcText
+                if PlaybackEngine.shared.currentTrack?.id == track.id {
+                    self.pushLyricsEvent()
                 }
             }
         }

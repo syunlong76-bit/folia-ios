@@ -93,14 +93,25 @@ final class WallPrototypeViewController: UIViewController,
     private var pendingTrackId: String?
     /// 原生点播失败的曲目与短文案（展开卡失败条用）。
     private var failedPlayback: (id: String, message: String)?
-    /// 滚动歌词缓存：trackId → [LyricLineData]；空数组 = 已查无词。
-    private var lyricCache: [String: [LyricLineData]] = [:]
+    /// 滚动歌词取数在途集（3.7 (23) 起只防本 VC 重复起 Task；
+    /// 缓存与网络合并归 LyricRepository 共享层，墙面逐帧 tick
+    /// 同步读仓库 cachedEntry）。
     private var lyricFetchInFlight: Set<String> = []
     /// 歌词窗口去重与滑入判定：同曲且索引恰好 +1 才滑入，其余 snap。
     private var lastLyricTrackId: String?
     private var lastLyricIndex: Int?
     /// 前奏预告态去重（3.7 (13) #2）：同 idx 下 active 翻转要重下发。
     private var lastLyricActive = true
+    /// 翻行分段埋点（3.7 (23)）：judge 判定提交翻行后记
+    /// (行号, 提交单调时刻)，下一帧 tick 顶部落「判定→呈现」
+    /// 段耗时（lrc flip present dt=），与 boundary 校准源的
+    /// 回调延迟分开量——audit-3723 未确认的 +0.3s 内部构成分
+    /// 段靠它定案。
+    private var pendingFlipPresent: (idx: Int, wall: CFTimeInterval)?
+    /// seek 边沿跟踪（3.7 (23)）：seek 在途不提交翻行；落定
+    /// 后首帧清去重态、按 judge 直接重算当前行（不滑行、不
+    /// 补翻）。
+    private var wasSeekPendingLyric = false
     /// 歌词帧锚定（3.7 (17)）：当前锚定的播放曲实例 id（hysteresis
     /// 保持，见 updateLyricOverlayFrame）+ 帧面包屑去重串（锚 id 与
     /// 40pt 网格化原点，未变不重复落盘）。
@@ -596,25 +607,24 @@ final class WallPrototypeViewController: UIViewController,
         refreshMiniProgressChrome()
     }
 
-    /// 进度填充与圆点配色的形态收口（3.7 (22)，DS R48）：
+    /// 进度填充与圆点配色的形态收口（3.7 (22) 立、(23) 修）：
     /// 展开态 = 主题口径（皮肤 + 主题填充色）；收起态背景已
-    /// 移除，皮肤摘掉、圆点恢复白色发光、填充改强色兜底，
-    /// 免得浅色填充与皮肤贴图在无背景的墙面上糊掉。主题
-    /// 变更（包括收起态下经设置页变更）与形态切换都经此
-    /// 重算；进度本身仍由 setMiniProgress 唯一驱动，切歌
-    /// 经 refreshMiniBar 先展开、再收起时按新曲续步进。
+    /// 移除、只留极淡底轨，填充改强色兜底（miniCollapsedFillColor）。
+    /// 圆点皮肤 (22) 曾在收起态一并摘掉改白色发光点，Miller
+    /// 真机否决（「花海小圆点就是一朵花」）——(23) 恢复：收
+    /// 起态与展开态同款挂 knobSkinView，有皮肤时 knob 底色
+    /// 转清、关发光阴影；无主题（皮肤为 nil）才用白色发光
+    /// 点兜底。主题变更（包括收起态下经设置页变更）与形态
+    /// 切换都经此重算（收起态切主题/切歌经 applyMiniTheme /
+    /// setMiniBarForm 回到这里重挂皮肤）；进度本身仍由
+    /// setMiniProgress 唯一驱动。
     private func refreshMiniProgressChrome() {
         miniKnobSkin?.removeFromSuperview()
         miniKnobSkin = nil
-        if miniBarCollapsed {
-            miniProgressKnob.backgroundColor = .white
-            miniProgressKnob.layer.shadowOpacity = 0.9
-            miniProgressFill.backgroundColor = Self.miniCollapsedFillColor(for: miniTheme)
-            return
-        }
         // 圆点皮肤：13pt 贴图居中压在既有 9pt knob 框上（knob
         // 不裁剪、贴图溢出显示，中心仍与轨道头位对齐，原
-        // leading 公式 -4.5 不变）。
+        // leading 公式 -4.5 不变）；皮肤层不拦截触摸
+        // （knobSkinView 内已置 isUserInteractionEnabled=false）。
         if let skin = MiniPlayerThemeLayer.knobSkinView(for: miniTheme) {
             skin.translatesAutoresizingMaskIntoConstraints = false
             miniProgressKnob.addSubview(skin)
@@ -626,10 +636,12 @@ final class WallPrototypeViewController: UIViewController,
             ])
             miniKnobSkin = skin
         }
-        let themed = miniTheme != .none
+        let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        miniProgressFill.backgroundColor = Self.miniFillColor(for: miniTheme)
+        miniProgressFill.backgroundColor = miniBarCollapsed
+            ? Self.miniCollapsedFillColor(for: miniTheme)
+            : Self.miniFillColor(for: miniTheme)
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
@@ -1758,12 +1770,27 @@ final class WallPrototypeViewController: UIViewController,
 
     /// 滚动歌词会话（包一 P2/P3）：歌词渲染在独立 overlay 上、
     /// 不绑 cell——展开实例不在 visibleCells、cell 被复用、展开
-    /// 别的卡时都不再灭词。3.7 (21) 起翻行由 lyricFlipDriver 的
-    /// boundary 事件决定（本 tick 只读其 currentIndex 并推进其
-    /// 护栏状态机）；lyricClockDriver 的 tick 仍每帧到达本方法，
-    /// 只作护栏推进与降级路径（注册失败时）的比对时钟，呈现
-    /// now 不再参与事件路径的翻行判定。
+    /// 别的卡时都不再灭词。
+    ///
+    /// 翻行主路径（3.7 (23)，DS R49 改主推荐）：由呈现钟 judge
+    /// 直驱——本 tick 的 now 即 lyricClockDriver 的 judge
+    /// （rawPlayhead 锚定、与扫光同钟），逐帧按时间区间取最后
+    /// 命中行，judge 跨行界即当帧提交行状态（高亮+扫光相位
+    /// 经 setWindow 同帧下发），窗体滑行动画只动 transform、
+    /// 随后落位，高亮不等落位。翻行与扫光同钟后，audit-3723
+    /// 拍到的「同卡两钟不一致」（扫光已过半而行未翻）在结构
+    /// 上不可能再出现。(21) 的 boundary 事件驱动降为校准源：
+    /// lyricFlipDriver 照常 bind/tick（注册、护栏、延迟采样、
+    /// 兜底状态机保留），其 currentIndex 不再决定 UI 当前行，
+    /// 只供同行翻行时落 judge 与 boundary 两源 lag 之差对账。
     private func lyricSessionTick(now: Double) {
+        // 翻行呈现段埋点（3.7 (23)）：上一帧提交的翻行在本帧
+        // 顶部结算「判定→呈现」耗时——tick 由显示链驱动，本
+        // 帧即提交后的首个呈现帧。
+        if let pending = pendingFlipPresent {
+            pendingFlipPresent = nil
+            Breadcrumbs.log("lrc flip present idx=\(pending.idx) dt=\(String(format: "%.3f", CACurrentMediaTime() - pending.wall))")
+        }
         let engine = PlaybackEngine.shared
         guard let track = engine.currentTrack, engine.duration > 0 else {
             setLyricOverlayVisible(false)
@@ -1790,33 +1817,42 @@ final class WallPrototypeViewController: UIViewController,
             setLyricOverlayVisible(false)
             return
         }
-        guard let lines = lyricCache[track.id] else {
+        guard let entry = LyricRepository.shared.cachedEntry(for: track.id) else {
             ensureLyrics(for: track.id)
             setLyricOverlayVisible(false)
             return
         }
+        let lines = entry.lines
         guard !lines.isEmpty else {
             setLyricOverlayVisible(false)
             return
         }
-        // 翻行锚定（3.7 (21)）：绑定当前曲行界并推进一步护栏
-        // 状态机；翻行走 boundary 事件（driver.currentIndex），
-        // 注册降级时回落时钟逐帧比对（(20) 口径）。兜底/护栏
-        // 判定喂媒体时刻（rawPlayhead），与呈现时钟隔离。
+        // 校准源推进（3.7 (23)）：boundary 驱动照常绑定与推进
+        // 护栏状态机（注册/兜底/延迟采样保留），但不再决定翻
+        // 行；其兜底状态仍供下方 lineActive 的事件兜底判据。
         lyricFlipDriver.bind(trackId: track.id, lines: lines)
         lyricFlipDriver.tick(rawNow: engine.rawPlayhead(),
                              isPlaying: engine.isPlaying,
                              seekPending: engine.isSeekPending)
-        let idx: Int
-        if lyricFlipDriver.isActive {
-            idx = lyricFlipDriver.currentIndex
-        } else {
-            var computed = 0
-            for (i, line) in lines.enumerated() {
-                if line.time <= now + LyricTiming.lead { computed = i } else { break }
-            }
-            idx = computed
+        // seek 护栏（3.7 (23)）：在途不提交翻行（judge 在落点
+        // 定案前是旧锚外推）；落定边沿清去重态，下一帧起按
+        // judge 直接重算当前行、直落不滑行。
+        if engine.isSeekPending {
+            wasSeekPendingLyric = true
+            return
         }
+        if wasSeekPendingLyric {
+            wasSeekPendingLyric = false
+            lastLyricIndex = nil
+            lastLyricActive = true
+        }
+        // 翻行判定（3.7 (23) 主路径）：judge 按时间区间取最后
+        // 命中行（二分）。一帧内跨多界（密集行/主线程卡顿后
+        // 恢复）只提交最终行——中间行不逐个补翻，即密集行合
+        // 并；暂停时 judge 冻结（时钟驱动锚为暂停态），idx
+        // 恒定不翻；恢复时时钟以 rawPlayhead 重锚，judge 即
+        // 当前位置、直接落当前行不补翻。
+        let idx = Self.judgeLineIndex(in: lines, at: now + LyricTiming.lead)
         // 前奏预告态（3.7 (13) #2）：还没唱到首行时窗口只预告，
         // 不点亮不扫光；active 翻转也要重下发（同 idx 不能被去重吞掉）。
         // 事件路径下当前行已被 boundary/代翻消费即视为已激活
@@ -1838,6 +1874,20 @@ final class WallPrototypeViewController: UIViewController,
         if lastLyricIndex != idx || lastLyricTrackId != track.id {
             Breadcrumbs.log("lrc line track=\(track.id) idx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].time)) judge=\(String(format: "%.3f", now)) raw=\(String(format: "%.3f", engine.rawPlayhead())) engine=\(String(format: "%.3f", engine.currentTime)) delta=\(String(format: "%.3f", now - engine.currentTime)) outLat=\(String(format: "%.3f", lyricClockDriver.rawOutputLatency)) route=\(lyricClockDriver.currentRouteName)")
         }
+        // 翻行提交埋点（3.7 (23)）：同曲行号变化 = 一次 judge
+        // 翻行——落提交时刻（present 段在下一帧 tick 顶部结
+        // 算）与两源对账：judgeLag = 本帧 judge 越过行界的量；
+        // boundary 已翻到同一行时同记其回调 lag 与差值，未翻
+        // 到记 na（下版日志据此看两源谁先谁后、差多少）。
+        if lastLyricTrackId == track.id, let prev = lastLyricIndex, prev != idx {
+            pendingFlipPresent = (idx: idx, wall: CACurrentMediaTime())
+            let judgeLag = now - lines[idx].time
+            if let boundary = lyricFlipDriver.lastBoundaryFlip, boundary.index == idx {
+                Breadcrumbs.log("lrc flip src=judge track=\(track.id) idx=\(idx) judgeLag=\(String(format: "%.3f", judgeLag)) boundaryLag=\(String(format: "%.3f", boundary.lag)) delta=\(String(format: "%.3f", judgeLag - boundary.lag))")
+            } else {
+                Breadcrumbs.log("lrc flip src=judge track=\(track.id) idx=\(idx) judgeLag=\(String(format: "%.3f", judgeLag)) boundaryLag=na")
+            }
+        }
         // 当前行时长：有下一行按行距夹取，末行按字数估（DS27 定版）。
         let duration: Double
         if idx + 1 < lines.count {
@@ -1850,7 +1900,12 @@ final class WallPrototypeViewController: UIViewController,
             let j = idx + offset
             return (j >= 0 && j < lines.count) ? lines[j].text : ""
         }
+        // 最小驻留（3.7 (23)）：新行驻留短于滑行时长（0.18s）
+        // 时不滑行——滑完之前又要翻行只会积压动画，直落呈现。
+        let dwell = idx + 1 < lines.count
+            ? lines[idx + 1].time - lines[idx].time : Double.infinity
         let slide = lastLyricTrackId == track.id && lastLyricIndex == idx - 1
+            && dwell >= 0.18
         lastLyricTrackId = track.id
         lastLyricIndex = idx
         lastLyricActive = lineActive
@@ -1858,6 +1913,25 @@ final class WallPrototypeViewController: UIViewController,
                                 lineDuration: duration, slide: slide,
                                 lineActive: lineActive,
                                 lineWords: lines[idx].words)
+    }
+
+    /// judge 当前行判定（3.7 (23)）：按时间区间取最后一个行
+    /// 界 ≤ t 的行（二分）；t 早于首行返回 0（前奏预告态由
+    /// lineActive=false 表达）。行表按时间升序（解析器保证）。
+    private static func judgeLineIndex(in lines: [LyricLineData], at t: Double) -> Int {
+        var lo = 0
+        var hi = lines.count - 1
+        var result = 0
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if lines[mid].time <= t {
+                result = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        return result
     }
 
     private func setLyricOverlayVisible(_ show: Bool) {
@@ -2010,221 +2084,25 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
+    /// 歌词预取（3.7 (23) 改经共享仓库）：取数链（/lyric/new
+    /// 双表合并、失败回落 /lyric）与缓存策略（LRU/正负 TTL/
+    /// 并发合并）全在 LyricRepository；本方法只防本 VC 重复
+    /// 起 Task，到手后清去重态让 tick 按仓库行表重下发。面
+    /// 包屑口径不变（lines/source/flip 供真机对账翻行源）。
     private func ensureLyrics(for trackId: String) {
-        guard lyricCache[trackId] == nil,
+        guard LyricRepository.shared.cachedEntry(for: trackId) == nil,
               !lyricFetchInFlight.contains(trackId) else { return }
         lyricFetchInFlight.insert(trackId)
         Breadcrumbs.log("lrc fetch start track=\(trackId)")
         Task { [weak self] in
-            // 取数口径（3.7 (20)）：先 /lyric/new 一次拿 lrc+yrc，
-            // 双表合并定翻行源（mergeLyricLines：默认 LRC 翻行、
-            // YRC 逐字只做扫光并按 LRC 行窗重标定）；/lyric/new
-            // 失败才回落旧 /lyric 的 LRC 路径，保证新接口异常时
-            // 歌词不至于整面消失。面包屑带 flip= 供真机对账实际
-            // 翻行源（开关回滚/单表回落时随之变）。
-            var parsed: [LyricLineData] = []
-            var source = "none"
-            var flip = "lrc"
-            if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: trackId) {
-                let merged = Self.mergeLyricLines(
-                    lrcLines: Self.parseLRC(bundle.lrc),
-                    yrcLines: bundle.yrc.map(Self.parseYRC) ?? [])
-                parsed = merged.lines
-                source = merged.source
-                flip = merged.flip
-            } else if let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: trackId) {
-                parsed = Self.parseLRC(text)
-                source = parsed.isEmpty ? "none" : "lrc-fallback"
-                flip = "lrc"
-            }
+            let entry = await LyricRepository.shared.entry(for: trackId)
             await MainActor.run {
                 guard let self else { return }
-                Breadcrumbs.log("lrc parsed track=\(trackId) lines=\(parsed.count) source=\(source) flip=\(flip)")
+                Breadcrumbs.log("lrc parsed track=\(trackId) lines=\(entry.lines.count) source=\(entry.source) flip=\(entry.flip)")
                 self.lyricFetchInFlight.remove(trackId)
-                self.lyricCache[trackId] = parsed
                 self.lastLyricIndex = nil
             }
         }
-    }
-
-    /// 双表合并（3.7 (20)，DS R45 对账 + onset 实测拍板）：
-    /// 翻行时刻源由 LyricTiming.flipSource 决定（默认 LRC）；
-    /// YRC 逐字戳只做行内扫光。flip=lrc 且双表齐时逐行按文本
-    /// 匹配（同文本多行按出现顺序消费）：行时刻取 LRC，逐字
-    /// 戳经 rebaseWords 按 DS 法重标定；匹配不上的 LRC 行
-    /// words=nil（行级扫光）。只有单表时该表即翻行源（flip
-    /// 随之）；双表皆空返回空。flip=yrc 时恢复 (19) 口径
-    /// （YRC 行时刻 + 原戳，不重标定）。
-    private static func mergeLyricLines(lrcLines: [LyricLineData], yrcLines: [LyricLineData])
-        -> (lines: [LyricLineData], source: String, flip: String) {
-        if LyricTiming.flipSource == .yrc {
-            if !yrcLines.isEmpty {
-                return (yrcLines, lrcLines.isEmpty ? "yrc" : "lrc+yrc", "yrc")
-            }
-            return (lrcLines, lrcLines.isEmpty ? "none" : "lrc", "lrc")
-        }
-        guard !lrcLines.isEmpty else {
-            return (yrcLines, yrcLines.isEmpty ? "none" : "yrc", "yrc")
-        }
-        guard !yrcLines.isEmpty else {
-            return (lrcLines, "lrc", "lrc")
-        }
-        // 匹配键去掉全部空白：YRC 文本是逐字拼接（词间空格形
-        // 式与 LRC 原行可能不同），LRC 文本经 trim——去空白后
-        // 两边可比，显示文本仍用 LRC 原行。
-        func matchKey(_ text: String) -> String {
-            text.filter { !$0.isWhitespace }
-        }
-        var yrcByText: [String: [Int]] = [:]
-        for (i, line) in yrcLines.enumerated() {
-            yrcByText[matchKey(line.text), default: []].append(i)
-        }
-        var out: [LyricLineData] = []
-        for (i, lrcLine) in lrcLines.enumerated() {
-            var words: [LyricWordStamp]? = nil
-            let key = matchKey(lrcLine.text)
-            if var queue = yrcByText[key], !queue.isEmpty {
-                let yrcLine = yrcLines[queue.removeFirst()]
-                yrcByText[key] = queue
-                if let yrcWords = yrcLine.words {
-                    let boundary = i + 1 < lrcLines.count
-                        ? lrcLines[i + 1].time : Double.infinity
-                    words = rebaseWords(yrcWords,
-                                        shift: lrcLine.time - yrcLine.time,
-                                        boundary: boundary)
-                }
-            }
-            out.append(LyricLineData(time: lrcLine.time, text: lrcLine.text, words: words))
-        }
-        return (out, "lrc+yrc", "lrc")
-    }
-
-    /// 逐字戳重标定（DS R45 法，禁全行仿射拉伸）：整行平移
-    /// shift（= LRC 行首 − YRC 行首，首字落 LRC 行首）、保留
-    /// 字间相对间隔、下一 LRC 行首为硬边界；溢出时只压缩行
-    /// 尾空白/尾字停留（末字时长夹到边界），起始已越界的字
-    /// 截断丢弃，不压缩字间节奏。全部越界返回 nil（行级扫光）。
-    private static func rebaseWords(_ words: [LyricWordStamp], shift: Double,
-                                    boundary: Double) -> [LyricWordStamp]? {
-        var out: [LyricWordStamp] = []
-        for word in words {
-            let start = word.start + shift
-            if start >= boundary { break }
-            out.append(LyricWordStamp(start: start,
-                                      duration: min(word.duration, boundary - start),
-                                      text: word.text))
-        }
-        return out.isEmpty ? nil : out
-    }
-
-    /// LRC 解析：[mm:ss.xx] 前缀行 → 行模型（words = nil）；多时间
-    /// 戳行只取首个，空文本行丢弃，结果按时间升序。
-    /// [offset:±ms] 全局偏移（3.7 (17)）：带此标签的文件要求把
-    /// 全部行时间整体平移 offset 毫秒（正值 = 歌词延后呈现，
-    /// 行时间 = 时间戳 + offset）；旧实现不认此标签、解析失败
-    /// 直接丢弃，带 offset 的歌整首恒定偏移数百毫秒。
-    private static func parseLRC(_ raw: String) -> [LyricLineData] {
-        var offsetSeconds = 0.0
-        for line in raw.split(separator: "\n") {
-            let s = line.trimmingCharacters(in: .whitespaces)
-            guard s.lowercased().hasPrefix("[offset:") else { continue }
-            let inner = s.dropFirst("[offset:".count).prefix { $0 != "]" }
-            if let ms = Double(inner.trimmingCharacters(in: .whitespaces)) {
-                offsetSeconds = ms / 1000
-            }
-        }
-        var out: [LyricLineData] = []
-        for line in raw.split(separator: "\n") {
-            let s = String(line)
-            guard s.hasPrefix("["), let close = s.firstIndex(of: "]") else { continue }
-            let stamp = s[s.index(after: s.startIndex)..<close]
-            let parts = stamp.split(separator: ":")
-            guard parts.count == 2,
-                  let minutes = Double(parts[0]),
-                  let seconds = Double(parts[1]) else { continue }
-            let text = String(s[s.index(after: close)...])
-                .trimmingCharacters(in: .whitespaces)
-            guard !text.isEmpty else { continue }
-            out.append(LyricLineData(time: minutes * 60 + seconds + offsetSeconds,
-                                     text: text, words: nil))
-        }
-        let sorted = out.sorted { $0.time < $1.time }
-        // 制作名单行只在首个正文行之前过滤（3.7 (13) #2，DS30
-        // 位置约束）：正文开始后出现的同形行是歌词本体，不动。
-        return Array(sorted.drop(while: { isCreditLine($0.text) }))
-    }
-
-    /// YRC 解析（3.7 (19)）：行格式 [startMs,durMs](startMs,durMs,flag)字…
-    /// 行起始取头戳、逐字取元组戳（毫秒 → 秒）；行文本 = 逐字文本
-    /// 拼接。不以 [ 开头的行是 JSON 制作名单行（{"t":…,"c":…}），
-    /// 与 LRC 路径同口径跳过；带时间戳的名单行同样只在正文开始
-    /// 前按 isCreditLine 过滤。元组中途解析失败的行降级为行级
-    /// （words = nil，文本取已拼接部分），整表为空时调用方回落
-    /// LRC。YRC 是机器生成格式，实测（529319768）33 行元组全
-    /// 为三元组、无异常。
-    private static func parseYRC(_ raw: String) -> [LyricLineData] {
-        var out: [LyricLineData] = []
-        for rawLine in raw.split(separator: "\n") {
-            let line = String(rawLine)
-            guard line.hasPrefix("["), let headEnd = line.firstIndex(of: "]") else { continue }
-            let head = line[line.index(after: line.startIndex)..<headEnd]
-            let headParts = head.split(separator: ",")
-            guard headParts.count >= 2,
-                  let startMs = Double(headParts[0].trimmingCharacters(in: .whitespaces))
-            else { continue }
-            var words: [LyricWordStamp] = []
-            var text = ""
-            var cursor = line.index(after: headEnd)
-            var malformed = false
-            while cursor < line.endIndex {
-                guard line[cursor] == "(",
-                      let close = line[cursor...].firstIndex(of: ")") else {
-                    malformed = true
-                    break
-                }
-                let tuple = line[line.index(after: cursor)..<close]
-                let tp = tuple.split(separator: ",")
-                guard tp.count >= 2,
-                      let wordStart = Double(tp[0].trimmingCharacters(in: .whitespaces)),
-                      let wordDur = Double(tp[1].trimmingCharacters(in: .whitespaces))
-                else { malformed = true; break }
-                let textStart = line.index(after: close)
-                let textEnd = line[textStart...].firstIndex(of: "(") ?? line.endIndex
-                let wordText = String(line[textStart..<textEnd])
-                words.append(LyricWordStamp(start: wordStart / 1000,
-                                             duration: wordDur / 1000,
-                                             text: wordText))
-                text += wordText
-                cursor = textEnd
-            }
-            guard !text.trimmingCharacters(in: .whitespaces).isEmpty else { continue }
-            out.append(LyricLineData(time: startMs / 1000, text: text,
-                                     words: (malformed || words.isEmpty) ? nil : words))
-        }
-        let sorted = out.sorted { $0.time < $1.time }
-        return Array(sorted.drop(while: { isCreditLine($0.text) }))
-    }
-
-    /// 制作名单行识别（3.7 (13) #2）：网易云 LRC 开头是制作名单
-    /// （作词/作曲/制作人/监制/混音/母带…），时间戳挤在亚秒级，
-    /// (12) 里被当歌词行逐行扫光。只认「名目 + 冒号」或英文
-    /// "X by" 形状；叙事行（如「妈妈：…」）不在名目表里。
-    private static let creditPrefixes = [
-        "作词", "作曲", "编曲", "制作人", "监制", "混音", "母带",
-        "录音", "和声", "配唱", "音乐总监", "出品", "发行",
-        "统筹", "企划", "演唱", "原唱", "OP", "SP"
-    ]
-
-    private static func isCreditLine(_ text: String) -> Bool {
-        for prefix in creditPrefixes where text.hasPrefix(prefix) {
-            // 冒号前可能带空格（「作词 : 林夕」），先削掉再判。
-            let rest = text.dropFirst(prefix.count)
-                .trimmingCharacters(in: .whitespaces)
-            if rest.hasPrefix("：") || rest.hasPrefix(":") { return true }
-        }
-        let lower = text.lowercased()
-        return lower.hasPrefix("lyrics by") || lower.hasPrefix("composed by")
-            || lower.hasPrefix("produced by") || lower.hasPrefix("arranged by")
     }
 
     /// 点播放：当前曲切换播放/暂停；否则按全量 trackIds 建队列

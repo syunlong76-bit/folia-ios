@@ -139,6 +139,8 @@ final class StageViewController: UIViewController {
     private var lastFrameTimestamp: CFTimeInterval = 0
     private var frameDurations: [Double] = []
     private var driftTimer: Timer?
+    /// 漂移连续超限计数（3.7 (23)）：连续 2 次 >0.15s 才重锚。
+    private var driftOverCount = 0
     private var gateTimer: Timer?
     private var lastLayoutSize: CGSize = .zero
     private var lastTimeLabelSecond = -1
@@ -284,8 +286,15 @@ final class StageViewController: UIViewController {
             view.addSubview(label)
         }
         totalTimeLabel.textAlignment = .right
-        prevButton.setImage(UIImage(systemName: "backward.end.fill"), for: .normal)
-        nextButton.setImage(UIImage(systemName: "forward.end.fill"), for: .normal)
+        // transport 字形定版（3.7 (23)，Miller 19:13 拍板）：
+        // 上一首/下一首换圆润的 backward.fill/forward.fill
+        // （去掉 .end 的竖杠尖角，与迷你台同款）；三键统一
+        // semibold 字重——上一/下一 26pt、播放/暂停 32pt
+        // （DS R49 尺寸）；按钮框 prev/next 44pt、play 64pt，
+        // 热区均 ≥44pt（layoutStage 定尺寸）。
+        let transportConfig = UIImage.SymbolConfiguration(pointSize: 26, weight: .semibold)
+        prevButton.setImage(UIImage(systemName: "backward.fill", withConfiguration: transportConfig), for: .normal)
+        nextButton.setImage(UIImage(systemName: "forward.fill", withConfiguration: transportConfig), for: .normal)
         for button in [prevButton, nextButton] {
             button.tintColor = .white
             view.addSubview(button)
@@ -454,8 +463,11 @@ final class StageViewController: UIViewController {
     }
 
     private func refreshPlayButton() {
+        // 字形定版（3.7 (23)）：32pt semibold，与 prev/next 同口径。
+        let config = UIImage.SymbolConfiguration(pointSize: 32, weight: .semibold)
         playButton.setImage(
-            UIImage(systemName: engine.isPlaying ? "pause.fill" : "play.fill"),
+            UIImage(systemName: engine.isPlaying ? "pause.fill" : "play.fill",
+                    withConfiguration: config),
             for: .normal)
     }
 
@@ -468,9 +480,21 @@ final class StageViewController: UIViewController {
 
     // MARK: 歌词与封面
 
+    /// 取词（3.7 (23) 改经共享仓库 LyricRepository）：此前舞台
+    /// 每次打开都是新实例、实例级缓存恒空，进台才向 EdgeOne
+    /// 现拉 /lyric（真机约 3s「暂无歌词」，audit-3723 §5.2），
+    /// 且与墙面已取过的同一首歌不共享。改走仓库：墙面取过或
+    /// 本会话开台取过的歌，仓库命中即时派生舞台形状（同一
+    /// 张合并表）；实例级 linesCache 只留派生结果，不再决定
+    /// 是否发网络请求。
     private func loadLyrics(for track: FoliaTrack) {
-        if let cached = linesCache[track.id] {
-            _ = cached
+        if linesCache[track.id] != nil {
+            pushSnapshot()
+            return
+        }
+        if let hit = LyricRepository.shared.cachedEntry(for: track.id) {
+            linesCache[track.id] = LyricParser.stageLines(
+                from: hit.lines, trackDuration: track.duration)
             pushSnapshot()
             return
         }
@@ -478,11 +502,11 @@ final class StageViewController: UIViewController {
         let trackId = track.id
         let duration = track.duration
         lyricsTask = Task { [weak self] in
-            let raw = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: trackId)
+            let entry = await LyricRepository.shared.entry(for: trackId)
             guard let self, !Task.isCancelled, self.currentTrackId == trackId else { return }
-            let lines = raw.map { LyricParser.parse($0, trackDuration: duration) } ?? []
+            let lines = LyricParser.stageLines(from: entry.lines, trackDuration: duration)
             self.linesCache[trackId] = lines
-            Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count)")
+            Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count) source=\(entry.source)")
             self.pushSnapshot()
         }
     }
@@ -541,22 +565,43 @@ final class StageViewController: UIViewController {
         refreshHeader()
     }
 
+    /// 锚点（3.7 (23) 改真值，DS R49 Q2）：此前取
+    /// engine.currentTime——200ms 周期 observer 的台阶缓存，
+    /// 引擎自家注释明文禁止歌词锚点读它（恒滞后真值
+    /// 0–200ms）；且 checkDrift 拿同一缓存自比，恒定滞后永
+    /// 不纠正（audit-3723 §5.1 实测舞台翻行晚行界
+    /// +0.48~0.68s 的主因）。改直读 rawPlayhead() 真值；每
+    /// 次重锚落 `stage anchor` 面包屑（锚值 + raw 与旧台阶
+    /// 缓存之差），补舞台路径此前零锚点埋点的可观测性缺口。
     private func reanchor() {
+        let raw = engine.rawPlayhead()
         anchor = PlaybackAnchor(
             trackId: engine.currentTrack?.id ?? "",
-            positionAtAnchor: engine.currentTime,
+            positionAtAnchor: raw,
             wallTimeAtAnchor: CACurrentMediaTime(),
             rate: engine.isPlaying ? 1 : 0,
             anchorSeq: anchor.anchorSeq + 1)
+        Breadcrumbs.log("stage anchor pos=\(String(format: "%.3f", raw)) cacheDelta=\(String(format: "%.3f", raw - engine.currentTime)) seq=\(anchor.anchorSeq)")
     }
 
     private func positionNow() -> TimeInterval {
         anchor.position(atWallTime: CACurrentMediaTime())
     }
 
+    /// 漂移校正（3.7 (23)）：比对对象改 rawPlayhead 真值（禁
+    /// 自比）；阈值 0.15s、连续 2 次超限才重锚，防单帧抖动
+    /// 误纠（driftTimer 周期 0.3s，两次 ≈ 0.6s 确认窗）。
     private func checkDrift() {
         guard engine.currentTrack != nil else { return }
-        if abs(engine.currentTime - positionNow()) > 0.35 { reanchor() }
+        if abs(engine.rawPlayhead() - positionNow()) > 0.15 {
+            driftOverCount += 1
+            if driftOverCount >= 2 {
+                driftOverCount = 0
+                reanchor()
+            }
+        } else {
+            driftOverCount = 0
+        }
     }
 
     // MARK: 命令处理（与迷你台/展开卡同一入口）
