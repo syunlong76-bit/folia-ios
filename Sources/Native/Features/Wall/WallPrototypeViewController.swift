@@ -27,11 +27,12 @@ extension Notification.Name {
     static let foliaStageClosed = Notification.Name("FoliaStageClosed")
 }
 
-/// 歌词行（3.7 (19) 起的统一行模型）：time = 行起始（秒），
-/// words 非 nil = 该行带 YRC 逐字戳（扫光按真戳推进）；nil =
-/// 行级 LRC 路径（扫光线性插值）。有 YRC 时行时刻由 YRC 头戳
-/// 派生，与 Web 详情页同源（audit-3719 实测 LRC/YRC 时刻表
-/// 同曲可差 −98~+463ms，两面必须同源才可能同刻换行）。
+/// 歌词行（统一行模型）：time = 翻行时刻（秒），来源由
+/// LyricTiming.flipSource 决定（3.7 (20) 起默认 LRC：onset
+/// 实测 LRC 无系统偏差、YRC 系统性偏晚，见 LyricTiming 注释；
+/// (19) 曾以 YRC 头戳为行时刻)。words 非 nil = 该行带逐字戳
+/// （扫光按真戳推进；双表合并时已按 LRC 行窗重标定）；nil =
+/// 行级路径（扫光线性插值）。
 struct LyricLineData {
     let time: Double
     let text: String
@@ -124,6 +125,12 @@ final class WallPrototypeViewController: UIViewController,
     /// 底部播放台（3.7 (13) #7；13.1 改版）：网页风迷你播放器，
     /// 点封面定位、点台身进播放页、进度可拖（Miller 13.1 定版）。
     private var miniBar: UIView?
+    /// 台面毛玻璃层（3.7 (20)）：入场时 effect 从 nil 渐入做
+    /// 「显影」联动，须持有引用（原为 buildMiniBar 局部量）。
+    private var miniBlurView: UIVisualEffectView?
+    /// 迷你台逻辑显隐（3.7 (20)）：动画边沿的唯一事实源，与
+    /// isHidden（视觉落定态）分工，防进/退动画互相打架。
+    private var miniBarPresented = false
     private var miniCover: UIImageView!
     private var miniTitle: UILabel!
     private var miniArtist: UILabel!
@@ -326,6 +333,7 @@ final class WallPrototypeViewController: UIViewController,
         blur.clipsToBounds = true
         blur.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(blur)
+        miniBlurView = blur
         NSLayoutConstraint.activate([
             blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
@@ -687,18 +695,80 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
+    /// 迷你台显隐边沿动画（3.7 (20)，audit-3720 §三规格；与
+    /// 主页墙同构）：只认 miniBarPresented 的 false↔true 边沿
+    /// ——内容刷新（播/停、切歌）每次都走 refreshMiniBar，但
+    /// 动画只在 currentTrack nil→非 nil（入场）与非 nil→nil
+    /// （退场）时播。入场：alpha 0→1 + 自下方 16pt 升起回落 +
+    /// 缩放 0.98→1，系统弹簧 0.65s/damping 0.88；台面毛玻璃
+    /// effect 从 nil 在同一段动画里渐入（系统交叉淡化）——
+    /// 玻璃「显影」即像画慢慢铺开；封面以 0.05s 延迟做
+    /// 0.92→1 次级缩放。退场对称：0.28s 淡出 + 下沉 8pt，
+    /// 完成后才置 hidden。Reduce Motion 时降级为纯 alpha
+    /// 淡化（0.2s、无位移缩放、effect 直接置位）。
+    private func setMiniBarVisible(_ visible: Bool) {
+        guard let bar = miniBar else { return }
+        miniThemeLayer?.setBarVisible(visible)
+        guard visible != miniBarPresented else { return }
+        miniBarPresented = visible
+        bar.layer.removeAllAnimations()
+        if visible {
+            if UIAccessibility.isReduceMotionEnabled {
+                miniBlurView?.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+                bar.transform = .identity
+                bar.isHidden = false
+                UIView.animate(withDuration: 0.2, animations: {
+                    bar.alpha = 1
+                })
+                return
+            }
+            bar.alpha = 0
+            bar.transform = CGAffineTransform(translationX: 0, y: 16)
+                .scaledBy(x: 0.98, y: 0.98)
+            miniBlurView?.effect = nil
+            bar.isHidden = false
+            miniCover.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            miniCover.alpha = 0
+            UIView.animate(withDuration: 0.65, delay: 0,
+                           usingSpringWithDamping: 0.88, initialSpringVelocity: 0.15,
+                           options: [.curveEaseOut, .allowUserInteraction]) {
+                bar.alpha = 1
+                bar.transform = .identity
+                self.miniBlurView?.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+            }
+            UIView.animate(withDuration: 0.65, delay: 0.05,
+                           usingSpringWithDamping: 0.88, initialSpringVelocity: 0.15,
+                           options: [.curveEaseOut, .allowUserInteraction]) {
+                self.miniCover.transform = .identity
+                self.miniCover.alpha = 1
+            }
+        } else {
+            let duration = UIAccessibility.isReduceMotionEnabled ? 0.2 : 0.28
+            UIView.animate(withDuration: duration, delay: 0,
+                           options: [.curveEaseIn, .beginFromCurrentState], animations: {
+                bar.alpha = 0
+                if !UIAccessibility.isReduceMotionEnabled {
+                    bar.transform = CGAffineTransform(translationX: 0, y: 8)
+                }
+            }, completion: { [weak self] _ in
+                // 已被重入打断（逻辑态已翻回）则不落 hidden。
+                guard let self, !self.miniBarPresented else { return }
+                bar.isHidden = true
+                bar.transform = .identity
+            })
+        }
+    }
+
     /// 播放台内容同步：有当前曲才显示；封面优先引擎现图，缺了走
     /// 封面链按当前曲 id 校验后补。
     private func refreshMiniBar() {
-        guard let bar = miniBar else { return }
+        guard miniBar != nil else { return }
         let engine = PlaybackEngine.shared
         guard let track = engine.currentTrack else {
-            bar.isHidden = true
-            miniThemeLayer?.setBarVisible(false)
+            setMiniBarVisible(false)
             return
         }
-        bar.isHidden = false
-        miniThemeLayer?.setBarVisible(true)
+        setMiniBarVisible(true)
         miniTitle.text = track.title
         miniArtist.text = track.artist
         miniPlayButton.setImage(
@@ -1675,36 +1745,105 @@ final class WallPrototypeViewController: UIViewController,
         lyricFetchInFlight.insert(trackId)
         Breadcrumbs.log("lrc fetch start track=\(trackId)")
         Task { [weak self] in
-            // 取数口径（3.7 (19)）：先 /lyric/new 一次拿 lrc+yrc，
-            // 有 YRC 走 YRC 解析（行时刻 + 逐字戳）；/lyric/new
-            // 失败或 YRC 解析为空才回落旧 /lyric 的 LRC 路径，
-            // 保证新接口异常时歌词不至于整面消失。
+            // 取数口径（3.7 (20)）：先 /lyric/new 一次拿 lrc+yrc，
+            // 双表合并定翻行源（mergeLyricLines：默认 LRC 翻行、
+            // YRC 逐字只做扫光并按 LRC 行窗重标定）；/lyric/new
+            // 失败才回落旧 /lyric 的 LRC 路径，保证新接口异常时
+            // 歌词不至于整面消失。面包屑带 flip= 供真机对账实际
+            // 翻行源（开关回滚/单表回落时随之变）。
             var parsed: [LyricLineData] = []
             var source = "none"
+            var flip = "lrc"
             if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: trackId) {
-                if let yrc = bundle.yrc {
-                    let yrcLines = Self.parseYRC(yrc)
-                    if !yrcLines.isEmpty {
-                        parsed = yrcLines
-                        source = "yrc"
-                    }
-                }
-                if source == "none" {
-                    parsed = Self.parseLRC(bundle.lrc)
-                    source = parsed.isEmpty ? "none" : "lrc"
-                }
+                let merged = Self.mergeLyricLines(
+                    lrcLines: Self.parseLRC(bundle.lrc),
+                    yrcLines: bundle.yrc.map(Self.parseYRC) ?? [])
+                parsed = merged.lines
+                source = merged.source
+                flip = merged.flip
             } else if let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: trackId) {
                 parsed = Self.parseLRC(text)
                 source = parsed.isEmpty ? "none" : "lrc-fallback"
+                flip = "lrc"
             }
             await MainActor.run {
                 guard let self else { return }
-                Breadcrumbs.log("lrc parsed track=\(trackId) lines=\(parsed.count) source=\(source)")
+                Breadcrumbs.log("lrc parsed track=\(trackId) lines=\(parsed.count) source=\(source) flip=\(flip)")
                 self.lyricFetchInFlight.remove(trackId)
                 self.lyricCache[trackId] = parsed
                 self.lastLyricIndex = nil
             }
         }
+    }
+
+    /// 双表合并（3.7 (20)，DS R45 对账 + onset 实测拍板）：
+    /// 翻行时刻源由 LyricTiming.flipSource 决定（默认 LRC）；
+    /// YRC 逐字戳只做行内扫光。flip=lrc 且双表齐时逐行按文本
+    /// 匹配（同文本多行按出现顺序消费）：行时刻取 LRC，逐字
+    /// 戳经 rebaseWords 按 DS 法重标定；匹配不上的 LRC 行
+    /// words=nil（行级扫光）。只有单表时该表即翻行源（flip
+    /// 随之）；双表皆空返回空。flip=yrc 时恢复 (19) 口径
+    /// （YRC 行时刻 + 原戳，不重标定）。
+    private static func mergeLyricLines(lrcLines: [LyricLineData], yrcLines: [LyricLineData])
+        -> (lines: [LyricLineData], source: String, flip: String) {
+        if LyricTiming.flipSource == .yrc {
+            if !yrcLines.isEmpty {
+                return (yrcLines, lrcLines.isEmpty ? "yrc" : "lrc+yrc", "yrc")
+            }
+            return (lrcLines, lrcLines.isEmpty ? "none" : "lrc", "lrc")
+        }
+        guard !lrcLines.isEmpty else {
+            return (yrcLines, yrcLines.isEmpty ? "none" : "yrc", "yrc")
+        }
+        guard !yrcLines.isEmpty else {
+            return (lrcLines, "lrc", "lrc")
+        }
+        // 匹配键去掉全部空白：YRC 文本是逐字拼接（词间空格形
+        // 式与 LRC 原行可能不同），LRC 文本经 trim——去空白后
+        // 两边可比，显示文本仍用 LRC 原行。
+        func matchKey(_ text: String) -> String {
+            text.filter { !$0.isWhitespace }
+        }
+        var yrcByText: [String: [Int]] = [:]
+        for (i, line) in yrcLines.enumerated() {
+            yrcByText[matchKey(line.text), default: []].append(i)
+        }
+        var out: [LyricLineData] = []
+        for (i, lrcLine) in lrcLines.enumerated() {
+            var words: [LyricWordStamp]? = nil
+            let key = matchKey(lrcLine.text)
+            if var queue = yrcByText[key], !queue.isEmpty {
+                let yrcLine = yrcLines[queue.removeFirst()]
+                yrcByText[key] = queue
+                if let yrcWords = yrcLine.words {
+                    let boundary = i + 1 < lrcLines.count
+                        ? lrcLines[i + 1].time : Double.infinity
+                    words = rebaseWords(yrcWords,
+                                        shift: lrcLine.time - yrcLine.time,
+                                        boundary: boundary)
+                }
+            }
+            out.append(LyricLineData(time: lrcLine.time, text: lrcLine.text, words: words))
+        }
+        return (out, "lrc+yrc", "lrc")
+    }
+
+    /// 逐字戳重标定（DS R45 法，禁全行仿射拉伸）：整行平移
+    /// shift（= LRC 行首 − YRC 行首，首字落 LRC 行首）、保留
+    /// 字间相对间隔、下一 LRC 行首为硬边界；溢出时只压缩行
+    /// 尾空白/尾字停留（末字时长夹到边界），起始已越界的字
+    /// 截断丢弃，不压缩字间节奏。全部越界返回 nil（行级扫光）。
+    private static func rebaseWords(_ words: [LyricWordStamp], shift: Double,
+                                    boundary: Double) -> [LyricWordStamp]? {
+        var out: [LyricWordStamp] = []
+        for word in words {
+            let start = word.start + shift
+            if start >= boundary { break }
+            out.append(LyricWordStamp(start: start,
+                                      duration: min(word.duration, boundary - start),
+                                      text: word.text))
+        }
+        return out.isEmpty ? nil : out
     }
 
     /// LRC 解析：[mm:ss.xx] 前缀行 → 行模型（words = nil）；多时间

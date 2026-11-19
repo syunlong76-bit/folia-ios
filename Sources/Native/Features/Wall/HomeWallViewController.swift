@@ -21,14 +21,18 @@ final class HomeWallViewController: UIViewController,
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
-    /// 入场视频槽位（3.7 (17)，替换 (12) 的电影长卷）：数据在途
-    /// 时由 EntryIntroPresenter 以横屏 modal 呈现 v5 油画视频；
-    /// 每进程只播一次的守卫在 Presenter 内（与 (13) 长卷的启动级
-    /// 守卫同语义、随槽迁移）。退出条件（3.7 (18) 定版）：只认
-    /// 关闭按钮与自然播完，数据落定不再触发退场——(17) 把
-    /// load-ok / load-failed / not-logged-in 三路落定接到
-    /// finishCurrent 的接线已全部拆除。
+    /// 入场视频槽位（3.7 (17)，替换 (12) 的电影长卷）：由
+    /// EntryIntroPresenter 以横屏 modal 呈现 v5 油画视频。
+    /// 触发口径（3.7 (20) 纠正，Miller 16:12 点明原设定）：每次
+    /// 进墙都播——动画的用途就是掩盖拉取数据慢；(17)/(18) 曾
+    /// 窄化成每进程只播一次，已撤销。退出条件（3.7 (18) 定版 +
+    /// (20) 循环掩盖）：只认关闭按钮与自然播完，数据先落定不
+    /// 掐断当前播次；每轮播完时数据仍在加载则再播一轮，数据
+    /// 已明确失败则退场落到墙的失败态（见 entryDataState）。
     private var didCenterCamera = false
+    /// 入场循环的数据状态答复（3.7 (20)）：loadEntries 各落点
+    /// 维护，EntryIntroPresenter 每轮播完时经 provider 读取。
+    private var entryDataState: EntryIntroDataState = .loading
     private var isWrapping = false
     /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
     private var loadAttempts = 0
@@ -38,6 +42,9 @@ final class HomeWallViewController: UIViewController,
     // E 液态玻璃台（构造同构、按仓库惯例有意重复）；差异是主页
     // 没有定位语义——封面与台身都进播放页，回程存主页票。
     private var miniBar: UIView?
+    /// 台面毛玻璃层（3.7 (20)）：入场时 effect 从 nil 渐入做
+    /// 「显影」联动，须持有引用（原为 buildMiniBar 局部量）。
+    private var miniBlurView: UIVisualEffectView?
     private var miniCover: UIImageView!
     private var miniTitle: UILabel!
     private var miniArtist: UILabel!
@@ -130,6 +137,11 @@ final class HomeWallViewController: UIViewController,
             .store(in: &playbackCancellables)
 
         buildMiniBar()
+        // 入场循环的数据状态提供者（3.7 (20)）：Presenter 每轮
+        // 播完时读 entryDataState 决定退场/再播一轮/落失败态。
+        EntryIntroPresenter.dataStateProvider = { [weak self] in
+            self?.entryDataState ?? .failed
+        }
         progressDriver.onFraction = { [weak self] fraction in
             guard let self else { return }
             guard let bar = self.miniBar, !bar.isHidden,
@@ -160,15 +172,15 @@ final class HomeWallViewController: UIViewController,
         progressDriver.start()
         miniThemeLayer?.setHostVisible(true)
         refreshMiniBar()
-        // 入场视频（3.7 (17)）：数据还没到才触发；先到（缓存快
-        // 路径）则整段跳过。每进程只播一次、重进不重播由
-        // EntryIntroPresenter 的静态守卫保证——本方法在入场退场
-        // 后会被再次调用（墙重新露面），守卫挡住双播；退场只由
-        // 关闭按钮/自然播完/视频自身失败与看门狗驱动（3.7 (18)），
-        // appear 与数据落定都不做任何关闭动作（(13.1) 长卷误关
-        // 黑屏的教训）。
-        if entries.isEmpty {
-            EntryIntroPresenter.presentIfNeeded(from: self)
+        // 入场视频（3.7 (20) 口径）：每次进墙都触发——数据已在
+        // 手（重进）也播满一轮再退（退出只认关闭/播完，(18)
+        // 定版），数据在途则循环掩盖到就绪或明确失败。唯一跳过
+        // 的是入场自身退场引发的这次露面（同一次进墙事件的下
+        // 半程）：Presenter 的一次性抑制标志在此消费，防自激。
+        if EntryIntroPresenter.consumeSuppression() {
+            // 入场刚退场引发的露面，不重播。
+        } else {
+            EntryIntroPresenter.present(from: self)
         }
     }
 
@@ -184,6 +196,7 @@ final class HomeWallViewController: UIViewController,
 
     private func loadEntries() {
         loadAttempts += 1
+        entryDataState = .loading
         Task { [weak self] in
             guard let self else { return }
             do {
@@ -193,6 +206,9 @@ final class HomeWallViewController: UIViewController,
                 let status = try await NativeDataClient.shared.fetchLoginStatus()
                 guard status.loggedIn, let userId = status.userId else {
                     await MainActor.run {
+                        // 未登录是落定态：入场播完即退场落到此提示，
+                        // 不许循环掩盖把用户挡在视频后（3.7 (20)）。
+                        self.entryDataState = .failed
                         self.statusLabel.text = "主页墙：未登录（先在网页侧登录网易云）"
                     }
                     return
@@ -201,6 +217,7 @@ final class HomeWallViewController: UIViewController,
                 await MainActor.run {
                     self.loadAttempts = 0
                     self.loadFailed = false
+                    self.entryDataState = .ready
                     Breadcrumbs.log("home entries ok n=\(playlists.count)")
                     self.playlistIds = playlists.map(\.id)
                     self.entries = playlists.map { playlist in
@@ -233,6 +250,9 @@ final class HomeWallViewController: UIViewController,
                         }
                     } else {
                         self.loadFailed = true
+                        // 最终失败落定：入场播完即退场落到失败态，
+                        // 不再循环掩盖（3.7 (20)）。
+                        self.entryDataState = .failed
                         self.statusLabel.text = "主页墙加载失败，点按这里重试"
                     }
                 }
@@ -381,6 +401,7 @@ final class HomeWallViewController: UIViewController,
         blur.clipsToBounds = true
         blur.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(blur)
+        miniBlurView = blur
         NSLayoutConstraint.activate([
             blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
@@ -727,17 +748,85 @@ final class HomeWallViewController: UIViewController,
         }
     }
 
+    /// 迷你台逻辑显隐（3.7 (20)）：动画边沿的唯一事实源，与
+    /// isHidden（视觉落定态）分工——进/退动画互相打断时以它
+    /// 为准判去留，防退场 completion 把已重入的台又藏掉。
+    private var miniBarPresented = false
+
+    /// 迷你台显隐边沿动画（3.7 (20)，audit-3720 §三规格；与
+    /// 曲目墙同构）：只认 miniBarPresented 的 false↔true 边沿
+    /// ——内容刷新（播/停、切歌）每次都走 refreshMiniBar，但
+    /// 动画只在 currentTrack nil→非 nil（入场）与非 nil→nil
+    /// （退场）时播。入场：alpha 0→1 + 自下方 16pt 升起回落 +
+    /// 缩放 0.98→1，系统弹簧 0.65s/damping 0.88；台面毛玻璃
+    /// effect 从 nil 在同一段动画里渐入（UIVisualEffectView 的
+    /// effect 在 animate 块内赋值由系统做交叉淡化）——玻璃
+    /// 「显影」即像画慢慢铺开；封面以 0.05s 延迟做 0.92→1 次级
+    /// 缩放。退场对称：0.28s 淡出 + 下沉 8pt，完成后才置
+    /// hidden。Reduce Motion 时降级为纯 alpha 淡化（0.2s、无
+    /// 位移缩放、effect 直接置位不做显影）。
+    private func setMiniBarVisible(_ visible: Bool) {
+        guard let bar = miniBar else { return }
+        miniThemeLayer?.setBarVisible(visible)
+        guard visible != miniBarPresented else { return }
+        miniBarPresented = visible
+        bar.layer.removeAllAnimations()
+        if visible {
+            if UIAccessibility.isReduceMotionEnabled {
+                miniBlurView?.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+                bar.transform = .identity
+                bar.isHidden = false
+                UIView.animate(withDuration: 0.2, animations: {
+                    bar.alpha = 1
+                })
+                return
+            }
+            bar.alpha = 0
+            bar.transform = CGAffineTransform(translationX: 0, y: 16)
+                .scaledBy(x: 0.98, y: 0.98)
+            miniBlurView?.effect = nil
+            bar.isHidden = false
+            miniCover.transform = CGAffineTransform(scaleX: 0.92, y: 0.92)
+            miniCover.alpha = 0
+            UIView.animate(withDuration: 0.65, delay: 0,
+                           usingSpringWithDamping: 0.88, initialSpringVelocity: 0.15,
+                           options: [.curveEaseOut, .allowUserInteraction]) {
+                bar.alpha = 1
+                bar.transform = .identity
+                self.miniBlurView?.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
+            }
+            UIView.animate(withDuration: 0.65, delay: 0.05,
+                           usingSpringWithDamping: 0.88, initialSpringVelocity: 0.15,
+                           options: [.curveEaseOut, .allowUserInteraction]) {
+                self.miniCover.transform = .identity
+                self.miniCover.alpha = 1
+            }
+        } else {
+            let duration = UIAccessibility.isReduceMotionEnabled ? 0.2 : 0.28
+            UIView.animate(withDuration: duration, delay: 0,
+                           options: [.curveEaseIn, .beginFromCurrentState], animations: {
+                bar.alpha = 0
+                if !UIAccessibility.isReduceMotionEnabled {
+                    bar.transform = CGAffineTransform(translationX: 0, y: 8)
+                }
+            }, completion: { [weak self] _ in
+                // 已被重入打断（逻辑态已翻回）则不落 hidden。
+                guard let self, !self.miniBarPresented else { return }
+                bar.isHidden = true
+                bar.transform = .identity
+            })
+        }
+    }
+
     /// 播放台内容同步（与曲目墙同构）：有当前曲才显示。
     private func refreshMiniBar() {
-        guard let bar = miniBar else { return }
+        guard miniBar != nil else { return }
         let engine = PlaybackEngine.shared
         guard let track = engine.currentTrack else {
-            bar.isHidden = true
-            miniThemeLayer?.setBarVisible(false)
+            setMiniBarVisible(false)
             return
         }
-        bar.isHidden = false
-        miniThemeLayer?.setBarVisible(true)
+        setMiniBarVisible(true)
         miniTitle.text = track.title
         miniArtist.text = track.artist
         miniPlayButton.setImage(

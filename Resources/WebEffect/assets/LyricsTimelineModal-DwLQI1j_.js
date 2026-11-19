@@ -1,1 +1,0 @@
-import{ui as e}from"./bootstrap-B2R4EpG-.js";export{e as default};

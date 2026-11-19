@@ -14,6 +14,14 @@ enum LyricTiming {
     /// 漂移重锚阈值（秒）：锚源改直读真实 playhead 后收紧
     /// （(15) 为 0.3，配台阶缓存时再小会频繁误锚）。
     static let reanchorThreshold = 0.12
+    /// 翻行时刻源开关（3.7 (20)，DS R45 对账 + onset 实测拍板）：
+    /// 默认 LRC——问题歌 529319768 全曲起音实测 onset−LRC 中位
+    /// +2ms（无系统偏差），YRC 系统性偏晚约 90ms 且逐行散布
+    /// 更大（绝对偏差中位 152 vs 97ms）；YRC 逐字戳只做行内
+    /// 扫光（按 LRC 行窗重标定，见 WallPrototype 的双表合并）。
+    /// 改回 .yrc 即恢复 (19) 口径（YRC 翻行 + 原戳扫光）。
+    enum FlipSource { case lrc, yrc }
+    static let flipSource: FlipSource = .lrc
 }
 
 /// 逐字时间戳（YRC 派生，3.7 (19)）：一行歌词内每个字/词的
@@ -205,26 +213,35 @@ final class LyricWindowView: UIView {
             && !lyricTexts[2].isEmpty && lyricTexts[2] == texts[1]
         lyricTexts = texts
         if canSlide {
-            // 现渲染的行 1...5 恰好是新窗口的可见行，整列上滑一行。
+            // 同帧渲染（3.7 (20)，audit-3720 选项 C）：新行 render
+            // + 扫光与滑行同帧启动，不再等 0.18s 滑行 completion
+            // ——旧实现把点亮/扫光推迟整段滑行时长，(17) 时被
+            // +150ms lead 抵掉大半、(19) 摘 lead 后全额裸露。
+            // 做法：先渲染新窗并起扫光，容器预置 +1 行偏移（新
+            // 行 1 恰落在旧行 2 的视觉位、与旧路径轨迹一致），
+            // 再动画收回 identity——动画只动 transform。唯一与
+            // 旧轨迹的差别：滑行期间最上一行（alpha 0.28 的最远
+            // 邻行）暂缺，到位时随新窗行 0 一并落定。
+            renderLyricWindow()
+            if lineActive {
+                beginSweep(lineStart: lineStart, lineDuration: lineDuration)
+                playLyricBreathing()
+            } else {
+                // 前奏预告：扫光停在 0（只剩暗字），不呼吸。
+                stopSweep()
+                lyricSweepView.progress = 0
+            }
+            lyricLinesContainer.transform =
+                CGAffineTransform(translationX: 0, y: lyricLineHeight)
             UIView.animate(withDuration: 0.18, delay: 0,
                            options: [.curveEaseOut]) {
-                self.lyricLinesContainer.transform =
-                    CGAffineTransform(translationX: 0, y: -self.lyricLineHeight)
+                self.lyricLinesContainer.transform = .identity
             } completion: { finished in
-                // 滑行被 removeAllAnimations 打断时 finished=false：
-                // 打断方（非滑行路径）已按新窗口重渲染并重开扫光，
-                // 旧回调不得再以旧 lineStart 重写一遍（行窗双写）。
+                // 被打断（finished=false）时打断方已接管 transform
+                // 与内容（非滑行路径/removeAllAnimations），此处
+                // 不再触碰任何状态——保留防行窗双写的守卫语义。
                 guard finished else { return }
                 self.lyricLinesContainer.transform = .identity
-                self.renderLyricWindow()
-                if lineActive {
-                    self.beginSweep(lineStart: lineStart, lineDuration: lineDuration)
-                    self.playLyricBreathing()
-                } else {
-                    // 前奏预告：扫光停在 0（只剩暗字），不呼吸。
-                    self.stopSweep()
-                    self.lyricSweepView.progress = 0
-                }
             }
         } else {
             lyricLinesContainer.layer.removeAllAnimations()
@@ -418,6 +435,9 @@ final class LyricClockDriver {
     /// 输出延迟缓存（秒）：呈现 now 统一减它；外放时 ≈0 属预期。
     private var outputLatency: Double = AVAudioSession.sharedInstance().outputLatency
     private var routeObserver: NSObjectProtocol?
+    /// 稳态重锚时刻（3.7 (20)）：播放态锚定后 +0.35s 触发一次
+    /// 无条件重锚（见 reanchor(armSettle:) 的定案注释）。
+    private var settleReanchorAt: CFTimeInterval?
 
     func start() {
         guard displayLink == nil else { return }
@@ -430,7 +450,7 @@ final class LyricClockDriver {
                 self?.refreshOutputLatency()
             }
         }
-        reanchor()
+        reanchor(armSettle: true)
         let link = CADisplayLink(target: LinkProxy(owner: self),
                                  selector: #selector(LinkProxy.step))
         link.add(to: .main, forMode: .common)
@@ -440,6 +460,7 @@ final class LyricClockDriver {
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
+        settleReanchorAt = nil
         if let routeObserver {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
@@ -452,13 +473,27 @@ final class LyricClockDriver {
         outputLatency = AVAudioSession.sharedInstance().outputLatency
     }
 
-    private func reanchor() {
+    /// 重锚：锚对 = (rawPlayhead 真值, 单调时钟)。
+    ///
+    /// armSettle（3.7 (20)，judge−raw +89ms 定案）：锚若在播放
+    /// 启动瞬态被捕获——timeControlStatus 收敛为 .playing、锚
+    /// 采到冻结位 playhead 后，player 时钟实际起步比锚捕获晚
+    /// 约 0.1s——此后外推与 rawPlayhead 同速行进、恒超前约
+    /// +99ms（judge 再减 outputLatency 约 10ms 即日志里的
+    /// +89ms），且 0.099 < 0.12 漂移阈值、整首不被纠正（真机
+    /// 日志恒定、不增长、亚阈值三特征全合）。修法：切歌/播停
+    /// 翻转这类「瞬态锚」在 +0.35s 后做一次稳态重锚（此时
+    /// playhead 已稳定行进、锚对齐真值），纠正量落面包屑
+    /// `lrc clock settle drift=` 供真机对账；漂移重锚采的是
+    /// 行进中真值、不 arm，避免链式重锚。
+    private func reanchor(armSettle: Bool = false) {
         let engine = PlaybackEngine.shared
         refreshOutputLatency()
         anchorTime = engine.rawPlayhead()
         anchorWall = CACurrentMediaTime()
         anchorTrackId = engine.currentTrack?.id
         anchorWasPlaying = engine.isPlaying
+        settleReanchorAt = (armSettle && anchorWasPlaying) ? anchorWall + 0.35 : nil
     }
 
     /// 锚的媒体时刻（未补偿）：播放态按单调时钟外推、暂停态
@@ -488,10 +523,22 @@ final class LyricClockDriver {
             onTick?(engine.rawPlayhead() - outputLatency)
             return
         }
-        if track.id != anchorTrackId { reanchor() }
+        if track.id != anchorTrackId { reanchor(armSettle: true) }
         // 播放/暂停翻转：立即以真实 playhead 重锚（暂停冻结在
         // 真位置、恢复从真位置起跑），不留整段暂停时长的外推误差。
-        if engine.isPlaying != anchorWasPlaying { reanchor() }
+        if engine.isPlaying != anchorWasPlaying { reanchor(armSettle: true) }
+        // 稳态重锚（3.7 (20)）：瞬态锚 +0.35s 落定后无条件对齐
+        // 一次真值，纠正量落面包屑；已暂停/已切歌则直接作废。
+        if let settleAt = settleReanchorAt {
+            if !engine.isPlaying || track.id != anchorTrackId {
+                settleReanchorAt = nil
+            } else if CACurrentMediaTime() >= settleAt {
+                settleReanchorAt = nil
+                let drift = engine.rawPlayhead() - mediaNow()
+                reanchor()
+                Breadcrumbs.log("lrc clock settle drift=\(String(format: "%.3f", drift))")
+            }
+        }
         let predicted = anchorWasPlaying
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
