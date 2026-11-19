@@ -136,14 +136,12 @@ final class StageViewController: UIViewController {
     private var backdropTask: Task<Void, Never>?
 
     // 贴纸层（3.7 (24)，纯新增视图层）：拉歌词角标（renderer
-    // 容器右上）、无歌词陪衬（容器居中）、红心庆祝（红心按
-    // 钮左侧）、播放陪伴宠物（容器周界漫游）。方法全在文件
-    // 尾 extension；显隐只由既有取词/点赞落点的一行钩子驱动，
-    // 不改任何歌词/时钟逻辑。
+    // 容器右上）、无歌词陪衬（容器居中）、红心庆祝（容器右
+    // 上内侧）。方法全在文件尾 extension；显隐只由既有取
+    // 词/点赞落点的一行钩子驱动，不改任何歌词/时钟逻辑。
     private var stickerFetchBadge: StickerView?
     private var stickerNoLyrics: StickerView?
     private var stickerLike: StickerView?
-    private var companionPet: CompanionPetView?
     private let progressDriver = StageProgressDriver()
     private var displayLink: CADisplayLink?
     private var lastFrameTimestamp: CFTimeInterval = 0
@@ -184,8 +182,6 @@ final class StageViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        // 贴纸层（3.7 (24)，纯新增）：陪伴宠物开始漫游。
-        companionPet?.startRoaming()
         Breadcrumbs.samplerStart()
         Breadcrumbs.log("stage gate enter style=\(activeStyleId)")
         progressDriver.onFraction = { [weak self] fraction in
@@ -205,8 +201,6 @@ final class StageViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
-        // 贴纸层（3.7 (24)，纯新增）：陪伴宠物停漫游。
-        companionPet?.stopRoaming()
         progressDriver.stop()
         stopDisplayLink()
         driftTimer?.invalidate()
@@ -466,8 +460,6 @@ final class StageViewController: UIViewController {
 
     private func handleTrackChanged(to track: FoliaTrack) {
         currentTrackId = track.id
-        // 贴纸层（3.7 (24)，纯新增）：陪伴宠物按曲换装判定。
-        companionPet?.setTrack(id: track.id)
         backdropTrackId = nil
         palette = .neutralDark
         backdropImageView.image = nil
@@ -840,9 +832,9 @@ private extension LyricStageCommand.Kind {
 // - 点红心：点亮时 dog-11（抱爱心）64pt 浮在容器右上内侧
 //   （取词角标在显时左移让位），播 2 圈后淡出；旧落点（红心
 //   按钮左侧）会压标题右端，(25) 迁走。
-// - 播放陪伴：CompanionPetView 在容器内下半活动带玩耍（框
-//   内漫游/双宠互动/双击召唤/点按对话/拖动占座），细则见
-//   CompanionPetView 文件头。设置页开关关闭时整层停用。
+// - 播放陪伴：(25) 的框内陪伴层（CompanionPetView）已于
+//   3.7 (27) 按 Miller 定案整体删除（「都没看见出现过」），
+//   表情包互动主场迁至迷你台/进度条（MiniBarPetStage）。
 // 显隐只由取词/点赞既有落点的一行钩子驱动；歌词数据、时钟
 // 与渲染逻辑零改动。
 
@@ -861,20 +853,6 @@ extension StageViewController {
         like.isHidden = true
         view.addSubview(like)
         stickerLike = like
-        let pet = CompanionPetView()
-        pet.onResidentRetired = {
-            Breadcrumbs.log("companion pet retired (dragged out)")
-        }
-        view.addSubview(pet)
-        companionPet = pet
-        // 双击召唤（3.7 (25)）：识别器挂在歌词容器上，宠物层
-        // 本身透传触摸（hitTest 只认领宠物/对话框），歌词行
-        // 点按 seek 不受影响（识别器不取消容器内既有触摸）。
-        pet.summonTapRecognizer.cancelsTouchesInView = false
-        rendererContainer.addGestureRecognizer(pet.summonTapRecognizer)
-        // 对话框「点别处关闭」：挂在舞台根视图的旁观识别器，
-        // 不取消任何既有触摸（歌词行 seek/按钮照常）。
-        view.addGestureRecognizer(pet.dismissTapRecognizer)
         stickerLayoutOverlays()
     }
 
@@ -936,6 +914,5 @@ extension StageViewController {
                 x: likeX, y: region.minY + 12,
                 width: 64, height: 64)
         }
-        companionPet?.roamRegion = region
     }
 }

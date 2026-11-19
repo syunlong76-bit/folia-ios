@@ -456,7 +456,8 @@ final class StickerView: UIView {
     }
 }
 
-/// 贴纸相关持久开关（陪伴宠物收起/放出跨启动保留）。
+/// 贴纸相关持久开关（3.7 (27) 起改管迷你台/进度条宠物系统，
+/// 存储键不变；舞台框内陪伴已删，见 MiniBarPetStage）。
 enum StickerSettings {
     private static let companionKey = "folia.stickers.companionEnabled"
     static var companionEnabled: Bool {

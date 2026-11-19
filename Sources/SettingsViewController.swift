@@ -35,7 +35,7 @@ final class SettingsViewController: UIViewController {
     private let spinner = UIActivityIndicatorView(style: .medium)
 
     // 贴纸层（3.7 (24)，纯新增）：检查更新狗贴纸 + 贴纸伙伴
-    // 分组（门面猫/狗 + 播放陪伴开关）。
+    // 分组（门面猫/狗 + 迷你台小宠物开关）。
     private let companionSwitch = UISwitch()
     private var checkDogTile: UIView?
     private var checkDogSticker: StickerView?
@@ -264,7 +264,7 @@ final class SettingsViewController: UIViewController {
 
         // 贴纸伙伴分组卡（3.7 (24)）：门面猫（cat-01，点按换
         // cat-15 播一次再换回）+ 门面狗（dog-17，白 tile 承
-        // 载）+ 播放页陪伴开关。贴纸均为 APNG 原素材真帧。
+        // 载）+ 迷你台小宠物开关。贴纸均为 APNG 原素材真帧。
         let stickerGroup = makeGroupCard()
         let stickerHeadRow = UIStackView()
         stickerHeadRow.axis = .horizontal
@@ -327,7 +327,7 @@ final class SettingsViewController: UIViewController {
         companionRow.isLayoutMarginsRelativeArrangement = true
         companionRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         let companionTitle = UILabel()
-        companionTitle.text = "播放页陪伴"
+        companionTitle.text = "迷你台小宠物"
         companionTitle.font = .systemFont(ofSize: 15)
         companionTitle.textColor = FoliaUI.primary
         companionSwitch.onTintColor = FoliaUI.accent
@@ -340,7 +340,7 @@ final class SettingsViewController: UIViewController {
         stickerGroup.addArrangedSubview(companionRow)
         stickerGroup.addArrangedSubview(makeHairline())
         let companionHint = UILabel()
-        companionHint.text = "开启后，播放页的框里会有小宠物陪你听歌：双击歌词区可以再叫一只出来（最多三只），点宠物头顶有小反应、点身上会说话；按住拖动可以给它占个座，拖出框外松手就送它走。每首歌主陪伴会换一只。"
+        companionHint.text = "开启后，底部播放台的台面上会有小宠物陪你听歌，播放台收起成进度条时它们会轮流上场玩耍：点宠物头顶有小反应、点身上会说话，它们还会互相打招呼、时不时关心你一句（点气泡可以摸摸头、亲亲、抱抱）；按住拖动可以把它安置在台面一处。每首歌主宠物会换一只。"
         companionHint.font = .systemFont(ofSize: 12)
         companionHint.textColor = FoliaUI.secondary
         companionHint.numberOfLines = 0
@@ -530,7 +530,7 @@ final class SettingsViewController: UIViewController {
         }
     }
 
-    // 贴纸层（3.7 (24)）：陪伴开关与门面猫点按换装。
+    // 贴纸层（3.7 (24) 立、(27) 改管迷你台宠物）：宠物开关与门面猫点按换装。
     @objc private func companionSwitchChanged() {
         StickerSettings.companionEnabled = companionSwitch.isOn
     }
