@@ -306,6 +306,9 @@ final class StickerView: UIView {
     private(set) var playMode: PlayMode = .loop
     /// 播完回调（once / loops 模式；loop 模式不触发）。
     var onFinished: (() -> Void)?
+    /// 面包屑落点标识（3.7 (29)）：各落点在创建视图时标注，
+    /// sticker.apply 留痕据此区分场景；未标注记 "-"。
+    var crumbScene: String?
 
     /// 轮廓柔光（3.7 (28)）：CALayer 阴影跟随 contents 的 alpha
     /// 轮廓（素材本体帧的透明形状），给浅色/线条型贴纸在深色
@@ -345,6 +348,20 @@ final class StickerView: UIView {
 
     /// 换贴纸（同名同模式重复调用只确保播放，不重解码不重置）。
     func setSticker(_ name: String, mode: PlayMode) {
+        // 出场留痕（3.7 (29)，走既有 crumb 通道）：新素材/新模式/
+        // 未解码/此前隐藏任一成立才记一行，抑制同参重复调用刷屏；
+        // halo 开时附带 shadow 参数（点赞/取消收藏落点诊断用）。
+        if assetName != name || playMode != mode || decoded == nil || isHidden {
+            let f = frame
+            var line = "sticker.apply scene=\(crumbScene ?? "-") asset=\(name)"
+                + " frame=\(Int(f.origin.x)),\(Int(f.origin.y)),\(Int(f.width))x\(Int(f.height))"
+                + " halo=\(silhouetteHaloEnabled ? 1 : 0)"
+            if silhouetteHaloEnabled {
+                line += " shadowOpacity=\(imageView.layer.shadowOpacity)"
+                    + " shadowRadius=\(imageView.layer.shadowRadius)"
+            }
+            Breadcrumbs.log(line)
+        }
         if assetName == name, playMode == mode, decoded != nil {
             play()
             return
@@ -476,8 +493,12 @@ final class StickerView: UIView {
     }
 }
 
-/// 贴纸相关持久开关（3.7 (27) 起改管迷你台/进度条宠物系统，
-/// 存储键不变；舞台框内陪伴已删，见 MiniBarPetStage）。
+/// 贴纸相关持久开关。companionEnabled 是旧键：(24)/(25) 舞台
+/// 框内陪伴时代的开关，曾被长按宠物、拖宠物出框外两个无提示
+/// 手势静默写 false；(27) 迷你台宠物系统沿用同键被旧值关死
+/// （DS R45 对账定案）。(29) 起宠物系统改读专用新键
+/// miniPetsEnabled（不继承旧键任何值），旧键本体保留不动、
+/// 行为读者清零（仅剩 (29) pet.settings.read 的诊断打印）。
 enum StickerSettings {
     private static let companionKey = "folia.stickers.companionEnabled"
     static var companionEnabled: Bool {
@@ -486,5 +507,16 @@ enum StickerSettings {
             return UserDefaults.standard.bool(forKey: companionKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: companionKey) }
+    }
+
+    /// 迷你台宠物系统专用开关（3.7 (29)）：键不存在 → 默认开；
+    /// 设置页「迷你台小宠物」开关读写都走此键。
+    private static let miniPetsKey = "folia.stickers.miniPetsEnabled"
+    static var miniPetsEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: miniPetsKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: miniPetsKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: miniPetsKey) }
     }
 }

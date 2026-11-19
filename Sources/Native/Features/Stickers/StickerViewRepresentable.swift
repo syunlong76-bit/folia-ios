@@ -8,6 +8,7 @@ struct StickerViewRepresentable: UIViewRepresentable {
 
     func makeUIView(context: Context) -> StickerView {
         let view = StickerView()
+        view.crumbScene = "search-empty"
         view.setSticker(asset, mode: mode)
         return view
     }

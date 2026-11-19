@@ -50,6 +50,7 @@ final class LoadingBackdropView: UIView {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
         backgroundColor = .black
+        catSticker.crumbScene = "loading-polaroid"
 
         bleedImageView.contentMode = .scaleAspectFill
         bleedImageView.clipsToBounds = true

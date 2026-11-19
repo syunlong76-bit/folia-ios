@@ -844,14 +844,17 @@ extension StageViewController {
 
     func stickerInstall() {
         let badge = StickerView()
+        badge.crumbScene = "stage-lyric-fetch"
         badge.isHidden = true
         view.addSubview(badge)
         stickerFetchBadge = badge
         let noLyrics = StickerView()
+        noLyrics.crumbScene = "stage-no-lyrics"
         noLyrics.isHidden = true
         view.addSubview(noLyrics)
         stickerNoLyrics = noLyrics
         let like = StickerView()
+        like.crumbScene = "stage-like"
         like.isHidden = true
         view.addSubview(like)
         stickerLike = like

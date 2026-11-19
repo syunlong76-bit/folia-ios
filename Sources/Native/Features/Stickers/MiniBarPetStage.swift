@@ -34,8 +34,11 @@ import UIKit
 //   头/亲亲/抱抱），点选后宠物冒对应反应贴纸 + 回一句开
 //   心的话，随后收起。
 // - 开关：设置页「迷你台小宠物」（StickerSettings.
-//   companionEnabled，存储键沿用）统管本层；关掉时台上与
-//   条上宠物全停（整层隐藏、演员清空）。
+//   miniPetsEnabled——(29) 起的宠物专用新键；旧键
+//   companionEnabled 曾被 (24)/(25) 两个无提示手势静默
+//   写 false、(27) 沿用同键被关死，DS R45 定案后分家、
+//   不继承旧值）统管本层；关掉时台上与条上宠物全停
+//   （整层隐藏、演员清空）。
 // - 触摸面：hitTest 只认领宠物本体、对话框、关心气泡与
 //   选项按钮，其余全部透传（点细条展开、台上按键、拖墙
 //   平移零影响）。
@@ -70,6 +73,7 @@ private final class MiniPetActor: UIView {
     init(asset: String, size: CGFloat) {
         super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
         stickerView.frame = bounds
+        stickerView.crumbScene = "minibar-pet"
         stickerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         addSubview(stickerView)
         setAsset(asset)
@@ -332,6 +336,8 @@ final class MiniBarPetStage: UIView {
 
     private var displayLink: CADisplayLink?
     private var lastTimestamp: TimeInterval = 0
+    /// pet.tick.heartbeat 节流锚（3.7 (29)）。
+    private var lastHeartbeatAt: TimeInterval = 0
     /// 墙钟：恒前进（批次/告别/关心过期用）。
     private var clockTime: TimeInterval = 0
     /// 编排时钟：只在播放中前进（走动/编排/轮换/关心触发用）。
@@ -410,6 +416,11 @@ final class MiniBarPetStage: UIView {
 
     /// 迷你台显隐边沿（setMiniBarVisible 内一行钩子）。
     func barPresentationChanged(_ presented: Bool) {
+        // 开关双键留痕（3.7 (29)）：新键决定本层生死，旧键只为
+        // 诊断毒丸键是否仍在设备上留值。
+        Breadcrumbs.log("pet.settings.read src=barPresentation presented=\(presented)"
+            + " miniPets=\(StickerSettings.miniPetsEnabled)"
+            + " legacyCompanion=\(StickerSettings.companionEnabled)")
         barPresented = presented
         if presented {
             // 台子每次出现必是完整形态（resetMiniBarFormInstant
@@ -417,7 +428,7 @@ final class MiniBarPetStage: UIView {
             collapsed = false
             cancelFlow()
             startLink()
-            if StickerSettings.companionEnabled {
+            if StickerSettings.miniPetsEnabled {
                 isHidden = false
                 petsActive = true
                 syncFrame()
@@ -566,6 +577,16 @@ final class MiniBarPetStage: UIView {
 
     // MARK: 班底（展开台规格 / 进度条批次）
 
+    /// pet.guard.block 节流（3.7 (29)）：同一原因 5 秒内只记
+    /// 一行（tick 会高频重试 ensure，防刷屏），走 crumb 通道。
+    private var guardBlockLast: [String: CFTimeInterval] = [:]
+    private func noteGuardBlock(_ reason: String) {
+        let now = CACurrentMediaTime()
+        if let last = guardBlockLast[reason], now - last < 5 { return }
+        guardBlockLast[reason] = now
+        Breadcrumbs.log("pet.guard.block reason=\(reason)")
+    }
+
     private func makeActor(asset: String) -> MiniPetActor {
         let actor = MiniPetActor(asset: asset, size: petSizeNow())
         actor.stage = self
@@ -574,7 +595,9 @@ final class MiniBarPetStage: UIView {
     }
 
     private func ensureExpandedCast() {
-        guard barPresented, bounds.width > 40 else { return }
+        if !barPresented { noteGuardBlock("ensure.barNotPresented"); return }
+        if bounds.width <= 40 { noteGuardBlock("ensure.stageTooNarrow"); return }
+        let castBefore = allActors.map { $0.asset }
         if resident == nil {
             let asset = Self.residentDogPool[
                 trackSerial % Self.residentDogPool.count]
@@ -596,6 +619,11 @@ final class MiniBarPetStage: UIView {
         }
         if !framesRunning {
             for actor in allActors { actor.stickerView.pause() }
+        }
+        let castAfter = allActors.map { $0.asset }
+        if castAfter != castBefore {
+            Breadcrumbs.log("pet.cast.generate kind=expanded"
+                + " assets=\(castAfter.joined(separator: ","))")
         }
     }
 
@@ -626,7 +654,10 @@ final class MiniBarPetStage: UIView {
     /// 进度条批次上场：5–8 只（按条宽封顶），沿条均布错峰
     /// 入场；批次墙钟约 40s（自最后一只入场起算）。
     private func spawnBatch() {
-        guard barPresented, petsActive, collapsed, bounds.width > 40 else { return }
+        if !barPresented { noteGuardBlock("batch.barNotPresented"); return }
+        if !petsActive { noteGuardBlock("batch.petsInactive"); return }
+        if !collapsed { noteGuardBlock("batch.notCollapsed"); return }
+        if bounds.width <= 40 { noteGuardBlock("batch.stageTooNarrow"); return }
         let maxFit = max(3, Int(bounds.width / 44))
         let size = min(Int.random(in: 5...8), maxFit)
         let assets = pickAssets(count: size, excluding: [])
@@ -636,6 +667,8 @@ final class MiniBarPetStage: UIView {
         }
         batchActive = true
         batchEndsAt = now + Double(assets.count) * 0.22 + Self.batchDuration
+        Breadcrumbs.log("pet.cast.generate kind=batch"
+            + " assets=\(assets.joined(separator: ","))")
     }
 
     private func spawnBatchMember(asset: String, slot: Int, total: Int) {
@@ -781,12 +814,8 @@ final class MiniBarPetStage: UIView {
         let key = ObjectIdentifier(actor)
         reactionViews[key]?.removeFromSuperview()
         let view = StickerView()
+        view.crumbScene = "minibar-reaction"
         let asset = specified ?? Self.reactionPool.randomElement() ?? "dog-11"
-        view.setSticker(asset, mode: .loop)
-        // 轮廓柔光（3.7 (28)）：反应贴纸若是 dog-11（亲亲回话
-        // 指定素材/反应池成员），深色墙面上保轮廓可辨。
-        view.silhouetteHaloEnabled = (asset == "dog-11")
-        if !framesRunning { view.pause() }
         let size: CGFloat = 40
         var x = actor.frame.midX - size / 2
             + CGFloat.random(in: -6...6)
@@ -794,6 +823,13 @@ final class MiniBarPetStage: UIView {
         var y = actor.frame.minY - size - 6
         if y < 4 { y = actor.frame.maxY + 6 }
         view.frame = CGRect(x: x, y: y, width: size, height: size)
+        // 轮廓柔光（3.7 (28)）：反应贴纸若是 dog-11（亲亲回话
+        // 指定素材/反应池成员），深色墙面上保轮廓可辨。
+        // (29) 起 halo 与 frame 都先于 setSticker 就位，使
+        // sticker.apply 留痕记到的是生效值。
+        view.silhouetteHaloEnabled = (asset == "dog-11")
+        view.setSticker(asset, mode: .loop)
+        if !framesRunning { view.pause() }
         view.isUserInteractionEnabled = false
         addSubview(view)
         reactionViews[key] = view
@@ -831,9 +867,10 @@ final class MiniBarPetStage: UIView {
         panel.layer.shadowRadius = 10
         panel.layer.shadowOffset = CGSize(width: 0, height: 3)
         let sticker = StickerView()
+        sticker.crumbScene = "minibar-dialog"
+        sticker.frame = CGRect(x: 10, y: 10, width: 64, height: 64)
         sticker.setSticker(actor.asset, mode: .loop)
         if !framesRunning { sticker.pause() }
-        sticker.frame = CGRect(x: 10, y: 10, width: 64, height: 64)
         panel.addSubview(sticker)
         let label = UILabel()
         label.font = .systemFont(ofSize: 13)
@@ -1170,6 +1207,7 @@ final class MiniBarPetStage: UIView {
         link.add(to: .main, forMode: .common)
         displayLink = link
         lastTimestamp = 0
+        Breadcrumbs.log("pet.link.start")
     }
 
     private func stopLink() {
@@ -1185,8 +1223,18 @@ final class MiniBarPetStage: UIView {
         lastTimestamp = now
         clockTime += dt
 
+        // 心跳（3.7 (29)）：1 秒节流，开关关时也照记——宠物
+        // 全灭时凭这一行与 pet.settings.read 即可分清断点在
+        // 开关、链未跑还是班底没生成。
+        if now - lastHeartbeatAt >= 1 {
+            lastHeartbeatAt = now
+            Breadcrumbs.log("pet.tick.heartbeat petsActive=\(petsActive)"
+                + " collapsed=\(collapsed) cast=\(allActors.count)"
+                + " bounds=\(Int(bounds.width))x\(Int(bounds.height))")
+        }
+
         // 开关统管：关 → 整层停（清空班底）；开 → 恢复在场。
-        if !StickerSettings.companionEnabled {
+        if !StickerSettings.miniPetsEnabled {
             if petsActive {
                 cancelFlow()
                 clearCast()
@@ -1277,6 +1325,8 @@ final class MiniBarPetStage: UIView {
                 if let asset = pickAssets(
                     count: 1, excluding: Set(allActors.map { $0.asset })).first {
                     spawnGuest(asset: asset, animated: true)
+                    Breadcrumbs.log("pet.cast.generate kind=rotate"
+                        + " assets=\(allActors.map { $0.asset }.joined(separator: ","))")
                 }
             }
         }

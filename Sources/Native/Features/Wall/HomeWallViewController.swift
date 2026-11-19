@@ -956,6 +956,11 @@ final class HomeWallViewController: UIViewController,
         miniThemeLayer?.setBarVisible(visible)
         guard visible != miniBarPresented else { return }
         miniBarPresented = visible
+        // 显隐边沿留痕（3.7 (29)）：guard 已保证 visible 与旧值
+        // 相反，old 即 !visible；附当时宠物开关值便于对账。
+        Breadcrumbs.log("minibar.visibility.edge requested=\(visible)"
+            + " old=\(!visible) new=\(visible)"
+            + " miniPets=\(StickerSettings.miniPetsEnabled)")
         miniPetStage?.barPresentationChanged(visible)
         if visible {
             // 形态复位（3.7 (21)）：收起态不跨显隐周期残留——
@@ -1266,12 +1271,14 @@ extension HomeWallViewController {
         }
         if stickerFailureView == nil {
             let failure = StickerView()
+            failure.crumbScene = "home-offline"
             failure.isHidden = true
             view.addSubview(failure)
             stickerFailureView = failure
         }
         if stickerBufferView == nil {
             let buffer = StickerView()
+            buffer.crumbScene = "home-buffer"
             buffer.isHidden = true
             view.addSubview(buffer)
             stickerBufferView = buffer
@@ -1305,6 +1312,7 @@ extension HomeWallViewController {
             runner = existing
         } else {
             runner = StickerView()
+            runner.crumbScene = "home-runner"
             dock.addSubview(runner)
             stickerRunnerView = runner
         }

@@ -273,6 +273,7 @@ final class SettingsViewController: UIViewController {
         stickerHeadRow.isLayoutMarginsRelativeArrangement = true
         stickerHeadRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         let catSticker = StickerView()
+        catSticker.crumbScene = "settings-cat"
         catSticker.translatesAutoresizingMaskIntoConstraints = false
         catSticker.setSticker("cat-01", mode: .loop)
         catSticker.addGestureRecognizer(
@@ -304,6 +305,7 @@ final class SettingsViewController: UIViewController {
         dogTile.backgroundColor = .clear
         dogTile.translatesAutoresizingMaskIntoConstraints = false
         let dogSticker = StickerView()
+        dogSticker.crumbScene = "settings-dog"
         dogSticker.translatesAutoresizingMaskIntoConstraints = false
         dogSticker.setSticker("dog-17", mode: .loop)
         dogTile.addSubview(dogSticker)
@@ -332,7 +334,7 @@ final class SettingsViewController: UIViewController {
         companionTitle.textColor = FoliaUI.primary
         companionSwitch.onTintColor = FoliaUI.accent
         companionSwitch.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-        companionSwitch.isOn = StickerSettings.companionEnabled
+        companionSwitch.isOn = StickerSettings.miniPetsEnabled
         companionSwitch.addTarget(self, action: #selector(companionSwitchChanged), for: .valueChanged)
         companionRow.addArrangedSubview(companionTitle)
         companionRow.addArrangedSubview(UIView())
@@ -390,6 +392,7 @@ final class SettingsViewController: UIViewController {
         checkTile.isHidden = true
         checkTile.translatesAutoresizingMaskIntoConstraints = false
         let checkDog = StickerView()
+        checkDog.crumbScene = "settings-check"
         checkDog.translatesAutoresizingMaskIntoConstraints = false
         checkTile.addSubview(checkDog)
         checkWrap.addSubview(checkTile)
@@ -530,9 +533,10 @@ final class SettingsViewController: UIViewController {
         }
     }
 
-    // 贴纸层（3.7 (24) 立、(27) 改管迷你台宠物）：宠物开关与门面猫点按换装。
+    // 贴纸层（3.7 (24) 立、(27) 改管迷你台宠物、(29) 开关改绑
+    // 宠物专用新键 miniPetsEnabled，不再读写旧 companionEnabled）。
     @objc private func companionSwitchChanged() {
-        StickerSettings.companionEnabled = companionSwitch.isOn
+        StickerSettings.miniPetsEnabled = companionSwitch.isOn
     }
 
     @objc private func settingsCatTapped() {

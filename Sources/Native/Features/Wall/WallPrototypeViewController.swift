@@ -848,6 +848,11 @@ final class WallPrototypeViewController: UIViewController,
         miniThemeLayer?.setBarVisible(visible)
         guard visible != miniBarPresented else { return }
         miniBarPresented = visible
+        // 显隐边沿留痕（3.7 (29)）：guard 已保证 visible 与旧值
+        // 相反，old 即 !visible；附当时宠物开关值便于对账。
+        Breadcrumbs.log("minibar.visibility.edge requested=\(visible)"
+            + " old=\(!visible) new=\(visible)"
+            + " miniPets=\(StickerSettings.miniPetsEnabled)")
         miniPetStage?.barPresentationChanged(visible)
         if visible {
             // 形态复位（3.7 (21)）：收起态不跨显隐周期残留——
@@ -2530,6 +2535,7 @@ final class WallPosterCell: UICollectionViewCell {
             shadowView.addSubview(sticker)
             failureSticker = sticker
         }
+        sticker.crumbScene = "card-failure"
         sticker.setSticker(asset, mode: .once(holdLast: true))
         sticker.isHidden = false
         setNeedsLayout()
@@ -2552,6 +2558,7 @@ final class WallPosterCell: UICollectionViewCell {
         // 轮廓柔光（3.7 (28)）：dog-11 线条型浅色主体，深色
         // 封面上靠一圈极淡亮边保轮廓可辨。
         sticker.silhouetteHaloEnabled = true
+        sticker.crumbScene = "card-like"
         sticker.setSticker("dog-11", mode: .loops(2))
         sticker.onFinished = { [weak sticker] in
             UIView.animate(withDuration: 0.3) {
@@ -2580,6 +2587,7 @@ final class WallPosterCell: UICollectionViewCell {
         sticker.alpha = 1
         sticker.isHidden = false
         sticker.silhouetteHaloEnabled = false
+        sticker.crumbScene = "card-like"
         sticker.setSticker("cat-04", mode: .once(holdLast: true))
         sticker.onFinished = { [weak sticker] in
             UIView.animate(withDuration: 0.3, delay: 1.1, options: []) {
@@ -2611,6 +2619,7 @@ final class WallPosterCell: UICollectionViewCell {
         }
         sticker.alpha = 1
         sticker.isHidden = false
+        sticker.crumbScene = "card-skip"
         sticker.setSticker(Self.nextFailureStickerAsset(), mode: .once(holdLast: true))
         setNeedsLayout()
         skipFlashWork?.cancel()
@@ -2835,18 +2844,21 @@ extension WallPrototypeViewController {
     private func stickerEnsureViews() {
         if stickerFailureView == nil {
             let failure = StickerView()
+            failure.crumbScene = "wall-offline"
             failure.isHidden = true
             view.addSubview(failure)
             stickerFailureView = failure
         }
         if stickerEmptyView == nil {
             let empty = StickerView()
+            empty.crumbScene = "wall-playlist-empty"
             empty.isHidden = true
             view.addSubview(empty)
             stickerEmptyView = empty
         }
         if stickerBufferView == nil {
             let buffer = StickerView()
+            buffer.crumbScene = "wall-buffer"
             buffer.isHidden = true
             view.addSubview(buffer)
             stickerBufferView = buffer
