@@ -82,8 +82,9 @@ final class HomeWallViewController: UIViewController,
     private var miniTrackBottomConstraint: NSLayoutConstraint?
     /// 迷你台收起态（3.7 (21)：5 秒无操作自动收成进度条）：
     /// 与 miniBarPresented 分工——后者管在不在场，本标志管
-    /// 完整/细条形态。收起时主题层与进度轨道保留（主题底色
-    /// 不丢、填充照常步进），内容淡出且按钮禁交互。
+    /// 完整/细条形态。收起形态 (22) 定版：背景全去（主题层/
+    /// 毛玻璃/玻璃高光隐藏），只剩轨道+填充+发光圆点步进，
+    /// 内容淡出且按钮禁交互。
     private var miniBarCollapsed = false
     private var miniIdleWorkItem: DispatchWorkItem?
     /// 上次 refreshMiniBar 同步的曲目 id：识别切歌（切歌先
@@ -97,6 +98,11 @@ final class HomeWallViewController: UIViewController,
     private var miniThemeLayer: MiniPlayerThemeLayer?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
+    /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
+    /// 存引用，供收起态去背景时与主题层/毛玻璃一并隐藏
+    /// （3.7 (22)，见 setMiniBarForm）。
+    private var miniRimLight: UIView?
+    private var miniGlassTint: UIView?
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -497,12 +503,14 @@ final class HomeWallViewController: UIViewController,
         rimLight.isUserInteractionEnabled = false
         rimLight.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(rimLight)
+        miniRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         glassTint.layer.cornerRadius = 35
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
+        miniGlassTint = glassTint
         NSLayoutConstraint.activate([
             rimLight.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 30),
             rimLight.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -30),
@@ -691,14 +699,33 @@ final class HomeWallViewController: UIViewController,
     }
 
     /// 主题应用（13.5）：主题层换装 + 圆点皮肤 + 填充色，只
-    /// 动视觉，不碰播放/进度/手势分发。
+    /// 动视觉，不碰播放/进度/手势分发。皮肤/填充/圆点的最终
+    /// 落色经 refreshMiniProgressChrome 按当前形态收口——
+    /// 收起态（(22) 去背景）走对比度兜底口径。
     private func applyMiniTheme() {
         miniThemeLayer?.apply(theme: miniTheme)
+        refreshMiniProgressChrome()
+    }
+
+    /// 进度填充与圆点配色的形态收口（3.7 (22)，DS R48）：
+    /// 展开态 = 主题口径（皮肤 + 主题填充色）；收起态背景已
+    /// 移除，皮肤摘掉、圆点恢复白色发光、填充改强色兜底，
+    /// 免得浅色填充与皮肤贴图在无背景的墙面上糊掉。主题
+    /// 变更（包括收起态下经设置页变更）与形态切换都经此
+    /// 重算；进度本身仍由 setMiniProgress 唯一驱动，切歌
+    /// 经 refreshMiniBar 先展开、再收起时按新曲续步进。
+    private func refreshMiniProgressChrome() {
+        miniKnobSkin?.removeFromSuperview()
+        miniKnobSkin = nil
+        if miniBarCollapsed {
+            miniProgressKnob.backgroundColor = .white
+            miniProgressKnob.layer.shadowOpacity = 0.9
+            miniProgressFill.backgroundColor = Self.miniCollapsedFillColor(for: miniTheme)
+            return
+        }
         // 圆点皮肤：13pt 贴图居中压在既有 9pt knob 框上（knob
         // 不裁剪、贴图溢出显示，中心仍与轨道头位对齐，原
         // leading 公式 -4.5 不变）。
-        miniKnobSkin?.removeFromSuperview()
-        miniKnobSkin = nil
         if let skin = MiniPlayerThemeLayer.knobSkinView(for: miniTheme) {
             skin.translatesAutoresizingMaskIntoConstraints = false
             miniProgressKnob.addSubview(skin)
@@ -714,6 +741,15 @@ final class HomeWallViewController: UIViewController,
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
         miniProgressFill.backgroundColor = Self.miniFillColor(for: miniTheme)
+    }
+
+    /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
+    /// 背景时易糊），其余沿用展开态主题填充色。
+    private static func miniCollapsedFillColor(for theme: MiniPlayerTheme) -> UIColor {
+        switch theme {
+        case .star: return UIColor(red: 1, green: 0.80, blue: 0.28, alpha: 1)
+        default: return miniFillColor(for: theme)
+        }
     }
 
     private static func miniFillColor(for theme: MiniPlayerTheme) -> UIColor {
@@ -956,10 +992,11 @@ final class HomeWallViewController: UIViewController,
     }
 
     /// 收成细进度条：同位置同宽，高度 70→16、轨道居中，封面/
-    /// 标题/歌手/按键/圆钮淡出且按键禁交互；主题层与毛玻璃
-    /// 保留（主题底色不丢），轨道填充继续由 setMiniProgress
-    /// 按进度步进。系统弹簧 0.5s；Reduce Motion 降级为仅
-    /// alpha 淡化、几何瞬时切换。
+    /// 标题/歌手/按键淡出且按键禁交互；背景全去（3.7 (22)：
+    /// 主题层/毛玻璃/玻璃高光隐藏），只保留轨道（极淡底轨）
+    /// + 填充 + 发光圆点，由 setMiniProgress 继续步进。系统
+    /// 弹簧 0.5s；Reduce Motion 降级为仅 alpha 淡化、几何
+    /// 瞬时切换。
     private func collapseMiniBarIdle() {
         guard miniBarPresented, !miniBarCollapsed, !miniSeekDragging,
               let bar = miniBar else { return }
@@ -1019,11 +1056,23 @@ final class HomeWallViewController: UIViewController,
         // 全部形态切换（收起/展开/边沿复位）都经此收口，开关
         // 与形态严格同步。
         (miniBar as? MiniBarHitView)?.hitExpansionY = collapsed ? 14 : 0
+        // 收起态去背景（3.7 (22)，Miller 定版 + DS R48）：主题
+        // 层、毛玻璃、玻璃高光/罩全部隐藏，只保留轨道（白
+        // 0.25 极淡底轨，属进度条本体）+ 填充 + 发光圆点；
+        // 展开态全部恢复。填充/圆点配色同步经形态收口重算
+        // （对比度兜底）。
+        miniThemeLayer?.isHidden = collapsed
+        miniBlurView?.isHidden = collapsed
+        miniRimLight?.isHidden = collapsed
+        miniGlassTint?.isHidden = collapsed
+        refreshMiniProgressChrome()
     }
 
     private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
+        // 圆点不在淡出名单（3.7 (22)）：收起态保留发光圆点
+        // 随进度步进，淡出的只有封面/标题/歌手/按键。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniProgressKnob]
+                                miniPrevButton, miniNextButton]
         for view in views {
             view?.alpha = alpha
         }

@@ -426,13 +426,14 @@ final class LyricWindowView: UIView {
 /// （落点未定）期间暂停漂移重锚，防乐观锚点引发的行判定抖动，
 /// seek 完成回调落定后下一帧按真值自动重锚。
 ///
-/// (19) 输出延迟补偿：本 driver 下发的是「呈现 now」。听觉
-/// 时刻 = 媒体时刻 − 输出延迟（声音经输出通道到达耳朵比 item
-/// 时间线晚 AVAudioSession.outputLatency：外放 ≈0、蓝牙
-/// 100–300ms）。补偿只在呈现出口减这一次：引擎时间线与漂移
-/// 检查全程用未补偿的媒体时刻，不污染锚源，也不与 Web 链的
-/// offset 校准钮叠加（那边是另一条呈现链）。路由变化通知 +
-/// 每次重锚时刷新缓存值。
+/// (19) 输出延迟补偿（已撤销）：曾在呈现出口减
+/// AVAudioSession.outputLatency。(22) 定案撤销（audit-3722 +
+/// DS R48 首选 A）：真机实测该扣减本会话 ≈0.149（(19)/(20)
+/// 会话仅 ≈0.008–0.010），使扫光恒慢 149ms；且扣减位于漂移
+/// 检查/settle 的下游，任何在位机制看不见、纠不了。Web cue
+/// 链从不做此扣减而被确认对得上——呈现钟改与媒体时刻同尺，
+/// outputLatency 只保留读数埋点（outLat=/route= 与 refresh
+/// 面包屑），续查 0.149 的锁存来源，不再影响时钟。
 ///
 /// (21) 职责收窄：翻行改由 LyricBoundaryFlipDriver 的 boundary
 /// 事件驱动，本 driver 只驱动扫光/进度呈现；settle 重锚严格
@@ -448,22 +449,39 @@ final class LyricClockDriver {
     /// 采锚时的播放态：外推只在锚为播放态时走单调时钟；与引擎
     /// 当前播放态不一致（暂停/恢复翻转）即重锚，不靠漂移阈值兜底。
     private var anchorWasPlaying = false
-    /// 输出延迟缓存（秒）：呈现 now 统一减它；外放时 ≈0 属预期。
+    /// 输出延迟缓存（秒）：(22) 起只作埋点记录、不再参与
+    /// 时钟计算（见类注释的定案）；刷新点不变（start/路由
+    /// 变化/重锚），每次刷新落面包屑供续查读数来源。
     private var outputLatency: Double = AVAudioSession.sharedInstance().outputLatency
     private var routeObserver: NSObjectProtocol?
-    /// 稳态重锚时刻（3.7 (20)）：播放态锚定后 +0.35s 触发一次
-    /// 无条件重锚（见 reanchor(armSettle:) 的定案注释）。
+    /// 稳态重锚时刻（3.7 (20)）：播放态锚定后 +settleWindow
+    /// 触发一次无条件重锚（见 reanchor(armSettle:) 的定案注释）。
     private var settleReanchorAt: CFTimeInterval?
+    /// settle 窗口时长与窗口内漂移重锚的重新武装上限（3.7
+    /// (22)，DS R48）：窗口内重锚重置窗口重新武装、不再一
+    /// 发即哑；超限才永久解除武装，防瞬态抖动下无限重锚。
+    private static let settleWindow: CFTimeInterval = 0.35
+    private static let settleRearmLimit = 3
+    /// 本次武装周期内已重新武装次数（armSettle 重锚时清零）。
+    private var settleRearmCount = 0
+
+    /// 埋点原始读数（3.7 (22)）：outputLatency 原始值与当前
+    /// 输出路由端口名，供 VC 的 lrc line 面包屑同帧对账；
+    /// 两者都只记录、不参与任何时钟计算。
+    var rawOutputLatency: Double { outputLatency }
+    var currentRouteName: String {
+        AVAudioSession.sharedInstance().currentRoute.outputs.first?.portType.rawValue ?? "none"
+    }
 
     func start() {
         guard displayLink == nil else { return }
-        refreshOutputLatency()
+        refreshOutputLatency(reason: "start")
         if routeObserver == nil {
             routeObserver = NotificationCenter.default.addObserver(
                 forName: AVAudioSession.routeChangeNotification,
                 object: AVAudioSession.sharedInstance(),
                 queue: .main) { [weak self] _ in
-                self?.refreshOutputLatency()
+                self?.refreshOutputLatency(reason: "route")
             }
         }
         reanchor(armSettle: true)
@@ -476,7 +494,10 @@ final class LyricClockDriver {
     func stop() {
         displayLink?.invalidate()
         displayLink = nil
-        settleReanchorAt = nil
+        if settleReanchorAt != nil {
+            settleReanchorAt = nil
+            Breadcrumbs.log("lrc clock settle disarm reason=stop")
+        }
         if let routeObserver {
             NotificationCenter.default.removeObserver(routeObserver)
             self.routeObserver = nil
@@ -485,8 +506,13 @@ final class LyricClockDriver {
 
     deinit { stop() }
 
-    private func refreshOutputLatency() {
+    /// 刷新 outputLatency 读数（3.7 (22)）：值只记录、不再
+    /// 影响时钟；每次刷新落面包屑（触发原因 + 旧值→新值），
+    /// 供续查异常读数（如 0.149）是在哪个时机锁存的。
+    private func refreshOutputLatency(reason: String) {
+        let old = outputLatency
         outputLatency = AVAudioSession.sharedInstance().outputLatency
+        Breadcrumbs.log("lrc clock outlat refresh reason=\(reason) \(String(format: "%.3f", old))->\(String(format: "%.3f", outputLatency))")
     }
 
     /// 重锚：锚对 = (rawPlayhead 真值, 单调时钟)。
@@ -504,12 +530,14 @@ final class LyricClockDriver {
     /// 行进中真值、不 arm，避免链式重锚。
     private func reanchor(armSettle: Bool = false) {
         let engine = PlaybackEngine.shared
-        refreshOutputLatency()
+        refreshOutputLatency(reason: "reanchor")
         anchorTime = engine.rawPlayhead()
         anchorWall = CACurrentMediaTime()
         anchorTrackId = engine.currentTrack?.id
         anchorWasPlaying = engine.isPlaying
-        settleReanchorAt = (armSettle && anchorWasPlaying) ? anchorWall + 0.35 : nil
+        settleReanchorAt = (armSettle && anchorWasPlaying)
+            ? anchorWall + Self.settleWindow : nil
+        if armSettle { settleRearmCount = 0 }
     }
 
     /// 锚的媒体时刻（未补偿）：播放态按单调时钟外推、暂停态
@@ -525,10 +553,11 @@ final class LyricClockDriver {
             : anchorTime
     }
 
-    /// 当前呈现时刻 = 媒体时刻 − 输出延迟（行判定与扫光共用，
-    /// 全程只在此处与 stepFrame 出口减一次）。
+    /// 当前呈现时刻（3.7 (22) 定案）：与媒体时刻同尺，不再
+    /// 扣 outputLatency（见类注释）——扫光与 Web cue 链同
+    /// 口径。outputLatency 读数只经 rawOutputLatency 落埋点。
     func interpolatedNow() -> Double {
-        mediaNow() - outputLatency
+        mediaNow()
     }
 
     fileprivate func stepFrame() {
@@ -536,13 +565,28 @@ final class LyricClockDriver {
         // 无曲/零时长时也要补发一帧：VC 的 hide 守卫靠 onTick 驱动，
         // 不补发则旧歌词会冻在 overlay 上无法收起。
         guard let track = engine.currentTrack, engine.duration > 0 else {
-            onTick?(engine.rawPlayhead() - outputLatency)
+            onTick?(engine.rawPlayhead())
             return
         }
-        if track.id != anchorTrackId { reanchor(armSettle: true) }
+        if track.id != anchorTrackId {
+            let settleWasArmed = settleReanchorAt != nil
+            reanchor(armSettle: true)
+            // 解除武装必落面包屑（3.7 (22)，DS R48）：切歌重锚
+            // 若没能重新武装（如新曲锚为暂停态），把解除记下来，
+            // 不再像 (21) 前那样静默覆写 nil 无从对账。
+            if settleWasArmed, settleReanchorAt == nil {
+                Breadcrumbs.log("lrc clock settle disarm reason=track-change")
+            }
+        }
         // 播放/暂停翻转：立即以真实 playhead 重锚（暂停冻结在
         // 真位置、恢复从真位置起跑），不留整段暂停时长的外推误差。
-        if engine.isPlaying != anchorWasPlaying { reanchor(armSettle: true) }
+        if engine.isPlaying != anchorWasPlaying {
+            let settleWasArmed = settleReanchorAt != nil
+            reanchor(armSettle: true)
+            if settleWasArmed, settleReanchorAt == nil {
+                Breadcrumbs.log("lrc clock settle disarm reason=playflip")
+            }
+        }
         // 稳态重锚（3.7 (20) 定案、(21) 隔离保留）：瞬态锚
         // +0.35s 落定后无条件对齐一次真值，纠正量落面包屑；
         // 已暂停/已切歌则直接作废。只作用本呈现时钟（扫光），
@@ -552,10 +596,17 @@ final class LyricClockDriver {
         // 解释（audit-3721 B2）——三者同帧一读，差在哪一侧可
         // 对账。开关关闭时 settle 整体停用（A/B 对照）。
         if !LyricTiming.settleReanchorEnabled {
-            settleReanchorAt = nil
-        } else if let settleAt = settleReanchorAt {
-            if !engine.isPlaying || track.id != anchorTrackId {
+            if settleReanchorAt != nil {
                 settleReanchorAt = nil
+                Breadcrumbs.log("lrc clock settle disarm reason=disabled")
+            }
+        } else if let settleAt = settleReanchorAt {
+            if !engine.isPlaying {
+                settleReanchorAt = nil
+                Breadcrumbs.log("lrc clock settle disarm reason=paused")
+            } else if track.id != anchorTrackId {
+                settleReanchorAt = nil
+                Breadcrumbs.log("lrc clock settle disarm reason=track-changed")
             } else if CACurrentMediaTime() >= settleAt {
                 settleReanchorAt = nil
                 let extrapolated = mediaNow()
@@ -569,15 +620,37 @@ final class LyricClockDriver {
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
         // seek 在途时落点由 seek 完成回调回正，期间不重锚。
-        // 漂移检查比的是媒体时刻同口径，不含输出延迟补偿。
-        if !engine.isSeekPending,
-           abs(engine.rawPlayhead() - predicted) > LyricTiming.reanchorThreshold {
-            reanchor()
+        // 漂移检查比的是媒体时刻同口径（(22) 起呈现出口同尺，
+        // 不再有扣减项混在两边）。
+        if !engine.isSeekPending {
+            let drift = engine.rawPlayhead() - predicted
+            if abs(drift) > LyricTiming.reanchorThreshold {
+                let settleWasArmed = settleReanchorAt != nil
+                reanchor()
+                Breadcrumbs.log("lrc clock reanchor reason=drift drift=\(String(format: "%.3f", drift))")
+                // settle 重新武装（3.7 (22)，DS R48）：(21) 前
+                // 任一漂移重锚都覆写 settleReanchorAt=nil——起播
+                // 窗口内一次重锚即永久解除武装且无面包屑（一发
+                // 即哑，audit-3722 §7）。改：武装中的漂移重锚
+                // 只重置窗口、重新计时；超重新武装上限才永久
+                // 解除并落面包屑。窗口外（未武装）重锚维持原
+                // 语义，不凭空武装。
+                if settleWasArmed, LyricTiming.settleReanchorEnabled,
+                   engine.isPlaying {
+                    if settleRearmCount < Self.settleRearmLimit {
+                        settleRearmCount += 1
+                        settleReanchorAt = anchorWall + Self.settleWindow
+                        Breadcrumbs.log("lrc clock settle rearm n=\(settleRearmCount) reason=drift")
+                    } else {
+                        Breadcrumbs.log("lrc clock settle disarm reason=drift-cap n=\(settleRearmCount)")
+                    }
+                }
+            }
         }
         let now = anchorWasPlaying
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
-        onTick?(now - outputLatency)
+        onTick?(now)
     }
 
     /// CADisplayLink 强持有 target：弱代理断环，driver 释放后

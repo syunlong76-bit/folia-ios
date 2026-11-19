@@ -34,6 +34,15 @@ enum EntryIntroDataState {
 ///   白色 ×，34pt），入场开始即显示可点；点它立即结束入场进墙——
 ///   墙数据未就绪时墙自呈既有加载态，不黑屏、不堵在入场面。
 /// - 画面点按不再跳过（12:07 定）：只认关闭按钮与自动退出，避免误触。
+/// - 尾段叠化（3.7 (22)，Miller 定版 + DS R48 编排）：自然
+///   播完路径下，视频最后 1.0s 先做 alpha 叠化作预退场——
+///   门控为「数据状态已就绪」（仍在加载不起叠化、播完按既有
+///   口径循环，下一轮再判；失败路径不走叠化）；视频保持全屏
+///   只降 alpha，其下海报垫透出，旋转回正仍由退场段在海报
+///   遮盖下完成（叠化期间不旋转、不露错向/黑边）；叠化完成
+///   后续接现行 ≤0.6s 退场编排的剩余部分（视频淡出段已由
+///   叠化承担，合并去重，不重新引入海报独占）。点关闭保持
+///   现行快速退场、不走叠化。
 /// - 海报垫底 + 退场衔接（3.7 (20) 立项、(21) 并行化修正）：
 ///   入场 VC 之下、墙之上垫一层油画海报帧（母带 2.0s 帧，
 ///   Resources/EntryVideo/entry-poster.jpg）。(20) 的退场是全
@@ -165,6 +174,12 @@ final class EntryIntroViewController: UIViewController {
     private var isDismissing = false
     /// 已循环播次计数（面包屑对账用，首轮为 0）。
     private var loopCount = 0
+    /// 尾段叠化已起跑（3.7 (22)）：自然播完路径最后 1.0s 的
+    /// 预退场状态；起跑后 dismissIntro 的视频淡出段按已叠化
+    /// 合并去重。循环重播前必须复位并恢复画面不透明。
+    private var dissolveBegan = false
+    /// 叠化门控的周期观察者（0.1s）：查剩余时长与数据状态。
+    private var timeObserver: Any?
 
     private let playerView = PlayerLayerView()
     private let closeButton = UIButton(type: .custom)
@@ -251,8 +266,39 @@ final class EntryIntroViewController: UIViewController {
             forName: Notification.Name.AVPlayerItemFailedToPlayToEndTime, object: item, queue: .main
         ) { [weak self] _ in self?.dismissIntro(reason: "failed", animated: false) }
 
+        // 尾段叠化门控（3.7 (22)）：0.1s 周期查剩余时长，进
+        // 入最后 1.0s 且数据已就绪才起叠化（见 checkDissolveGate）。
+        timeObserver = player.addPeriodicTimeObserver(
+            forInterval: CMTime(seconds: 0.1, preferredTimescale: 600),
+            queue: .main
+        ) { [weak self] _ in self?.checkDissolveGate() }
+
         scheduleWatchdog()
         player.play()
+    }
+
+    /// 尾段叠化门控（3.7 (22)，Miller 定版 + DS R48）：只在
+    /// 「自然播完将退出且主页墙数据已就绪」时起跑——剩余
+    /// ≤1.0s 时查数据状态：.ready 才起叠化；.loading 不起
+    /// （播完按既有口径循环掩盖，下一轮尾段再判）；.failed
+    /// 不起（退场落墙失败态，保持现行路径）。起跑后视频保
+    /// 持全屏只降 alpha（播放层淡出、海报垫透出），界面底
+    /// 色转清防黑底挡海报；旋转回正不在叠化中发生，仍由
+    /// 退场段在海报遮盖下完成，叠化期间不露错向/黑边。
+    private func checkDissolveGate() {
+        guard !isDismissing, !dissolveBegan, let player,
+              let duration = player.currentItem?.duration.seconds,
+              duration.isFinite, duration > 1.5 else { return }
+        let remaining = duration - player.currentTime().seconds
+        guard remaining > 0.05, remaining <= 1.0 else { return }
+        guard EntryIntroPresenter.currentDataState == .ready else { return }
+        dissolveBegan = true
+        Breadcrumbs.log("entry dissolve begin")
+        view.backgroundColor = .clear
+        UIView.animate(withDuration: remaining, delay: 0,
+                       options: [.curveEaseInOut], animations: {
+            self.playerView.alpha = 0
+        })
     }
 
     /// 看门狗：单轮时长 + 2.5s 兜底放行（时长未知时按 12.5s）；
@@ -279,6 +325,14 @@ final class EntryIntroViewController: UIViewController {
         case .failed:
             dismissIntro(reason: "data-failed", animated: true)
         case .loading:
+            // 叠化已起跑但状态翻回加载（门控后数据状态变化）：
+            // 先恢复画面不透明再循环，不许透着海报重播。
+            if dissolveBegan {
+                dissolveBegan = false
+                playerView.layer.removeAllAnimations()
+                playerView.alpha = 1
+                view.backgroundColor = .black
+            }
             loopCount += 1
             Breadcrumbs.log("entry loop round=\(loopCount)")
             scheduleWatchdog()
@@ -343,8 +397,12 @@ final class EntryIntroViewController: UIViewController {
         // ③视频层淡出 0.4s（关闭 0.3s），completion 只做拆
         // 播放器与 dismiss，不再承载任何视觉段。
         // 点关闭的按钮淡出并入主段并行（(20) 是串行前置 0.15s）。
+        // 尾段叠化合并（3.7 (22)）：自然播完且叠化已起跑时，
+        // 视频层已在最后 1.0s 淡尽，本段整面淡出只剩关闭按钮
+        // 要清，时长压到 0.15——与海报交叉淡出（错峰 0.15 起
+        // 跑 + 0.4）合计仍 ≤0.6s，不重新引入海报独占停留。
         let fast = reason == "closed"
-        let fadeDuration = fast ? 0.3 : 0.4
+        let fadeDuration = fast ? 0.3 : (dissolveBegan ? 0.15 : 0.4)
         rotateBack()
         if fast {
             UIView.animate(withDuration: 0.15, delay: 0, options: [.curveEaseOut], animations: {
@@ -391,6 +449,10 @@ final class EntryIntroViewController: UIViewController {
     }
 
     private func teardownPlayer() {
+        if let timeObserver, let player {
+            player.removeTimeObserver(timeObserver)
+        }
+        timeObserver = nil
         player?.pause()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let failObserver { NotificationCenter.default.removeObserver(failObserver) }
