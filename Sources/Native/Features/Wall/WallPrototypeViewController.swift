@@ -70,6 +70,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 歌词窗口已移交 lyricClockDriver 逐帧推进（包一 P2/P3）。
     private let progressDriver = StageProgressDriver()
     private let lyricClockDriver = LyricClockDriver()
+    /// 翻行事件锚定（3.7 (21)）：行界注册到引擎 active 轨的
+    /// boundary observer，翻行只认事件；lyricClockDriver 退为
+    /// 只驱动扫光/进度。注册失败降级时（driver.isDegraded）本
+    /// VC 回落时钟逐帧比对（(20) 口径）。
+    private let lyricFlipDriver = LyricBoundaryFlipDriver()
     private var lyricOverlay: LyricWindowView?
     private var lyricSessionTrackId: String?
     private var firstAudioTrackId: String?
@@ -131,6 +136,21 @@ final class WallPrototypeViewController: UIViewController,
     /// 迷你台逻辑显隐（3.7 (20)）：动画边沿的唯一事实源，与
     /// isHidden（视觉落定态）分工，防进/退动画互相打架。
     private var miniBarPresented = false
+    /// 迷你台尺寸约束（3.7 (21)）：宽度按竖屏定版居中（横屏
+    /// 不拉伸，viewDidLayoutSubviews 按 min(宽,高) 更新）、
+    /// 高度在完整/收起两形态间切换。
+    private var miniBarWidthConstraint: NSLayoutConstraint?
+    private var miniBarHeightConstraint: NSLayoutConstraint?
+    private var miniTrackBottomConstraint: NSLayoutConstraint?
+    /// 迷你台收起态（3.7 (21)：5 秒无操作自动收成进度条）：
+    /// 与 miniBarPresented 分工——后者管在不在场，本标志管
+    /// 完整/细条形态。收起时主题层与进度轨道保留（主题底色
+    /// 不丢、填充照常步进），内容淡出且按钮禁交互。
+    private var miniBarCollapsed = false
+    private var miniIdleWorkItem: DispatchWorkItem?
+    /// 上次 refreshMiniBar 同步的曲目 id：识别切歌（切歌先
+    /// 完整形态再起计时）。
+    private var miniLastTrackId: String?
     private var miniCover: UIImageView!
     private var miniTitle: UILabel!
     private var miniArtist: UILabel!
@@ -462,15 +482,23 @@ final class WallPrototypeViewController: UIViewController,
         let seekPan = UIPanGestureRecognizer(target: self, action: #selector(miniSeekPanned(_:)))
         seekHit.addGestureRecognizer(seekPan)
 
+        // 宽度按竖屏定版（3.7 (21)）：居中 + 宽度约束存引用，
+        // viewDidLayoutSubviews 按 min(宽,高)−24 更新——横屏时
+        // 即竖屏布局宽，左右留白，不再拉伸满宽；高度存引用供
+        // 收起形态切换（70↔16）。
+        miniBarWidthConstraint = bar.widthAnchor.constraint(
+            equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
+        miniBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 70)
+        miniBarWidthConstraint?.isActive = true
+        miniBarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
-            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
+            bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
             bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
-            bar.heightAnchor.constraint(equalToConstant: 70),
 
             progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
             progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20),
-            progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7),
             progressTrack.heightAnchor.constraint(equalToConstant: 4),
             fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
@@ -517,6 +545,10 @@ final class WallPrototypeViewController: UIViewController,
         miniKnobLeading = knob.leadingAnchor.constraint(
             equalTo: progressTrack.leadingAnchor, constant: -4.5)
         miniKnobLeading?.isActive = true
+        // 轨道底距存引用（3.7 (21)）：收起形态 −7→−6 使轨道
+        // 在 16pt 细条内居中（轨道高 4：(16−4)/2=6）。
+        miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
+        miniTrackBottomConstraint?.isActive = true
         fill.transform = CGAffineTransform(scaleX: 0, y: 1)
 
         // 长按切主题（13.5）：tap 须等长按落空才触发（短点按
@@ -595,7 +627,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 分发一致，按键只管切歌播停）；切换即落盘，两台下次
     /// 打开同主题。特效总开关关着时停用（设置页一键全关）。
     @objc private func miniBarLongPressed(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, let bar = miniBar,
+        // 收起态不切主题（3.7 (21)）：细条只认点按展开。
+        guard gesture.state == .began, let bar = miniBar, !miniBarCollapsed,
               MiniPlayerTheme.effectsEnabled else { return }
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
@@ -606,17 +639,21 @@ final class WallPrototypeViewController: UIViewController,
         applyMiniTheme()
         NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
         UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        resetMiniIdleTimer()
     }
 
     @objc private func miniPlayTapped() {
+        resetMiniIdleTimer()
         PlaybackEngine.shared.togglePlayPause()
     }
 
     @objc private func miniPrevTapped() {
+        resetMiniIdleTimer()
         QueueManager.shared.playPrevious()
     }
 
     @objc private func miniNextTapped() {
+        resetMiniIdleTimer()
         QueueManager.shared.playNext(manual: true)
     }
 
@@ -626,6 +663,14 @@ final class WallPrototypeViewController: UIViewController,
     /// 2pt 相接，先判进度带会让点封面下缘变成跳进度）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
         guard let bar = miniBar else { return }
+        // 收起态点按（3.7 (21)）：只展开回完整形态并重新计时，
+        // 不走原分发（不 seek/不开台/不定位）。
+        if miniBarCollapsed {
+            expandMiniBar()
+            return
+        }
+        // 完整形态的任何点按都算操作，重置无操作计时。
+        resetMiniIdleTimer()
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
@@ -667,18 +712,23 @@ final class WallPrototypeViewController: UIViewController,
             if gesture.state == .ended || gesture.state == .cancelled
                 || gesture.state == .failed {
                 miniSeekDragging = false
+                resetMiniIdleTimer()
             }
             return
         }
         let fraction = min(max((barPoint.x - track.minX) / track.width, 0), 1)
         switch gesture.state {
         case .began:
+            // 收起态不响应拖动（3.7 (21)）：细条只认点按展开。
+            if miniBarCollapsed { return }
             if miniCover.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
+            // 拖动期间挂起无操作计时（3.7 (21)），松手后重置。
+            cancelMiniIdleTimer()
             setMiniProgress(Double(fraction))
         case .changed:
             guard miniSeekDragging else { return }
@@ -686,10 +736,12 @@ final class WallPrototypeViewController: UIViewController,
         case .ended:
             guard miniSeekDragging else { return }
             miniSeekDragging = false
+            resetMiniIdleTimer()
             guard engine.duration > 0 else { return }
             engine.seek(to: Double(fraction) * engine.duration)
         case .cancelled, .failed:
             miniSeekDragging = false
+            resetMiniIdleTimer()
         default:
             break
         }
@@ -711,6 +763,14 @@ final class WallPrototypeViewController: UIViewController,
         miniThemeLayer?.setBarVisible(visible)
         guard visible != miniBarPresented else { return }
         miniBarPresented = visible
+        if visible {
+            // 形态复位（3.7 (21)）：收起态不跨显隐周期残留——
+            // 每次出现先完整形态，再起无操作计时。
+            if miniBarCollapsed { resetMiniBarFormInstant() }
+            resetMiniIdleTimer()
+        } else {
+            cancelMiniIdleTimer()
+        }
         bar.layer.removeAllAnimations()
         if visible {
             if UIAccessibility.isReduceMotionEnabled {
@@ -755,8 +815,120 @@ final class WallPrototypeViewController: UIViewController,
                 guard let self, !self.miniBarPresented else { return }
                 bar.isHidden = true
                 bar.transform = .identity
+                // 退场落定时形态静默复位（3.7 (21)）：下次出现
+                // 必是完整形态（与出现边沿的复位双保险）。
+                self.resetMiniBarFormInstant()
             })
         }
+    }
+
+    // MARK: - 迷你台收起（3.7 (21)：5 秒无操作自动收成进度条，与主页墙同构）
+
+    /// 无操作收起延迟（Miller 17:01 定：5 秒）。
+    private static let miniIdleCollapseDelay: TimeInterval = 5
+
+    /// 重置无操作计时：在场、完整形态、非拖动中才起 5 秒倒
+    /// 计时；任何对台的操作（点按/按键/长按切主题/seek 结束/
+    /// 切歌/回墙）都经这里续命。
+    private func resetMiniIdleTimer() {
+        miniIdleWorkItem?.cancel()
+        miniIdleWorkItem = nil
+        guard miniBarPresented, !miniBarCollapsed, !miniSeekDragging else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.collapseMiniBarIdle()
+        }
+        miniIdleWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.miniIdleCollapseDelay, execute: work)
+    }
+
+    private func cancelMiniIdleTimer() {
+        miniIdleWorkItem?.cancel()
+        miniIdleWorkItem = nil
+    }
+
+    /// 收成细进度条：同位置同宽，高度 70→16、轨道居中，封面/
+    /// 标题/歌手/按键/圆钮淡出且按键禁交互；主题层与毛玻璃
+    /// 保留（主题底色不丢），轨道填充继续由 setMiniProgress
+    /// 按进度步进。系统弹簧 0.5s；Reduce Motion 降级为仅
+    /// alpha 淡化、几何瞬时切换。
+    private func collapseMiniBarIdle() {
+        guard miniBarPresented, !miniBarCollapsed, !miniSeekDragging,
+              let bar = miniBar else { return }
+        miniBarCollapsed = true
+        cancelMiniIdleTimer()
+        Breadcrumbs.log("minibar collapse idle")
+        setMiniBarContentsInteractive(false)
+        if UIAccessibility.isReduceMotionEnabled {
+            setMiniBarForm(collapsed: true)
+            UIView.animate(withDuration: 0.2) { self.setMiniBarContentsAlpha(0) }
+            return
+        }
+        UIView.animate(withDuration: 0.5, delay: 0,
+                       usingSpringWithDamping: 0.85, initialSpringVelocity: 0.1,
+                       options: [.curveEaseOut, .allowUserInteraction]) {
+            self.setMiniBarForm(collapsed: true)
+            self.setMiniBarContentsAlpha(0)
+            bar.superview?.layoutIfNeeded()
+        }
+    }
+
+    /// 恢复完整形态（点细条/切歌触发）并重新计时。
+    private func expandMiniBar() {
+        guard miniBarCollapsed, let bar = miniBar else {
+            resetMiniIdleTimer()
+            return
+        }
+        miniBarCollapsed = false
+        Breadcrumbs.log("minibar expand")
+        setMiniBarContentsInteractive(true)
+        if UIAccessibility.isReduceMotionEnabled {
+            setMiniBarForm(collapsed: false)
+            UIView.animate(withDuration: 0.2) { self.setMiniBarContentsAlpha(1) }
+        } else {
+            UIView.animate(withDuration: 0.5, delay: 0,
+                           usingSpringWithDamping: 0.85, initialSpringVelocity: 0.1,
+                           options: [.curveEaseOut, .allowUserInteraction]) {
+                self.setMiniBarForm(collapsed: false)
+                self.setMiniBarContentsAlpha(1)
+                bar.superview?.layoutIfNeeded()
+            }
+        }
+        resetMiniIdleTimer()
+    }
+
+    /// 形态几何（高度/轨道底距/圆角）：在动画块内调用即随
+    /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
+    /// 直接置位即瞬时生效。
+    private func setMiniBarForm(collapsed: Bool) {
+        miniBarHeightConstraint?.constant = collapsed ? 16 : 70
+        miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
+        let radius: CGFloat = collapsed ? 8 : 35
+        miniBar?.layer.cornerRadius = radius
+        miniBlurView?.layer.cornerRadius = radius
+    }
+
+    private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
+        let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
+                                miniPrevButton, miniNextButton, miniProgressKnob]
+        for view in views {
+            view?.alpha = alpha
+        }
+    }
+
+    private func setMiniBarContentsInteractive(_ interactive: Bool) {
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton]
+        for button in buttons {
+            button?.isUserInteractionEnabled = interactive
+        }
+    }
+
+    /// 显隐边沿的形态无动画复位：收起态不跨显隐周期残留。
+    private func resetMiniBarFormInstant() {
+        miniBarCollapsed = false
+        setMiniBarForm(collapsed: false)
+        setMiniBarContentsAlpha(1)
+        setMiniBarContentsInteractive(true)
     }
 
     /// 播放台内容同步：有当前曲才显示；封面优先引擎现图，缺了走
@@ -765,10 +937,17 @@ final class WallPrototypeViewController: UIViewController,
         guard miniBar != nil else { return }
         let engine = PlaybackEngine.shared
         guard let track = engine.currentTrack else {
+            miniLastTrackId = nil
             setMiniBarVisible(false)
             return
         }
         setMiniBarVisible(true)
+        if track.id != miniLastTrackId {
+            miniLastTrackId = track.id
+            // 切歌（3.7 (21)）：收起态先展开回完整形态，未
+            // 收起则重置无操作计时——新歌先以完整形态亮相。
+            if miniBarCollapsed { expandMiniBar() } else { resetMiniIdleTimer() }
+        }
         miniTitle.text = track.title
         miniArtist.text = track.artist
         miniPlayButton.setImage(
@@ -1042,6 +1221,10 @@ final class WallPrototypeViewController: UIViewController,
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         lyricClockDriver.stop()
+        // 翻行 observer 随墙消失解绑防泄漏（回墙后 tick 重新绑定）。
+        lyricFlipDriver.unbind()
+        // 迷你台无操作计时随墙消失取消（回墙 viewDidAppear 续命）。
+        cancelMiniIdleTimer()
         setLyricOverlayVisible(false)
         progressDriver.stop()
         miniThemeLayer?.setHostVisible(false)
@@ -1055,6 +1238,9 @@ final class WallPrototypeViewController: UIViewController,
         Breadcrumbs.log("tracks appear playlist=\(playlistId)")
         Breadcrumbs.samplerStart()
         refreshMiniBar()
+        // 迷你台无操作计时（3.7 (21)）：回墙即续命（在场且
+        // 完整形态才起，resetMiniIdleTimer 内部把关）。
+        resetMiniIdleTimer()
         UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseOut]) {
             self.collectionView.transform = .identity
         }
@@ -1296,6 +1482,14 @@ final class WallPrototypeViewController: UIViewController,
         super.viewDidLayoutSubviews()
         centerCameraIfNeeded()
         updateLyricOverlayFrame()
+        // 迷你台宽度按竖屏定版（3.7 (21)）：min(宽,高) 即竖屏
+        // 布局宽（横屏时宽高互换），减两侧各 12 边距；横竖屏
+        // 同一宽度、居中，横屏左右留白。
+        let portraitBarWidth = min(view.bounds.width, view.bounds.height) - 24
+        if let constraint = miniBarWidthConstraint,
+           abs(constraint.constant - portraitBarWidth) > 0.5 {
+            constraint.constant = portraitBarWidth
+        }
     }
 
     /// 相机增量折叠（3.7 (2) 修复）：3.7 (1) 的整格绕回模型有个致命
@@ -1508,10 +1702,13 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// 滚动歌词会话（包一 P2/P3）：由 lyricClockDriver 的逐帧插值
-    /// 时钟驱动，歌词渲染在独立 overlay 上、不绑 cell——展开实例
-    /// 不在 visibleCells、cell 被复用、展开别的卡时都不再灭词。
-    /// 行判定/提前量/时长夹取与旧实现完全一致。
+    /// 滚动歌词会话（包一 P2/P3）：歌词渲染在独立 overlay 上、
+    /// 不绑 cell——展开实例不在 visibleCells、cell 被复用、展开
+    /// 别的卡时都不再灭词。3.7 (21) 起翻行由 lyricFlipDriver 的
+    /// boundary 事件决定（本 tick 只读其 currentIndex 并推进其
+    /// 护栏状态机）；lyricClockDriver 的 tick 仍每帧到达本方法，
+    /// 只作护栏推进与降级路径（注册失败时）的比对时钟，呈现
+    /// now 不再参与事件路径的翻行判定。
     private func lyricSessionTick(now: Double) {
         let engine = PlaybackEngine.shared
         guard let track = engine.currentTrack, engine.duration > 0 else {
@@ -1526,6 +1723,8 @@ final class WallPrototypeViewController: UIViewController,
             lyricSessionTrackId = track.id
             lastLyricIndex = nil
             lyricAnchorInstanceId = nil
+            // 切歌先解绑旧曲行界（新曲歌词到手后 tick 内重新绑定）。
+            lyricFlipDriver.unbind()
             // 切歌重置锚隐藏态：淡出动画与 alpha 不许带进新曲。
             if lyricAnchorHidden {
                 lyricAnchorHidden = false
@@ -1546,13 +1745,30 @@ final class WallPrototypeViewController: UIViewController,
             setLyricOverlayVisible(false)
             return
         }
-        var idx = 0
-        for (i, line) in lines.enumerated() {
-            if line.time <= now + LyricTiming.lead { idx = i } else { break }
+        // 翻行锚定（3.7 (21)）：绑定当前曲行界并推进一步护栏
+        // 状态机；翻行走 boundary 事件（driver.currentIndex），
+        // 注册降级时回落时钟逐帧比对（(20) 口径）。兜底/护栏
+        // 判定喂媒体时刻（rawPlayhead），与呈现时钟隔离。
+        lyricFlipDriver.bind(trackId: track.id, lines: lines)
+        lyricFlipDriver.tick(rawNow: engine.rawPlayhead(),
+                             isPlaying: engine.isPlaying,
+                             seekPending: engine.isSeekPending)
+        let idx: Int
+        if lyricFlipDriver.isActive {
+            idx = lyricFlipDriver.currentIndex
+        } else {
+            var computed = 0
+            for (i, line) in lines.enumerated() {
+                if line.time <= now + LyricTiming.lead { computed = i } else { break }
+            }
+            idx = computed
         }
         // 前奏预告态（3.7 (13) #2）：还没唱到首行时窗口只预告，
         // 不点亮不扫光；active 翻转也要重下发（同 idx 不能被去重吞掉）。
+        // 事件路径下当前行已被 boundary/代翻消费即视为已激活
+        // （呈现 now 带输出延迟补偿，可能迟于行界一拍）。
         let lineActive = lines[idx].time <= now + LyricTiming.lead
+            || (lyricFlipDriver.isActive && idx <= lyricFlipDriver.consumedThrough)
         // 帧锚定（3.7 (17) 口径 + (19) 出窗策略）：歌词只在锚得
         // 到播放曲自己的封面卡时显示。.anchored / .outOfWindow
         // 的可见性由 updateLyricOverlayFrame 内的锚状态机管理

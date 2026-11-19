@@ -20,8 +20,19 @@ enum LyricTiming {
     /// 更大（绝对偏差中位 152 vs 97ms）；YRC 逐字戳只做行内
     /// 扫光（按 LRC 行窗重标定，见 WallPrototype 的双表合并）。
     /// 改回 .yrc 即恢复 (19) 口径（YRC 翻行 + 原戳扫光）。
+    /// 3.7 (21) 起本开关只决定「注册哪套行界给 boundary 锚定」
+    /// （及降级时钟比对的表），翻行触发本身改由事件驱动
+    /// （LyricBoundaryFlipDriver）。
     enum FlipSource { case lrc, yrc }
     static let flipSource: FlipSource = .lrc
+    /// settle 稳态重锚开关（3.7 (21)，DS R46 对账）：保留但严格
+    /// 隔离为只作用扫光呈现时钟（LyricClockDriver），翻行路径
+    /// （boundary 事件 + 媒体时钟兜底）完全不读。真机实测
+    /// drift=-0.097 与 (20) 定案吻合、纠正后二次读数 -0.003 不
+    /// 复发；去留待三基准埋点（settle 面包屑同记 engine
+    /// currentTime / rawPlayhead / 外推 now）攒够数据后再定，
+    /// 关此开关即 A/B 对照。
+    static let settleReanchorEnabled = true
 }
 
 /// 逐字时间戳（YRC 派生，3.7 (19)）：一行歌词内每个字/词的
@@ -415,13 +426,18 @@ final class LyricWindowView: UIView {
 /// （落点未定）期间暂停漂移重锚，防乐观锚点引发的行判定抖动，
 /// seek 完成回调落定后下一帧按真值自动重锚。
 ///
-/// (19) 输出延迟补偿：本 driver 下发的是「呈现 now」——行判定
-/// 与扫光共用。听觉时刻 = 媒体时刻 − 输出延迟（声音经输出
-/// 通道到达耳朵比 item 时间线晚 AVAudioSession.outputLatency：
-/// 外放 ≈0、蓝牙 100–300ms）。补偿只在呈现出口减这一次：
-/// 引擎时间线与漂移检查全程用未补偿的媒体时刻，不污染锚源，
-/// 也不与 Web 链的 offset 校准钮叠加（那边是另一条呈现链）。
-/// 路由变化通知 + 每次重锚时刷新缓存值。
+/// (19) 输出延迟补偿：本 driver 下发的是「呈现 now」。听觉
+/// 时刻 = 媒体时刻 − 输出延迟（声音经输出通道到达耳朵比 item
+/// 时间线晚 AVAudioSession.outputLatency：外放 ≈0、蓝牙
+/// 100–300ms）。补偿只在呈现出口减这一次：引擎时间线与漂移
+/// 检查全程用未补偿的媒体时刻，不污染锚源，也不与 Web 链的
+/// offset 校准钮叠加（那边是另一条呈现链）。路由变化通知 +
+/// 每次重锚时刷新缓存值。
+///
+/// (21) 职责收窄：翻行改由 LyricBoundaryFlipDriver 的 boundary
+/// 事件驱动，本 driver 只驱动扫光/进度呈现；settle 重锚严格
+/// 隔离在本时钟内（LyricTiming.settleReanchorEnabled 开关），
+/// 翻行路径不读本时钟。
 final class LyricClockDriver {
     var onTick: ((Double) -> Void)?
 
@@ -527,16 +543,26 @@ final class LyricClockDriver {
         // 播放/暂停翻转：立即以真实 playhead 重锚（暂停冻结在
         // 真位置、恢复从真位置起跑），不留整段暂停时长的外推误差。
         if engine.isPlaying != anchorWasPlaying { reanchor(armSettle: true) }
-        // 稳态重锚（3.7 (20)）：瞬态锚 +0.35s 落定后无条件对齐
-        // 一次真值，纠正量落面包屑；已暂停/已切歌则直接作废。
-        if let settleAt = settleReanchorAt {
+        // 稳态重锚（3.7 (20) 定案、(21) 隔离保留）：瞬态锚
+        // +0.35s 落定后无条件对齐一次真值，纠正量落面包屑；
+        // 已暂停/已切歌则直接作废。只作用本呈现时钟（扫光），
+        // 翻行路径不读（(21) 起翻行走 boundary 事件）。面包屑
+        // 同记三基准（engine currentTime 台阶缓存 / rawPlayhead
+        // 真值 / 外推 mediaNow），供后续判定 +99ms 超前的镜像
+        // 解释（audit-3721 B2）——三者同帧一读，差在哪一侧可
+        // 对账。开关关闭时 settle 整体停用（A/B 对照）。
+        if !LyricTiming.settleReanchorEnabled {
+            settleReanchorAt = nil
+        } else if let settleAt = settleReanchorAt {
             if !engine.isPlaying || track.id != anchorTrackId {
                 settleReanchorAt = nil
             } else if CACurrentMediaTime() >= settleAt {
                 settleReanchorAt = nil
-                let drift = engine.rawPlayhead() - mediaNow()
+                let extrapolated = mediaNow()
+                let raw = engine.rawPlayhead()
+                let drift = raw - extrapolated
                 reanchor()
-                Breadcrumbs.log("lrc clock settle drift=\(String(format: "%.3f", drift))")
+                Breadcrumbs.log("lrc clock settle drift=\(String(format: "%.3f", drift)) engine=\(String(format: "%.3f", engine.currentTime)) raw=\(String(format: "%.3f", raw)) extrapolated=\(String(format: "%.3f", extrapolated))")
             }
         }
         let predicted = anchorWasPlaying

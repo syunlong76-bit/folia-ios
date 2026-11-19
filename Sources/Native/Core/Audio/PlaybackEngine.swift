@@ -99,6 +99,13 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
     /// seek 落点未定期间暂停漂移重锚，防乐观锚点引发的行判定抖动。
     var isSeekPending: Bool { pendingSeek }
 
+    /// 墙链歌词 boundary 锚定（3.7 (21)）的注册面：active 轨只读
+    /// 引用。墙链的行界 observer 直接挂这台 player（与桥 cue 的
+    /// lyricCues 互不干扰、两套 observer 并存）；注册/消费/护栏
+    /// 归 LyricBoundaryFlipDriver，引擎不感知。一期 usingA 固定，
+    /// 返回恒为 playerA；二期双轨切换时消费方按身份变化重注册。
+    var lyricBoundaryPlayer: AVPlayer { activePlayer }
+
     // MARK: - init
 
     private override init() {

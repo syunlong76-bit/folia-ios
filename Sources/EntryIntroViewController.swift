@@ -10,15 +10,19 @@ enum EntryIntroDataState {
 /// 入场视频：v5 全油画入场动画（Miller 2026-11-19 定版）。
 ///
 /// 口径（2026-11-19 12:04/12:07 定；13:04 挪位修正，3.7 (17) 落地；
-/// 16:12 触发口径纠正，3.7 (20) 落地）：
-/// - 槽位归主页墙进入页：由 HomeWallViewController 在每次进入时
+/// 16:12 触发口径纠正，3.7 (20) 落地；3.7 (21) 触发点修正）：
+/// - 槽位归主页墙进入页：由 HomeWallViewController 在真进墙时
 ///   触发，以本文件整套横屏 modal 机制呈现；冷启动进 App 的路径
 ///   就是进墙，效果上冷启仍先见视频，但所有权归墙进入页。
 /// - **每次进墙都播**（16:12 Miller 点明原设定，我方 (17)/(18)
 ///   曾窄化成「每进程只播一次」，已撤销）：动画的用途就是掩盖
 ///   拉取数据慢——退出重进墙时数据重拉的几秒只剩黑屏即是反例。
-///   唯一抑制是入场自身退场引发的那次墙露面（同一次进墙事件的
-///   下半程，Presenter 的一次性抑制标志消费），防自激重播。
+///   (20) 把触发挂在 viewDidAppear 每次露面，进歌单退回也重播
+///   （Miller：「镶嵌错了」）；(21) 改实例级一次性（audit-3721
+///   A2）：HomeWall 实例首露面才触发，同实例子页返回不播——
+///   判别依赖「顶层进墙恒新建实例」的当前拓扑。入场自身退场
+///   引发的那次墙露面由 Presenter 的一次性抑制标志消费，防
+///   自激重播。
 /// - 循环掩盖（3.7 (20)）：每轮自然播完时查墙数据状态——已就绪
 ///   才退场；仍在加载则 seek 回零再播一轮；已明确失败（最终失败
 ///   /未登录落定）则退场落到墙的失败态，不无限循环。关闭按钮
@@ -30,13 +34,17 @@ enum EntryIntroDataState {
 ///   白色 ×，34pt），入场开始即显示可点；点它立即结束入场进墙——
 ///   墙数据未就绪时墙自呈既有加载态，不黑屏、不堵在入场面。
 /// - 画面点按不再跳过（12:07 定）：只认关闭按钮与自动退出，避免误触。
-/// - 海报垫底 + 退场衔接（3.7 (20)，Miller 16:14 追加「衔接好」）：
+/// - 海报垫底 + 退场衔接（3.7 (20) 立项、(21) 并行化修正）：
 ///   入场 VC 之下、墙之上垫一层油画海报帧（母带 2.0s 帧，
-///   Resources/EntryVideo/entry-poster.jpg）。退场 choreography：
-///   视频层 0.4s 淡出露出海报 → 横→竖旋转在海报遮蔽下完成 →
-///   海报与真实墙面交叉淡入（0.35s）+ 墙面 1.02→1.00 弹簧落位；
-///   点关闭走同一套、节奏略快且关闭按钮先行淡出（0.15s）。
-///   曲线用 iOS 系统减速/弹簧，禁线性硬切。消失后彻底释放 player。
+///   Resources/EntryVideo/entry-poster.jpg）。(20) 的退场是全
+///   串行分段 + revealHome 固定 delay 0.45s，海报全不透明静止
+///   独占约 0.45s（Miller：「停留一下，很突兀」，audit-3721
+///   A3）；(21) 改全程并行重叠：退场开始即发旋转请求（在视频
+///   +海报双层遮盖下转完）、视频淡出段内海报交叉淡出与墙面
+///   1.02→1.00 弹簧落位错峰同跑——海报只作中间层、永不独占
+///   画面，固定 delay 归零，总时长 ≤0.6s；点关闭同套并行
+///   （按钮淡出并入主段，不再串行前置）。曲线用 iOS 系统
+///   减速/弹簧，禁线性硬切。消失后彻底释放 player。
 ///   保留的安全出口（视频自身问题，非加载）：播放失败立即放行、
 ///   看门狗（每轮时长 + 2.5s）兜底。
 /// - 音频（3.7 (20) 定案修正）：播放期类别用 .playback 与全局
@@ -50,12 +58,15 @@ enum EntryIntroPresenter {
     private static var suppressNextPresent = false
     private static weak var current: EntryIntroViewController?
 
-    /// 主页墙数据状态提供者（HomeWall 在 viewDidLoad 登记，
-    /// 弱引用自持）。未登记者按 failed 答复：宁可退场进墙，
-    /// 不许入场无限循环。
-    static var dataStateProvider: (() -> EntryIntroDataState)?
+    /// 本次呈现的数据状态快照（3.7 (21)）：present 时由呈现方
+    /// （HomeWall）把自家状态闭包交进来、按呈现隔离读取——
+    /// (20) 用全局静态登记，后建实例覆盖先建实例，并行加载时
+    /// 入场会读到别家的状态（真机 entries 已 ok 却以
+    /// data-failed 退场）。无快照时按 failed 答复：宁可退场
+    /// 进墙，不许入场无限循环。退场落定后清空。
+    private static var activeDataStateProvider: (() -> EntryIntroDataState)?
     static var currentDataState: EntryIntroDataState {
-        dataStateProvider?() ?? .failed
+        activeDataStateProvider?() ?? .failed
     }
 
     /// 入场退场会引发主页墙紧接着的一次 viewDidAppear（同一次
@@ -71,16 +82,21 @@ enum EntryIntroPresenter {
         return true
     }
 
-    /// VC 退场落定后回调：清呈现中标志，允许下一次进墙再播。
+    /// VC 退场落定后回调：清呈现中标志与数据状态快照，允许
+    /// 下一次进墙再播。
     static func introDidFinish() {
         isPresenting = false
         current = nil
+        activeDataStateProvider = nil
     }
 
     /// 由主页墙进入页触发：在 presenter 之上呈现入场视频。
-    /// 每次进墙都受理；正在呈现中、资源缺失、窗口未就绪不受理。
+    /// 每次真进墙都受理；正在呈现中、资源缺失、窗口未就绪
+    /// 不受理。dataState 是呈现方的数据状态闭包，受理时快照
+    /// 保存、本轮循环判定只读它（按呈现隔离）。
     @discardableResult
-    static func present(from presenter: UIViewController) -> Bool {
+    static func present(from presenter: UIViewController,
+                        dataState: @escaping () -> EntryIntroDataState) -> Bool {
         guard !isPresenting else { return false }
         guard let url = Bundle.main.url(forResource: "entry-v5",
                                         withExtension: "mp4",
@@ -91,6 +107,7 @@ enum EntryIntroPresenter {
         }
         guard let window = presenter.view.window else { return false }
         isPresenting = true
+        activeDataStateProvider = dataState
         // 推迟一帧再呈现，确保 presenter 已进窗口层级
         DispatchQueue.main.async {
             // 海报垫：垫在入场 VC 之下、主页墙之上。播放期它被
@@ -316,54 +333,54 @@ final class EntryIntroViewController: UIViewController {
             return
         }
 
-        // 退场衔接（3.7 (20)）：点关闭节奏略快且关闭按钮先行
-        // 淡出；自然播完/看门狗走标准节奏，按钮随视频层一起淡。
+        // 退场衔接（3.7 (21) 并行无停留，audit-3721 A3）：全部
+        // 段落同帧起跑、互相重叠，总时长 ≤0.6s——
+        // ①旋转请求立即并行发出，在视频+海报双层遮盖下转完
+        // （(20) 把它压在淡出 completion 里、再靠固定 delay 猜
+        // 旋转耗时，海报因此全不透明独占 0.35–0.45s）；
+        // ②海报交叉淡出 + 墙面弹簧落位在视频淡出段内错峰
+        // 0.1/0.15s 起跑（beginRevealHome），海报只作中间层；
+        // ③视频层淡出 0.4s（关闭 0.3s），completion 只做拆
+        // 播放器与 dismiss，不再承载任何视觉段。
+        // 点关闭的按钮淡出并入主段并行（(20) 是串行前置 0.15s）。
         let fast = reason == "closed"
         let fadeDuration = fast ? 0.3 : 0.4
-        let beginExit = { [weak self] in
-            guard let self else { return }
-            // 阶段一：视频层淡出到海报垫（0.4s），此时不请求转
-            // 方向，画面整体隐入油画帧，用户看不到任何旋转。
-            UIView.animate(withDuration: fadeDuration, delay: 0, options: [.curveEaseOut], animations: {
-                self.view.alpha = 0
-            }, completion: { [weak self] _ in
-                // 阶段二：海报遮蔽下拆播放器、请求转回竖屏、移除
-                // 入场 VC；旋转在海报下走完后，海报与墙面交叉
-                // 淡入 + 墙面弹簧落位（revealHome）。
-                self?.teardownPlayer()
-                rotateBack()
-                if let presenter {
-                    presenter.dismiss(animated: false) {
-                        EntryIntroPresenter.introDidFinish()
-                        Self.revealHome(veil: veil, wallView: presenter.view, fast: fast)
-                    }
-                } else {
-                    Self.revealHome(veil: veil, wallView: nil, fast: fast)
-                }
-            })
-        }
+        rotateBack()
         if fast {
             UIView.animate(withDuration: 0.15, delay: 0, options: [.curveEaseOut], animations: {
                 self.closeButton.alpha = 0
-            }, completion: { _ in beginExit() })
-        } else {
-            beginExit()
+            })
         }
+        Self.beginRevealHome(veil: veil, wallView: presenter?.view, fast: fast)
+        UIView.animate(withDuration: fadeDuration, delay: 0, options: [.curveEaseOut], animations: {
+            self.view.alpha = 0
+        }, completion: { [weak self] _ in
+            self?.teardownPlayer()
+            if let presenter {
+                presenter.dismiss(animated: false) {
+                    EntryIntroPresenter.introDidFinish()
+                }
+            } else {
+                EntryIntroPresenter.introDidFinish()
+            }
+        })
     }
 
-    /// 海报与真实墙面交叉淡入：先留一拍让系统旋转在海报下走完，
-    /// 海报 0.35s 淡出的同时墙面以 1.02→1.00 弹簧落位收尾；
-    /// 另设 2.5s 兜底强制移除，绝不把用户挡在海报后。
-    private static func revealHome(veil: UIView?, wallView: UIView?, fast: Bool) {
+    /// 海报交叉淡出 + 墙面落位（3.7 (21) 并行版）：退场开始时
+    /// 即调用——墙面先置 1.02 蓄势，海报在视频淡出段内错峰
+    /// 起跑淡出（视频未淡尽时海报已在退，两层始终至少一层在
+    /// 动、至少一层半透明，海报永不全不透明独占），墙面弹簧
+    /// 同段落位；2.5s 兜底强制移除保留为纯安全出口。
+    private static func beginRevealHome(veil: UIView?, wallView: UIView?, fast: Bool) {
         guard let veil else { return }
         wallView?.transform = CGAffineTransform(scaleX: 1.02, y: 1.02)
-        let delay = fast ? 0.35 : 0.45
-        UIView.animate(withDuration: 0.35, delay: delay, options: [.curveEaseOut], animations: {
+        let delay = fast ? 0.1 : 0.15
+        UIView.animate(withDuration: fast ? 0.35 : 0.4, delay: delay, options: [.curveEaseOut], animations: {
             veil.alpha = 0
         }, completion: { _ in
             veil.removeFromSuperview()
         })
-        UIView.animate(withDuration: 0.45, delay: delay,
+        UIView.animate(withDuration: fast ? 0.4 : 0.45, delay: delay,
                        usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
                        options: [.allowUserInteraction], animations: {
             wallView?.transform = .identity
