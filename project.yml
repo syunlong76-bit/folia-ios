@@ -39,6 +39,10 @@ targets:
       # 主题场景带画作（3.7 (13.4)，莫奈风草地带图，folder reference）
       - path: Resources/ThemeArt
         type: folder
+      # 冷启动入场视频（3.7 (16)，v5 全油画入场动画，folder reference，
+      # 运行时定位 "EntryVideo/entry-v5.mp4"）
+      - path: Resources/EntryVideo
+        type: folder
     info:
       path: Info.plist
       # 注意：XcodeGen 在 generate 时按这里的 properties 重写 Info.plist，
@@ -48,7 +52,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "15"
+        CFBundleVersion: "16"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         UILaunchScreen: {}
@@ -85,7 +89,7 @@ targets:
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         MARKETING_VERSION: "3.7"
-        CURRENT_PROJECT_VERSION: "15"
+        CURRENT_PROJECT_VERSION: "16"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         # DatabaseManager 用 import SQLite3（系统库，需显式链接）
         OTHER_LDFLAGS: "-lsqlite3"
