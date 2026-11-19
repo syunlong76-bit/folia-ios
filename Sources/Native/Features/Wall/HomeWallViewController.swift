@@ -21,15 +21,15 @@ final class HomeWallViewController: UIViewController,
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
-    /// 电影长卷入场（3.7 (12)）：数据在途时盖住空墙，数据到即退场。
-    private var filmStrip: FilmStripView?
+    /// 入场视频槽位（3.7 (17)，替换 (12) 的电影长卷）：数据在途
+    /// 时由 EntryIntroPresenter 以横屏 modal 呈现 v5 油画视频，
+    /// 数据落定经 finishCurrent 提前退场；每进程只播一次的守卫
+    /// 在 Presenter 内（与 (13) 长卷的启动级守卫同语义、随槽迁移）。
     private var didCenterCamera = false
     private var isWrapping = false
     /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
     private var loadAttempts = 0
     private var loadFailed = false
-    /// 电影长卷每次启动只播一次（3.7 (13)）：重进主页墙不重播。
-    private static var filmStripPlayedThisLaunch = false
 
     // 底部播放台（3.7 (13.4) #4，Miller 点名）：与曲目墙同款
     // E 液态玻璃台（构造同构、按仓库惯例有意重复）；差异是主页
@@ -82,18 +82,6 @@ final class HomeWallViewController: UIViewController,
             collectionView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
-
-        // 电影长卷：盖在空墙上、垫在胶囊/关闭键下（后加的在上层）。
-        let strip = FilmStripView()
-        strip.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(strip)
-        NSLayoutConstraint.activate([
-            strip.topAnchor.constraint(equalTo: view.topAnchor),
-            strip.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            strip.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            strip.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-        ])
-        filmStrip = strip
 
         statusLabel = UILabel()
         statusLabel.text = "主页墙加载中…"
@@ -162,12 +150,6 @@ final class HomeWallViewController: UIViewController,
         loadEntries()
     }
 
-    /// 本实例是否正在播长卷（3.7 (13.1) 黑屏修复，DS32 裁定 (a)）：
-    /// (13) 用启动级静态标记判 finish，viewDidAppear 二次触发时把
-    /// 还在播的长卷误关、留下数秒纯黑。finish 从此只由本实例的
-    /// 加载落定驱动，appear 只记账。
-    private var stripPlayingHere = false
-
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         Breadcrumbs.log("home appear")
@@ -175,18 +157,15 @@ final class HomeWallViewController: UIViewController,
         progressDriver.start()
         miniThemeLayer?.setHostVisible(true)
         refreshMiniBar()
-        // 数据还没到才播长卷；先到（缓存快路径）则整段跳过。
-        // 每次启动只播一次：重进主页墙直接见墙（3.7 (13)）。
-        if entries.isEmpty, !Self.filmStripPlayedThisLaunch {
-            Self.filmStripPlayedThisLaunch = true
-            stripPlayingHere = true
-            filmStrip?.play()
-        } else if entries.isEmpty, !stripPlayingHere {
-            // 本实例没播过（重进的新实例）：长卷不重播，改铺静态
-            // 剧照氛围底等数据（3.7 (13.2)，治重进数秒纯黑）。
-            filmStrip?.showStillBackdrop()
+        // 入场视频（3.7 (17)）：数据还没到才触发；先到（缓存快
+        // 路径）则整段跳过。每进程只播一次、重进不重播由
+        // EntryIntroPresenter 的静态守卫保证——本方法在入场退场
+        // 后会被再次调用（墙重新露面），守卫挡住双播；退场只由
+        // 加载落定（finishCurrent）或视频自身退出路径驱动，
+        // appear 不做任何关闭动作（(13.1) 长卷误关黑屏的教训）。
+        if entries.isEmpty {
+            EntryIntroPresenter.presentIfNeeded(from: self)
         }
-        // 本实例正在播且仍在加载：什么都不做，等加载落定 finish。
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -211,7 +190,7 @@ final class HomeWallViewController: UIViewController,
                 guard status.loggedIn, let userId = status.userId else {
                     await MainActor.run {
                         self.statusLabel.text = "主页墙：未登录（先在网页侧登录网易云）"
-                        self.filmStrip?.finish("not-logged-in")
+                        EntryIntroPresenter.finishCurrent(reason: "not-logged-in")
                     }
                     return
                 }
@@ -233,7 +212,7 @@ final class HomeWallViewController: UIViewController,
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
-                    self.filmStrip?.finish("load-ok")
+                    EntryIntroPresenter.finishCurrent(reason: "load-ok")
                 }
             } catch {
                 // 原始错误只进日志，标签只给人话（3.7 (13) #3：根因是
@@ -244,7 +223,7 @@ final class HomeWallViewController: UIViewController,
                         message: "home load failed attempt=\(self.loadAttempts): \(error)")
                     Breadcrumbs.log("home load failed attempt=\(self.loadAttempts)")
                     if self.loadAttempts < 2 {
-                        // 首次失败不是落定：长卷继续播着等重试（13.1）。
+                        // 首次失败不是落定：入场视频继续播着等重试（13.1）。
                         self.statusLabel.text = "主页墙加载失败，正在重试…"
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                             self?.loadEntries()
@@ -252,7 +231,7 @@ final class HomeWallViewController: UIViewController,
                     } else {
                         self.loadFailed = true
                         self.statusLabel.text = "主页墙加载失败，点按这里重试"
-                        self.filmStrip?.finish("load-failed")
+                        EntryIntroPresenter.finishCurrent(reason: "load-failed")
                     }
                 }
             }

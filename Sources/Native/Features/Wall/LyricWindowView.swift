@@ -1,6 +1,17 @@
 import QuartzCore
 import UIKit
 
+/// 歌词时序口径（3.7 (17)）：行判定提前量、扫光补偿与时钟重锚
+/// 阈值收在一处，改口径只改这里。
+enum LyricTiming {
+    /// 行判定提前量（秒）：沿 (15) 的 +0.15 判定口径；扫光起点
+    /// 同步前移同量，消除「行已点亮、扫光恒定拖尾」。
+    static let lead = 0.15
+    /// 漂移重锚阈值（秒）：锚源改直读真实 playhead 后收紧
+    /// （(15) 为 0.3，配台阶缓存时再小会频繁误锚）。
+    static let reanchorThreshold = 0.12
+}
+
 /// 当前行扫光视图（3.7 (12)）：暗字打底 + 亮字被 mask 按进度裁切，
 /// 唱到哪亮到哪。mask 按文本实际宽度居中起算（居中文本不能从
 /// label 左缘扫起）；进度由 cell 的 CADisplayLink 按引擎时钟推进。
@@ -171,7 +182,11 @@ final class LyricWindowView: UIView {
                            options: [.curveEaseOut]) {
                 self.lyricLinesContainer.transform =
                     CGAffineTransform(translationX: 0, y: -self.lyricLineHeight)
-            } completion: { _ in
+            } completion: { finished in
+                // 滑行被 removeAllAnimations 打断时 finished=false：
+                // 打断方（非滑行路径）已按新窗口重渲染并重开扫光，
+                // 旧回调不得再以旧 lineStart 重写一遍（行窗双写）。
+                guard finished else { return }
                 self.lyricLinesContainer.transform = .identity
                 self.renderLyricWindow()
                 if lineActive {
@@ -230,7 +245,10 @@ final class LyricWindowView: UIView {
     /// 只够换行、不够驱动扫光，DS27 定版）。link 经弱代理转发
     /// （3.7 (13) #1）：直连 cell 会被 link 强持无法释放。
     private func beginSweep(lineStart: Double, lineDuration: Double) {
-        sweepLineStart = lineStart
+        // 扫光与行判定同口径（3.7 (17)）：行判定带 +lead 提前量，
+        // 扫光起点同步前移 lead；(15) 时扫光零补偿、恒定拖尾
+        // 0–300ms，是肉眼最易感知的「对不齐」来源。
+        sweepLineStart = lineStart - LyricTiming.lead
         sweepLineDuration = max(lineDuration, 0.1)
         lyricSweepView.progress = 0
         sweepDisplayLink?.invalidate()
@@ -303,10 +321,19 @@ final class LyricWindowView: UIView {
 
 }
 
-/// 歌词逐帧插值时钟（包一 P2）：仿 StageProgressDriver 结构——以
-/// 引擎时间为锚、按显示刷新逐帧外推（播放速率恒 1）；引擎时间
-/// 与外推偏差超过 0.3 秒（seek、切歌、漂移）即重锚。逐帧回调
-/// 驱动歌词行判定，替代旧 0.3s 心跳 + 200ms 步进时钟的量化滞后。
+/// 歌词逐帧插值时钟（包一 P2；3.7 (17) 换锚源）：仿
+/// StageProgressDriver 结构——以引擎时间为锚、按显示刷新逐帧
+/// 外推（播放速率恒 1）；外推与真值偏差超过阈值（seek、切歌、
+/// 漂移）即重锚。逐帧回调驱动歌词行判定。
+///
+/// (17) 锚源修正：(15) 时锚取自 PlaybackEngine 的 200ms 周期
+/// observer 台阶缓存，采锚瞬间即带 0–200ms 滞后；此后漂移检查
+/// 比较的又是同一缓存值，滞后永远够不到 0.3 重锚阈值、被锁死
+/// 一整首（逐曲随机、整首恒定）。改直读 activePlayer 真实
+/// playhead（rawPlayhead），阈值收紧到 0.12；播放/暂停翻转
+/// 即重锚（暂停冻结位置与恢复起跑点都以真值为准）；seek 在途
+/// （落点未定）期间暂停漂移重锚，防乐观锚点引发的行判定抖动，
+/// seek 完成回调落定后下一帧按真值自动重锚。
 final class LyricClockDriver {
     var onTick: ((Double) -> Void)?
 
@@ -314,6 +341,9 @@ final class LyricClockDriver {
     private var anchorTime: Double = 0
     private var anchorWall: CFTimeInterval = 0
     private var anchorTrackId: String?
+    /// 采锚时的播放态：外推只在锚为播放态时走单调时钟；与引擎
+    /// 当前播放态不一致（暂停/恢复翻转）即重锚，不靠漂移阈值兜底。
+    private var anchorWasPlaying = false
 
     func start() {
         guard displayLink == nil else { return }
@@ -333,19 +363,20 @@ final class LyricClockDriver {
 
     private func reanchor() {
         let engine = PlaybackEngine.shared
-        anchorTime = engine.currentTime
+        anchorTime = engine.rawPlayhead()
         anchorWall = CACurrentMediaTime()
         anchorTrackId = engine.currentTrack?.id
+        anchorWasPlaying = engine.isPlaying
     }
 
-    /// 当前锚的插值时刻：暂停取 anchorTime；无锚/无当前曲返回
-    /// 引擎 currentTime。
+    /// 当前锚的插值时刻：锚为播放态时按单调时钟外推、暂停态
+    /// 冻结在锚点；无锚/无当前曲返回真实 playhead。
     func interpolatedNow() -> Double {
         let engine = PlaybackEngine.shared
         guard anchorTrackId != nil, engine.currentTrack != nil else {
-            return engine.currentTime
+            return engine.rawPlayhead()
         }
-        return engine.isPlaying
+        return anchorWasPlaying
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
     }
@@ -355,16 +386,22 @@ final class LyricClockDriver {
         // 无曲/零时长时也要补发一帧：VC 的 hide 守卫靠 onTick 驱动，
         // 不补发则旧歌词会冻在 overlay 上无法收起。
         guard let track = engine.currentTrack, engine.duration > 0 else {
-            onTick?(engine.currentTime)
+            onTick?(engine.rawPlayhead())
             return
         }
         if track.id != anchorTrackId { reanchor() }
-        let playing = engine.isPlaying
-        let predicted = playing
+        // 播放/暂停翻转：立即以真实 playhead 重锚（暂停冻结在
+        // 真位置、恢复从真位置起跑），不留整段暂停时长的外推误差。
+        if engine.isPlaying != anchorWasPlaying { reanchor() }
+        let predicted = anchorWasPlaying
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
-        if abs(engine.currentTime - predicted) > 0.3 { reanchor() }
-        let now = playing
+        // seek 在途时落点由 seek 完成回调回正，期间不重锚。
+        if !engine.isSeekPending,
+           abs(engine.rawPlayhead() - predicted) > LyricTiming.reanchorThreshold {
+            reanchor()
+        }
+        let now = anchorWasPlaying
             ? anchorTime + (CACurrentMediaTime() - anchorWall)
             : anchorTime
         onTick?(now)

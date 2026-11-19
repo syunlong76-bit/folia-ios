@@ -79,6 +79,11 @@ final class WallPrototypeViewController: UIViewController,
     private var lastLyricIndex: Int?
     /// 前奏预告态去重（3.7 (13) #2）：同 idx 下 active 翻转要重下发。
     private var lastLyricActive = true
+    /// 歌词帧锚定（3.7 (17)）：当前锚定的播放曲实例 id（hysteresis
+    /// 保持，见 updateLyricOverlayFrame）+ 帧面包屑去重串（锚 id 与
+    /// 40pt 网格化原点，未变不重复落盘）。
+    private var lyricAnchorInstanceId: String?
+    private var lastLyricOverlayCrumb: String?
     /// 展开卡打点去重：组串未变时跳过重复 log。
     private var lastExpandedCellCrumb: String?
     private let wallLayout = WallLayout()
@@ -267,7 +272,7 @@ final class WallPrototypeViewController: UIViewController,
         let overlay = LyricWindowView()
         overlay.isHidden = true
         overlay.clock = { [weak self] in
-            self?.lyricClockDriver.interpolatedNow() ?? PlaybackEngine.shared.currentTime
+            self?.lyricClockDriver.interpolatedNow() ?? PlaybackEngine.shared.rawPlayhead()
         }
         if let bar = miniBar { view.insertSubview(overlay, belowSubview: bar) } else { view.addSubview(overlay) }
         lyricOverlay = overlay
@@ -1435,6 +1440,7 @@ final class WallPrototypeViewController: UIViewController,
         if lyricSessionTrackId != track.id {
             lyricSessionTrackId = track.id
             lastLyricIndex = nil
+            lyricAnchorInstanceId = nil
         }
         guard wallLayout.expandedInstanceId != nil else {
             setLyricOverlayVisible(false)
@@ -1451,17 +1457,20 @@ final class WallPrototypeViewController: UIViewController,
         }
         var idx = 0
         for (i, line) in lines.enumerated() {
-            if line.time <= now + 0.15 { idx = i } else { break }
+            if line.time <= now + LyricTiming.lead { idx = i } else { break }
         }
         // 前奏预告态（3.7 (13) #2）：还没唱到首行时窗口只预告，
         // 不点亮不扫光；active 翻转也要重下发（同 idx 不能被去重吞掉）。
-        let lineActive = lines[idx].time <= now + 0.15
-        updateLyricOverlayFrame()
-        setLyricOverlayVisible(true)
+        let lineActive = lines[idx].time <= now + LyricTiming.lead
+        // 帧锚定（3.7 (17)）：歌词只在锚得到播放曲自己的封面卡
+        // 时显示；播放曲不在当前实例窗口内就不显示（随卡出画），
+        // 不再停靠视口、不再压到别曲封面上。
+        let anchored = updateLyricOverlayFrame()
+        setLyricOverlayVisible(anchored)
         if lastLyricTrackId == track.id, lastLyricIndex == idx,
            lastLyricActive == lineActive { return }
         if lastLyricIndex != idx || lastLyricTrackId != track.id {
-            Breadcrumbs.log("lrc line track=\(track.id) idx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].time)) judge=\(String(format: "%.3f", now)) engine=\(String(format: "%.3f", engine.currentTime)) delta=\(String(format: "%.3f", now - engine.currentTime))")
+            Breadcrumbs.log("lrc line track=\(track.id) idx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].time)) judge=\(String(format: "%.3f", now)) raw=\(String(format: "%.3f", engine.rawPlayhead())) engine=\(String(format: "%.3f", engine.currentTime)) delta=\(String(format: "%.3f", now - engine.currentTime))")
         }
         // 当前行时长：有下一行按行距夹取，末行按字数估（DS27 定版）。
         let duration: Double
@@ -1496,30 +1505,75 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// overlay 帧对齐：展开实例就是当前播放曲且其 cell 在场时贴合
-    /// cell 帧；否则停靠在顶部居中（展开别的卡时歌词不灭、改停靠）。
-    private func updateLyricOverlayFrame() {
+    /// overlay 帧锚定（3.7 (17) 口径修正，Miller 13:04 定版）：
+    /// 歌词帧只锚「正在播放歌曲的封面卡实例」在墙坐标系中的世界
+    /// 矩形，平移时随卡一起移动；(15) 的视口顶部居中停靠分支已
+    /// 删除——展开别曲时歌词留在播放曲自己的卡上（不在视口就随
+    /// 卡出画），不许跟随视口、不许压到别曲封面上。
+    ///
+    /// 帧换算与相机折叠模型对齐：布局属性帧 =（世界 − 原点）×
+    /// scale + contentOffset，视觉帧 = 属性帧 − contentOffset +
+    /// collectionView 在 view 中的原点（本 VC 中 collectionView
+    /// 铺满 view、原点为 0，仍按通式写）。取属性帧而非 cell 帧：
+    /// 不依赖 cell 是否在场，消除 reload 间隙的贴合/停靠横跳；
+    /// 展开中的播放曲实例自动取到展开块矩形。
+    ///
+    /// 同曲多实例选锚带 hysteresis：当前锚仍在实例集内就保持，
+    /// 避免平移跨过视口中点时换锚跳格；锚失效（出窗/切歌）才
+    /// 重选——展开中的播放曲实例优先，其次离视口中心最近。
+    /// 返回是否锚定成功（歌词可见性与此对齐）。
+    @discardableResult
+    private func updateLyricOverlayFrame() -> Bool {
         guard let overlay = lyricOverlay,
-              let expandedId = wallLayout.expandedInstanceId,
-              let item = wallLayout.instances.firstIndex(where: { $0.instanceId == expandedId })
-        else { return }
-        let instance = wallLayout.instances[item]
-        if instance.queueIndex < entries.count,
-           entries[instance.queueIndex].id == PlaybackEngine.shared.currentTrack?.id,
-           let cell = collectionView.cellForItem(at: IndexPath(item: item, section: 0)) {
-            overlay.frame = cell.convert(cell.bounds, to: view)
-            return
+              let trackId = PlaybackEngine.shared.currentTrack?.id else { return false }
+        let candidates = wallLayout.instances.filter {
+            $0.queueIndex < entries.count && entries[$0.queueIndex].id == trackId
         }
-        guard let attrs = collectionView.layoutAttributesForItem(
-            at: IndexPath(item: item, section: 0)) else { return }
-        let frameWidth = attrs.frame.width
-        guard frameWidth > 0 else { return }
-        let w = min(frameWidth, view.bounds.width - 24)
-        let h = attrs.frame.height * (w / frameWidth)
-        let docked = CGRect(x: (view.bounds.width - w) / 2,
-                            y: view.safeAreaInsets.top + 56,
-                            width: w, height: h)
-        if overlay.frame != docked { overlay.frame = docked }
+        guard !candidates.isEmpty else {
+            // 播放曲不在当前实例窗口内：无处可锚，帧不许停在旧
+            // 视口坐标冒充锚定（(15) 的冻结帧正是此形态）。
+            lyricAnchorInstanceId = nil
+            return false
+        }
+        var anchor = candidates.first { $0.instanceId == lyricAnchorInstanceId }
+        if anchor == nil {
+            if let expandedId = wallLayout.expandedInstanceId,
+               let expanded = candidates.first(where: { $0.instanceId == expandedId }) {
+                anchor = expanded
+            } else {
+                // 视口中心的世界坐标：世界原点 + 视口尺寸/scale 的一半。
+                let centerWorld = CGPoint(
+                    x: Double(wallLayout.worldOrigin.x) + Double(view.bounds.width) / wallLayout.cameraScale / 2,
+                    y: Double(wallLayout.worldOrigin.y) + Double(view.bounds.height) / wallLayout.cameraScale / 2)
+                anchor = candidates.min { a, b in
+                    let da = hypot(a.rect.left + a.rect.width / 2 - Double(centerWorld.x),
+                                   a.rect.top + a.rect.height / 2 - Double(centerWorld.y))
+                    let db = hypot(b.rect.left + b.rect.width / 2 - Double(centerWorld.x),
+                                   b.rect.top + b.rect.height / 2 - Double(centerWorld.y))
+                    return da < db
+                }
+            }
+        }
+        guard let anchor,
+              let item = wallLayout.instances.firstIndex(where: { $0.instanceId == anchor.instanceId }),
+              let attrs = collectionView.layoutAttributesForItem(at: IndexPath(item: item, section: 0))
+        else { return false }
+        lyricAnchorInstanceId = anchor.instanceId
+        let frame = CGRect(
+            x: attrs.frame.minX - collectionView.contentOffset.x + collectionView.frame.minX,
+            y: attrs.frame.minY - collectionView.contentOffset.y + collectionView.frame.minY,
+            width: attrs.frame.width,
+            height: attrs.frame.height)
+        if overlay.frame != frame { overlay.frame = frame }
+        // 帧面包屑：锚实例 id + 帧矩形（原点按 40pt 网格去重，
+        // 平移时约每 40pt 一条，不刷屏）；供真机对账锚定是否恒
+        // 为播放曲实例、帧是否随卡走。
+        let crumb = "\(anchor.instanceId)|\(Int(frame.minX / 40))|\(Int(frame.minY / 40))"
+        if crumb != lastLyricOverlayCrumb {
+            lastLyricOverlayCrumb = crumb
+            Breadcrumbs.log("lrc overlay anchor=\(anchor.instanceId) frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height)) visible=\(!overlay.isHidden)")
+        }
+        return true
     }
 
     private func ensureLyrics(for trackId: String) {
@@ -1542,7 +1596,20 @@ final class WallPrototypeViewController: UIViewController,
 
     /// LRC 解析：[mm:ss.xx] 前缀行 → (秒， 文本）；多时间戳行只取
     /// 首个，空文本行丢弃，结果按时间升序。
+    /// [offset:±ms] 全局偏移（3.7 (17)）：带此标签的文件要求把
+    /// 全部行时间整体平移 offset 毫秒（正值 = 歌词延后呈现，
+    /// 行时间 = 时间戳 + offset）；旧实现不认此标签、解析失败
+    /// 直接丢弃，带 offset 的歌整首恒定偏移数百毫秒。
     private static func parseLRC(_ raw: String) -> [(time: Double, text: String)] {
+        var offsetSeconds = 0.0
+        for line in raw.split(separator: "\n") {
+            let s = line.trimmingCharacters(in: .whitespaces)
+            guard s.lowercased().hasPrefix("[offset:") else { continue }
+            let inner = s.dropFirst("[offset:".count).prefix { $0 != "]" }
+            if let ms = Double(inner.trimmingCharacters(in: .whitespaces)) {
+                offsetSeconds = ms / 1000
+            }
+        }
         var out: [(time: Double, text: String)] = []
         for line in raw.split(separator: "\n") {
             let s = String(line)
@@ -1555,7 +1622,7 @@ final class WallPrototypeViewController: UIViewController,
             let text = String(s[s.index(after: close)...])
                 .trimmingCharacters(in: .whitespaces)
             guard !text.isEmpty else { continue }
-            out.append((time: minutes * 60 + seconds, text: text))
+            out.append((time: minutes * 60 + seconds + offsetSeconds, text: text))
         }
         let sorted = out.sorted { $0.time < $1.time }
         // 制作名单行只在首个正文行之前过滤（3.7 (13) #2，DS30

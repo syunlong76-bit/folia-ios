@@ -84,6 +84,21 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
 
     private var currentRate: Float { playbackState == .playing ? 1.0 : 0.0 }
 
+    /// 真实 playhead（3.7 (17)）：直读 active 轨 AVPlayer 时钟。
+    /// @Published currentTime 是 200ms 周期 observer 的台阶缓存，
+    /// 相对真值恒有 0–200ms 滞后；歌词时钟锚点与面包屑对账必须
+    /// 读真值（引擎内部布防/回正已有直读先例：armLyricCues、
+    /// seek 完成回调）。无 item 或时钟无效时回落缓存值。
+    /// 须主线程调用（与本类其余方法同一约定）。
+    func rawPlayhead() -> TimeInterval {
+        let raw = activePlayer.currentTime().seconds
+        return raw.isFinite ? raw : currentTime
+    }
+
+    /// seek 在途标志（竞态三件套之②的对外只读面）：歌词时钟在
+    /// seek 落点未定期间暂停漂移重锚，防乐观锚点引发的行判定抖动。
+    var isSeekPending: Bool { pendingSeek }
+
     // MARK: - init
 
     private override init() {

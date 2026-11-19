@@ -23,9 +23,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.makeKeyAndVisible()
         self.window = window
 
-        // 2.5) 冷启动入场视频（3.7 (16)）：v5 全油画入场动画横屏全屏播一次，
-        //     播完/点右上角关闭按钮/失败自动移除放行；热恢复不走这里、不重播
-        EntryIntroPresenter.presentIfNeeded(in: window)
+        // 2.5) 入场视频不在冷启动挂（3.7 (17) 挪位）：冷启直落
+        //     Web 主界面；v5 油画视频改由主页墙进入页触发（见
+        //     HomeWallViewController 的入场槽位），替换原电影长卷。
 
         // 3) 冷启动自动检查更新（开关开启时，后台队列执行，不阻塞启动）
         if UpdateManager.shared.autoUpdateEnabled {
