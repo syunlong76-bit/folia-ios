@@ -108,8 +108,10 @@ private final class PetActor: UIView {
 }
 
 // MARK: - 台词库（生活口吻，猫狗分声口；纯 UI 文案）
+// 3.7 (27)：改内部可见，迷你台宠物层（MiniBarPetStage）共用
+// 同一台词库，不另抄一份（台词内容与声口仍以此为唯一真源）。
 
-private enum PetLines {
+enum PetLines {
     static let catSingles = [
         "这首我听过，勉强入耳。",
         "别光听歌，记得喝水。",

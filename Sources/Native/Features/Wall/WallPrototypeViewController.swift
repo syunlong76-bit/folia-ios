@@ -181,6 +181,9 @@ final class WallPrototypeViewController: UIViewController,
     /// 毛玻璃/玻璃高光隐藏），只剩轨道+填充+发光圆点步进，
     /// 内容淡出且按钮禁交互。
     private var miniBarCollapsed = false
+    /// 迷你台宠物层（3.7 (27)）：纯新增覆盖层，只经下面几处
+    /// 一行钩子订阅台子的显隐/形态/切歌边沿，台子逻辑零改动。
+    private var miniPetStage: MiniBarPetStage?
     private var miniIdleWorkItem: DispatchWorkItem?
     /// 上次 refreshMiniBar 同步的曲目 id：识别切歌（切歌先
     /// 完整形态再起计时）。
@@ -385,6 +388,9 @@ final class WallPrototypeViewController: UIViewController,
         bar.isHidden = true
         view.addSubview(bar)
         miniBar = bar
+        let petStage = MiniBarPetStage(bar: bar)
+        view.addSubview(petStage)
+        miniPetStage = petStage
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = 35
@@ -836,6 +842,7 @@ final class WallPrototypeViewController: UIViewController,
         miniThemeLayer?.setBarVisible(visible)
         guard visible != miniBarPresented else { return }
         miniBarPresented = visible
+        miniPetStage?.barPresentationChanged(visible)
         if visible {
             // 形态复位（3.7 (21)）：收起态不跨显隐周期残留——
             // 每次出现先完整形态，再起无操作计时。
@@ -930,6 +937,7 @@ final class WallPrototypeViewController: UIViewController,
         guard miniBarPresented, !miniBarCollapsed, !miniSeekDragging,
               let bar = miniBar else { return }
         miniBarCollapsed = true
+        miniPetStage?.barFormChanged(collapsed: true)
         cancelMiniIdleTimer()
         Breadcrumbs.log("minibar collapse idle")
         setMiniBarContentsInteractive(false)
@@ -954,6 +962,7 @@ final class WallPrototypeViewController: UIViewController,
             return
         }
         miniBarCollapsed = false
+        miniPetStage?.barFormChanged(collapsed: false)
         Breadcrumbs.log("minibar expand")
         setMiniBarContentsInteractive(true)
         if UIAccessibility.isReduceMotionEnabled {
@@ -1035,6 +1044,7 @@ final class WallPrototypeViewController: UIViewController,
         setMiniBarVisible(true)
         if track.id != miniLastTrackId {
             miniLastTrackId = track.id
+            miniPetStage?.setTrack(id: track.id)
             // 切歌（3.7 (21)）：收起态先展开回完整形态，未
             // 收起则重置无操作计时——新歌先以完整形态亮相。
             if miniBarCollapsed { expandMiniBar() } else { resetMiniIdleTimer() }
