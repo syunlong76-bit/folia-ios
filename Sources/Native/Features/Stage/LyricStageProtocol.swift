@@ -218,8 +218,9 @@ struct LyricStageStyleInfo {
     var sourceTag: String { "stage.\(id)" }
 }
 
-/// 样式注册表（本期已迁：classic 静态排版型、partita 滚动同步型；
-/// 其余 15 个只登记元数据，供选择器全量展示与「网页版」跳转）。
+/// 样式注册表（已迁 8：classic、partita（(26)）与 cadenza、fume、
+/// tilt、claddagh、cappella、still（(33) A 档全量）；其余 9 个只
+/// 登记元数据，供选择器全量展示与「网页版」跳转）。
 enum LyricStageRegistry {
     static let allStyles: [LyricStageStyleInfo] = [
         .init(id: "sonnet",   displayName: "商籁", order: 10,  styleVersion: 1, isNativeAvailable: false, factory: nil),
@@ -230,17 +231,23 @@ enum LyricStageRegistry {
         .init(id: "nebbia",   displayName: "雾笺", order: 29,  styleVersion: 1, isNativeAvailable: false, factory: nil),
         .init(id: "classic",  displayName: "流光", order: 30,  styleVersion: 2, isNativeAvailable: true,
               factory: { ClassicStageRenderer() }),
-        .init(id: "cadenza",  displayName: "心象", order: 40,  styleVersion: 1, isNativeAvailable: false, factory: nil),
+        .init(id: "cadenza",  displayName: "心象", order: 40,  styleVersion: 2, isNativeAvailable: true,
+              factory: { CadenzaStageRenderer() }),
         .init(id: "partita",  displayName: "云阶", order: 50,  styleVersion: 2, isNativeAvailable: true,
               factory: { PartitaStageRenderer() }),
-        .init(id: "fume",     displayName: "浮名", order: 60,  styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "tilt",     displayName: "倾诉", order: 70,  styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "claddagh", displayName: "回环", order: 80,  styleVersion: 1, isNativeAvailable: false, factory: nil),
+        .init(id: "fume",     displayName: "浮名", order: 60,  styleVersion: 2, isNativeAvailable: true,
+              factory: { FumeStageRenderer() }),
+        .init(id: "tilt",     displayName: "倾诉", order: 70,  styleVersion: 2, isNativeAvailable: true,
+              factory: { TiltStageRenderer() }),
+        .init(id: "claddagh", displayName: "回环", order: 80,  styleVersion: 2, isNativeAvailable: true,
+              factory: { CladdaghStageRenderer() }),
         .init(id: "monet",    displayName: "莫奈", order: 90,  styleVersion: 1, isNativeAvailable: false, factory: nil),
         .init(id: "pendolo",  displayName: "时计", order: 100, styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "cappella", displayName: "群唱", order: 110, styleVersion: 1, isNativeAvailable: false, factory: nil),
+        .init(id: "cappella", displayName: "群唱", order: 110, styleVersion: 2, isNativeAvailable: true,
+              factory: { CappellaStageRenderer() }),
         .init(id: "diorama",  displayName: "镜台", order: 120, styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "still",    displayName: "静止", order: 130, styleVersion: 1, isNativeAvailable: false, factory: nil),
+        .init(id: "still",    displayName: "静止", order: 130, styleVersion: 2, isNativeAvailable: true,
+              factory: { StillStageRenderer() }),
     ]
 
     static func info(for styleId: String) -> LyricStageStyleInfo? {
