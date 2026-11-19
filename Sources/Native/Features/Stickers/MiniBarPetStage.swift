@@ -56,6 +56,14 @@ private final class MiniPetActor: UIView {
     var isCat: Bool { asset.hasPrefix("cat") }
     /// 安置中（长按拖动落位）：不参加漫游与互动编排。
     var placed = false
+    /// 停靠计时锚（3.7 (32) 细修 4）：落位时刻的层墙钟；与
+    /// 它互动（点/双击/再拖）刷新，满 5 秒无互动淡出回池。
+    var parkedClock: TimeInterval = 0
+    /// 告别分流标记（3.7 (32) 三地流转）：墙台告别流决策时
+    /// 打标，真正离场瞬间才写去向登记——岛向的蹦去灵动岛
+    /// 落座，详情页向的登记为 stageBar 在详情页台等候。
+    var divertToIsland = false
+    var divertToStageBar = false
     /// 朝向：1 = 素材原向，-1 = 整只水平镜像。
     var facing: CGFloat = 1
     var hopStart: TimeInterval = -1
@@ -80,6 +88,17 @@ private final class MiniPetActor: UIView {
         let tap = UITapGestureRecognizer(
             target: self, action: #selector(handleTap(_:)))
         addGestureRecognizer(tap)
+        // 双击（3.7 (32) 细修 3）：此前全层没有双击手势，双
+        // 击只能落成两次单击（点本体双击 = 对话框重开，无反
+        // 应），Miller 报「有些宠物双击不发表情」。新增专用
+        // 双击认领 → 走点头顶同一反应通道；单击 require to
+        // Fail 双击（iOS 系统级消歧口径，单击延迟一个双击
+        // 窗口约 0.25s）。
+        let doubleTap = UITapGestureRecognizer(
+            target: self, action: #selector(handleDoubleTap(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        addGestureRecognizer(doubleTap)
+        tap.require(toFail: doubleTap)
         let press = UILongPressGestureRecognizer(
             target: self, action: #selector(handlePress(_:)))
         press.minimumPressDuration = 0.35
@@ -97,6 +116,10 @@ private final class MiniPetActor: UIView {
         let point = gesture.location(in: self)
         let head = point.y < bounds.height * 0.42
         stage?.petTapped(self, head: head)
+    }
+
+    @objc private func handleDoubleTap(_ gesture: UITapGestureRecognizer) {
+        stage?.petDoubleTapped(self)
     }
 
     @objc private func handlePress(_ gesture: UILongPressGestureRecognizer) {
@@ -198,6 +221,9 @@ enum PetLines {
         "我饿了，去看看碗里有啥",
         "今天的巡逻结束了，明天见",
         "我去磨磨爪子，回头见",
+        // (32) 补 2 句
+        "我听见开罐头的声音了，先走一步",
+        "沙发那头有个好位置，我去占着",
     ]
     static let farewellDog = [
         "我妈叫我回家吃饭了",
@@ -208,6 +234,9 @@ enum PetLines {
         "晚饭时间到了，我先走一步",
         "我去院子里跑两圈，明天见",
         "困了困了，我去窝里睡了",
+        // (32) 补 2 句
+        "我闻到饭香了，跟过去看看",
+        "球还在院子里，我去叼回来",
     ]
 
     // MARK: 关心词（(27) 新增；按时段分池，种子句在各池内）
@@ -217,30 +246,35 @@ enum PetLines {
         "早上好呀，先喝杯水再听歌",
         "早饭吃了没？不吃早饭可不行",
         "新的一天，我陪你一起开始",
+        "伸个懒腰，新的一天开始啦",
     ]
     static let careNoon = [
         "今天有没有好好吃饭",
         "午饭想吃什么？我陪你想想",
         "吃完饭歇一会儿，别急着忙",
         "今天你累不累啊，要不要眯一会儿",
+        "吃点热乎的，胃会舒服点",
     ]
     static let careAfternoon = [
         "今天我给你捏捏肩",
         "下午容易困，起来走两圈吧",
         "喝口水，眼睛也休息一下",
         "坐一下午了，肩膀僵不僵",
+        "起来接杯水，顺便透透气",
     ]
     static let careEvening = [
         "今天你累不累啊",
         "今天辛苦啦，晚饭要吃好一点",
         "洗个热水澡，解解乏吧",
         "晚饭有没有好好吃？别凑合",
+        "忙了一天，回来就好好歇着",
     ]
     static let careLateNight = [
         "都这么晚了，早点睡吧",
         "这首听完就睡，好不好",
         "我要睡觉了，晚安……你也快睡",
         "深夜了，我陪你，但只能陪一小会儿哦",
+        "眼睛都睁不开了吧，去睡吧",
     ]
 
     static func carePool(forHour hour: Int) -> [String] {
@@ -288,7 +322,9 @@ final class MiniBarPetStage: UIView {
         + (1...27).map { String(format: "dog-%02d", $0) }
     private static let residentDogPool =
         ["dog-01", "dog-15", "dog-18", "dog-19", "dog-23", "dog-25"]
-    private static let reactionPool =
+    /// 反应池：灵动岛层双击反应共用同一份（3.7 (32) 放开
+    /// private 供 PetIslandLayer 引用，值不变）。
+    static let reactionPool =
         ["dog-11", "cat-15", "dog-25", "cat-01", "dog-20", "cat-24", "dog-17"]
     /// 关心回应选项 → 头顶反应贴纸（猫/狗）：0 摸摸头、
     /// 1 亲亲、2 抱抱。
@@ -300,8 +336,17 @@ final class MiniBarPetStage: UIView {
     private static let careOptionTitles = ["摸摸头", "亲亲", "抱抱"]
     private static let seenKey = "folia.minipets.seenAssets"
 
+    /// 宿主角色（3.7 (32)）：墙台 / 详情页台。取人来源、告别
+    /// 分流与去向登记按角色分工（见 PetHomeRegistry）。
+    enum Role {
+        case wall, stage
+    }
+    let role: Role
+
     private weak var bar: UIView?
     private var barPresented = false
+    /// 供去向登记判定「最前点播台」用。
+    var isBarPresented: Bool { barPresented }
     private var collapsed = false
     /// 开关开且班底在场（与 isHidden 分工：关开关时清空班底）。
     private var petsActive = false
@@ -348,19 +393,22 @@ final class MiniBarPetStage: UIView {
     private var trackSerial = 0
     private var lastTrackId: String?
     private var guestRotateAt: TimeInterval = 0
-    private var nextInteractionAt: TimeInterval = 6
-    private var scriptKind: ScriptKind = .meet
-    private var scriptRunningKind: ScriptKind = .meet
-    private var scriptPair: (MiniPetActor, MiniPetActor)?
-    private var scriptUntil: TimeInterval = 0
-    private var lastPairIndex = -1
+    // 停聊（3.7 (32) 细修 5 人格驱动版）：随机配对、个体冷
+    // 却、轮流冒泡。旧 meet 双气泡同显与 chase 追逐编排退
+    // 役（Miller 报「宠物一直在跑、从不停下来对话」），走
+    // 位复用 meetWalk/meetArrived/meetHold 三态。
+    private var chatPair: (MiniPetActor, MiniPetActor)?
+    private var chatLines: [(actor: MiniPetActor, text: String)] = []
+    private var chatLineIndex = -1
+    private var chatLineUntil: TimeInterval = 0
+    private var nextChatAt: TimeInterval = 14
+    private var chatCooldowns: [ObjectIdentifier: TimeInterval] = [:]
     private var lastSingleIndex: [Bool: Int] = [:]
     private var lastFarewellIndex: [Bool: Int] = [:]
     private var lastCareIndex = -1
 
     private var bubbleA: UILabel?
     private var bubbleB: UILabel?
-    private var bubblePairUntil: TimeInterval = 0
 
     private var dialogView: UIView?
     private var dialogSticker: StickerView?
@@ -378,8 +426,6 @@ final class MiniBarPetStage: UIView {
     private var careOptionsShown = false
     private var nextCareAt: TimeInterval = 25
 
-    private enum ScriptKind { case meet, chase }
-
     /// 对话框点别处关闭（挂到宿主墙根视图；不取消触摸，与
     /// (25) 在舞台根视图上的做法同构）。
     private lazy var dismissTapRecognizer: UITapGestureRecognizer = {
@@ -389,8 +435,9 @@ final class MiniBarPetStage: UIView {
         return tap
     }()
 
-    init(bar: UIView) {
+    init(bar: UIView, role: Role = .wall) {
         self.bar = bar
+        self.role = role
         super.init(frame: .zero)
         backgroundColor = .clear
         isUserInteractionEnabled = true
@@ -422,6 +469,8 @@ final class MiniBarPetStage: UIView {
             + " miniPets=\(StickerSettings.miniPetsEnabled)"
             + " legacyCompanion=\(StickerSettings.companionEnabled)")
         barPresented = presented
+        // 去向登记：最前点播台登记（岛上宠物点按回台落点）。
+        PetHomeRegistry.shared.noteFrontmost(stage: self, presented: presented)
         if presented {
             // 台子每次出现必是完整形态（resetMiniBarFormInstant
             // 保证），宠物层形态同步复位展开态。
@@ -432,7 +481,23 @@ final class MiniBarPetStage: UIView {
                 isHidden = false
                 petsActive = true
                 syncFrame()
+                // 详情页台：先记下「等在此处」的班底，入场后由
+                // 其中一只冒「等你」库台词（细修 B 流转）。
+                let waiting = role == .stage
+                    ? Set(PetHomeRegistry.shared.stageBarResidents) : []
                 ensureExpandedCast()
+                if role == .stage,
+                   let greeter = allActors.first(where: { waiting.contains($0.asset) }) {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+                        [weak self, weak greeter] in
+                        guard let self, let greeter, self.petsActive,
+                              self.allActors.contains(where: { $0 === greeter })
+                        else { return }
+                        self.showTransientBubble(
+                            PetLines.stageWaiting.randomElement() ?? "",
+                            above: greeter, duration: 2.6)
+                    }
+                }
             } else {
                 isHidden = true
                 petsActive = false
@@ -459,7 +524,7 @@ final class MiniBarPetStage: UIView {
         hideDialog()
         hideBubbles()
         closeCare()
-        scriptPair = nil
+        cancelChat()
         pendingSpawns.removeAll()
         batchActive = false
         pendingForm = (newValue, clockTime + Self.formSettleDelay)
@@ -473,19 +538,32 @@ final class MiniBarPetStage: UIView {
         lastTrackId = id
         trackSerial += 1
         guard barPresented, petsActive else { return }
-        if let resident {
+        // 常驻按曲轮换只属墙台（3.7 (32)）：详情页台的班底是
+        // 「等在此处」的具体宠物，换素材即换身份，流转模型
+        // 下不许轮换；舞台只做探头反应。
+        if role == .wall, let resident {
             let asset = trackSerial % 5 == 0
                 ? "cat-09"
                 : Self.residentDogPool[trackSerial % Self.residentDogPool.count]
             if resident.asset != asset {
+                let oldAsset = resident.asset
                 resident.setAsset(asset)
                 seenAssets.insert(asset)
                 persistSeen()
+                // 去向随素材走：旧素材回幕后、新素材上墙台。
+                let registry = PetHomeRegistry.shared
+                if registry.home(of: oldAsset) == .wallBar {
+                    registry.setHome(oldAsset, .pool)
+                }
+                registry.setHome(asset, .wallBar)
+                syncLiveRegistry()
             }
         }
         for actor in allActors { actor.placed = false }
         if PlaybackEngine.shared.isPlaying {
             for actor in allActors where actor.mode != .dragged {
+                // 停聊中的一对不被切歌探头打断（细修 5 让位）。
+                if actor === chatPair?.0 || actor === chatPair?.1 { continue }
                 actor.mode = .peek
                 actor.until = activeTime + 0.9
                 actor.facing = actor.center.x <= bounds.midX ? 1 : -1
@@ -541,15 +619,46 @@ final class MiniBarPetStage: UIView {
 
     // MARK: 取人（未露面者优先，全员露面后重置名单）
 
+    /// 在场名单同步去向登记（身份连续的互斥保证）：取人时
+    /// 排除在别层在场的宠物。
+    private func syncLiveRegistry() {
+        PetHomeRegistry.shared.noteLiveAssets(
+            stage: self, assets: Set(allActors.map { $0.asset }))
+    }
+
     private func pickAssets(count: Int, excluding: Set<String>) -> [String] {
+        let registry = PetHomeRegistry.shared
         var unavailable = excluding
+        // 在别层在场的宠物不可取（同一只不在两处同时出现）。
+        unavailable.formUnion(registry.liveAssetsElsewhere(excluding: self))
         var picked: [String] = []
+        if role == .stage {
+            // 详情页台班底 = 去向登记：等在此处（stageBar）的
+            // 优先，其次幕后（pool）；墙台/岛上的不抢。舞台取
+            // 人不写墙的未露面名单（新面孔先在墙上登场的规矩
+            // 不被舞台消耗）。
+            let waiting = Self.fullPool.filter {
+                registry.home(of: $0) == .stageBar && !unavailable.contains($0)
+            }.shuffled()
+            let pool = Self.fullPool.filter {
+                registry.home(of: $0) == .pool && !unavailable.contains($0)
+            }.shuffled()
+            for asset in waiting + pool {
+                guard picked.count < count else { break }
+                picked.append(asset)
+                unavailable.insert(asset)
+            }
+            return picked
+        }
+        // 墙台：未露面者优先（原口径）；灵动岛居民垫底——只
+        // 有实在无人可派时才召回（回流，细修 B 第 4 条）。
         if seenAssets.count >= Self.fullPool.count {
             seenAssets.removeAll()
             persistSeen()
         }
+        let onIsland: (String) -> Bool = { registry.home(of: $0) == .island }
         let unseen = Self.fullPool.filter {
-            !seenAssets.contains($0) && !unavailable.contains($0)
+            !seenAssets.contains($0) && !unavailable.contains($0) && !onIsland($0)
         }.shuffled()
         for asset in unseen {
             guard picked.count < count else { break }
@@ -558,9 +667,19 @@ final class MiniBarPetStage: UIView {
         }
         if picked.count < count {
             let rest = Self.fullPool.filter {
-                !unavailable.contains($0)
+                !unavailable.contains($0) && !onIsland($0)
             }.shuffled()
             for asset in rest {
+                guard picked.count < count else { break }
+                picked.append(asset)
+                unavailable.insert(asset)
+            }
+        }
+        if picked.count < count {
+            let islanders = Self.fullPool.filter {
+                onIsland($0) && !unavailable.contains($0)
+            }.shuffled()
+            for asset in islanders {
                 guard picked.count < count else { break }
                 picked.append(asset)
                 unavailable.insert(asset)
@@ -591,6 +710,10 @@ final class MiniBarPetStage: UIView {
         let actor = MiniPetActor(asset: asset, size: petSizeNow())
         actor.stage = self
         addSubview(actor)
+        // 去向登记：上台即变更去向（召回岛民/详情页待命者时
+        // pet.move 在此落痕，岛层经回调同步撤下）。
+        PetHomeRegistry.shared.setHome(asset, role == .wall ? .wallBar : .stageBar)
+        syncLiveRegistry()
         return actor
     }
 
@@ -599,14 +722,30 @@ final class MiniBarPetStage: UIView {
         if bounds.width <= 40 { noteGuardBlock("ensure.stageTooNarrow"); return }
         let castBefore = allActors.map { $0.asset }
         if resident == nil {
-            let asset = Self.residentDogPool[
-                trackSerial % Self.residentDogPool.count]
+            // 详情页台的常驻同样走取人（等在此处者优先），不
+            // 用墙的狗池轮换（身份连续）；墙台沿用原口径，但
+            // 跳过正在灵动岛落座的狗池成员（不硬召回岛民）。
+            let wallResident: String = {
+                let pool = Self.residentDogPool
+                for offset in 0..<pool.count {
+                    let candidate = pool[(trackSerial + offset) % pool.count]
+                    if PetHomeRegistry.shared.home(of: candidate) != .island {
+                        return candidate
+                    }
+                }
+                return pool[trackSerial % pool.count]
+            }()
+            let asset = role == .stage
+                ? (pickAssets(count: 1, excluding: []).first ?? wallResident)
+                : wallResident
             let actor = makeActor(asset: asset)
             actor.center = CGPoint(x: bounds.width * 0.32,
                                    y: currentGroundY() - petSizeNow() / 2)
             resident = actor
-            seenAssets.insert(asset)
-            persistSeen()
+            if role == .wall {
+                seenAssets.insert(asset)
+                persistSeen()
+            }
         }
         while allActors.count < Self.expandedCast {
             guard let asset = pickAssets(
@@ -614,8 +753,13 @@ final class MiniBarPetStage: UIView {
             else { break }
             spawnGuest(asset: asset, animated: true)
         }
-        while allActors.count > Self.expandedCast, let oldest = guests.first {
-            removeActor(oldest, animated: true)
+        // 裁员跳过停靠中与停聊中的（细修 4/5 让位）；全员让
+        // 位时允许临时超编，不硬裁。
+        while allActors.count > Self.expandedCast,
+              let extra = guests.first(where: {
+                  !$0.placed && $0 !== chatPair?.0 && $0 !== chatPair?.1
+              }) {
+            removeActor(extra, animated: true, sendToPool: true)
         }
         if !framesRunning {
             for actor in allActors { actor.stickerView.pause() }
@@ -692,16 +836,23 @@ final class MiniBarPetStage: UIView {
         if !framesRunning { actor.stickerView.pause() }
     }
 
-    private func removeActor(_ actor: MiniPetActor, animated: Bool) {
+    /// 移除演员。sendToPool = 去向回幕后（轮换/裁员/停靠过
+    /// 期）；告别流的移除不走这里回池——去向已由分流决策写
+    /// 好（岛/stageBar），此处默认不动登记。
+    private func removeActor(_ actor: MiniPetActor, animated: Bool,
+                             sendToPool: Bool = false) {
         guests.removeAll { $0 === actor }
         if resident === actor { resident = nil }
-        if scriptPair?.0 === actor || scriptPair?.1 === actor {
-            scriptPair = nil
-            hideBubbles()
+        if chatPair?.0 === actor || chatPair?.1 === actor {
+            cancelChat()
         }
         if dialogOwner === actor { hideDialog() }
         if carePet === actor { closeCare() }
         farewellQueue.removeAll { $0 === actor }
+        if sendToPool {
+            PetHomeRegistry.shared.setHome(actor.asset, .pool)
+        }
+        syncLiveRegistry()
         if animated {
             UIView.animate(withDuration: 0.3, animations: {
                 actor.alpha = 0
@@ -712,10 +863,20 @@ final class MiniBarPetStage: UIView {
     }
 
     private func clearCast() {
+        // 台面撤场时的去向收口：墙台宠物回幕后；详情页台的
+        // 宠物保留 stageBar 登记（关台后仍在详情页台等候，
+        // 下次开台原班底回来）。
+        if role == .wall {
+            for actor in allActors
+            where PetHomeRegistry.shared.home(of: actor.asset) == .wallBar {
+                PetHomeRegistry.shared.setHome(actor.asset, .pool)
+            }
+        }
         for actor in allActors { actor.removeFromSuperview() }
         resident = nil
         guests.removeAll()
-        scriptPair = nil
+        cancelChat()
+        syncLiveRegistry()
     }
 
     /// 展开落定后班底重整：条上宠物随台升起（吸附自动跟
@@ -731,9 +892,11 @@ final class MiniBarPetStage: UIView {
         } else {
             guests = riders
         }
-        // 超额时从最新入场者裁起，保留最久的嘉宾随台留任。
-        while allActors.count > Self.expandedCast, let extra = guests.last {
-            removeActor(extra, animated: true)
+        // 超额时从最新入场者裁起，保留最久的嘉宾随台留任；
+        // 停靠中的不裁（细修 4 让位）。
+        while allActors.count > Self.expandedCast,
+              let extra = guests.last(where: { !$0.placed }) {
+            removeActor(extra, animated: true, sendToPool: true)
         }
         ensureExpandedCast()
         for actor in allActors {
@@ -758,6 +921,10 @@ final class MiniBarPetStage: UIView {
 
     fileprivate func petTapped(_ actor: MiniPetActor, head: Bool) {
         guard !isHidden, petsActive else { return }
+        // 停靠中被点 = 互动，5 秒计时刷新（细修 4）。
+        if actor.placed { actor.parkedClock = clockTime }
+        // 停聊让位：点到参与者，对话先让给用户（细修 5）。
+        cancelChatIfParticipant(actor)
         if head {
             showReaction(above: actor)
         } else {
@@ -765,14 +932,38 @@ final class MiniBarPetStage: UIView {
         }
     }
 
+    /// 双击（3.7 (32) 细修 3）：任何宠物双击 → 冒它自己的
+    /// 反应贴纸，与点头顶同一通道；若单击的对话框刚被本只
+    /// 打开（双击第一下触发的残留），先收掉再冒反应。
+    fileprivate func petDoubleTapped(_ actor: MiniPetActor) {
+        guard !isHidden, petsActive else { return }
+        if actor.placed { actor.parkedClock = clockTime }
+        cancelChatIfParticipant(actor)
+        if dialogOwner === actor { hideDialog() }
+        actor.hopStart = activeTime
+        showReaction(above: actor)
+    }
+
+    /// 岛上宠物点按回台的落点（PetIslandLayer 调用）：在本台
+    /// 以嘉宾身份入场（入场动画承接「蹦回」）；台不在场/宠
+    /// 物关时不动登记，宠物留在岛上。
+    func receiveReturningPet(asset: String) {
+        guard barPresented, petsActive, !isHidden else { return }
+        if let existing = allActors.first(where: { $0.asset == asset }) {
+            existing.hopStart = activeTime
+            return
+        }
+        spawnGuest(asset: asset, animated: true)
+        if let actor = guests.first(where: { $0.asset == asset }) {
+            actor.hopStart = activeTime
+        }
+    }
+
     fileprivate func petDragBegan(_ actor: MiniPetActor) {
         guard !isHidden, petsActive else { return }
         hideDialog()
         closeCare()
-        if scriptPair?.0 === actor || scriptPair?.1 === actor {
-            scriptPair = nil
-            hideBubbles()
-        }
+        cancelChatIfParticipant(actor)
         actor.mode = .dragged
         actor.placed = false
         bringSubviewToFront(actor)
@@ -796,16 +987,23 @@ final class MiniBarPetStage: UIView {
     }
 
     /// 松手：横向落位（夹回活动范围）、竖直吸附回地面并小
-    /// 跳一下，进入安置态——停在落点，不参加漫游与编排，
-    /// 直到切歌/形态切换。
+    /// 跳一下，进入停靠态（3.7 (32) 细修 4 修订 (27) 的安置
+    /// 语义）：定格在落点、不被队形/轮换/批次逻辑拽走；停
+    /// 靠后 5 秒内无任何与它的互动（点/双击/再拖，互动刷
+    /// 新计时）→ 淡出消失回池。停靠仅会话内有效；切歌/形
+    /// 态切换仍按原口径解除停靠。
     private func dropActor(_ actor: MiniPetActor, at point: CGPoint) {
         let range = walkRange(for: actor)
         actor.center.x = min(max(point.x, range.lowerBound), range.upperBound)
         actor.feetY = currentGroundY()
         actor.placed = true
+        actor.parkedClock = clockTime
         actor.mode = .idle
         actor.until = activeTime + 2
         actor.hopStart = activeTime
+        Breadcrumbs.log("pet.park asset=\(actor.asset)"
+            + " x=\(Int(actor.center.x)) y=\(Int(actor.center.y))"
+            + " form=\(collapsed ? "collapsed" : "expanded")")
     }
 
     // MARK: 反应小贴纸（点头顶；关心回应时按映射指定素材）
@@ -990,7 +1188,30 @@ final class MiniBarPetStage: UIView {
         for actor in allActors {
             actor.layer.removeAllAnimations()
             actor.alpha = 1
+            // 分流标记只打在演员身上、离场瞬间才写登记：流
+            // 被取消时清标即可，不留幽灵去向（细修 B）。
+            actor.divertToIsland = false
+            actor.divertToStageBar = false
             if actor.mode == .farewell { actor.mode = .idle }
+        }
+    }
+
+    /// 告别分流决策（3.7 (32) 三地流转，仅墙台）：说完离开
+    /// 词后不再直接回池——约 1/3（按在场数取整）蹦去灵动
+    /// 岛落座（岛上限 2 只，满员不再送），其余去详情页点
+    /// 播台等候。此处只打标，去向登记在离场瞬间写（见
+    /// stepFarewell），流被取消时标记随 cancelFlow 清除。
+    private func prepareFarewellDestinations(_ actors: [MiniPetActor]) {
+        guard role == .wall else { return }
+        let slots = max(0, PetHomeRegistry.islandCapacity
+            - PetHomeRegistry.shared.islandResidents.count)
+        let islandCount = min(slots, Int((Double(actors.count) / 3.0).rounded()))
+        for (index, actor) in actors.enumerated() {
+            if index < islandCount {
+                actor.divertToIsland = true
+            } else {
+                actor.divertToStageBar = true
+            }
         }
     }
 
@@ -1001,7 +1222,7 @@ final class MiniBarPetStage: UIView {
         farewellActive = true
         farewellNextAt = clockTime
         afterFarewell = completion
-        scriptPair = nil
+        cancelChat()
         hideBubbles()
         closeCare()
         hideDialog()
@@ -1026,27 +1247,48 @@ final class MiniBarPetStage: UIView {
         let generation = flowGeneration
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.1) { [weak self, weak actor] in
             guard let self, let actor, generation == self.flowGeneration else { return }
+            // 分流落点（细修 B）：岛向的在告别词说完后蹦去灵
+            // 动岛（去向此刻才写登记，岛层从它当前窗口位置
+            // 接走）；详情页向的登记为 stageBar 后淡出。
+            if actor.divertToIsland {
+                let rect = actor.convert(actor.bounds, to: nil)
+                PetHomeRegistry.shared.setHome(actor.asset, .island)
+                PetIslandLayer.shared.receive(asset: actor.asset, fromRect: rect)
+                self.removeActor(actor, animated: false)
+                actor.alpha = 1
+                self.finishFarewellDeparture(generation: generation)
+                return
+            }
+            if actor.divertToStageBar {
+                PetHomeRegistry.shared.setHome(actor.asset, .stageBar)
+            }
             UIView.animate(withDuration: 0.35, animations: {
                 actor.alpha = 0
             }, completion: { _ in
                 guard generation == self.flowGeneration else { return }
                 self.removeActor(actor, animated: false)
                 actor.alpha = 1
-                self.farewellRemaining -= 1
-                if self.farewellRemaining <= 0, self.farewellActive {
-                    self.farewellActive = false
-                    let done = self.afterFarewell
-                    self.afterFarewell = nil
-                    done?()
-                }
+                self.finishFarewellDeparture(generation: generation)
             })
+        }
+    }
+
+    /// 告别离场收尾计数（淡出与岛转移共用）。
+    private func finishFarewellDeparture(generation: Int) {
+        guard generation == flowGeneration else { return }
+        farewellRemaining -= 1
+        if farewellRemaining <= 0, farewellActive {
+            farewellActive = false
+            let done = afterFarewell
+            afterFarewell = nil
+            done?()
         }
     }
 
     // MARK: 关心用户系统
 
     private func maybeStartCare() {
-        guard petsActive, dialogView == nil, scriptPair == nil,
+        guard petsActive, dialogView == nil, chatPair == nil,
               !farewellActive, pendingForm == nil, carePet == nil,
               activeTime >= nextCareAt else { return }
         let candidates = allActors.filter {
@@ -1283,6 +1525,7 @@ final class MiniBarPetStage: UIView {
         if let pending = pendingForm, clockTime >= pending.at {
             pendingForm = nil
             if pending.collapsed {
+                prepareFarewellDestinations(allActors)
                 startFarewell(of: allActors) { [weak self] in
                     self?.spawnBatch()
                 }
@@ -1307,21 +1550,32 @@ final class MiniBarPetStage: UIView {
         if batchActive, pendingSpawns.isEmpty, !farewellActive,
            clockTime >= batchEndsAt, !allActors.isEmpty {
             batchActive = false
+            prepareFarewellDestinations(allActors)
             startFarewell(of: allActors) { [weak self] in
                 self?.spawnBatch()
             }
+        }
+
+        // 停靠过期（细修 4）：定格满 5 秒无互动 → 淡出回池。
+        for actor in allActors where actor.placed && actor.mode != .dragged
+            && clockTime - actor.parkedClock >= 5 {
+            Breadcrumbs.log("pet.park.expire asset=\(actor.asset)")
+            removeActor(actor, animated: true, sendToPool: true)
         }
 
         updateCare()
 
         guard playing else { return }
         activeTime += dt
-        // 展开态嘉宾轮换（未露面者优先取人）。
+        // 展开态嘉宾轮换（未露面者优先取人）；停靠中与停
+        // 聊中的嘉宾不被轮换调走（细修 4/5 让位）。
         if !collapsed, !farewellActive, pendingForm == nil,
            activeTime >= guestRotateAt {
             guestRotateAt = activeTime + 18
-            if let oldest = guests.first {
-                removeActor(oldest, animated: true)
+            if let oldest = guests.first(where: {
+                !$0.placed && $0 !== chatPair?.0 && $0 !== chatPair?.1
+            }) {
+                removeActor(oldest, animated: true, sendToPool: true)
                 if let asset = pickAssets(
                     count: 1, excluding: Set(allActors.map { $0.asset })).first {
                     spawnGuest(asset: asset, animated: true)
@@ -1331,9 +1585,8 @@ final class MiniBarPetStage: UIView {
             }
         }
         maybeStartCare()
-        advanceScript()
+        advanceChat()
         for actor in allActors { advance(actor, dt: dt) }
-        if activeTime > bubblePairUntil, bubbleA != nil { hideBubbles() }
     }
 
     private func advance(_ actor: MiniPetActor, dt: TimeInterval) {
@@ -1369,7 +1622,7 @@ final class MiniBarPetStage: UIView {
             let speed: CGFloat = actor.mode == .pursue ? 52
                 : actor.mode == .flee ? 44 : 30
             let target = actor.mode == .pursue
-                ? (scriptPair?.1.center.x ?? actor.targetX) : actor.targetX
+                ? (chatPair?.1.center.x ?? actor.targetX) : actor.targetX
             let dx = target - actor.center.x
             if abs(dx) > 2 { actor.facing = dx > 0 ? 1 : -1 }
             if abs(dx) < 3 {
@@ -1391,97 +1644,130 @@ final class MiniBarPetStage: UIView {
         }
     }
 
-    // MARK: 双宠互动编排（沿 (25)：相遇对答 / 追逐）
+    // MARK: 双宠停聊（3.7 (32) 细修 5：人格驱动 + 随机配对）
 
-    private func advanceScript() {
-        if let pair = scriptPair {
+    /// 停聊推进：进行中则按句推进（轮流冒泡，一句 1.2–1.8s，
+    /// 气泡只在当前说话者头顶）；空闲且到了触发点则随机抽
+    /// 一对空闲宠物走到一起开聊。触发间隔：上一场结束后
+    /// 20–40s（编排时钟，暂停停摆）。让位：停靠/拖动/探头/
+    /// 告别中的不参与；对话框开着、关心气泡在场时不开聊；
+    /// 个体冷却 45s（同一只不连聊两轮）。
+    private func advanceChat() {
+        if let pair = chatPair {
             let (a, b) = pair
-            switch scriptRunningKind {
-            case .meet:
-                if a.mode == .meetHold {
-                    if activeTime >= scriptUntil {
-                        a.mode = .idle; a.until = activeTime + 1
-                        b.mode = .idle; b.until = activeTime + 1.6
-                        scriptPair = nil
-                        nextInteractionAt = activeTime + 10 + .random(in: 0...6)
-                    }
-                } else if a.mode == .meetArrived, b.mode == .meetArrived {
-                    beginMeetHold(a: a, b: b)
+            if a.mode == .meetHold {
+                if chatLineIndex >= 0, activeTime >= chatLineUntil {
+                    chatLineIndex += 1
+                    presentChatLine()
                 }
-            case .chase:
-                if activeTime >= scriptUntil {
-                    a.mode = .idle; a.until = activeTime + 1.2
-                    b.mode = .idle; b.until = activeTime + 1.2
-                    scriptPair = nil
-                    nextInteractionAt = activeTime + 10 + .random(in: 0...6)
-                }
+            } else if a.mode == .meetArrived, b.mode == .meetArrived {
+                beginChatHold(a: a, b: b)
             }
             return
         }
-        guard activeTime >= nextInteractionAt, !farewellActive else { return }
+        guard activeTime >= nextChatAt, !farewellActive,
+              pendingForm == nil, carePet == nil, dialogView == nil
+        else { return }
         let free = allActors.filter {
-            !$0.placed && $0.mode != .dragged && $0.mode != .peek && $0.mode != .farewell
+            !$0.placed && $0.mode != .dragged && $0.mode != .peek
+                && $0.mode != .farewell
+                && (chatCooldowns[ObjectIdentifier($0)] ?? 0) <= activeTime
         }
         guard free.count >= 2 else {
-            nextInteractionAt = activeTime + 3
+            nextChatAt = activeTime + 4
             return
         }
-        let a = free[0], b = free[1]
-        scriptPair = (a, b)
-        scriptRunningKind = scriptKind
-        switch scriptKind {
-        case .meet:
-            let mid = (a.center.x + b.center.x) / 2
-            let separation = (a.bounds.width + b.bounds.width) / 2 + 4
-            a.targetX = min(max(mid - separation / 2, walkRange(for: a).lowerBound),
-                            walkRange(for: a).upperBound)
-            b.targetX = min(max(mid + separation / 2, walkRange(for: b).lowerBound),
-                            walkRange(for: b).upperBound)
-            a.mode = .meetWalk
-            b.mode = .meetWalk
-        case .chase:
-            a.mode = .pursue
-            b.mode = .flee
-            let range = walkRange(for: b)
-            b.targetX = b.center.x <= bounds.midX
-                ? range.upperBound : range.lowerBound
-            scriptUntil = activeTime + 3.2
-        }
-        scriptKind = scriptKind == .meet ? .chase : .meet
+        let shuffled = free.shuffled()
+        let a = shuffled[0], b = shuffled[1]
+        chatPair = (a, b)
+        // 走位复用相遇编排：走到中点两侧，面对面。
+        let mid = (a.center.x + b.center.x) / 2
+        let separation = (a.bounds.width + b.bounds.width) / 2 + 4
+        a.targetX = min(max(mid - separation / 2, walkRange(for: a).lowerBound),
+                        walkRange(for: a).upperBound)
+        b.targetX = min(max(mid + separation / 2, walkRange(for: b).lowerBound),
+                        walkRange(for: b).upperBound)
+        a.mode = .meetWalk
+        b.mode = .meetWalk
     }
 
-    private func beginMeetHold(a: MiniPetActor, b: MiniPetActor) {
+    private func beginChatHold(a: MiniPetActor, b: MiniPetActor) {
         a.mode = .meetHold
         b.mode = .meetHold
         a.facing = a.center.x <= b.center.x ? 1 : -1
         b.facing = -a.facing
         a.hopStart = activeTime
         b.hopStart = activeTime + 0.12
-        scriptUntil = activeTime + 3.4
-        // 一问一答：异物种走跨物种对答库、同物种各说一句本
-        // 物种单句（防声口串台），与 (25) 同规则。
-        if a.isCat == b.isCat {
-            let lines = a.isCat ? PetLines.catSingles : PetLines.dogSingles
-            var first = Int.random(in: 0..<lines.count)
-            var second = Int.random(in: 0..<lines.count)
-            if second == first { second = (second + 1) % lines.count }
-            if first == lastPairIndex { first = (first + 1) % lines.count }
-            lastPairIndex = first
-            showBubble(lines[first], above: a, slot: 0)
-            showBubble(lines[second], above: b, slot: 1)
-        } else {
-            let asker = a.isCat ? a : b
-            let answerer = asker === a ? b : a
-            let pairs = asker.isCat ? PetLines.catAsksDog : PetLines.dogAsksCat
-            var index = Int.random(in: 0..<pairs.count)
-            if pairs.count > 1, index == lastPairIndex {
-                index = (index + 1) % pairs.count
-            }
-            lastPairIndex = index
-            showBubble(pairs[index].0, above: asker, slot: 0)
-            showBubble(pairs[index].1, above: answerer, slot: 1)
+        let dialogue = PetChat.generate(
+            a: PetPersonalities.of(a.asset), b: PetPersonalities.of(b.asset))
+        chatLines = dialogue.lines.map {
+            (actor: $0.speakerIsA ? a : b, text: $0.text)
         }
-        bubblePairUntil = activeTime + 3.3
+        chatLineIndex = 0
+        Breadcrumbs.log("pet.chat surface=\(role == .stage ? "stage" : "wall")"
+            + " form=\(collapsed ? "collapsed" : "expanded")"
+            + " a=\(a.asset)(\(PetPersonalities.of(a.asset).label))"
+            + " b=\(b.asset)(\(PetPersonalities.of(b.asset).label))"
+            + " topic=\(dialogue.topic.label)"
+            + " combo=o\(dialogue.openerIndex)/r\(dialogue.responseIndex)"
+            + " lines=\(dialogue.lines.count)")
+        presentChatLine()
+    }
+
+    private func presentChatLine() {
+        guard chatPair != nil, chatLineIndex >= 0 else { endChat(); return }
+        guard chatLineIndex < chatLines.count else { endChat(); return }
+        let line = chatLines[chatLineIndex]
+        chatLineUntil = activeTime + .random(in: 1.2...1.8)
+        showBubble(line.text, above: line.actor, slot: 0)
+        bubbleB?.removeFromSuperview()
+        bubbleB = nil
+        line.actor.hopStart = activeTime
+    }
+
+    /// 对话自然收尾：双方进个体冷却（45s），下一场 20–40s
+    /// 后（编排时钟）。
+    private func endChat() {
+        if let pair = chatPair {
+            for actor in [pair.0, pair.1] {
+                chatCooldowns[ObjectIdentifier(actor)] = activeTime + 45
+                if actor.mode == .meetHold || actor.mode == .meetWalk
+                    || actor.mode == .meetArrived {
+                    actor.mode = .idle
+                    actor.until = activeTime + 1 + .random(in: 0...1.5)
+                }
+            }
+        }
+        chatPair = nil
+        chatLines = []
+        chatLineIndex = -1
+        hideBubbles()
+        nextChatAt = activeTime + .random(in: 20...40)
+    }
+
+    /// 对话被打断（形态/显隐翻转、参与者被点按/拖走/移除）：
+    /// 参与者回待机并记短冷却（10s），防刚打断又立刻开聊。
+    private func cancelChat() {
+        if let pair = chatPair {
+            for actor in [pair.0, pair.1] {
+                chatCooldowns[ObjectIdentifier(actor)] = activeTime + 10
+                if actor.mode == .meetHold || actor.mode == .meetWalk
+                    || actor.mode == .meetArrived {
+                    actor.mode = .idle
+                    actor.until = activeTime + 1
+                }
+            }
+        }
+        chatPair = nil
+        chatLines = []
+        chatLineIndex = -1
+        hideBubbles()
+    }
+
+    private func cancelChatIfParticipant(_ actor: MiniPetActor) {
+        if chatPair?.0 === actor || chatPair?.1 === actor {
+            cancelChat()
+        }
     }
 
     // MARK: 对话气泡（与 (25) 同样式同节奏）

@@ -2,81 +2,6 @@ import UIKit
 import Combine
 import QuartzCore
 
-/// 舞台进度条：填充 + 光点，点按跳点、拖动松手才 seek（与迷你台
-/// 同一手势语义）。填充由 StageProgressDriver 逐帧喂 fraction。
-final class StageProgressBarView: UIView {
-    var onSeekFraction: ((Double) -> Void)?
-    private(set) var fraction: Double = 0
-    private var dragging = false
-    private let trackLayer = CALayer()
-    private let fillLayer = CALayer()
-    private let knob = UIView()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        trackLayer.backgroundColor = UIColor.white.withAlphaComponent(0.22).cgColor
-        trackLayer.cornerRadius = 2
-        fillLayer.backgroundColor = UIColor.white.cgColor
-        fillLayer.cornerRadius = 2
-        knob.backgroundColor = .white
-        knob.layer.cornerRadius = 5
-        knob.layer.shadowColor = UIColor.white.cgColor
-        knob.layer.shadowOpacity = 0.8
-        knob.layer.shadowRadius = 4
-        layer.addSublayer(trackLayer)
-        layer.addSublayer(fillLayer)
-        addSubview(knob)
-        let pan = UIPanGestureRecognizer(target: self, action: #selector(panned(_:)))
-        addGestureRecognizer(pan)
-        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped(_:)))
-        tap.require(toFail: pan)
-        addGestureRecognizer(tap)
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    func setFraction(_ value: Double) {
-        guard !dragging else { return }
-        fraction = min(max(value, 0), 1)
-        setNeedsLayout()
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        let trackFrame = CGRect(x: 0, y: bounds.height / 2 - 2, width: bounds.width, height: 4)
-        trackLayer.frame = trackFrame
-        fillLayer.frame = CGRect(
-            x: 0, y: trackFrame.minY, width: trackFrame.width * CGFloat(fraction), height: 4)
-        knob.frame = CGRect(
-            x: trackFrame.width * CGFloat(fraction) - 5, y: bounds.height / 2 - 5,
-            width: 10, height: 10)
-    }
-
-    private func fractionAt(_ gesture: UIGestureRecognizer) -> Double {
-        guard bounds.width > 0 else { return 0 }
-        return min(max(Double(gesture.location(in: self).x / bounds.width), 0), 1)
-    }
-
-    @objc private func tapped(_ gesture: UITapGestureRecognizer) {
-        onSeekFraction?(fractionAt(gesture))
-    }
-
-    @objc private func panned(_ gesture: UIPanGestureRecognizer) {
-        switch gesture.state {
-        case .began, .changed:
-            dragging = true
-            fraction = fractionAt(gesture)
-            setNeedsLayout()
-        case .ended, .cancelled:
-            dragging = false
-            onSeekFraction?(fractionAt(gesture))
-        default:
-            break
-        }
-    }
-}
-
 // 原生舞台页壳（3.7 (14)，M2'）：全屏舞台——封面氛围背景、
 // LyricStage 协议驱动的歌词面、与迷你台/展开卡同一命令入口的
 // 控制层。入口由双墙迷你台/双击卡片改道至此（网页 openStage
@@ -112,12 +37,38 @@ final class StageViewController: UIViewController {
     private let noticeWebButton = UIButton(type: .system)
     private let noticeCloseButton = UIButton(type: .system)
     private let rendererContainer = UIView()
-    private let progressBar = StageProgressBarView()
+    // 点播台（3.7 (32) 同步改造）：原固定 128pt 控制带（私有
+    // 进度条 + 时间标签 + 44/64/44 三键）整体换成与墙台同规
+    // 格的点播台——70pt 玻璃胶囊 + 同款主题层 + 可拖进度轨，
+    // 闲置 5 秒收成 16pt 细条（命中带 44pt）；去重变体：不
+    // 带封面缩略与标题/歌手行（页眉已有），只留控制与进度
+    // + 时间标签。实现见文件内「点播台」MARK 段，与墙台的
+    // 参数逐项对齐（弹簧/时长/填充色/圆点皮肤）。
+    private let stageBar = MiniBarHitView()
+    private var stageBlurView: UIVisualEffectView?
+    private var stageThemeLayer: MiniPlayerThemeLayer?
+    private var stageRimLight: UIView?
+    private var stageGlassTint: UIView?
+    private var stageProgressTrack: UIView?
+    private var stageProgressFill: UIView?
+    private var stageProgressKnob: UIView?
+    private var stageKnobSkin: UIView?
+    private var stageSeekHit: UIView?
     private let currentTimeLabel = UILabel()
     private let totalTimeLabel = UILabel()
     private let prevButton = UIButton(type: .system)
     private let playButton = UIButton(type: .system)
     private let nextButton = UIButton(type: .system)
+    private var stageBarWidthConstraint: NSLayoutConstraint?
+    private var stageBarHeightConstraint: NSLayoutConstraint?
+    private var stageTrackBottomConstraint: NSLayoutConstraint?
+    private var stageKnobLeading: NSLayoutConstraint?
+    private var stageTheme: MiniPlayerTheme = MiniPlayerTheme.effective
+    private var stageBarCollapsed = false
+    private var stageBarPresented = false
+    private var stageSeekDragging = false
+    private var stageIdleWorkItem: DispatchWorkItem?
+    private var stagePetStage: MiniBarPetStage?
 
     // MARK: 状态
 
@@ -158,6 +109,10 @@ final class StageViewController: UIViewController {
 
     // MARK: 生命周期
 
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
@@ -185,10 +140,18 @@ final class StageViewController: UIViewController {
         Breadcrumbs.samplerStart()
         Breadcrumbs.log("stage gate enter style=\(activeStyleId)")
         progressDriver.onFraction = { [weak self] fraction in
-            self?.progressBar.setFraction(fraction)
+            self?.setStageProgress(fraction)
         }
         progressDriver.start()
         startDisplayLink()
+        // 点播台在场边沿（3.7 (32)）：主题层门控 + 宠物钩子 +
+        // 无操作计时，与墙台 setMiniBarVisible 同构。
+        stageBarPresented = true
+        stageThemeLayer?.setHostVisible(true)
+        stageThemeLayer?.setBarVisible(true)
+        if stageBarCollapsed { resetStageBarFormInstant() }
+        stagePetStage?.barPresentationChanged(true)
+        resetStageIdleTimer()
         driftTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             self?.checkDrift()
         }
@@ -202,6 +165,11 @@ final class StageViewController: UIViewController {
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         progressDriver.stop()
+        stageBarPresented = false
+        cancelStageIdleTimer()
+        stageThemeLayer?.setHostVisible(false)
+        stageThemeLayer?.setBarVisible(false)
+        stagePetStage?.barPresentationChanged(false)
         stopDisplayLink()
         driftTimer?.invalidate()
         driftTimer = nil
@@ -285,39 +253,15 @@ final class StageViewController: UIViewController {
         noticeBar.addSubview(noticeCloseButton)
         view.addSubview(noticeBar)
         view.addSubview(rendererContainer)
-        progressBar.onSeekFraction = { [weak self] fraction in
-            guard let self, self.engine.duration > 0 else { return }
-            self.performSeek(to: fraction * self.engine.duration, source: "stage.progress")
-        }
-        view.addSubview(progressBar)
-        for label in [currentTimeLabel, totalTimeLabel] {
-            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-            label.textColor = UIColor.white.withAlphaComponent(0.6)
-            view.addSubview(label)
-        }
-        totalTimeLabel.textAlignment = .right
-        // transport 字形定版（3.7 (23)，Miller 19:13 拍板）：
-        // 上一首/下一首换圆润的 backward.fill/forward.fill
-        // （去掉 .end 的竖杠尖角，与迷你台同款）；三键统一
-        // semibold 字重——上一/下一 26pt、播放/暂停 32pt
-        // （DS R49 尺寸）；按钮框 prev/next 44pt、play 64pt，
-        // 热区均 ≥44pt（layoutStage 定尺寸）。
-        let transportConfig = UIImage.SymbolConfiguration(pointSize: 26, weight: .semibold)
-        prevButton.setImage(UIImage(systemName: "backward.fill", withConfiguration: transportConfig), for: .normal)
-        nextButton.setImage(UIImage(systemName: "forward.fill", withConfiguration: transportConfig), for: .normal)
-        for button in [prevButton, nextButton] {
-            button.tintColor = .white
-            view.addSubview(button)
-        }
-        prevButton.addTarget(self, action: #selector(prevTapped), for: .touchUpInside)
-        nextButton.addTarget(self, action: #selector(nextTapped), for: .touchUpInside)
-        playButton.tintColor = .white
-        playButton.backgroundColor = UIColor.white.withAlphaComponent(0.16)
-        playButton.layer.cornerRadius = 32
-        playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
-        view.addSubview(playButton)
+        // 点播台（3.7 (32)）：与墙台同规格的台体在此装配，
+        // 三键仍走既有按钮与命令入口（handleCommand 同路）。
+        buildStageBar()
         refreshPlayButton()
         refreshLikeButton()
+        // 主题变更通知（设置页/任一台长按）→ 本台同步换装。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(stageThemeSettingsChanged),
+            name: .foliaMiniPlayerThemeChanged, object: nil)
     }
 
     private func layoutStage() {
@@ -348,19 +292,20 @@ final class StageViewController: UIViewController {
                 x: 10, y: 4, width: noticeWebButton.frame.minX - 16, height: 32)
             contentTop += 48
         }
-        let controlsHeight: CGFloat = 128
-        let controlsTop = bounds.height - safe.bottom - controlsHeight
+        // 点播台几何（3.7 (32)）：宽 = min(屏宽, 屏高) − 24
+        // 居中（横屏同宽不拉伸，与墙台 (21) 定版一致，约束在
+        // buildStageBar 定、此处按当前尺寸更新常量）；台顶 =
+        // 屏底 − 安全区 − 10 − 形态高（展开 70 / 收起 16）。
+        // 台内子视图全走约束（同墙台结构），此处不再逐个定
+        // 帧。歌词容器底边到台顶上 4pt。
+        stageBarWidthConstraint?.constant =
+            min(bounds.width, bounds.height) - 24
+        let barHeight: CGFloat = stageBarCollapsed ? 16 : 70
+        let controlsTop = bounds.height - safe.bottom - 10 - barHeight
         rendererContainer.frame = CGRect(
             x: 0, y: contentTop, width: bounds.width,
             height: max(controlsTop - contentTop - 4, 0))
         renderer?.view.frame = rendererContainer.bounds
-        progressBar.frame = CGRect(x: 22, y: controlsTop, width: bounds.width - 44, height: 26)
-        currentTimeLabel.frame = CGRect(x: 22, y: controlsTop + 27, width: 60, height: 14)
-        totalTimeLabel.frame = CGRect(x: bounds.width - 82, y: controlsTop + 27, width: 60, height: 14)
-        let transportY = controlsTop + 52
-        playButton.frame = CGRect(x: bounds.width / 2 - 32, y: transportY, width: 64, height: 64)
-        prevButton.frame = CGRect(x: bounds.width / 2 - 116, y: transportY + 10, width: 44, height: 44)
-        nextButton.frame = CGRect(x: bounds.width / 2 + 72, y: transportY + 10, width: 44, height: 44)
         // 贴纸层（3.7 (24)，纯新增）：贴纸与陪伴宠物定位。
         stickerLayoutOverlays()
     }
@@ -471,6 +416,10 @@ final class StageViewController: UIViewController {
         loadLyrics(for: track)
         loadBackdropFallback(for: track)
         Breadcrumbs.log("stage track \(track.id) title=\(track.title)")
+        // 点播台切歌边沿（3.7 (32)，与墙 refreshMiniBar 同
+        // 构）：宠物切歌钩子 + 收起态先展开、否则重置计时。
+        stagePetStage?.setTrack(id: track.id)
+        if stageBarCollapsed { expandStageBar() } else { resetStageIdleTimer() }
     }
 
     private func refreshHeader() {
@@ -481,8 +430,9 @@ final class StageViewController: UIViewController {
     }
 
     private func refreshPlayButton() {
-        // 字形定版（3.7 (23)）：32pt semibold，与 prev/next 同口径。
-        let config = UIImage.SymbolConfiguration(pointSize: 32, weight: .semibold)
+        // 字形（3.7 (32) 同步后）：与墙台同值——播放 19pt
+        // semibold（(23) 的舞台专属 32pt 随旧控制带退役）。
+        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)
         playButton.setImage(
             UIImage(systemName: engine.isPlaying ? "pause.fill" : "play.fill",
                     withConfiguration: config),
@@ -699,12 +649,15 @@ final class StageViewController: UIViewController {
 
     @objc private func closeTapped() { closeStage() }
     @objc private func playTapped() {
+        resetStageIdleTimer()
         handleCommand(LyricStageCommand(kind: .toggle, source: "stage.controls"))
     }
     @objc private func prevTapped() {
+        resetStageIdleTimer()
         handleCommand(LyricStageCommand(kind: .prev, source: "stage.controls"))
     }
     @objc private func nextTapped() {
+        resetStageIdleTimer()
         handleCommand(LyricStageCommand(kind: .next, source: "stage.controls"))
     }
     @objc private func likeTapped() {
@@ -751,6 +704,466 @@ final class StageViewController: UIViewController {
         noticeDismissed = true
         noticeBar.isHidden = true
         view.setNeedsLayout()
+    }
+
+    // MARK: - 点播台（3.7 (32)：与墙台同规格的同步改造）
+    //
+    // 结构与参数逐项对齐墙台（WallPrototypeViewController 的
+    // buildMiniBar 一族）：70pt 玻璃胶囊（systemUltraThin-
+    // MaterialDark + 1pt 亮边 + rim 高光 + 0.06 白罩）、同款
+    // MiniPlayerThemeLayer 主题层（同一主题来源/存储/变更通
+    // 知）、底部内缘进度轨（左右内缩 20、高 4、底距 −7）+
+    // 发光圆钮/主题圆点皮肤、底部 20pt seek 命中带（拖动只
+    // 更填充、松手 seek；点按按轨道实际帧算比例跳点）、长按
+    // 0.55s 循环切主题、闲置 5 秒收成 16pt 细条（轨道底距
+    // −6、圆角 8、命中带纵向外扩 14pt 至 44pt、主题层/毛玻
+    // 璃/高光全隐、填充走收起态兜底色、圆点保留主题皮肤）、
+    // 形态弹簧 0.5s/damping 0.85/velocity 0.1、Reduce Motion
+    // 降级为 0.2s 纯 alpha。去重变体差异只有两处：无封面缩
+    // 略与标题/歌手行（页眉已有）；三键居中排布（墙台靠右，
+    // 因其左侧有封面标题），两侧补时间标签（旧控制带既有
+    // 元素保留）。命令落点与墙完全相同：toggle →
+    // PlaybackEngine.togglePlayPause、next/prev →
+    // QueueManager（经 handleCommand 统一入口）、seek →
+    // PlaybackEngine.seek（经 performSeek）。进度源仍是既有
+    // StageProgressDriver（viewWillDisappear 必 stop），不新
+    // 造第二套。
+
+    private func buildStageBar() {
+        let bar = stageBar
+        bar.backgroundColor = .clear
+        bar.layer.cornerRadius = 35
+        bar.layer.shadowColor = UIColor.black.cgColor
+        bar.layer.shadowOpacity = 0.25
+        bar.layer.shadowRadius = 20
+        bar.layer.shadowOffset = CGSize(width: 0, height: 8)
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(bar)
+        // 宠物层（细修 B）：详情页台班底，钩子与墙等价。
+        let petStage = MiniBarPetStage(bar: bar, role: .stage)
+        view.addSubview(petStage)
+        stagePetStage = petStage
+
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        blur.layer.cornerRadius = 35
+        blur.layer.borderWidth = 1
+        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        blur.clipsToBounds = true
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(blur)
+        stageBlurView = blur
+
+        let themeLayer = MiniPlayerThemeLayer()
+        themeLayer.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(themeLayer)
+        stageThemeLayer = themeLayer
+
+        let rimLight = UIView()
+        rimLight.backgroundColor = UIColor.white.withAlphaComponent(0.45)
+        rimLight.layer.cornerRadius = 0.5
+        rimLight.isUserInteractionEnabled = false
+        rimLight.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(rimLight)
+        stageRimLight = rimLight
+        let glassTint = UIView()
+        glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        glassTint.layer.cornerRadius = 35
+        glassTint.isUserInteractionEnabled = false
+        glassTint.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(glassTint)
+        stageGlassTint = glassTint
+
+        let progressTrack = UIView()
+        progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
+        progressTrack.layer.cornerRadius = 2
+        progressTrack.clipsToBounds = true
+        progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(progressTrack)
+        stageProgressTrack = progressTrack
+        let fill = UIView()
+        fill.backgroundColor = .white
+        fill.translatesAutoresizingMaskIntoConstraints = false
+        fill.layer.anchorPoint = CGPoint(x: 0, y: 0.5)
+        progressTrack.addSubview(fill)
+        stageProgressFill = fill
+        fill.transform = CGAffineTransform(scaleX: 0, y: 1)
+
+        let knob = UIView()
+        knob.backgroundColor = .white
+        knob.layer.cornerRadius = 4.5
+        knob.layer.shadowColor = UIColor.white.cgColor
+        knob.layer.shadowOpacity = 0.9
+        knob.layer.shadowRadius = 4
+        knob.layer.shadowOffset = .zero
+        knob.isUserInteractionEnabled = false
+        knob.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(knob)
+        stageProgressKnob = knob
+
+        for label in [currentTimeLabel, totalTimeLabel] {
+            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            label.textColor = UIColor.white.withAlphaComponent(0.6)
+            label.translatesAutoresizingMaskIntoConstraints = false
+            bar.addSubview(label)
+        }
+        totalTimeLabel.textAlignment = .right
+
+        // 三键字形与墙台同值（play 19pt / prev·next 15pt，
+        // semibold）；命令走既有 handleCommand 入口。
+        playButton.tintColor = .white
+        playButton.translatesAutoresizingMaskIntoConstraints = false
+        playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
+        bar.addSubview(playButton)
+        let sideConfig = UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)
+        prevButton.setImage(UIImage(systemName: "backward.fill", withConfiguration: sideConfig), for: .normal)
+        nextButton.setImage(UIImage(systemName: "forward.fill", withConfiguration: sideConfig), for: .normal)
+        for button in [prevButton, nextButton] {
+            button.tintColor = .white
+            button.translatesAutoresizingMaskIntoConstraints = false
+            bar.addSubview(button)
+        }
+        prevButton.addTarget(self, action: #selector(prevTapped), for: .touchUpInside)
+        nextButton.addTarget(self, action: #selector(nextTapped), for: .touchUpInside)
+
+        let seekHit = UIView()
+        seekHit.backgroundColor = .clear
+        seekHit.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(seekHit)
+        stageSeekHit = seekHit
+        let seekPan = UIPanGestureRecognizer(target: self, action: #selector(stageSeekPanned(_:)))
+        seekHit.addGestureRecognizer(seekPan)
+
+        stageBarWidthConstraint = bar.widthAnchor.constraint(
+            equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
+        stageBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 70)
+        stageBarWidthConstraint?.isActive = true
+        stageBarHeightConstraint?.isActive = true
+        NSLayoutConstraint.activate([
+            bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
+            bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
+            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+
+            blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            blur.topAnchor.constraint(equalTo: bar.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+
+            themeLayer.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            themeLayer.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            themeLayer.topAnchor.constraint(equalTo: bar.topAnchor),
+            themeLayer.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+
+            rimLight.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 30),
+            rimLight.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -30),
+            rimLight.topAnchor.constraint(equalTo: bar.topAnchor, constant: 1),
+            rimLight.heightAnchor.constraint(equalToConstant: 1),
+            glassTint.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            glassTint.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            glassTint.topAnchor.constraint(equalTo: bar.topAnchor),
+            glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+
+            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
+            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20),
+            progressTrack.heightAnchor.constraint(equalToConstant: 4),
+            fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
+            fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
+            fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
+
+            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            knob.widthAnchor.constraint(equalToConstant: 9),
+            knob.heightAnchor.constraint(equalToConstant: 9),
+
+            currentTimeLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
+            currentTimeLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            currentTimeLabel.widthAnchor.constraint(equalToConstant: 44),
+            totalTimeLabel.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            totalTimeLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            totalTimeLabel.widthAnchor.constraint(equalToConstant: 44),
+
+            playButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
+            playButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            playButton.widthAnchor.constraint(equalToConstant: 40),
+            playButton.heightAnchor.constraint(equalToConstant: 40),
+            prevButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -2),
+            prevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            prevButton.widthAnchor.constraint(equalToConstant: 34),
+            prevButton.heightAnchor.constraint(equalToConstant: 40),
+            nextButton.leadingAnchor.constraint(equalTo: playButton.trailingAnchor, constant: 2),
+            nextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            nextButton.widthAnchor.constraint(equalToConstant: 34),
+            nextButton.heightAnchor.constraint(equalToConstant: 40),
+
+            seekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            seekHit.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            seekHit.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            seekHit.heightAnchor.constraint(equalToConstant: 20),
+        ])
+        stageKnobLeading = knob.leadingAnchor.constraint(
+            equalTo: progressTrack.leadingAnchor, constant: -4.5)
+        stageKnobLeading?.isActive = true
+        stageTrackBottomConstraint = progressTrack.bottomAnchor.constraint(
+            equalTo: bar.bottomAnchor, constant: -7)
+        stageTrackBottomConstraint?.isActive = true
+
+        let longPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(stageBarLongPressed(_:)))
+        longPress.minimumPressDuration = 0.55
+        bar.addGestureRecognizer(longPress)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(stageBarTapped(_:)))
+        tap.require(toFail: longPress)
+        bar.addGestureRecognizer(tap)
+
+        applyStageTheme()
+    }
+
+    /// 进度填充与圆钮的唯一步进点（与墙 setMiniProgress 同
+    /// 构）：StageProgressDriver 逐帧喂、拖动/点按跳点先行
+    /// 预览都走这里；主题层积雪/鲨鳍/流星头位同源转喂。
+    private func setStageProgress(_ fraction: Double) {
+        let clamped = CGFloat(min(max(fraction, 0), 1))
+        stageProgressFill?.transform = CGAffineTransform(scaleX: clamped, y: 1)
+        if let trackWidth = stageProgressTrack?.bounds.width, trackWidth > 0 {
+            stageKnobLeading?.constant = clamped * trackWidth - 4.5
+        }
+        stageThemeLayer?.setFraction(Double(clamped))
+    }
+
+    private func applyStageTheme() {
+        stageThemeLayer?.apply(theme: stageTheme)
+        refreshStageProgressChrome()
+    }
+
+    /// 填充/圆点配色的形态收口（与墙 refreshMiniProgress-
+    /// Chrome 同值）：展开 = 主题口径；收起 = 兜底色（星空
+    /// 强金），圆点两形态都保留主题皮肤、无皮肤才白发光点。
+    private func refreshStageProgressChrome() {
+        stageKnobSkin?.removeFromSuperview()
+        stageKnobSkin = nil
+        if let skin = MiniPlayerThemeLayer.knobSkinView(for: stageTheme) {
+            skin.translatesAutoresizingMaskIntoConstraints = false
+            stageProgressKnob?.addSubview(skin)
+            NSLayoutConstraint.activate([
+                skin.centerXAnchor.constraint(equalTo: stageProgressKnob!.centerXAnchor),
+                skin.centerYAnchor.constraint(equalTo: stageProgressKnob!.centerYAnchor),
+                skin.widthAnchor.constraint(equalToConstant: 13),
+                skin.heightAnchor.constraint(equalToConstant: 13),
+            ])
+            stageKnobSkin = skin
+        }
+        let themed = stageKnobSkin != nil
+        stageProgressKnob?.backgroundColor = themed ? .clear : .white
+        stageProgressKnob?.layer.shadowOpacity = themed ? 0 : 0.9
+        stageProgressFill?.backgroundColor = stageBarCollapsed
+            ? Self.stageCollapsedFillColor(for: stageTheme)
+            : Self.stageFillColor(for: stageTheme)
+    }
+
+    /// 与墙 miniFillColor 同值（主题填充色）。
+    private static func stageFillColor(for theme: MiniPlayerTheme) -> UIColor {
+        switch theme {
+        case .meadow: return UIColor(red: 0.96, green: 0.72, blue: 0.25, alpha: 1)
+        case .star: return UIColor(red: 1, green: 0.91, blue: 0.62, alpha: 1)
+        default: return .white
+        }
+    }
+
+    /// 与墙 miniCollapsedFillColor 同值（收起态兜底）。
+    private static func stageCollapsedFillColor(for theme: MiniPlayerTheme) -> UIColor {
+        switch theme {
+        case .star: return UIColor(red: 1, green: 0.80, blue: 0.28, alpha: 1)
+        default: return stageFillColor(for: theme)
+        }
+    }
+
+    @objc private func stageThemeSettingsChanged() {
+        let eff = MiniPlayerTheme.effective
+        guard eff != stageTheme else { return }
+        stageTheme = eff
+        applyStageTheme()
+    }
+
+    /// 长按台身循环切主题（与墙同规：收起态不切、按键区不
+    /// 切、总开关关时停用；切换落盘 + 发同一变更通知）。
+    @objc private func stageBarLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, !stageBarCollapsed,
+              MiniPlayerTheme.effectsEnabled else { return }
+        let point = gesture.location(in: stageBar)
+        if playButton.frame.contains(point)
+            || prevButton.frame.contains(point)
+            || nextButton.frame.contains(point) { return }
+        stageTheme = stageTheme.next
+        MiniPlayerTheme.stored = stageTheme
+        applyStageTheme()
+        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        resetStageIdleTimer()
+    }
+
+    /// 台面点按分发（与墙同构）：收起态只展开；展开态按键
+    /// 各自处理、底部进度带按轨道实际帧跳点、其余台身无动
+    /// 作（已在详情页，不再开台）。任何点按重置无操作计时。
+    @objc private func stageBarTapped(_ gesture: UITapGestureRecognizer) {
+        if stageBarCollapsed {
+            expandStageBar()
+            return
+        }
+        resetStageIdleTimer()
+        let point = gesture.location(in: stageBar)
+        if playButton.frame.contains(point)
+            || prevButton.frame.contains(point)
+            || nextButton.frame.contains(point) { return }
+        if let seekHit = stageSeekHit, seekHit.frame.contains(point) {
+            guard let track = stageProgressTrack?.frame, track.width > 0,
+                  engine.duration > 0 else { return }
+            let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
+            setStageProgress(Double(fraction))
+            performSeek(to: Double(fraction) * engine.duration, source: "stage.bar.tap")
+        }
+    }
+
+    /// 进度拖动（与墙同构）：拖动只更填充、松手才 seek；拖
+    /// 动期间挂起无操作计时；收起态不响应。
+    @objc private func stageSeekPanned(_ gesture: UIPanGestureRecognizer) {
+        guard stageSeekHit != nil else { return }
+        let barPoint = gesture.location(in: stageBar)
+        guard let track = stageProgressTrack?.frame, track.width > 0 else {
+            if gesture.state == .ended || gesture.state == .cancelled
+                || gesture.state == .failed {
+                stageSeekDragging = false
+                resetStageIdleTimer()
+            }
+            return
+        }
+        let fraction = min(max((barPoint.x - track.minX) / track.width, 0), 1)
+        switch gesture.state {
+        case .began:
+            if stageBarCollapsed { return }
+            if playButton.frame.contains(barPoint)
+                || prevButton.frame.contains(barPoint)
+                || nextButton.frame.contains(barPoint) { return }
+            guard engine.duration > 0 else { return }
+            stageSeekDragging = true
+            cancelStageIdleTimer()
+            setStageProgress(Double(fraction))
+        case .changed:
+            guard stageSeekDragging else { return }
+            setStageProgress(Double(fraction))
+        case .ended:
+            guard stageSeekDragging else { return }
+            stageSeekDragging = false
+            resetStageIdleTimer()
+            guard engine.duration > 0 else { return }
+            performSeek(to: Double(fraction) * engine.duration, source: "stage.bar.seek")
+        case .cancelled, .failed:
+            stageSeekDragging = false
+            resetStageIdleTimer()
+        default:
+            break
+        }
+    }
+
+    // MARK: 点播台收起（与墙同规：5 秒无操作自动收成细条）
+
+    private static let stageIdleCollapseDelay: TimeInterval = 5
+
+    private func resetStageIdleTimer() {
+        stageIdleWorkItem?.cancel()
+        stageIdleWorkItem = nil
+        guard stageBarPresented, !stageBarCollapsed, !stageSeekDragging else { return }
+        let work = DispatchWorkItem { [weak self] in
+            self?.collapseStageBarIdle()
+        }
+        stageIdleWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.stageIdleCollapseDelay, execute: work)
+    }
+
+    private func cancelStageIdleTimer() {
+        stageIdleWorkItem?.cancel()
+        stageIdleWorkItem = nil
+    }
+
+    private func collapseStageBarIdle() {
+        guard stageBarPresented, !stageBarCollapsed, !stageSeekDragging else { return }
+        stageBarCollapsed = true
+        stagePetStage?.barFormChanged(collapsed: true)
+        cancelStageIdleTimer()
+        Breadcrumbs.log("stage bar collapse idle")
+        setStageBarContentsInteractive(false)
+        if UIAccessibility.isReduceMotionEnabled {
+            setStageBarForm(collapsed: true)
+            UIView.animate(withDuration: 0.2) { self.setStageBarContentsAlpha(0) }
+            return
+        }
+        UIView.animate(withDuration: 0.5, delay: 0,
+                       usingSpringWithDamping: 0.85, initialSpringVelocity: 0.1,
+                       options: [.curveEaseOut, .allowUserInteraction]) {
+            self.setStageBarForm(collapsed: true)
+            self.setStageBarContentsAlpha(0)
+            self.view.layoutIfNeeded()
+        }
+    }
+
+    private func expandStageBar() {
+        guard stageBarCollapsed else {
+            resetStageIdleTimer()
+            return
+        }
+        stageBarCollapsed = false
+        stagePetStage?.barFormChanged(collapsed: false)
+        Breadcrumbs.log("stage bar expand")
+        setStageBarContentsInteractive(true)
+        if UIAccessibility.isReduceMotionEnabled {
+            setStageBarForm(collapsed: false)
+            UIView.animate(withDuration: 0.2) { self.setStageBarContentsAlpha(1) }
+        } else {
+            UIView.animate(withDuration: 0.5, delay: 0,
+                           usingSpringWithDamping: 0.85, initialSpringVelocity: 0.1,
+                           options: [.curveEaseOut, .allowUserInteraction]) {
+                self.setStageBarForm(collapsed: false)
+                self.setStageBarContentsAlpha(1)
+                self.view.layoutIfNeeded()
+            }
+        }
+        resetStageIdleTimer()
+    }
+
+    private func setStageBarForm(collapsed: Bool) {
+        stageBarHeightConstraint?.constant = collapsed ? 16 : 70
+        stageTrackBottomConstraint?.constant = collapsed ? -6 : -7
+        let radius: CGFloat = collapsed ? 8 : 35
+        stageBar.layer.cornerRadius = radius
+        stageBlurView?.layer.cornerRadius = radius
+        stageBar.hitExpansionY = collapsed ? 14 : 0
+        stageThemeLayer?.isHidden = collapsed
+        stageBlurView?.isHidden = collapsed
+        stageRimLight?.isHidden = collapsed
+        stageGlassTint?.isHidden = collapsed
+        refreshStageProgressChrome()
+    }
+
+    private func setStageBarContentsAlpha(_ alpha: CGFloat) {
+        // 圆点不淡出（收起态保留主题圆点随进度步进，同墙）。
+        for view in [currentTimeLabel, totalTimeLabel,
+                     playButton, prevButton, nextButton] as [UIView] {
+            view.alpha = alpha
+        }
+    }
+
+    private func setStageBarContentsInteractive(_ interactive: Bool) {
+        for button in [playButton, prevButton, nextButton] {
+            button.isUserInteractionEnabled = interactive
+        }
+    }
+
+    /// 在场边沿的形态无动画复位：收起态不跨呈现周期残留。
+    private func resetStageBarFormInstant() {
+        stageBarCollapsed = false
+        setStageBarForm(collapsed: false)
+        setStageBarContentsAlpha(1)
+        setStageBarContentsInteractive(true)
     }
 
     // MARK: 帧驱动与 gate 统计
