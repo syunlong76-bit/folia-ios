@@ -163,7 +163,7 @@ final class WallPrototypeViewController: UIViewController,
     private var miniTrackBottomConstraint: NSLayoutConstraint?
     /// 点播台上排（3.7 (54) 工作流 H）：网页整排的上排（喜欢/
     /// 打乱/模式/睡眠/设置，MiniBarQuickRowView 唯一实现），
-    /// 展开态台高 70→118、主排下移；形态名单（淡出/禁交互）
+    /// 展开态台高 70→122、主排下移；形态名单（淡出/禁交互）
     /// 与主排同收口。主排 centerY 约束存引用供形态切换改常量
     /// （展开 +13 / 收起 −5，与旧 70pt 台的 −5 同值兜底）。
     private var miniQuickRow: MiniBarQuickRowView?
@@ -187,6 +187,11 @@ final class WallPrototypeViewController: UIViewController,
     private var miniPlayButton: UIButton!
     private var miniPrevButton: UIButton!
     private var miniNextButton: UIButton!
+    /// 主排模式钮（3.7 (55) 工作流 E 修正项，DS 对账）：与主页
+    /// 墙同构——主排右端紧凑钮，glyph 随 QueueManager.playMode
+    /// 四档各异，点按弹四档菜单点选，与队列面板/设置同一存储
+    /// 同步。详注见 HomeWallViewController 同名属性。
+    private var miniModeButton: UIButton!
     private var miniQueueButton: UIButton!
     private var miniSeekHit: UIView!
     private var miniProgressFill: UIView!
@@ -236,6 +241,26 @@ final class WallPrototypeViewController: UIViewController,
         NotificationCenter.default.addObserver(
             self, selector: #selector(stickerTrackSkippedUnplayable),
             name: .foliaTrackSkippedUnplayable, object: nil)
+        // 点播台面板通知接线（3.7 (55) 工作流 E 任务三）：工作
+        // 流 C 的顶排字幕/面板/命令键 post 这三条通知（object
+        // 为发出信号的 quick row 本身），本墙订阅后 present 工
+        // 作流 D 的三个面板（类名定死，处理见 viewDidLoad 后
+        // 的 miniBarPanel* 方法）。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniBarPanelSubtitle),
+            name: .foliaMiniBarSubtitle, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniBarPanelPanel),
+            name: .foliaMiniBarPanel, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniBarPanelCommand),
+            name: .foliaMiniBarCommand, object: nil)
+        // 主排模式钮回显（(55) E 修正项）：模式在队列面板/设置/
+        // 顶排任一处变更都经同一 @Published 存储回刷本钮。
+        QueueManager.shared.$playMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshMiniModeButton() }
+            .store(in: &playbackCancellables)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         collectionView.backgroundColor = .black
@@ -424,6 +449,65 @@ final class WallPrototypeViewController: UIViewController,
         loadEntries()
     }
 
+    // MARK: - 点播台面板通知（(55) E 任务三）与主排模式钮回显
+    //
+    // 顶排（工作流 C）post .foliaMiniBarSubtitle / Panel /
+    // Command，本墙 present 工作流 D 的三个面板（类名定死）；
+    // 已有面板在呈时不叠开。模式钮与主页墙同构：glyph 四档
+    // 各异（顺序 list.bullet 与循环 repeat 区分开，防语义撞
+    // 车），菜单四项与队列面板同名，写回同一 playMode 存储。
+
+    @objc private func miniBarPanelSubtitle() {
+        presentMiniBarPanel(SubtitleSettingsPanelViewController(), kind: "subtitle")
+    }
+
+    @objc private func miniBarPanelPanel() {
+        presentMiniBarPanel(PlaybackPanelViewController(), kind: "panel")
+    }
+
+    @objc private func miniBarPanelCommand() {
+        presentMiniBarPanel(CommandPaletteViewController(), kind: "command")
+    }
+
+    private func presentMiniBarPanel(_ panel: UIViewController, kind: String) {
+        guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.log("wall.menu.panel skipped kind=\(kind) busy=1 wall=proto")
+            return
+        }
+        Breadcrumbs.log("wall.menu.panel present kind=\(kind) wall=proto")
+        panel.modalPresentationStyle = .pageSheet
+        present(panel, animated: true)
+    }
+
+    private func refreshMiniModeButton() {
+        guard let button = miniModeButton else { return }
+        let mode = QueueManager.shared.playMode
+        let symbol: String
+        switch mode {
+        case .off: symbol = "list.bullet"
+        case .loopAll: symbol = "repeat"
+        case .repeatOne: symbol = "repeat.1"
+        case .shuffle: symbol = "shuffle"
+        }
+        button.setImage(UIImage(systemName: symbol,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)),
+            for: .normal)
+        button.tintColor = mode == .off
+            ? UIColor.white.withAlphaComponent(0.45) : .white
+        let items: [(QueueManager.PlayMode, String)] = [
+            (.off, "顺序"), (.loopAll, "循环"), (.repeatOne, "单曲"), (.shuffle, "随机"),
+        ]
+        button.menu = UIMenu(children: items.map { item in
+            let action = UIAction(title: item.1) { [weak self] _ in
+                QueueManager.shared.playMode = item.0
+                Breadcrumbs.log("minibar.mainrow.mode=\(item.0.rawValue)")
+                self?.resetMiniIdleTimer()
+            }
+            action.state = item.0 == mode ? .on : .off
+            return action
+        })
+    }
+
     /// 底部播放台（3.7 (13) #7；13.1 改版，Miller 2026-11-18 亲定）：
     /// 封面缩略 + 标题/歌手 + 上一曲/播放暂停/下一曲 + 顶部可拖进度。
     /// 交互：点封面 = 定位到正在播放的歌曲；点台身 = 进播放详情页
@@ -505,25 +589,26 @@ final class WallPrototypeViewController: UIViewController,
             glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
-        // 点播台上排（3.7 (54) 工作流 H）：网页整排接入——上排
-        // 44pt 贴台顶（喜欢/打乱/模式/睡眠＋右端设置），主排
-        // 整体下移、台高 70→118。功能走 MiniBarQuickRowView
-        // 唯一实现（与舞台/主页墙同件）；点按先行回调重置无
-        // 操作计时（与台面其他操作同口径续命）；设置入口走
-        // 本面既有 wallSettingsTapped 呈现方式。
+        // 点播台上排（3.7 (54) 工作流 H、(55) C 改版）：网页六钮
+        // 整排贴台顶，主排整体下移、台高 70→122。尺寸单一出处
+        // 在 MiniBarQuickRowView（rowHeight / expandedBarHeight），
+        // 本处只读常量不写死。功能走该视图唯一实现（与舞台/
+        // 主页墙同件）；点按先行回调重置无操作计时（与台面其
+        // 他操作同口径续命）。(55) C 起顶排已无设置钮，旧
+        // onOpenSettings 接线为死代码、已移除（属性声明在 C
+        // 侧保留；本面设置入口在顶部 chrome 排、未动）。
         let quickRow = MiniBarQuickRowView()
         quickRow.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(quickRow)
         miniQuickRow = quickRow
         quickRow.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
-        quickRow.onOpenSettings = { [weak self] in self?.wallSettingsTapped() }
         NSLayoutConstraint.activate([
             quickRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
             quickRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
             quickRow.topAnchor.constraint(equalTo: bar.topAnchor, constant: 3),
-            quickRow.heightAnchor.constraint(equalToConstant: 44),
+            quickRow.heightAnchor.constraint(equalToConstant: MiniBarQuickRowView.rowHeight),
         ])
-        Breadcrumbs.log("minibar.webrow wallproto attached h=118")
+        Breadcrumbs.log("minibar.webrow wallproto attached h=\(Int(MiniBarQuickRowView.expandedBarHeight))")
 
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
@@ -599,6 +684,17 @@ final class WallPrototypeViewController: UIViewController,
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
 
+        // 主排模式钮（(55) E 修正项）：主排最右端紧凑钮，菜单
+        // 点选四档（showsMenuAsPrimaryAction），回显由
+        // refreshMiniModeButton 统一刷（订阅在 viewDidLoad）。
+        miniModeButton = UIButton(type: .system)
+        miniModeButton.tintColor = .white
+        miniModeButton.accessibilityLabel = "播放模式"
+        miniModeButton.showsMenuAsPrimaryAction = true
+        miniModeButton.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniModeButton)
+        refreshMiniModeButton()
+
         // 播放列表入口（3.7 (48) 落台面、(53) H 修正迁出）：台面
         // 不再常驻此钮，改置于顶部 chrome 排、紧挨设置齿轮（本面
         // 无顶栏自动隐藏排，与设置入口同排即此排；样式同齿轮：
@@ -638,7 +734,8 @@ final class WallPrototypeViewController: UIViewController,
         // 收起形态切换（70↔16）。
         miniBarWidthConstraint = bar.widthAnchor.constraint(
             equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
-        miniBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 118)
+        miniBarHeightConstraint = bar.heightAnchor.constraint(
+            equalToConstant: MiniBarQuickRowView.expandedBarHeight)
         miniBarWidthConstraint?.isActive = true
         miniBarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
@@ -673,7 +770,11 @@ final class WallPrototypeViewController: UIViewController,
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniModeButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniModeButton.widthAnchor.constraint(equalToConstant: 30),
+            miniModeButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniNextButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
@@ -693,12 +794,14 @@ final class WallPrototypeViewController: UIViewController,
         miniKnobLeading = knob.leadingAnchor.constraint(
             equalTo: progressTrack.leadingAnchor, constant: -4.5)
         miniKnobLeading?.isActive = true
-        // 主排纵向位置（3.7 (54) H）：展开 118 台里主排中心在
-        // 上排（3..47）与 seek 命中带（98..118）之间，相对台
-        // 中心 +13；收起态回 −5（内容已淡出、仅动画观感）。
+        // 主排纵向位置（3.7 (54) H、(55) C 复核）：展开 122 台
+        // 里主排中心在上排（3..51）与 seek 命中带（102..122）
+        // 之间正中，相对台中心 +15.5（台高/上排 +4 增量复核，
+        // 封面上下留白各 3.5pt 对称）；收起态回 −5。模式钮
+        // （(55) E 修正项）同入本组。
         // 形态切换在 setMiniBarForm 里统一改这组常量。
-        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 13)
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniModeButton].map {
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 15.5)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // 轨道底距存引用（3.7 (21)）：收起形态 −7→−6 使轨道
@@ -846,7 +949,8 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
         // 上排（(54) H）长按不切主题：与按键区同口径豁免。
         if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
         miniTheme = miniTheme.next
@@ -900,7 +1004,8 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
         // 上排（(54) H）：键各自处理、排内空隙不落台身分发
         // （防瞄准上排时误触进详情页）。
         if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
@@ -953,7 +1058,8 @@ final class WallPrototypeViewController: UIViewController,
             if miniCover.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
-                || miniNextButton.frame.contains(barPoint) { return }
+                || miniNextButton.frame.contains(barPoint)
+                || miniModeButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
             // 拖动期间挂起无操作计时（3.7 (21)），松手后重置。
@@ -1082,7 +1188,7 @@ final class WallPrototypeViewController: UIViewController,
         miniIdleWorkItem = nil
     }
 
-    /// 收成细进度条：同位置同宽，高度 118→16、轨道居中，封面/
+    /// 收成细进度条：同位置同宽，高度 122→16、轨道居中，封面/
     /// 标题/歌手/按键淡出且按键禁交互；背景全去（3.7 (22)：
     /// 主题层/毛玻璃/玻璃高光隐藏），只保留轨道（极淡底轨）
     /// + 填充 + 发光圆点，由 setMiniProgress 继续步进。系统
@@ -1139,8 +1245,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
     /// 直接置位即瞬时生效。
     private func setMiniBarForm(collapsed: Bool) {
-        miniBarHeightConstraint?.constant = collapsed ? 16 : 118
-        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 13 }
+        miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
+        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 15.5 }
         miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
@@ -1167,14 +1273,14 @@ final class WallPrototypeViewController: UIViewController,
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
         // (54) H：上排整排同入淡出名单（收起细条上只留轨道）。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniQuickRow]
+                                miniPrevButton, miniNextButton, miniModeButton, miniQuickRow]
         for view in views {
             view?.alpha = alpha
         }
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniModeButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }

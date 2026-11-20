@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// 搜索结果中的集合条目（专辑 / 歌单）。点整行经 onOpenCollection 交协调者开集合页，
 /// 本视图不直接管导航。
@@ -92,6 +93,12 @@ struct SearchWorkspaceView: View {
     @State private var entered = false
     /// 搜索代际：快速连搜时过期结果直接丢弃。
     @State private var searchGeneration = 0
+    /// 星标刷新代次（(55) 工作流 F）：订阅 FoliaStarChanged 后
+    /// 自增，强制行重算 StarStore 显态（他面切换星标也同步）。
+    @State private var starRefreshTick = 0
+    /// 「收藏到歌单」弹层的目标歌曲（(55) 工作流 F）：加号点按
+    /// 置入后由 sheet 呈 AddToPlaylistViewController。
+    @State private var addTarget: SongItem?
     /// 搜索框前置小方块的旋转角（搜索中旋转成菱形代替 spinner）。
     @State private var markRotation: Double = 0
 
@@ -122,6 +129,12 @@ struct SearchWorkspaceView: View {
             }
         }
         .preferredColorScheme(.dark)
+        .onReceive(NotificationCenter.default.publisher(for: .foliaStarChanged)) { _ in
+            starRefreshTick += 1
+        }
+        .sheet(item: $addTarget) { item in
+            AddToPlaylistSheet(track: item.track)
+        }
         .onAppear { fieldFocused = true }
         .onChange(of: isSearching) { _, busy in
             // 前置方块：搜索中 1100ms 一周旋转（search.css search-mark-busy 的近似）。
@@ -334,6 +347,8 @@ struct SearchWorkspaceView: View {
 
     private func songRow(index: Int, item: SongItem) -> some View {
         let track = item.track
+        // 读一次星标代次，把 FoliaStarChanged 的刷新依赖挂到行渲染上。
+        _ = starRefreshTick
         return HStack(spacing: 14) {
             Text(String(format: "%02d", index + 1))
                 .font(.system(size: 12, design: .monospaced))
@@ -371,8 +386,10 @@ struct SearchWorkspaceView: View {
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundColor(FoliaTheme.secondary)
 
-            // 行尾动作（34×34）：速记簿已接通（(53) 工作流 D，点按收进/移出，
-            // 视觉态随已收切换）；收藏仍为诚实禁用态；加入队列可用。
+            // 行尾动作（命中区 40×40）：速记簿已接通（(53) 工作流 D，点按收进/移出，
+            // 视觉态随已收切换，本轮只放大命中框、语义不动）；星标 (55) 工作流 F
+            // 接 StarStore 本地真源（显态随 FoliaStarChanged 刷新）；加号 (55) F
+            // 改义对齐网页版——点按开「收藏到歌单」弹层，原「追加队列」降为长按。
             HStack(spacing: 2) {
                 let inSketchbook = sketchbookStore.contains(trackId: track.id)
                 Button {
@@ -385,27 +402,41 @@ struct SearchWorkspaceView: View {
                     Image(systemName: inSketchbook ? "checkmark.circle.fill" : "note.text")
                         .font(.system(size: 16))
                         .foregroundColor(inSketchbook ? ink : FoliaTheme.secondary)
-                        .frame(width: 34, height: 34)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
 
-                Button {} label: {
-                    Image(systemName: "star")
-                        .font(.system(size: 16))
-                        .frame(width: 34, height: 34)
-                }
-                .disabled(true)
-                .opacity(0.3)
-
+                let starred = StarStore.shared.isStarred(track.id)
                 Button {
-                    QueueManager.shared.appendToQueue([track])
+                    let on = StarStore.shared.toggle(track.id)
+                    Breadcrumbs.log("search.row.star id=\(track.id) on=\(on)")
                 } label: {
-                    Image(systemName: "plus")
+                    Image(systemName: starred ? "star.fill" : "star")
                         .font(.system(size: 16))
-                        .foregroundColor(ink)
-                        .frame(width: 34, height: 34)
+                        .foregroundColor(starred ? ink : FoliaTheme.secondary)
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
+                .accessibilityLabel(starred ? "取消星标" : "星标")
+
+                Image(systemName: "plus")
+                    .font(.system(size: 16))
+                    .foregroundColor(ink)
+                    .frame(width: 40, height: 40)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        Breadcrumbs.log("search.row.addtoplaylist id=\(track.id)")
+                        addTarget = item
+                    }
+                    .onLongPressGesture(minimumDuration: 0.5) {
+                        QueueManager.shared.appendToQueue([track])
+                        Breadcrumbs.log("search.row.queue.longpress id=\(track.id)")
+                        NativePlaybackFailureToast.show(message: "已加入播放队列")
+                    }
+                    .accessibilityLabel("添加到歌单，长按加入播放队列")
+                    .accessibilityAddTraits(.isButton)
             }
         }
         .padding(.leading, 18)
@@ -629,6 +660,19 @@ struct SearchWorkspaceView: View {
             return ([], 0)
         }
     }
+}
+
+/// 「收藏到歌单」弹层的 SwiftUI 挂载（(55) 工作流 F）：UIKit 本体
+/// AddToPlaylistViewController 包一层导航控制器以 pageSheet 呈出
+/// （系统下拉关闭 + 导航栏 ✕ 双通道），关闭后回搜索结果原位。
+private struct AddToPlaylistSheet: UIViewControllerRepresentable {
+    let track: FoliaTrack
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        UINavigationController(rootViewController: AddToPlaylistViewController(track: track))
+    }
+
+    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
 }
 
 /// 加载三形（search.css .search-loader）：18×18 强调方块 / 18×18 ink 圆 / 42×6 ink 横条，

@@ -11,10 +11,14 @@ import QuartzCore
 //    条纹 + 底边 scallop；开幕 1.35s easeOutBack 弹性拉开。
 //  - 垂幔：7 扇 scallop 垂幔（粉底 + 奶油面）+ 流苏圆点 +
 //    星星/爱心/爪印点缀，点缀低频错峰闪烁（缩放脉动）。
-//  - 脚灯：11 盏圆点脚灯，逐盏错相脉动。
-//  - 追光：只剩脚下光池逐帧跟随独唱者（(54) S：原光锥与
-//    身周柔光以色调罩染宠物本体，已摘除；独唱发光由渲染
-//    方按贴纸 alpha 轮廓在本体身后生成）。
+//  - 脚灯：11 盏圆点脚灯（灯体在本层、辉光在灯光层），
+//    逐盏错相脉动。
+//  - 灯光（(55) B 第 3 项）：洗光/氛围光束/追光光束/脚下
+//    光池/脚灯辉光全部拆进独立的 PetConcertLightView，由
+//    渲染方挂在宠物层之下——光只落在地板/幕布/背景上，
+//    宠物本体一像素不被覆盖滤色（(54) S 红线延续：光锥/
+//    柔光罩体不以任何形式复活，本文件已无 halo/cone）。
+//    追光光束以弹簧跟随独唱位；光池逐帧贴独唱脚下。
 //  - 洗光：整场染色随相位（前奏紫/轮唱暖金/间奏蓝紫振荡/
 //    告别转暖），间奏另有三束摇摆光束与五彩纸屑——氛围层，
 //    降级顺序最先砍（atmosphereReduced），歌词可读性永不砍。
@@ -216,19 +220,214 @@ enum PetConcertDeco {
     }
 }
 
-// MARK: - 动态幕布/灯光层
+// MARK: - 灯光层（(55) B 第 3 项：宠物层之下的环境光）
+//
+// z 序与混合模式全清单（自证：无一层覆盖宠物本体做滤色）：
+// 本视图由渲染方挂在 petField 之下（见 PetConcertRenderer
+// 的装配序），内部自下而上：
+//   1. washView —— 整场洗光，普通混合（.normal 等价，UIView
+//      背景色直绘），alpha 0.08–0.11；只染其下的背景渐变。
+//   2. beamLayers ×3 —— 氛围光束（间奏/轮唱），CAShapeLayer
+//      普通填充，alpha 0.18/0.24；落在背景与地板上。
+//   3. spotLayer —— 追光光束，普通填充 alpha 0.20，自舞台
+//      顶部向独唱脚下张开；弹簧跟随独唱位（见 spotX 状态）。
+//   4. poolView —— 独唱脚下光池（径向渐变图），普通混合
+//      alpha 0.55；只在地板面、宠物脚下。
+//   5. footGlowLayers ×11 —— 脚灯辉光，普通填充 alpha 0.18，
+//      在地板前缘成排，与宠物（最前排格底 1440/825、独唱
+//      底 1717.5/970.9 参考 px）纵向不相交。
+// 以上五组全部位于 petField 之下：宠物贴纸层自上覆盖光
+// 层，光层像素永不与宠物像素做任何混合/滤色。独唱的
+// alpha 轮廓发光在 petField 内贴本体身后（(54) S，既有）。
 
-final class PetConcertCurtainView: UIView {
+final class PetConcertLightView: UIView {
 
-    /// 氛围降级（内存警告/降级链触发）：关光束与纸屑、停闪烁，
-    /// 幕布摆动与追光保留（身份特征 + 便宜）。
+    /// 氛围降级：关光束（含追光光束）、停洗光强振荡；光池
+    /// 保留（独唱落点标识，便宜且是身份特征）。
     var atmosphereReduced = false
 
     private let washView = UIView()
     private var beamLayers: [CAShapeLayer] = []
-    private let coneLayer = CAShapeLayer()
+    private let spotLayer = CAShapeLayer()
     private let poolView = UIImageView()
-    private let haloView = UIImageView()
+    private var footGlowLayers: [CAShapeLayer] = []
+    /// 追光弹簧状态（参考 px）：spotX/spotV 为当前值/速度，
+    /// 每帧向独唱 x 积分（刚度 90、阻尼 14，轻欠阻尼的系统
+    /// 弹簧手感）；时间跳变（seek/切歌，|Δt| > 0.5 或倒退）
+    /// 直接吸附目标，不拖尾。spotY 不积分（脚位由调用方给）。
+    private var spotX: CGFloat?
+    private var spotV: CGFloat = 0
+    private var spotLastT: TimeInterval = -1
+    private var lastPathT: TimeInterval = -1
+    private var isLand = false
+    private var refWNow: CGFloat { isLand ? PetConcertConst.refWL : PetConcertConst.refW }
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        washView.isUserInteractionEnabled = false
+        addSubview(washView)
+        for _ in 0..<3 {
+            let beam = CAShapeLayer()
+            beam.fillColor = UIColor.white.cgColor
+            layer.addSublayer(beam)
+            beamLayers.append(beam)
+        }
+        spotLayer.fillColor = UIColor(red: 255/255, green: 240/255,
+                                      blue: 200/255, alpha: 0.20).cgColor
+        layer.addSublayer(spotLayer)
+        poolView.image = PetConcertCurtainView.radialGlowImage()
+        poolView.isUserInteractionEnabled = false
+        addSubview(poolView)
+        for _ in 0..<PetConcertConst.footlightCount {
+            let glow = CAShapeLayer()
+            glow.fillColor = UIColor(red: 255/255, green: 220/255,
+                                     blue: 140/255, alpha: 0.18).cgColor
+            layer.addSublayer(glow)
+            footGlowLayers.append(glow)
+        }
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    /// - singerPos: 独唱者当前中心（本视图坐标）；nil 时追光
+    ///   回中场缓摆、光池落独唱位缺省脚位。
+    /// - singerFeetY: 独唱者脚底 y（本视图坐标）。
+    func update(t: TimeInterval, phase: ConcertPhase,
+                params: (amp: Double, freq: Double,
+                         twinkleFreq: Double, twinkleAmp: Double),
+                singerPos: CGPoint?, singerFeetY: CGFloat?,
+                interludeIntensity: Double) {
+        let w = bounds.width, h = bounds.height
+        guard w > 0 else { return }
+        let landNow = PetConcertConst.isLandscape(bounds.size)
+        let flipped = landNow != isLand
+        isLand = landNow
+        let sx = w / refWNow
+        let sy = h / (isLand ? PetConcertConst.refHL : PetConcertConst.refH)
+
+        // 洗光（逐帧，仅颜色赋值；本层在宠物之下，只染背景）。
+        washView.frame = bounds
+        washView.backgroundColor = Self.washColor(
+            t: t, phase: phase, intensity: interludeIntensity)
+
+        // 追光落点（参考 px）：有独唱者跟独唱者，无则中场缓摆。
+        let centerRef: CGFloat = isLand ? 960 : 540
+        let targetRefX = singerPos.map { $0.x / sx }
+            ?? (centerRef + 180 * CGFloat(sin(0.5 * t)))
+        // 弹簧积分（dt 钳制 1/240–1/20；跳变/旋转吸附——旋转
+        // 时参考系横轴换表，旧 spotX 无意义，直接落新目标）。
+        if let current = spotX, spotLastT >= 0, !flipped {
+            let dt = t - spotLastT
+            if dt <= 0 || dt > 0.5 {
+                spotX = targetRefX
+                spotV = 0
+            } else {
+                let step = min(max(dt, 1.0 / 240.0), 1.0 / 20.0)
+                let accel = 90 * (targetRefX - current) - 14 * spotV
+                spotV += accel * CGFloat(step)
+                spotX = current + spotV * CGFloat(step)
+            }
+        } else {
+            spotX = targetRefX
+            spotV = 0
+        }
+        spotLastT = t
+        let spotRefX = spotX ?? targetRefX
+
+        // 脚下光池（地板面）：逐帧贴独唱脚位，横向跟弹簧后的
+        // 追光 x（与光束落点一致），纵向用真实脚底。
+        // 横屏缺省脚底 = L 独唱位脚下（898 + 108×1.35/2 ≈ 971）。
+        let feetY = singerFeetY ?? ((isLand ? 971 : 1717.5) * sy)
+        poolView.frame = CGRect(x: spotRefX * sx - 170 * sx,
+                                y: feetY - 34 * sy,
+                                width: 340 * sx, height: 68 * sy)
+        poolView.alpha = 0.55
+
+        // 路径类（光束/辉光）15Hz 节流（与幕布层同口径）；
+        // 弹簧状态已逐帧积分，路径取节流时刻的最新值。
+        guard t - lastPathT >= 1.0 / 15.0 || lastPathT < 0 else { return }
+        lastPathT = t
+
+        // 追光光束（顶部 → 独唱脚下张开的梯形，普通填充）：
+        // 降级或无演唱相位（降落/列队/告别）时收起。
+        let spotActive = !atmosphereReduced
+            && (phase == .singing1 || phase == .singing2
+                || phase == .interlude || phase == .greeting
+                || phase == .preludeChat)
+        if spotActive {
+            let topY: CGFloat = 30
+            let bottomRefY = feetY / sy
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: (spotRefX - 14) * sx, y: topY * sy))
+            path.addLine(to: CGPoint(x: (spotRefX + 14) * sx, y: topY * sy))
+            path.addLine(to: CGPoint(x: (spotRefX + 105) * sx, y: bottomRefY * sy))
+            path.addLine(to: CGPoint(x: (spotRefX - 105) * sx, y: bottomRefY * sy))
+            path.close()
+            spotLayer.path = path.cgPath
+        } else {
+            spotLayer.path = nil
+        }
+
+        // 氛围光束（三束摇摆，间奏强、轮唱弱，其余收起）。
+        let beamsActive = !atmosphereReduced
+            && (phase == .interlude || phase == .singing1 || phase == .singing2)
+        let colors: [UIColor] = [
+            UIColor(red: 255/255, green: 170/255, blue: 200/255, alpha: 1),
+            UIColor(red: 150/255, green: 190/255, blue: 255/255, alpha: 1),
+            UIColor(red: 200/255, green: 170/255, blue: 255/255, alpha: 1),
+        ]
+        for (i, beam) in beamLayers.enumerated() {
+            guard beamsActive else { beam.path = nil; continue }
+            let ox: CGFloat = isLand ? [320, 960, 1600][i] : [180, 540, 900][i]
+            let tx = ox + 250 * sin(CGFloat(0.35 * t * params.freq) + CGFloat(i) * 2.1)
+            let alpha: CGFloat = phase == .interlude ? 0.24 : 0.18
+            beam.fillColor = colors[i].withAlphaComponent(alpha).cgColor
+            let path = UIBezierPath()
+            path.move(to: CGPoint(x: (ox - 13) * sx, y: 45 * sy))
+            path.addLine(to: CGPoint(x: (ox + 13) * sx, y: 45 * sy))
+            path.addLine(to: CGPoint(x: (tx + 100) * sx, y: (isLand ? 900 : 1600) * sy))
+            path.addLine(to: CGPoint(x: (tx - 100) * sx, y: (isLand ? 900 : 1600) * sy))
+            path.close()
+            beam.path = path.cgPath
+        }
+
+        // 脚灯辉光（逐盏错相脉动，地板前缘）。
+        for i in 0..<PetConcertConst.footlightCount {
+            let x = isLand ? (CGFloat(i) + 0.5) * refWNow / CGFloat(PetConcertConst.footlightCount) * sx
+                : (90 + CGFloat(i) * 90) * sx
+            let y = (isLand ? PetConcertConst.footlightYL : PetConcertConst.footlightY) * sy
+            let pulse = 0.75 + 0.25 * sin(2 * t + Double(i) * 0.8)
+            let r = 30 * sx * CGFloat(pulse)
+            footGlowLayers[i].path = UIBezierPath(ovalIn: CGRect(
+                x: x - r, y: y - r, width: r * 2, height: r * 2)).cgPath
+        }
+    }
+
+    private static func washColor(t: TimeInterval, phase: ConcertPhase,
+                                  intensity: Double) -> UIColor {
+        switch phase {
+        case .dropping, .formation:
+            return UIColor(red: 168/255, green: 158/255, blue: 220/255, alpha: 0.08)
+        case .greeting, .preludeChat, .singing1, .singing2:
+            return UIColor(red: 255/255, green: 206/255, blue: 120/255, alpha: 0.10)
+        case .interlude:
+            let u = CGFloat(0.5 + 0.5 * sin(t * 1.4)) * CGFloat(intensity)
+            return UIColor(red: (110 + 90 * u) / 255, green: (160 - 10 * u) / 255,
+                           blue: 1, alpha: 0.11)
+        case .farewell, .ended:
+            return UIColor(red: 255/255, green: 176/255, blue: 160/255, alpha: 0.09)
+        }
+    }
+}
+
+// MARK: - 动态幕布层（灯光已拆至 PetConcertLightView）
+
+final class PetConcertCurtainView: UIView {
+
+    /// 氛围降级（内存警告/降级链触发）：关纸屑、停闪烁，
+    /// 幕布摆动保留（身份特征 + 便宜）；灯光降级在灯光层。
+    var atmosphereReduced = false
+
     private var sideFill: [CAShapeLayer] = []     // L/R
     private var sideFold: [[CAShapeLayer]] = []   // L/R × 3
     private var sideHem: [CAShapeLayer] = []
@@ -238,7 +437,6 @@ final class PetConcertCurtainView: UIView {
     private var valanceEdge = CAShapeLayer()
     private var tasselLayer = CAShapeLayer()
     private var decoLayers: [CAShapeLayer] = []
-    private var footGlowLayers: [CAShapeLayer] = []
     private var footCoreLayer = CAShapeLayer()
     private var confettiLayers: [CALayer] = []
 
@@ -270,29 +468,10 @@ final class PetConcertCurtainView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     private func buildLayers() {
-        washView.isUserInteractionEnabled = false
-        addSubview(washView)
-        for _ in 0..<3 {
-            let beam = CAShapeLayer()
-            beam.fillColor = UIColor.white.cgColor
-            layer.addSublayer(beam)
-            beamLayers.append(beam)
-        }
-        // 追光（(54) S 改版）：只保留脚下光池（地板面光斑，不
-        // 覆盖宠物身体）。原身周柔光 haloView 与暖色光锥
-        // coneLayer 均以普通混合整层盖在宠物身上、把本体染
-        // 成暖色调——Miller 点名摘除：halo 不再挂载显示，
-        // cone 永不赋 path；独唱发光改由渲染方按贴纸 alpha
-        // 轮廓在宠物身后生成（见 PetConcertRenderer 的
-        // singerGlow），本体像素零滤色。
-        poolView.image = Self.radialGlowImage()
-        poolView.isUserInteractionEnabled = false
-        addSubview(poolView)
-        haloView.image = Self.radialGlowImage()
-        haloView.isUserInteractionEnabled = false
-        haloView.alpha = 0 // (54) S：停用，不显示
-        coneLayer.fillColor = UIColor(red: 255/255, green: 238/255,
-                                      blue: 190/255, alpha: 0.26).cgColor
+        // (55) B 第 3 项：洗光/光束/追光/光池/脚灯辉光已整体
+        // 拆到 PetConcertLightView（宠物层之下）。(54) S 摘除
+        // 的身周柔光 halo 与暖色光锥 cone 在此一并删净——本
+        // 层只剩幕布本体、点缀、脚灯灯体与纸屑。
         // 侧幕。
         for _ in 0..<2 {
             let fill = CAShapeLayer()
@@ -362,14 +541,8 @@ final class PetConcertCurtainView: UIView {
             layer.addSublayer(deco)
             decoLayers.append(deco)
         }
-        // 脚灯。
-        for _ in 0..<PetConcertConst.footlightCount {
-            let glow = CAShapeLayer()
-            glow.fillColor = UIColor(red: 255/255, green: 220/255,
-                                     blue: 140/255, alpha: 0.18).cgColor
-            layer.addSublayer(glow)
-            footGlowLayers.append(glow)
-        }
+        // 脚灯灯体（辉光在灯光层，灯体是地板前缘的实体点，
+        // 与宠物纵向不相交，留在本层）。
         footCoreLayer.fillColor = UIColor(red: 255/255, green: 243/255,
                                           blue: 207/255, alpha: 1).cgColor
         footCoreLayer.strokeColor = PetConcertPalette.outline.cgColor
@@ -394,7 +567,8 @@ final class PetConcertCurtainView: UIView {
         }
     }
 
-    private static func radialGlowImage() -> UIImage {
+    /// 径向辉光图（灯光层光池共用，故 internal 不 private）。
+    static func radialGlowImage() -> UIImage {
         let size = CGSize(width: 256, height: 256)
         let renderer = UIGraphicsImageRenderer(size: size)
         return renderer.image { context in
@@ -419,8 +593,9 @@ final class PetConcertCurtainView: UIView {
 
     // MARK: 逐帧更新
 
-    /// - singerPos: 独唱者当前中心（本视图坐标）；nil 时追光中场缓摆。
-    /// - singerFeetY: 独唱者脚底 y（本视图坐标）。
+    /// 签名与灯光层 update 对齐（同一调用点双发）：singerPos/
+    /// singerFeetY/interludeIntensity 自 (55) B 起只供灯光层
+    /// 消费，本层不再读（灯光已拆层，见 PetConcertLightView）。
     func update(t: TimeInterval, phase: ConcertPhase,
                 params: (amp: Double, freq: Double,
                          twinkleFreq: Double, twinkleAmp: Double),
@@ -432,53 +607,12 @@ final class PetConcertCurtainView: UIView {
         let sx = w / refWNow
         let sy = h / (isLand ? PetConcertConst.refHL : PetConcertConst.refH)
 
-        // 洗光（逐帧，仅颜色赋值）。
-        washView.frame = bounds
-        washView.backgroundColor = washColor(t: t, phase: phase,
-                                             intensity: interludeIntensity)
-
-        // 追光落点（逐帧跟随）：仅驱动脚下光池的水平位置。
-        // (54) S：光锥与身周柔光已摘除（染本体色），此处不再
-        // 给 coneLayer 赋 path、haloView 恒 alpha 0。
-        let target: CGPoint
-        if let singerPos {
-            target = singerPos
-        } else {
-            target = CGPoint(x: ((isLand ? 960 : 540) + 180 * sin(0.5 * t)) * sx,
-                             y: (isLand ? 560 : 980) * sy)
-        }
-        coneLayer.path = nil
-        // 横屏默认脚底 = L 独唱位脚下（885+108×1.35/2 ≈ 958）。
-        let feetY = singerFeetY ?? ((isLand ? 958 : 1724) * sy)
-        // 光池随 (54) Q 放大的独唱圈同步放大（地板面，不染本体）。
-        poolView.frame = CGRect(x: target.x - 170 * sx, y: feetY - 34 * sy,
-                                width: 340 * sx, height: 68 * sy)
-        poolView.alpha = 0.55
-        haloView.alpha = 0
-
         // 路径类 15Hz 节流。
         guard t - lastPathUpdate >= 1.0 / 15.0 || lastPathUpdate < 0 else { return }
         lastPathUpdate = t
         updateCurtains(t: t, params: params, sx: sx, sy: sy)
-        updateBeams(t: t, params: params, phase: phase, sx: sx, sy: sy)
         updateFootlights(t: t, sx: sx, sy: sy)
         updateConfetti(t: t, sx: sx, sy: sy)
-    }
-
-    private func washColor(t: TimeInterval, phase: ConcertPhase,
-                           intensity: Double) -> UIColor {
-        switch phase {
-        case .dropping, .formation:
-            return UIColor(red: 168/255, green: 158/255, blue: 220/255, alpha: 0.08)
-        case .greeting, .preludeChat, .singing1, .singing2:
-            return UIColor(red: 255/255, green: 206/255, blue: 120/255, alpha: 0.10)
-        case .interlude:
-            let u = CGFloat(0.5 + 0.5 * sin(t * 1.4)) * CGFloat(intensity)
-            return UIColor(red: (110 + 90 * u) / 255, green: (160 - 10 * u) / 255,
-                           blue: 1, alpha: 0.11)
-        case .farewell, .ended:
-            return UIColor(red: 255/255, green: 176/255, blue: 160/255, alpha: 0.09)
-        }
     }
 
     /// 开幕进度（easeOutBack，1.35s）。
@@ -514,7 +648,8 @@ final class PetConcertCurtainView: UIView {
         let openU = curtainOpenU(t: t)
         let outer: CGFloat = -60
         // (54) Q 全屏化：侧幕自画布顶 (y=0) 一直落到 1740，
-        // 顶/两侧不留暗带；内缘开口 126 仍在队形左缘 144 之外。
+        // 顶/两侧不留暗带；(55) B 内缘开口 84（摆动极值后
+        // 有效 103.8）仍在队形格位左缘 120 之外，侧幕不切格。
         // (54) U 横屏：落点走 L 表 1020@1080（=371pt/393pt，
         // 近全高），采样步长按参考高同比（70×1080/1920≈40）。
         let bottomY = isLand ? PetConcertConst.curtainBottomYL : 1740
@@ -682,35 +817,8 @@ final class PetConcertCurtainView: UIView {
         _ = w
     }
 
-    private func updateBeams(
-        t: TimeInterval,
-        params: (amp: Double, freq: Double, twinkleFreq: Double, twinkleAmp: Double),
-        phase: ConcertPhase, sx: CGFloat, sy: CGFloat
-    ) {
-        let active = !atmosphereReduced
-            && (phase == .interlude || phase == .singing1 || phase == .singing2)
-        let colors: [UIColor] = [
-            UIColor(red: 255/255, green: 170/255, blue: 200/255, alpha: 1),
-            UIColor(red: 150/255, green: 190/255, blue: 255/255, alpha: 1),
-            UIColor(red: 200/255, green: 170/255, blue: 255/255, alpha: 1),
-        ]
-        for (i, beam) in beamLayers.enumerated() {
-            guard active else { beam.path = nil; continue }
-            let ox: CGFloat = isLand ? [320, 960, 1600][i] : [180, 540, 900][i]
-            let tx = ox + 250 * sin(CGFloat(0.35 * t * params.freq) + CGFloat(i) * 2.1)
-            let alpha: CGFloat = phase == .interlude ? 0.24 : 0.18
-            beam.fillColor = colors[i].withAlphaComponent(alpha).cgColor
-            let path = UIBezierPath()
-            path.move(to: CGPoint(x: (ox - 13) * sx, y: 45 * sy))
-            path.addLine(to: CGPoint(x: (ox + 13) * sx, y: 45 * sy))
-            path.addLine(to: CGPoint(x: (tx + 100) * sx, y: (isLand ? 900 : 1600) * sy))
-            path.addLine(to: CGPoint(x: (tx - 100) * sx, y: (isLand ? 900 : 1600) * sy))
-            path.close()
-            beam.path = path.cgPath
-        }
-    }
-
     private func updateFootlights(t: TimeInterval, sx: CGFloat, sy: CGFloat) {
+        // 只画灯体（辉光已拆到灯光层同位绘制，见 LightView）。
         let cores = UIBezierPath()
         for i in 0..<PetConcertConst.footlightCount {
             // (54) U 横屏：11 盏均分全宽（原 90 间距只铺左半）。
@@ -719,10 +827,6 @@ final class PetConcertCurtainView: UIView {
             let y = (isLand ? PetConcertConst.footlightYL : PetConcertConst.footlightY) * sy
             cores.append(UIBezierPath(ovalIn: CGRect(
                 x: x - 13 * sx, y: y - 13 * sy, width: 26 * sx, height: 26 * sy)))
-            let pulse = 0.75 + 0.25 * sin(2 * t + Double(i) * 0.8)
-            let r = 30 * sx * CGFloat(pulse)
-            footGlowLayers[i].path = UIBezierPath(ovalIn: CGRect(
-                x: x - r, y: y - r, width: r * 2, height: r * 2)).cgPath
         }
         footCoreLayer.path = cores.cgPath
         footCoreLayer.lineWidth = 3 * sx

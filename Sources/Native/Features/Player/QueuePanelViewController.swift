@@ -52,6 +52,15 @@ final class QueuePanelViewController: UIViewController {
     private let modeChipsStack = UIStackView()
     private let sleepChipsStack = UIStackView()
     private let sleepStateLabel = UILabel()
+    /// 头部睡眠定时状态行（3.7 (55) 工作流 D/DS 修正3，仅头部）：
+    /// 标题行与管理卡之间的一行状态——有定时：月亮图标＋「睡眠
+    /// 定时 · 剩 m:ss」＋取消钮；无定时：整行是「睡眠定时」入口，
+    /// 点开预设菜单（与管理卡定时档同源 SleepTimerController）。
+    /// 队列行逻辑零改动；刷新挂在既有 refreshSleepUI 末尾（睡眠
+    /// 变更通知与 1 秒倒计时都经它），状态天然同源。
+    private let sleepHeaderRow = UIView()
+    private let sleepHeaderLabel = UILabel()
+    private let sleepHeaderCancelButton = UIButton(type: .system)
     private var modeChips: [UIButton] = []
     private var sleepChips: [UIButton] = []
     private let tableView = UITableView(frame: .zero, style: .plain)
@@ -124,6 +133,48 @@ final class QueuePanelViewController: UIViewController {
         editButton.translatesAutoresizingMaskIntoConstraints = false
         editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
         view.addSubview(editButton)
+
+        // 头部睡眠定时状态行（3.7 (55) 工作流 D/DS 修正3）
+        sleepHeaderRow.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        sleepHeaderRow.layer.cornerRadius = 10
+        sleepHeaderRow.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(sleepHeaderRow)
+        let sleepHeaderIcon = UIImageView(
+            image: UIImage(systemName: "moon.zzz"))
+        sleepHeaderIcon.tintColor = UIColor.white.withAlphaComponent(0.75)
+        sleepHeaderIcon.translatesAutoresizingMaskIntoConstraints = false
+        sleepHeaderRow.addSubview(sleepHeaderIcon)
+        sleepHeaderLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        sleepHeaderLabel.textColor = UIColor.white.withAlphaComponent(0.85)
+        sleepHeaderLabel.translatesAutoresizingMaskIntoConstraints = false
+        sleepHeaderRow.addSubview(sleepHeaderLabel)
+        sleepHeaderCancelButton.setTitle("取消", for: .normal)
+        sleepHeaderCancelButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+        sleepHeaderCancelButton.tintColor = UIColor(red: 1, green: 0.42, blue: 0.42, alpha: 1)
+        sleepHeaderCancelButton.translatesAutoresizingMaskIntoConstraints = false
+        sleepHeaderCancelButton.addTarget(
+            self, action: #selector(sleepHeaderCancelTapped), for: .touchUpInside)
+        sleepHeaderRow.addSubview(sleepHeaderCancelButton)
+        let sleepHeaderTap = UITapGestureRecognizer(
+            target: self, action: #selector(sleepHeaderRowTapped))
+        sleepHeaderRow.addGestureRecognizer(sleepHeaderTap)
+        NSLayoutConstraint.activate([
+            sleepHeaderRow.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            sleepHeaderRow.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            sleepHeaderRow.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10),
+            sleepHeaderRow.heightAnchor.constraint(equalToConstant: 36),
+            sleepHeaderIcon.leadingAnchor.constraint(equalTo: sleepHeaderRow.leadingAnchor, constant: 12),
+            sleepHeaderIcon.centerYAnchor.constraint(equalTo: sleepHeaderRow.centerYAnchor),
+            sleepHeaderIcon.widthAnchor.constraint(equalToConstant: 16),
+            sleepHeaderIcon.heightAnchor.constraint(equalToConstant: 16),
+            sleepHeaderLabel.leadingAnchor.constraint(equalTo: sleepHeaderIcon.trailingAnchor, constant: 8),
+            sleepHeaderLabel.centerYAnchor.constraint(equalTo: sleepHeaderRow.centerYAnchor),
+            sleepHeaderCancelButton.trailingAnchor.constraint(equalTo: sleepHeaderRow.trailingAnchor, constant: -8),
+            sleepHeaderCancelButton.centerYAnchor.constraint(equalTo: sleepHeaderRow.centerYAnchor),
+            sleepHeaderCancelButton.widthAnchor.constraint(equalToConstant: 48),
+            sleepHeaderCancelButton.heightAnchor.constraint(equalToConstant: 32),
+            sleepHeaderLabel.trailingAnchor.constraint(lessThanOrEqualTo: sleepHeaderCancelButton.leadingAnchor, constant: -8),
+        ])
 
         // 管理卡
         let card = UIView()
@@ -203,7 +254,7 @@ final class QueuePanelViewController: UIViewController {
 
             card.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             card.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            card.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 14),
+            card.topAnchor.constraint(equalTo: sleepHeaderRow.bottomAnchor, constant: 10),
 
             modeTitle.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
             modeTitle.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
@@ -450,6 +501,54 @@ final class QueuePanelViewController: UIViewController {
         } else {
             sleepStateLabel.text = ""
         }
+        refreshSleepHeaderRow()
+    }
+
+    /// 头部睡眠状态行回显（3.7 (55) 工作流 D）：有定时显剩余＋
+    /// 取消钮，无定时显入口文案、藏取消钮。经 refreshSleepUI 调用
+    /// （变更通知＋面板在场 1 秒倒计时同路），无需另建计时器。
+    private func refreshSleepHeaderRow() {
+        let timer = SleepTimerController.shared
+        if let remaining = timer.remainingSeconds, timer.isActive {
+            let total = Int(remaining.rounded())
+            sleepHeaderLabel.text = String(
+                format: "睡眠定时 · 剩 %d:%02d 后暂停", total / 60, total % 60)
+            sleepHeaderCancelButton.isHidden = false
+        } else {
+            sleepHeaderLabel.text = "睡眠定时"
+            sleepHeaderCancelButton.isHidden = true
+        }
+    }
+
+    /// 头部行点按（无定时=入口、有定时=改档）：弹既有预设档菜单
+    /// （SleepTimerController.presets 全集，当前档打勾），与管理
+    /// 卡定时档同一设置源。
+    @objc private func sleepHeaderRowTapped() {
+        let alert = UIAlertController(
+            title: "睡眠定时", message: nil, preferredStyle: .actionSheet)
+        let active = SleepTimerController.shared.activePresetMinutes
+        for minutes in SleepTimerController.presets {
+            let isCurrent = SleepTimerController.shared.isActive
+                ? (active == minutes && minutes > 0) : minutes == 0
+            let title = (minutes == 0 ? "关" : "\(minutes) 分钟后暂停")
+                + (isCurrent ? " ✓" : "")
+            alert.addAction(UIAlertAction(title: title, style: .default) { _ in
+                SleepTimerController.shared.set(minutes: minutes)
+                Breadcrumbs.log("queue.panel.sleepHeader set minutes=\(minutes)")
+            })
+        }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        if let popover = alert.popoverPresentationController {
+            popover.sourceView = sleepHeaderRow
+            popover.sourceRect = sleepHeaderRow.bounds
+        }
+        Breadcrumbs.log("queue.panel.sleepHeader menu")
+        present(alert, animated: true)
+    }
+
+    @objc private func sleepHeaderCancelTapped() {
+        SleepTimerController.shared.cancel()
+        Breadcrumbs.log("queue.panel.sleepHeader cancel")
     }
 
     private func startCountdown() {

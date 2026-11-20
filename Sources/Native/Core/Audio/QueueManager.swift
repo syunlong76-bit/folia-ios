@@ -260,6 +260,26 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    /// 启动续播自动播放（(55) 工作流 G，网页 autoPlayOnLaunch
+    /// 消费点）：冷启恢复态在位时由 SceneDelegate 在「启动续
+    /// 播自动播放」开关开启时调用——走唯一改曲路径装载当前
+    /// 曲并保持起播（不走 resumeRestoredQueue 的装载后暂停）。
+    /// 非恢复态/无当前曲为无操作并返回 false。
+    @discardableResult
+    func playRestoredQueueIfNeeded() -> Bool {
+        guard hasRestoredQueue, currentTrack != nil else { return false }
+        runOnMain { [weak self] in
+            guard let self, self.hasRestoredQueue, self.currentTrack != nil
+            else { return }
+            self.hasRestoredQueue = false
+            self.loadIsManual = false
+            self.manualSelectionPending = false
+            Breadcrumbs.log("settings.autoPlayOnLaunch fired=1 track=\(self.currentTrack?.id ?? "-")")
+            self.loadTrackAtCurrentIndex()
+        }
+        return true
+    }
+
     private init() {
         engine.onTrackEnded = { [weak self] in
             guard let self else { return }
@@ -623,13 +643,25 @@ final class QueueManager: ObservableObject {
     }
 
     /// 追加到队尾（去重，不打断当前播放；3.2 桥 addToQueue 用）。
+    /// (55) 工作流 G：插入点受「加入队列默认位置」设置门控
+    /// （SettingsStore.queueDefaultPosition）——append=队尾
+    /// （默认、原行为）；next=插到当前曲之后（保序批量插
+    /// 入），空队列时退化为队尾追加。
     func appendToQueue(_ tracks: [FoliaTrack]) {
         runOnMain { [weak self] in
             guard let self else { return }
             let existing = Set(self.queue.map(\.id))
             let fresh = tracks.filter { !existing.contains($0.id) }
             guard !fresh.isEmpty else { return }
-            self.queue.append(contentsOf: fresh)
+            if SettingsStore.queueDefaultPosition == "next",
+               !self.queue.isEmpty,
+               self.queue.indices.contains(self.currentIndex) {
+                let at = self.currentIndex + 1
+                self.queue.insert(contentsOf: fresh, at: at)
+                Breadcrumbs.log("settings.queueDefault pos=next inserted=\(fresh.count) at=\(at)")
+            } else {
+                self.queue.append(contentsOf: fresh)
+            }
             self.updateCommandAvailability()
             self.persistQueueSnapshot()
         }
@@ -730,14 +762,22 @@ final class QueueManager: ObservableObject {
                     FoliaBridgeLogStore.shared.write(level: "warn", module: "queue",
                         message: "load failed track=\(track.id) manual=\(manual) class=\(Self.loadErrorClass(error)) resolveMs=\(resolveMs) error=\(error.localizedDescription)")
                     if manual {
-                        if Self.isDeterministicallyUnplayable(error) {
+                        if Self.isDeterministicallyUnplayable(error),
+                           SettingsStore.autoSkipUnplayableEnabled {
                             // 点播到的歌确定性不可播（3.7 (28)）：顺跳
                             // 下一首可播的，不停在失败态；连跳由熔断
                             // 封顶（整队一轮无一可播才停并报错）。
+                            // (55) 工作流 G：顺跳受「无法播放自动跳
+                            // 过」开关门控，关则落 else 停住报错。
                             self.skipUnplayableLoad(error: error, track: track)
                         } else {
                             // 瞬时失败（网络超时/节点故障）：停住报错，
                             // 不连环跳歌（3.2 录屏里歌名闪切的教训）。
+                            // 确定性不可播但自动跳过开关关时也落这里
+                            // （(55) 工作流 G），留痕区分两路。
+                            if Self.isDeterministicallyUnplayable(error) {
+                                Breadcrumbs.log("settings.autoSkip off=1 action=hold-error track=\(track.id)")
+                            }
                             self.consecutiveFailures = 0
                             self.manualSelectionPending = false
                             self.engine.stop()

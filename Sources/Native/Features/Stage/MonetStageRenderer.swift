@@ -1122,7 +1122,10 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         // 烘焙倍率（3.7 (47) 清晰度修复）：旧版恒 @2x，@3x
         // 屏上静态行恒软 1.5 倍；改按当前屏幕倍率出图，与
         // 显示尺寸 1:1（莫奈行变换 scale ≤1，无需余量）。
+        // 3.7 (55) 协调者集成：叠加设置「歌词画布分辨率」档位
+        // （SettingsStore.lyricRenderScale，缺省 1.0 不变行为）。
         let bakeScale = currentDisplayScale
+            * CGFloat(SettingsStore.lyricRenderScale)
         bakeQueue.async { [weak self] in
             // bake 生命周期面包屑（3.7 (46)，DS 取证清单）：此前
             // 只有落地痕、没有入队/开工/完工痕，崩在栅格化中途
@@ -1194,7 +1197,9 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         let generation = bakeGeneration
         let track = trackID
         // 扫字烘焙倍率同 static（3.7 (47)）：按当前屏幕倍率。
+        // 3.7 (55) 协调者集成：同 static 叠加歌词画布分辨率档位。
         let bakeScale = currentDisplayScale
+            * CGFloat(SettingsStore.lyricRenderScale)
         bakeQueue.async { [weak self] in
             // bake 生命周期面包屑（3.7 (46)）：同 static bake。
             Breadcrumbs.log("monet bake start kind=sweep gen=\(generation) key=\(key)")

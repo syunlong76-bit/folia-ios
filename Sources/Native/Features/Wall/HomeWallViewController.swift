@@ -14,7 +14,7 @@ import UIKit
 /// 两处都已验证的手势路径不做抽象合并，协调器接线时再抽共享基类）。
 final class HomeWallViewController: UIViewController,
     UICollectionViewDataSource, UICollectionViewDelegate,
-    UICollectionViewDataSourcePrefetching {
+    UICollectionViewDataSourcePrefetching, UICollectionViewDelegateFlowLayout {
 
     private var entries: [WallPrototypeViewController.Entry] = []
     private var playlistIds: [String] = []
@@ -104,6 +104,13 @@ final class HomeWallViewController: UIViewController,
     private var miniPlayButton: UIButton!
     private var miniPrevButton: UIButton!
     private var miniNextButton: UIButton!
+    /// 主排模式钮（3.7 (55) 工作流 E 修正项，DS 对账）：顶排
+    /// 改网页六钮后模式退出顶排，但模式是高频项——主排右端
+    /// 补一颗紧凑钮：glyph 随 QueueManager.playMode 四档各异
+    /// （顺序 list.bullet / 循环 repeat / 单曲 repeat.1 / 随机
+    /// shuffle），点按弹四档菜单点选（非盲循环），与队列面
+    /// 板/设置同一存储（QueueManager.playMode）双向同步。
+    private var miniModeButton: UIButton!
     private var miniProgressTrack: UIView!
     private var miniProgressFill: UIView!
     private var miniProgressKnob: UIView!
@@ -118,7 +125,7 @@ final class HomeWallViewController: UIViewController,
     private var miniTrackBottomConstraint: NSLayoutConstraint?
     /// 点播台上排（3.7 (54) 工作流 H）：网页整排的上排（喜欢/
     /// 打乱/模式/睡眠/设置，MiniBarQuickRowView 唯一实现），
-    /// 展开态台高 70→118、主排下移；形态名单与主排同收口。
+    /// 展开态台高 70→122、主排下移；形态名单与主排同收口。
     /// 主排 centerY 约束存引用供形态切换改常量（展开 +13 /
     /// 收起 −5）。
     private var miniQuickRow: MiniBarQuickRowView?
@@ -154,6 +161,27 @@ final class HomeWallViewController: UIViewController,
     /// 打开时经 setExternallyCovered 整层隐藏（照网页版
     /// is-covered），关栏恢复。
     private var sketchbookDrawer: SketchbookDrawerView?
+
+    // 缝合工具条（3.7 (55) 工作流 E）：工具条视图 + 三段数据
+    // + 网格形态 + 过滤 + 沉浸模式，全部状态在此，接线逻辑在
+    // 文件尾 seam extension。原始歌单全量（未过滤）存
+    // seamRawPlaylists，entries/playlistIds 恒为「当前段 +
+    // 隐藏过滤 + 文字过滤」后的呈现集（applyWallData 唯一装配点）。
+    private var seamToolbar: SeamToolbarView?
+    private var seamToolbarTrailing: NSLayoutConstraint?
+    private var seamSegment: SeamSegment = .songs
+    private var seamRawPlaylists: [NativePlaylistSummary] = []
+    private var seamRecommendedPlaylists: [NativePlaylistSummary]?
+    private var seamExploreTracks: [FoliaTrack]?
+    /// 探段当前呈现曲目（过滤后），点按起播的队列即此列。
+    private var seamVisibleTracks: [FoliaTrack] = []
+    private var seamFilterText = ""
+    private var seamFilterBar: UIView?
+    private var seamFilterField: UITextField?
+    private var gridCollectionView: UICollectionView?
+    private var seamGridMode = UserDefaults.standard.bool(forKey: "folia.wall.gridMode")
+    private var seamImmersive = false
+    private var seamImmersiveTapView: UIView?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
     /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
@@ -188,6 +216,23 @@ final class HomeWallViewController: UIViewController,
         NotificationCenter.default.addObserver(
             self, selector: #selector(stickerTrackSkippedUnplayable),
             name: .foliaTrackSkippedUnplayable, object: nil)
+        // 点播台面板通知接线（3.7 (55) 工作流 E 任务三）：工作
+        // 流 C 的点播台上排字幕/面板/命令键发出这三条通知，墙面
+        // 两台订阅后 present 工作流 D 的面板（类名定死，见文件
+        // 尾 seam extension 的 miniBarPanel* 处理）。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniBarPanelSubtitle),
+            name: .foliaMiniBarSubtitle, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniBarPanelPanel),
+            name: .foliaMiniBarPanel, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniBarPanelCommand),
+            name: .foliaMiniBarCommand, object: nil)
+        // 隐藏集变更（管理面/长按隐藏）后重装配墙面数据。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(seamHiddenPlaylistsChanged),
+            name: .foliaHiddenPlaylistsChanged, object: nil)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         // 同 view 底色口径（(53) I 组）：墙画布未铺满/回弹露底时同为海报主色。
@@ -282,6 +327,12 @@ final class HomeWallViewController: UIViewController,
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.refreshMiniBar() }
             .store(in: &playbackCancellables)
+        // 主排模式钮回显（(55) E 修正项）：模式在队列面板/设置/
+        // 顶排任一处变更都经同一 @Published 存储回刷本钮。
+        QueueManager.shared.$playMode
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshMiniModeButton() }
+            .store(in: &playbackCancellables)
         // 贴纸层（3.7 (24)，纯新增订阅）：切歌缓冲态驱动缓冲
         // 贴纸显隐，只读引擎状态，不回写。
         PlaybackEngine.shared.$playbackState
@@ -312,6 +363,8 @@ final class HomeWallViewController: UIViewController,
         let workbench = WorkbenchOverlayHostView(hostViewController: self)
         workbench.onSidebarVisibilityChanged = { [weak self] open in
             self?.collectionView.isUserInteractionEnabled = !open
+            // 网格形态（(55) E）与墙面同口径：侧栏打开时禁交互。
+            self?.gridCollectionView?.isUserInteractionEnabled = !open
             // 速记簿共存（3.7 (54) 工作流 N，照网页版 is-covered
             // 口径）：侧栏打开时速记簿整层隐藏——把手绝不浮压
             // 侧栏之上；关栏原样恢复（抽屉状态保留）。
@@ -336,6 +389,11 @@ final class HomeWallViewController: UIViewController,
         // (53) L 组 chrome 收口留痕：提示条删除 + ✕ 关闭键 +
         // 齿轮/搜索并入侧栏，真机对账以此行确认新包在跑。
         Breadcrumbs.log("wall.chrome home hintBar=removed gearSearch=sidebar close=glass-x")
+
+        // 缝合工具条安装（3.7 (55) 工作流 E）：装在工作台宿主与
+        // 速记簿之后——侧栏打开时宿主盖住本条（共存口径），速记
+        // 簿把手在其下层左缘、二者纵向错位不打架。接线见文件尾。
+        installSeamChrome()
 
         loadEntries()
     }
@@ -403,6 +461,13 @@ final class HomeWallViewController: UIViewController,
         // (51) 换根后本墙可作窗口根：无呈现方时「关闭」是空操作死按钮，隐藏之；
         // 被 present 出来时照旧显示（dismiss 回呈现方）。
         rootCloseButton?.isHidden = (presentingViewController == nil && navigationController == nil)
+        // 缝合工具条（(55) E）：被 present 时右上 ✕ 与工具条右
+        // 端同高，工具条尾距让出 ✕ 的 44pt 命中区；作窗口根
+        // 时 ✕ 隐藏、工具条用满宽。登录态头像每次露面刷新
+        // （与侧栏账户头同口径）。
+        seamToolbarTrailing?.constant =
+            (rootCloseButton?.isHidden ?? true) ? -12 : -64
+        seamRefreshAccount()
         Breadcrumbs.log("wall.appear kind=home")
         Breadcrumbs.log("home appear")
         Breadcrumbs.samplerStart()
@@ -517,20 +582,12 @@ final class HomeWallViewController: UIViewController,
                     self.wallNotLoggedIn = false
                     self.entryDataState = .ready
                     Breadcrumbs.log("home entries ok n=\(playlists.count)")
-                    self.playlistIds = playlists.map(\.id)
-                    self.entries = playlists.map { playlist in
-                        WallPrototypeViewController.Entry(
-                            id: playlist.id,
-                            title: playlist.name,
-                            picUrl: playlist.coverUrl,
-                            subtitle: "歌单 · \(playlist.trackCount)")
-                    }
-                    self.wallLayout.totalEntries = self.entries.count
-                    // 提示条/胶囊均已删（(53) L 组删条、(54) L
-                    // 撤胶囊）：成功态不上屏任何文案。
-                    self.wallLayout.refreshInstances()
-                    self.collectionView.reloadData()
-                    self.centerCameraIfNeeded()
+                    // 缝合工具条（(55) E）：原始全量存档，呈现集
+                    // 由 applyWallData 按当前段/隐藏/过滤统一装配
+                    // （歌段即此列过滤后；提示条/胶囊均已删，成功
+                    // 态不上屏任何文案，(53)/(54) L 口径不变）。
+                    self.seamRawPlaylists = playlists
+                    self.applyWallData()
                 }
             } catch {
                 // 原始错误只进日志，标签只给人话（3.7 (13) #3：根因是
@@ -594,6 +651,9 @@ final class HomeWallViewController: UIViewController,
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // 网格形态（(55) E）的 collection view 共用本 delegate：
+        // 相机折叠只认墙面本体那台，网格滚动不触发。
+        guard scrollView === collectionView else { return }
         guard !isWrapping, didCenterCamera else { return }
         let cell = wallLayout.cellViewSize
         guard cell.width > 0, cell.height > 0 else { return }
@@ -623,13 +683,25 @@ final class HomeWallViewController: UIViewController,
     // MARK: - 数据源
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        wallLayout.instances.count
+        // 网格形态（(55) E）：同数据直列；墙面本体走实例平铺。
+        if collectionView === gridCollectionView { return entries.count }
+        return wallLayout.instances.count
     }
 
     func collectionView(_ collectionView: UICollectionView,
                         cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
         let cell = collectionView.dequeueReusableCell(
             withReuseIdentifier: WallPosterCell.reuseId, for: indexPath) as! WallPosterCell
+        if collectionView === gridCollectionView {
+            let entry = entries[indexPath.item]
+            let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
+            let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
+            let tier = entry.picUrl.map { NativeCoverLoader.wallTier(raw: $0, pixelExtent: pixelExtent) }
+                ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
+            cell.configure(entry: entry, tier: tier)
+            cell.playEntranceIfNeeded(key: entry.id)
+            return cell
+        }
         let instance = wallLayout.instances[indexPath.item]
         let entry = entries[instance.queueIndex]
         let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
@@ -643,6 +715,18 @@ final class HomeWallViewController: UIViewController,
 
     func collectionView(_ collectionView: UICollectionView,
                         prefetchItemsAt indexPaths: [IndexPath]) {
+        if collectionView === gridCollectionView {
+            for indexPath in indexPaths {
+                guard indexPath.item < entries.count,
+                      let pic = entries[indexPath.item].picUrl else { continue }
+                let tier = NativeCoverLoader.tier(forPixelExtent: 360)
+                guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier)
+                else { continue }
+                if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { continue }
+                Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
+            }
+            return
+        }
         for indexPath in indexPaths {
             guard indexPath.item < wallLayout.instances.count else { continue }
             let instance = wallLayout.instances[indexPath.item]
@@ -718,11 +802,30 @@ final class HomeWallViewController: UIViewController,
     // MARK: - 点按：打开该歌单的曲目墙（详情 MVP 前的桥）
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        // 网格形态（(55) E）：索引即条目序，与墙面点卡同路。
+        if collectionView === gridCollectionView {
+            seamOpenEntry(at: indexPath.item)
+            return
+        }
         let instance = wallLayout.instances[indexPath.item]
-        guard instance.queueIndex < playlistIds.count else { return }
-        let entry = entries[instance.queueIndex]
+        seamOpenEntry(at: instance.queueIndex)
+    }
+
+    /// 点卡统一入口（墙面实例/网格行共用）：探段（曲目形条
+    /// 目）以当前呈现列为队列起播；歌/推段（歌单形）打开该
+    /// 歌单的曲目墙（下方既有通路）。
+    private func seamOpenEntry(at queueIndex: Int) {
+        if seamSegment == .explore {
+            guard queueIndex < seamVisibleTracks.count else { return }
+            Breadcrumbs.log("wall.seam.explore play at=\(queueIndex) n=\(seamVisibleTracks.count)")
+            QueueManager.shared.setQueue(
+                seamVisibleTracks, startingAt: queueIndex, source: "wall-explore")
+            return
+        }
+        guard queueIndex < playlistIds.count, queueIndex < entries.count else { return }
+        let entry = entries[queueIndex]
         let wall = WallPrototypeViewController(
-            playlistId: playlistIds[instance.queueIndex],
+            playlistId: playlistIds[queueIndex],
             title: entry.title, coverUrl: entry.picUrl)
         wall.modalPresentationStyle = .fullScreen
         wall.modalTransitionStyle = .crossDissolve
@@ -732,7 +835,7 @@ final class HomeWallViewController: UIViewController,
         // 转场同族化（3.7 (40) 项8）：crossDissolve 保留，
         // 呈现侧加 1.02 弹簧蓄势、目标墙弹簧落位（见
         // beginPosterTransition），不再是静止墙面单方淡化。
-        beginPosterTransition(source: "tap", playlistId: playlistIds[instance.queueIndex])
+        beginPosterTransition(source: "tap", playlistId: playlistIds[queueIndex])
         wall.startPreload()
         Task { [weak self] in
             guard let self else { return }
@@ -814,30 +917,25 @@ final class HomeWallViewController: UIViewController,
             glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
-        // 点播台上排（3.7 (54) 工作流 H）：网页整排接入——上排
-        // 44pt 贴台顶（喜欢/打乱/模式/睡眠＋右端设置），主排
-        // 整体下移、台高 70→118。功能走 MiniBarQuickRowView
-        // 唯一实现（与曲目墙/舞台同件）；点按先行回调重置无
-        // 操作计时；设置入口按墙面既有口径直呈设置页（本面
-        // 齿轮已随 (53) L 并入侧栏，此键与侧栏设置行同落点）。
+        // 点播台上排（3.7 (54) 工作流 H、(55) C 改版）：网页六钮
+        // 整排贴台顶，主排整体下移、台高 70→122。尺寸单一出处
+        // 在 MiniBarQuickRowView（rowHeight / expandedBarHeight），
+        // 本处只读常量不写死。功能走该视图唯一实现（与曲目墙/
+        // 舞台同件）；点按先行回调重置无操作计时。(55) C 起顶
+        // 排已无设置钮，旧 onOpenSettings 接线为死代码、已移除
+        // （属性声明在 C 侧保留，设置入口归缝合工具条/侧栏）。
         let quickRow = MiniBarQuickRowView()
         quickRow.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(quickRow)
         miniQuickRow = quickRow
         quickRow.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
-        quickRow.onOpenSettings = { [weak self] in
-            guard let self else { return }
-            let settings = SettingsViewController()
-            settings.modalPresentationStyle = .overFullScreen
-            self.present(settings, animated: false)
-        }
         NSLayoutConstraint.activate([
             quickRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
             quickRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
             quickRow.topAnchor.constraint(equalTo: bar.topAnchor, constant: 3),
-            quickRow.heightAnchor.constraint(equalToConstant: 44),
+            quickRow.heightAnchor.constraint(equalToConstant: MiniBarQuickRowView.rowHeight),
         ])
-        Breadcrumbs.log("minibar.webrow homewall attached h=118")
+        Breadcrumbs.log("minibar.webrow homewall attached h=\(Int(MiniBarQuickRowView.expandedBarHeight))")
 
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
@@ -911,6 +1009,18 @@ final class HomeWallViewController: UIViewController,
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
 
+        // 主排模式钮（(55) E 修正项）：主排最右端紧凑钮，菜单
+        // 点选四档（showsMenuAsPrimaryAction），glyph/菜单勾选
+        // 态由 refreshMiniModeButton 按 QueueManager.playMode
+        // 统一回显（订阅在 viewDidLoad、构建后先刷一次）。
+        miniModeButton = UIButton(type: .system)
+        miniModeButton.tintColor = .white
+        miniModeButton.accessibilityLabel = "播放模式"
+        miniModeButton.showsMenuAsPrimaryAction = true
+        miniModeButton.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniModeButton)
+        refreshMiniModeButton()
+
         let seekHit = UIView()
         seekHit.backgroundColor = .clear
         seekHit.translatesAutoresizingMaskIntoConstraints = false
@@ -925,7 +1035,8 @@ final class HomeWallViewController: UIViewController,
         // 收起形态切换（70↔16）。
         miniBarWidthConstraint = bar.widthAnchor.constraint(
             equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
-        miniBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 118)
+        miniBarHeightConstraint = bar.heightAnchor.constraint(
+            equalToConstant: MiniBarQuickRowView.expandedBarHeight)
         miniBarWidthConstraint?.isActive = true
         miniBarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
@@ -960,7 +1071,11 @@ final class HomeWallViewController: UIViewController,
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniModeButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniModeButton.widthAnchor.constraint(equalToConstant: 30),
+            miniModeButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniNextButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
@@ -980,12 +1095,15 @@ final class HomeWallViewController: UIViewController,
         miniKnobLeading = knob.leadingAnchor.constraint(
             equalTo: progressTrack.leadingAnchor, constant: -4.5)
         miniKnobLeading?.isActive = true
-        // 主排纵向位置（3.7 (54) H）：展开 118 台里主排中心在
-        // 上排（3..47）与 seek 命中带（98..118）之间，相对台
-        // 中心 +13；收起态回 −5（内容已淡出、仅动画观感）。
-        // 形态切换在 setMiniBarForm 里统一改这组常量。
-        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 13)
+        // 主排纵向位置（3.7 (54) H、(55) C 复核）：展开 122 台
+        // 里主排中心在上排（3..51）与 seek 命中带（102..122）
+        // 之间正中，相对台中心 +15.5（台高 118→122、上排
+        // 44→48 后按 +4 增量复核：封面上下留白各 3.5pt 对称）；
+        // 收起态回 −5（内容已淡出、仅动画观感）。形态切换在
+        // setMiniBarForm 里统一改这组常量。模式钮（(55) E 修正
+        // 项）同入本组，随形态同位。
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniModeButton].map {
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 15.5)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // 轨道底距存引用（3.7 (21)）：收起形态 −7→−6 使轨道
@@ -1031,6 +1149,40 @@ final class HomeWallViewController: UIViewController,
 
     @objc private func miniBarSlotsChanged() {
         applyMiniBarSlots()
+    }
+
+    /// 主排模式钮回显（(55) E 修正项）：glyph 四档各异（顺序
+    /// 与循环不共用 repeat——顺序档用 list.bullet 与顶排/面板
+    /// 旧口径的同图区分开，正是本修正要防的「两个打乱键」式
+    /// 语义撞车）；菜单四项与队列面板同名（顺序/循环/单曲/
+    /// 随机），当前档带勾，点选写回同一 playMode 存储。
+    private func refreshMiniModeButton() {
+        guard let button = miniModeButton else { return }
+        let mode = QueueManager.shared.playMode
+        let symbol: String
+        switch mode {
+        case .off: symbol = "list.bullet"
+        case .loopAll: symbol = "repeat"
+        case .repeatOne: symbol = "repeat.1"
+        case .shuffle: symbol = "shuffle"
+        }
+        button.setImage(UIImage(systemName: symbol,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)),
+            for: .normal)
+        button.tintColor = mode == .off
+            ? UIColor.white.withAlphaComponent(0.45) : .white
+        let items: [(QueueManager.PlayMode, String)] = [
+            (.off, "顺序"), (.loopAll, "循环"), (.repeatOne, "单曲"), (.shuffle, "随机"),
+        ]
+        button.menu = UIMenu(children: items.map { item in
+            let action = UIAction(title: item.1) { [weak self] _ in
+                QueueManager.shared.playMode = item.0
+                Breadcrumbs.log("minibar.mainrow.mode=\(item.0.rawValue)")
+                self?.resetMiniIdleTimer()
+            }
+            action.state = item.0 == mode ? .on : .off
+            return action
+        })
     }
 
     /// 进度填充与发光圆钮的唯一步进点（与曲目墙同构）：主题
@@ -1128,7 +1280,8 @@ final class HomeWallViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
         // 上排（(54) H）长按不切主题：与按键区同口径豁免。
         if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
         miniTheme = miniTheme.next
@@ -1172,7 +1325,8 @@ final class HomeWallViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
         // 上排（(54) H）：键各自处理、排内空隙不落台身分发
         // （防瞄准上排时误触进详情页）。
         if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
@@ -1217,7 +1371,8 @@ final class HomeWallViewController: UIViewController,
             if miniCover.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
-                || miniNextButton.frame.contains(barPoint) { return }
+                || miniNextButton.frame.contains(barPoint)
+                || miniModeButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
             // 拖动期间挂起无操作计时（3.7 (21)），松手后重置。
@@ -1409,8 +1564,8 @@ final class HomeWallViewController: UIViewController,
     /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
     /// 直接置位即瞬时生效。
     private func setMiniBarForm(collapsed: Bool) {
-        miniBarHeightConstraint?.constant = collapsed ? 16 : 118
-        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 13 }
+        miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
+        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 15.5 }
         miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
@@ -1437,14 +1592,14 @@ final class HomeWallViewController: UIViewController,
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
         // (54) H：上排整排同入淡出名单（收起细条上只留轨道）。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniQuickRow]
+                                miniPrevButton, miniNextButton, miniModeButton, miniQuickRow]
         for view in views {
             view?.alpha = alpha
         }
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniModeButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
@@ -1797,5 +1952,576 @@ extension HomeWallViewController {
            dockIdx > barIdx {
             view.insertSubview(dock, belowSubview: bar)
         }
+    }
+}
+
+// MARK: - 缝合工具条接线（3.7 (55) 工作流 E）
+//
+// 工具条本体见 SeamToolbarView；本段只做宿主接线：三段数据
+// 装配（applyWallData 是 entries/playlistIds 的唯一装配点）、
+// 网格形态、过滤浮层、沉浸模式、「…」菜单五项动作、账户
+// 回填、点播台面板通知（任务三）的呈现。
+
+extension HomeWallViewController {
+
+    // MARK: 安装
+
+    func installSeamChrome() {
+        // 网格形态：与墙面同一份 entries 的 flow 呈现，插在墙
+        // 画布正上方、其余 chrome 之下；初始按持久化选择显隐。
+        let flow = UICollectionViewFlowLayout()
+        flow.scrollDirection = .vertical
+        flow.minimumInteritemSpacing = 10
+        flow.minimumLineSpacing = 14
+        flow.sectionInset = UIEdgeInsets(top: 60, left: 14, bottom: 150, right: 14)
+        let grid = UICollectionView(frame: view.bounds, collectionViewLayout: flow)
+        grid.backgroundColor = .clear
+        grid.dataSource = self
+        grid.delegate = self
+        grid.prefetchDataSource = self
+        grid.showsVerticalScrollIndicator = false
+        grid.register(WallPosterCell.self, forCellWithReuseIdentifier: WallPosterCell.reuseId)
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        view.insertSubview(grid, aboveSubview: collectionView)
+        NSLayoutConstraint.activate([
+            grid.topAnchor.constraint(equalTo: view.topAnchor),
+            grid.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            grid.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            grid.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        grid.isHidden = !seamGridMode
+        collectionView.isHidden = seamGridMode
+        gridCollectionView = grid
+
+        // 工具条：插在工作台宿主之下——侧栏打开时宿主整层盖住
+        // 本条（随墙被覆盖的共存口径，不新造避让）；关闭态宿主
+        // 只占把手/头像小命中区，与本条纵向错位（宿主头像在
+        // safeTop+50、本条底沿 safeTop+48）。
+        let toolbar = SeamToolbarView()
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        if let host = workbenchHost {
+            view.insertSubview(toolbar, belowSubview: host)
+        } else {
+            view.addSubview(toolbar)
+        }
+        seamToolbarTrailing = toolbar.trailingAnchor.constraint(
+            equalTo: view.trailingAnchor, constant: -12)
+        NSLayoutConstraint.activate([
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            seamToolbarTrailing!,
+            toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
+            toolbar.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        toolbar.setLayoutMode(grid: seamGridMode)
+        toolbar.onSegmentChanged = { [weak self] segment in
+            self?.seamSegmentSelected(segment)
+        }
+        toolbar.onAvatarTapped = { [weak self] in self?.seamAvatarTapped() }
+        toolbar.onSearchTapped = { [weak self] in
+            guard let self else { return }
+            Breadcrumbs.log("wall.seam.search")
+            SearchHostPresenter.presentSearch(from: self)
+        }
+        toolbar.onSettingsTapped = { [weak self] in
+            guard let self else { return }
+            Breadcrumbs.log("wall.seam.settings")
+            let settings = SettingsViewController()
+            settings.modalPresentationStyle = .overFullScreen
+            self.present(settings, animated: false)
+        }
+        toolbar.onLayoutTapped = { [weak self] in self?.seamToggleLayout() }
+        toolbar.onMoreTapped = { [weak self] anchor in
+            self?.seamMoreTapped(anchor: anchor)
+        }
+        toolbar.onFullscreenTapped = { [weak self] in self?.seamSetImmersive(true) }
+        seamToolbar = toolbar
+
+        buildSeamFilterBar(below: toolbar)
+        buildSeamImmersiveTapView()
+        Breadcrumbs.log("wall.seam.installed grid=\(seamGridMode)")
+    }
+
+    private func buildSeamFilterBar(below toolbar: SeamToolbarView) {
+        let bar = UIView()
+        bar.isHidden = true
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        blur.layer.cornerRadius = 16
+        blur.layer.borderWidth = 1
+        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        blur.clipsToBounds = true
+        blur.isUserInteractionEnabled = false
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(blur)
+        let field = UITextField()
+        field.placeholder = "按标题过滤当前页"
+        field.attributedPlaceholder = NSAttributedString(
+            string: "按标题过滤当前页",
+            attributes: [.foregroundColor: UIColor.white.withAlphaComponent(0.45)])
+        field.textColor = .white
+        field.font = .systemFont(ofSize: 14)
+        field.clearButtonMode = .whileEditing
+        field.returnKeyType = .done
+        field.translatesAutoresizingMaskIntoConstraints = false
+        field.addTarget(self, action: #selector(seamFilterTextChanged), for: .editingChanged)
+        field.addTarget(self, action: #selector(seamFilterDone), for: .editingDidEndOnExit)
+        bar.addSubview(field)
+        seamFilterField = field
+        let clear = UIButton(type: .system)
+        clear.setTitle("清除", for: .normal)
+        clear.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
+        clear.tintColor = UIColor(red: 0.45, green: 0.75, blue: 1, alpha: 1)
+        clear.translatesAutoresizingMaskIntoConstraints = false
+        clear.addTarget(self, action: #selector(seamFilterClearTapped), for: .touchUpInside)
+        bar.addSubview(clear)
+        if let host = workbenchHost {
+            view.insertSubview(bar, belowSubview: host)
+        } else {
+            view.addSubview(bar)
+        }
+        NSLayoutConstraint.activate([
+            blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            blur.topAnchor.constraint(equalTo: bar.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+            bar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            bar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            bar.topAnchor.constraint(equalTo: toolbar.bottomAnchor, constant: 6),
+            bar.heightAnchor.constraint(equalToConstant: 44),
+            field.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            field.trailingAnchor.constraint(equalTo: clear.leadingAnchor, constant: -8),
+            field.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            clear.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -10),
+            clear.centerYAnchor.constraint(equalTo: bar.centerYAnchor),
+            clear.widthAnchor.constraint(equalToConstant: 44),
+            clear.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        seamFilterBar = bar
+    }
+
+    private func buildSeamImmersiveTapView() {
+        let tapView = UIView()
+        tapView.backgroundColor = .clear
+        tapView.isHidden = true
+        tapView.translatesAutoresizingMaskIntoConstraints = false
+        tapView.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(seamImmersiveTap)))
+        if let host = workbenchHost {
+            view.insertSubview(tapView, belowSubview: host)
+        } else {
+            view.addSubview(tapView)
+        }
+        NSLayoutConstraint.activate([
+            tapView.topAnchor.constraint(equalTo: view.topAnchor),
+            tapView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            tapView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            tapView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
+        seamImmersiveTapView = tapView
+    }
+
+    // MARK: 数据装配（唯一装配点）
+
+    /// 按「当前段 → 隐藏过滤 → 文字过滤」装配呈现集。歌段源
+    /// 是 loadEntries 的原始全量；推段源是推荐歌单缓存；探段
+    /// 源是探索曲目缓存（曲目形，playlistIds 恒空、点按起播）。
+    func applyWallData() {
+        let hidden = HiddenPlaylistsStore.shared.hiddenIds
+        let filter = seamFilterText.trimmingCharacters(in: .whitespaces)
+        switch seamSegment {
+        case .songs, .recommend:
+            var list = (seamSegment == .songs
+                ? seamRawPlaylists
+                : (seamRecommendedPlaylists ?? []))
+                .filter { !hidden.contains($0.id) }
+            if !filter.isEmpty {
+                list = list.filter { $0.name.localizedCaseInsensitiveContains(filter) }
+            }
+            playlistIds = list.map(\.id)
+            entries = list.map { playlist in
+                WallPrototypeViewController.Entry(
+                    id: playlist.id,
+                    title: playlist.name,
+                    picUrl: playlist.coverUrl,
+                    subtitle: seamSegment == .songs
+                        ? "歌单 · \(playlist.trackCount)"
+                        : "推荐歌单 · \(playlist.trackCount)")
+            }
+            seamVisibleTracks = []
+        case .explore:
+            var tracks = seamExploreTracks ?? []
+            if !filter.isEmpty {
+                tracks = tracks.filter {
+                    $0.title.localizedCaseInsensitiveContains(filter)
+                        || $0.artist.localizedCaseInsensitiveContains(filter)
+                }
+            }
+            seamVisibleTracks = tracks
+            playlistIds = []
+            entries = tracks.map { track in
+                WallPrototypeViewController.Entry(
+                    id: track.id,
+                    title: track.title,
+                    picUrl: track.artworkURL?.absoluteString,
+                    subtitle: track.artist)
+            }
+        }
+        wallLayout.totalEntries = entries.count
+        wallLayout.refreshInstances()
+        collectionView.reloadData()
+        gridCollectionView?.reloadData()
+        centerCameraIfNeeded()
+        Breadcrumbs.log("wall.seam.data segment=\(seamSegment.crumbName)"
+            + " n=\(entries.count) filter=\(!filter.isEmpty) hidden=\(hidden.count)")
+    }
+
+    @objc func seamHiddenPlaylistsChanged() {
+        applyWallData()
+    }
+
+    // MARK: 三段切换
+
+    func seamSegmentSelected(_ segment: SeamSegment) {
+        guard segment != seamSegment else { return }
+        seamSegment = segment
+        Breadcrumbs.log("wall.seam.segment=\(segment.crumbName)")
+        switch segment {
+        case .songs:
+            applyWallData()
+        case .recommend:
+            if seamRecommendedPlaylists != nil {
+                applyWallData()
+            } else {
+                loadSeamRecommend()
+            }
+        case .explore:
+            if seamExploreTracks != nil {
+                applyWallData()
+            } else {
+                loadSeamExplore()
+            }
+        }
+    }
+
+    /// 推段加载失败的诚实回退：提示后回歌段（不留假段控、
+    /// 不留空白墙假装有内容）。
+    private func seamSegmentLoadFailed(_ segment: SeamSegment) {
+        Breadcrumbs.log("wall.seam.segment failed=\(segment.crumbName) revert=songs")
+        seamSegment = .songs
+        seamToolbar?.setSegment(.songs)
+        applyWallData()
+        let alert = UIAlertController(
+            title: segment == .recommend ? "推荐暂时不可用" : "探索暂时不可用",
+            message: "需要登录网易云，或网络暂时不可用。已回到你的歌单。",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "好", style: .default))
+        present(alert, animated: true)
+    }
+
+    private func loadSeamRecommend() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let playlists = try await NativeDataClient.shared.fetchRecommendedPlaylists()
+                await MainActor.run {
+                    self.seamRecommendedPlaylists = playlists
+                    Breadcrumbs.log("wall.seam.recommend ok n=\(playlists.count)")
+                    if self.seamSegment == .recommend { self.applyWallData() }
+                }
+            } catch {
+                await MainActor.run {
+                    if self.seamSegment == .recommend {
+                        self.seamSegmentLoadFailed(.recommend)
+                    }
+                }
+            }
+        }
+    }
+
+    private func loadSeamExplore() {
+        Task { [weak self] in
+            guard let self else { return }
+            // 每日推荐 + 私人 FM 两路各自成败（工作台电台同口径）：
+            // 任一路有货即成段，两路全空才算失败回退。
+            async let dailyTask = NativeDataClient.shared.fetchDailySongs()
+            async let fmTask = NativeDataClient.shared.fetchPersonalFM()
+            let daily = (await try? dailyTask) ?? []
+            let fm = (await try? fmTask) ?? []
+            var seen = Set<String>()
+            let merged = (daily + fm).map(workbenchFoliaTrack).filter {
+                seen.insert($0.id).inserted
+            }
+            await MainActor.run {
+                guard self.seamSegment == .explore else { return }
+                if merged.isEmpty {
+                    self.seamSegmentLoadFailed(.explore)
+                } else {
+                    self.seamExploreTracks = merged
+                    Breadcrumbs.log("wall.seam.explore ok daily=\(daily.count) fm=\(fm.count)")
+                    self.applyWallData()
+                }
+            }
+        }
+    }
+
+    // MARK: 布局切换（网格 ⇄ Bravais 墙）
+
+    /// 网页 suite 切换版面过渡的原生落点：交叉淡化 + 0.98
+    /// 缩放、0.3s 系统弹簧（Home.tsx 的 suite 切换本身无自有
+    /// 时序参数、经 registry 换面，故按 iOS 系统转场口径取
+    /// 此参，与本仓 (40) 转场同族）。选择落 UserDefaults 记忆。
+    func seamToggleLayout() {
+        seamGridMode.toggle()
+        UserDefaults.standard.set(seamGridMode, forKey: "folia.wall.gridMode")
+        seamToolbar?.setLayoutMode(grid: seamGridMode)
+        Breadcrumbs.log("wall.seam.layout=\(seamGridMode ? "grid" : "bravais")")
+        guard let grid = gridCollectionView else { return }
+        let showGrid = seamGridMode
+        grid.isHidden = false
+        collectionView.isHidden = false
+        grid.alpha = showGrid ? 0 : 1
+        collectionView.alpha = showGrid ? 1 : 0
+        grid.transform = CGAffineTransform(scaleX: 0.98, y: 0.98)
+        collectionView.transform = CGAffineTransform(scaleX: 0.98, y: 0.98)
+        UIView.animate(withDuration: 0.3, delay: 0,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            grid.alpha = showGrid ? 1 : 0
+            self.collectionView.alpha = showGrid ? 0 : 1
+            grid.transform = .identity
+            self.collectionView.transform = .identity
+        } completion: { [weak self] _ in
+            guard let self else { return }
+            grid.isHidden = !showGrid
+            self.collectionView.isHidden = showGrid
+            grid.alpha = 1
+            self.collectionView.alpha = 1
+        }
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        layout collectionViewLayout: UICollectionViewLayout,
+                        sizeForItemAt indexPath: IndexPath) -> CGSize {
+        // 只服务网格 flow 布局（墙面本体是自定义 WallLayout、
+        // 不走本方法）。三列等宽方卡，封面内标题叠底（cell 本
+        // 形），横屏按宽重算列宽、行数自然增减。
+        let width = collectionView.bounds.width
+        let available = width - 28 - 20
+        let side = max(60, floor(available / 3))
+        return CGSize(width: side, height: side)
+    }
+
+    // MARK: 长按隐藏（歌单卡上下文菜单）
+
+    func collectionView(_ collectionView: UICollectionView,
+                        contextMenuConfigurationForItemAt indexPath: IndexPath,
+                        point: CGPoint) -> UIContextMenuConfiguration? {
+        // 探段是曲目、无歌单可隐藏；歌/推段两形态（墙/网格）
+        // 同一菜单。隐藏经 HiddenPlaylistsStore 落盘 + 通知回
+        // applyWallData 即时生效。
+        guard seamSegment != .explore else { return nil }
+        let entryIndex: Int
+        if collectionView === gridCollectionView {
+            entryIndex = indexPath.item
+        } else {
+            guard indexPath.item < wallLayout.instances.count else { return nil }
+            entryIndex = wallLayout.instances[indexPath.item].queueIndex
+        }
+        guard entryIndex < playlistIds.count, entryIndex < entries.count else { return nil }
+        let playlistId = playlistIds[entryIndex]
+        let title = entries[entryIndex].title
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { _ in
+            let hide = UIAction(title: "隐藏歌单",
+                                image: UIImage(systemName: "eye.slash"),
+                                attributes: .destructive) { _ in
+                HiddenPlaylistsStore.shared.hide(id: playlistId, name: title)
+            }
+            return UIMenu(children: [hide])
+        }
+    }
+
+    // MARK: 过滤当前页
+
+    func seamShowFilterBar() {
+        guard let bar = seamFilterBar else { return }
+        bar.isHidden = false
+        bar.alpha = 0
+        UIView.animate(withDuration: 0.25) { bar.alpha = 1 }
+        seamFilterField?.becomeFirstResponder()
+    }
+
+    @objc func seamFilterTextChanged() {
+        // 本地过滤：只收窄当前呈现集，不动数据源（applyWallData
+        // 恒从原始全量/段缓存装配，清除即全量恢复）。
+        seamFilterText = seamFilterField?.text ?? ""
+        applyWallData()
+    }
+
+    @objc func seamFilterDone() {
+        seamFilterField?.resignFirstResponder()
+    }
+
+    @objc func seamFilterClearTapped() {
+        seamFilterField?.text = ""
+        seamFilterText = ""
+        applyWallData()
+        seamFilterField?.resignFirstResponder()
+        UIView.animate(withDuration: 0.25, animations: {
+            self.seamFilterBar?.alpha = 0
+        }, completion: { [weak self] _ in
+            self?.seamFilterBar?.isHidden = true
+            self?.seamFilterBar?.alpha = 1
+        })
+        Breadcrumbs.log("wall.menu.filter cleared")
+    }
+
+    // MARK: 沉浸模式（全屏钮的 iOS 平台差异替代、非等价）
+    //
+    // iOS 无窗口全屏概念：本钮落为沉浸模式——隐藏工具条与点
+    // 播台 chrome、只留墙面，点任意处恢复。此为平台差异替代、
+    // 与网页版全屏非等价，面包屑与报告均按此口径表述。
+
+    func seamSetImmersive(_ on: Bool) {
+        seamImmersive = on
+        Breadcrumbs.log("wall.seam.immersive on=\(on) platformSubstitute=1 nonEquivalent=1")
+        seamToolbar?.isHidden = on
+        seamFilterBar?.isHidden = true
+        seamImmersiveTapView?.isHidden = !on
+        if on {
+            rootCloseButton?.isHidden = true
+            miniBar?.alpha = 0
+            miniBar?.isUserInteractionEnabled = false
+        } else {
+            rootCloseButton?.isHidden =
+                (presentingViewController == nil && navigationController == nil)
+            miniBar?.alpha = 1
+            miniBar?.isUserInteractionEnabled = true
+        }
+    }
+
+    @objc func seamImmersiveTap() {
+        guard seamImmersive else { return }
+        seamSetImmersive(false)
+    }
+
+    // MARK: 账户（双入口并存：与侧栏头像同一登录页/同一态）
+
+    func seamAvatarTapped() {
+        Breadcrumbs.log("wall.seam.avatar")
+        let login = LoginViewController()
+        login.modalPresentationStyle = .overFullScreen
+        login.onLoginSuccess = { [weak self] in
+            guard let self else { return }
+            self.wallNotLoggedIn = false
+            self.loadAttempts = 0
+            self.loadEntries()
+            self.seamRefreshAccount()
+        }
+        present(login, animated: true)
+    }
+
+    func seamRefreshAccount() {
+        Task { [weak self] in
+            guard let self else { return }
+            let status = try? await NativeDataClient.shared.fetchLoginStatus()
+            await MainActor.run {
+                self.seamToolbar?.setAccount(
+                    nickname: status?.nickname,
+                    loggedIn: status?.loggedIn ?? false)
+            }
+        }
+    }
+
+    // MARK: 「…」菜单五项
+
+    func seamMoreTapped(anchor: UIView) {
+        let hasQueue = PlaybackEngine.shared.currentTrack != nil
+            || !QueueManager.shared.queue.isEmpty
+        WallMoreMenu.present(
+            from: self, anchor: anchor,
+            hasQueue: hasQueue,
+            filterActive: !seamFilterText.isEmpty,
+            actions: WallMoreMenu.Actions(
+                liked: { [weak self] in self?.seamOpenLikedPlaylist() },
+                cloud: { [weak self] in
+                    guard let self else { return }
+                    let drive = CloudDriveViewController()
+                    drive.modalPresentationStyle = .fullScreen
+                    self.present(drive, animated: true)
+                },
+                filter: { [weak self] in self?.seamShowFilterBar() },
+                manageHidden: { [weak self] in
+                    guard let self else { return }
+                    let manage = HiddenPlaylistsViewController()
+                    manage.modalPresentationStyle = .fullScreen
+                    self.present(manage, animated: true)
+                },
+                backToStage: { [weak self] in self?.openNativeStageFromHome() }))
+    }
+
+    /// 喜欢的音乐：原始全量里 specialType=5 的那张（与工作台
+    /// 歌单列表同一判据），走既有歌单曲目墙通路；未登录/无此
+    /// 歌单时诚实提示，不造假入口。
+    private func seamOpenLikedPlaylist() {
+        guard let liked = seamRawPlaylists.first(where: { $0.isLikedCollection }) else {
+            Breadcrumbs.log("wall.menu.liked missing")
+            let alert = UIAlertController(
+                title: "未找到「我喜欢的音乐」",
+                message: "可能尚未登录网易云，或歌单还没加载完成。",
+                preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "好", style: .default))
+            present(alert, animated: true)
+            return
+        }
+        Breadcrumbs.log("wall.menu.liked id=\(liked.id)")
+        seamPresentPlaylistWall(id: liked.id, title: liked.name, coverUrl: liked.coverUrl)
+    }
+
+    /// 歌单曲目墙呈现（与点卡同路：预加载 + 同族转场）。
+    private func seamPresentPlaylistWall(id: String, title: String, coverUrl: String?) {
+        let wall = WallPrototypeViewController(
+            playlistId: id, title: title, coverUrl: coverUrl)
+        wall.modalPresentationStyle = .fullScreen
+        wall.modalTransitionStyle = .crossDissolve
+        beginPosterTransition(source: "menu", playlistId: id)
+        wall.startPreload()
+        Task { [weak self] in
+            guard let self else { return }
+            let seed = await wall.awaitSeed(timeout: 0.25)
+            self.present(wall, animated: true) { [weak self] in
+                self?.endPosterTransition(source: "menu", seedReady: seed)
+            }
+        }
+    }
+
+    // MARK: 点播台面板通知（任务三）
+    //
+    // 工作流 C 的顶排字幕/面板/命令键 post .foliaMiniBar-
+    // Subtitle / .foliaMiniBarPanel / .foliaMiniBarCommand
+    // （object 为发出信号的 quick row 本身），本墙订阅后
+    // present 工作流 D 的三个面板（类名定死）。墙面无舞台字
+    // 幕层，字幕面板在此是纯设置面、照常打开。已有面板在呈
+    // 时不叠开。
+
+    @objc func miniBarPanelSubtitle() {
+        seamPresentPanel(SubtitleSettingsPanelViewController(), kind: "subtitle")
+    }
+
+    @objc func miniBarPanelPanel() {
+        seamPresentPanel(PlaybackPanelViewController(), kind: "panel")
+    }
+
+    @objc func miniBarPanelCommand() {
+        seamPresentPanel(CommandPaletteViewController(), kind: "command")
+    }
+
+    private func seamPresentPanel(_ panel: UIViewController, kind: String) {
+        guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.log("wall.menu.panel skipped kind=\(kind) busy=1")
+            return
+        }
+        Breadcrumbs.log("wall.menu.panel present kind=\(kind)")
+        panel.modalPresentationStyle = .pageSheet
+        present(panel, animated: true)
     }
 }

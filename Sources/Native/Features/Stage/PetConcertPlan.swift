@@ -21,12 +21,17 @@ enum PetConcertConst {
     static let refW: CGFloat = 1080
     static let refH: CGFloat = 1920
 
-    // MARK: 队形（(54) Q 纵深重排：7 列 × 8 行，队长 front-center）
+    // MARK: 队形（(54) Q 纵深重排 + (55) B 格位纪律：7 列 × 8 行）
     static let gridCols = 7
     static let gridRows = 8
-    /// 列 x = 540 + (c−3)×132（参考 px）。
+    /// 列 x = 540 + (c−3)×120（参考 px）。(55) B 第 4/5 项：
+    /// 列距自 132 收至 120——格位矩形（宽 = 列距、相邻格共
+    /// 边平铺，见 slotCellRect）整体收进幕布开口：首格左缘
+    /// 120 ≥ 开口有效左缘 103.8（开口 84 + 摆动极值 19.8），
+    /// 末格右缘 960 ≤ 976.2，两侧各留 16.2 参考 px 余量，
+    /// 侧幕任何相位都切不到格位（脚本断言见 (55) B 报告）。
     static let gridX0: CGFloat = 540
-    static let gridDX: CGFloat = 132
+    static let gridDX: CGFloat = 120
     /// 行 y 改透视表（(54) Q）：行距自后排 88 递增到前排 136，
     /// 队形整体后移到舞台后 2/3（首行 588、末行 1372），中央
     /// 前方留给独唱区。gridDY 仅作旧口径留存，站位以表为准。
@@ -43,14 +48,25 @@ enum PetConcertConst {
     /// 队长槽（行 7、列 3，前排正中）。
     static let captainSlotRow = 7
     static let captainSlotCol = 3
-    /// 宠物基准边长（参考 px，fit-box 口径）。
-    static let petBase: CGFloat = 124
-    static let captainScale: CGFloat = 1.6
+    /// 宠物基准边长（参考 px，fit-box 口径）。(55) B：124 →
+    /// 116，使每行贴纸边长 ≤ 相邻行距（后排 81.2 < 88 起逐
+    /// 行成立）且前排边长 116 < 列距 120——贴纸本体不跨格、
+    /// 不压相邻格界（脚本逐行断言）。
+    static let petBase: CGFloat = 116
+    /// 队长放大倍率。(55) B：1.6 → 1.03——旧值队长边长
+    /// 198.4 横跨近两格、压住左右邻格（真机「挤格/压线」
+    /// 主因之一）；新值队长边长 119.5 ≤ 列距 120，与邻格
+    /// 贴纸半宽和 117.7 < 120，严格一格一只。队长身份改由
+    /// C 位 + 口令 + 前排最大行缩放承载。
+    static let captainScale: CGFloat = 1.03
 
     // MARK: 独唱跑位（(54) Q：独唱区前移留大）
-    /// 独唱位（参考 px），渲染方按舞台尺寸等比换算。前排底
-    /// 1434（队长底 1471）与独唱顶 1508 之间留 ≥37 空隙，
-    /// 独唱底 1724 在脚灯行之上， footprint 与队形零重叠。
+    /// 独唱位（参考 px），渲染方按舞台尺寸等比换算。(55) B
+    /// 复核：队长格底 1440（队长贴纸底 1431.7）与独唱顶
+    /// 1514.5 之间留 74.5 空隙，独唱底 1717.5 在脚灯行
+    /// 1766 之上。独唱位是独立位、不占任何队形格：独唱者
+    /// 离队期间其格位保持空置（slotOf 构建期定死、无人递
+    /// 补），归队回到原格（(55) B 第 4 项处理口径）。
     static let soloX: CGFloat = 540
     static let soloY: CGFloat = 1616
     static let soloScale: CGFloat = 1.75
@@ -139,9 +155,17 @@ enum PetConcertConst {
     /// 开幕时长 1.35s，easeOutBack(c1=2.2) 弹性拉开。
     static let curtainOpenDuration: TimeInterval = 1.35
     static let curtainOpenBackC1: Double = 2.2
-    /// 侧幕内缘基准：收拢 x=566 → 拉开 x=126（参考 px，自左缘量）。
+    /// 侧幕内缘基准：收拢 x=566 → 拉开 x=84（参考 px，自左
+    /// 缘量）。(55) B 第 5 项：126 → 84，幕布开口（名义
+    /// [84, 996]）连同呼吸摆动极值（±19.8 = (6+3)×amp 上限
+    /// 2.2，见 curtainSwayMax）都让开队形格位（[120, 960]）：
+    /// 有效开口 [103.8, 976.2] ⊇ 格位横向全幅。
     static let curtainClosedX: CGFloat = 566
-    static let curtainOpenX: CGFloat = 126
+    static let curtainOpenX: CGFloat = 84
+    /// 侧幕内缘摆动极值（参考 px）：波形幅值 (swayAmpA +
+    /// swayAmpB) = 9 乘 sectionParams 的 amp 上限 2.2（间奏
+    /// 全强度 1 + 1.2）。开口断言按此极值收紧，不按名义值。
+    static let curtainSwayMax: CGFloat = 19.8
     /// 呼吸摆动：内缘波 6·sin(y·0.010 + 1.1t) + 3·sin(y·0.023 − 0.7t)
     /// （参考 px 幅值，随段落倍率 amp 缩放，见 sectionParams）。
     static let swayAmpA: CGFloat = 6
@@ -168,10 +192,11 @@ enum PetConcertConst {
     static let soloRingY: CGFloat = 1712
     static let soloRingRX: CGFloat = 190
     static let soloRingRY: CGFloat = 42
-    /// 歌词气泡专区（(54) P+Q，参考 px）：垂幔底 254 之下、
-    /// 队形首排顶 543 之上，布局上与队形零重叠。
-    static let bubbleZoneTop: CGFloat = 268
-    static let bubbleZoneBottom: CGFloat = 540
+    /// 歌词气泡专区（(54) P+Q 的 bubbleZoneTop/Bottom）已
+    /// 随 (55) B 第 2 项删除：Miller 点名改回跟人走——轮唱
+    /// 气泡锚定当前独唱者头顶、钳制在舞台内、换人弹簧跟
+    /// 随，无固定专区、无引导线（见 PetConcertBubbleView
+    /// 的 showFollowingSinger）。
 
     // MARK: 横屏几何（(54) U 独立推导，覆盖 Q 的横屏等比口径）
     // 朝向判定：舞台容器 bounds 宽 ≥ 高判横屏（正方形归横屏，
@@ -181,16 +206,18 @@ enum PetConcertConst {
     // 852×393pt，sxL=852/1920=0.444、syL=393/1080=0.364）：
     // 队形改 11 列 × 5 行用满横向；单只边长下限口径——
     // petBaseL×formationScaleL(0)=108×0.78=84.2 参考 px
-    // ×0.444 = 37.4pt，不低于竖屏最小只 31.6pt（124×0.70
-    // ×393/1080），且列距 150×0.444=66.6pt > 前排边长
-    // 108×0.444=48.0pt，横向零重叠。
+    // ×0.444 = 37.4pt，不低于竖屏最小只（(55) B 后
+    // 116×0.70×393/1080 = 29.5pt），且列距 144×0.444=64.0pt
+    // > 前排边长 108×0.444=48.0pt，横向零重叠。(55) B：
+    // 列距 150 → 144，格位 [168, 1752] 收进横屏有效开口
+    // [115.8, 1804.2]（开口 96 + 摆动极值 19.8），余量 52.2。
     static let refWL: CGFloat = 1920
     static let refHL: CGFloat = 1080
     static func isLandscape(_ size: CGSize) -> Bool { size.width >= size.height }
     static let gridColsL = 11
     static let gridRowsL = 5
     static let gridX0L: CGFloat = 960
-    static let gridDXL: CGFloat = 150
+    static let gridDXL: CGFloat = 144
     static let gridRowYL: [CGFloat] = [330, 440, 550, 660, 770]
     static func formationScaleL(row: Int) -> CGFloat {
         let r = min(max(row, 0), gridRowsL - 1)
@@ -204,19 +231,23 @@ enum PetConcertConst {
     /// 横屏单只边长归一化下限（占舞台宽）：84.2/1920 = 0.0439。
     static let petMinEdgeNormL: CGFloat = 0.0439
     static let soloXL: CGFloat = 960
-    static let soloYL: CGFloat = 885
+    /// 横屏独唱位 y。(55) B：885 → 898——独唱顶 825.1 与末
+    /// 行格底 825 相切（原值时独唱贴纸顶 812.1 压进末行格
+    /// 13 参考 px）；独唱脚 970.9 在脚灯行 1005 之上、与提
+    /// 词条顶 975 留 4.1 间隙。脚圈随脚位移到 965。
+    static let soloYL: CGFloat = 898
     static let soloScaleL: CGFloat = 1.35
-    static let soloRingYL: CGFloat = 950
+    static let soloRingYL: CGFloat = 965
     static let soloRingRXL: CGFloat = 150
     static let soloRingRYL: CGFloat = 30
     static let floorTopYL: CGFloat = 300
-    static let bubbleZoneTopL: CGFloat = 145
-    static let bubbleZoneBottomL: CGFloat = 315
     static let valanceSwagsL = 11
     static let valanceBaseYL: CGFloat = 105
     static let valanceDepthL: CGFloat = 28
     static let curtainClosedXL: CGFloat = 1020
-    static let curtainOpenXL: CGFloat = 140
+    /// 横屏侧幕拉开内缘。(55) B 第 5 项：140 → 96，横屏有
+    /// 效开口 [115.8, 1804.2] ⊇ 横屏格位 [168, 1752]。
+    static let curtainOpenXL: CGFloat = 96
     static let curtainBottomYL: CGFloat = 1020
     static let footlightYL: CGFloat = 1005
     static let teleBarYL: CGFloat = 975
@@ -888,6 +919,57 @@ struct ConcertPlan {
     /// 朝向分发（渲染方按容器 bounds 判定后调用）。
     static func slotPoint(_ slot: Int, landscape: Bool) -> CGPoint {
         landscape ? slotPointLandscape(slot) : slotPoint(slot)
+    }
+
+    /// 格高递推（(55) B）：格以站位点为正中，相邻格共边平
+    /// 铺的充要条件是 h[r] + h[r+1] = 2×行距[r]。取首行高
+    /// = 行距[0] − (行距[1] − 行距[0])/2 后递推：竖屏行距
+    /// 等差（88…136）→ 格高 84, 92, …, 140，逐行恰共边、
+    /// 无缝无叠、格心 = 站位点（脚本首跑曾抓出中点平铺差
+    /// 2 参考 px、均值高叠 2 参考 px 两版定义，均已弃）。
+    /// 横屏行距恒 110 → 格高恒 110。
+    private static func cellHeights(_ ys: [CGFloat]) -> [CGFloat] {
+        guard ys.count > 1 else { return [0] }
+        var heights: [CGFloat] = []
+        var h = ys[1] - ys[0]
+        if ys.count > 2 {
+            h -= ((ys[2] - ys[1]) - (ys[1] - ys[0])) / 2
+        }
+        heights.append(h)
+        for r in 1..<ys.count {
+            h = 2 * (ys[r] - ys[r - 1]) - h
+            heights.append(h)
+        }
+        return heights
+    }
+
+    /// 格位矩形（(55) B 第 4/5 项的几何真源，脚本断言同源
+    /// 复刻）：以站位点为正中、宽 = 列距、高 = cellHeights
+    /// 递推行高。独唱位不在格表内（独立位，见 soloX/soloY）。
+    static func slotCellRect(_ slot: Int) -> CGRect {
+        let row = min(max(slot / PetConcertConst.gridCols, 0),
+                      PetConcertConst.gridRows - 1)
+        let center = slotPoint(slot)
+        let height = cellHeights(PetConcertConst.gridRowY)[row]
+        return CGRect(x: center.x - PetConcertConst.gridDX / 2,
+                      y: center.y - height / 2,
+                      width: PetConcertConst.gridDX, height: height)
+    }
+
+    /// 横屏格位矩形（11×5）。
+    static func slotCellRectLandscape(_ slot: Int) -> CGRect {
+        let row = min(max(slot / PetConcertConst.gridColsL, 0),
+                      PetConcertConst.gridRowsL - 1)
+        let center = slotPointLandscape(slot)
+        let height = cellHeights(PetConcertConst.gridRowYL)[row]
+        return CGRect(x: center.x - PetConcertConst.gridDXL / 2,
+                      y: center.y - height / 2,
+                      width: PetConcertConst.gridDXL, height: height)
+    }
+
+    /// 朝向分发（格位矩形）。
+    static func slotCellRect(_ slot: Int, landscape: Bool) -> CGRect {
+        landscape ? slotCellRectLandscape(slot) : slotCellRect(slot)
     }
 
     private static func breathBlocks(

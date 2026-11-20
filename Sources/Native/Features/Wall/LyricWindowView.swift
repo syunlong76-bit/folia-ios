@@ -10,7 +10,17 @@ enum LyricTiming {
     /// (17) 锚源换成真值直读后滞后已消失、提前量成净误差
     /// （audit-3719 §三实锤：墙链因此比详情页恒早 150ms
     /// 换行）。扫光起点同步吃同一常量，归零后两边自动同口径。
-    static let lead = 0.0
+    /// 3.7 (55) 工作流 G：基线仍为 0，lead 改计算属性 = 基线
+    /// + 用户全局歌词时间轴偏移（SettingsStore
+    /// .lyricTimelineOffsetSeconds，设置页「歌词」页签，±2s
+    /// 钳制）——墙链翻行判定（WallPrototype judge 的
+    /// now + LyricTiming.lead）与本文件扫光起点（lineStart
+    /// - LyricTiming.lead）同吃此值，偏移对墙链真实生效；
+    /// 正值歌词提前、负值延后。舞台链不经本常量（其汇聚点
+    /// 在 StageViewController.positionNow，另行接入）。
+    static var lead: Double {
+        0.0 + SettingsStore.lyricTimelineOffsetSeconds
+    }
     /// 漂移重锚阈值（秒）：锚源改直读真实 playhead 后收紧
     /// （(15) 为 0.3，配台阶缓存时再小会频繁误锚）。
     static let reanchorThreshold = 0.12

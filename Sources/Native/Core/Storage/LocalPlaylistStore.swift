@@ -68,6 +68,20 @@ final class LocalPlaylistStore: ObservableObject {
         playlists.first { $0.id == id }
     }
 
+    /// 向既有本机歌单追加一首（3.7 (55) 协调者集成，收藏到
+    /// 歌单弹层消费）：歌单不存在或已含同 id 曲目时拒绝并
+    /// 返回 false（防重复），成功落盘并返回 true。
+    @discardableResult
+    func addTrack(_ track: FoliaTrack, toPlaylist id: String) -> Bool {
+        guard let index = playlists.firstIndex(where: { $0.id == id }),
+              !playlists[index].tracks.contains(where: { $0.id == track.id })
+        else { return false }
+        playlists[index].tracks.append(track)
+        save()
+        Breadcrumbs.log("localPlaylist.addTrack playlist=\(id) track=\(track.id) total=\(playlists[index].tracks.count)")
+        return true
+    }
+
     // MARK: - 落盘
 
     private func load() {

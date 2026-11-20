@@ -213,6 +213,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 beginRoute()
             } else {
                 Breadcrumbs.log("nowplaying.route action=skip reason=cold-start-route-removed")
+                // 启动续播自动播放（3.7 (55) 工作流 G，网页
+                // autoPlayOnLaunch 消费点）：仅用户在设置里显
+                // 式开启时，冷启恢复队列直接装载起播（不进舞
+                // 台、不走 route，与 (43) 冷启劫持禁令不冲突
+                // ——那禁的是未经用户设置的自动直达播放页）。
+                if SettingsStore.autoPlayOnLaunch {
+                    QueueManager.shared.playRestoredQueueIfNeeded()
+                }
             }
             return
         }

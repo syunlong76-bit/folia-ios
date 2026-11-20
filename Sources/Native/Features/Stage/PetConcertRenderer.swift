@@ -4,9 +4,11 @@ import CoreImage
 
 // 汪汪队开大会 petconcert（3.7 (53) J）：演唱会渲染器。
 //
-// 中央大歌词隐藏：唱词走上方专区气泡（(54) P+Q：整行全
-// 显、不分段、引导线指向独唱者）+ 底部细提词条兜底（整
-// 行、不省略）。53 只全员上台：静帧
+// 中央大歌词隐藏：唱词走独唱者头顶气泡（(55) B 第 2 项
+// 覆盖 (54) P+Q 的固定专区＋引导线：气泡锚定当前独唱者
+// 头顶、整行全显不分段、钳制在舞台内、尾巴指向唱者、换
+// 人时系统弹簧移位跟随）+ 底部细提词条兜底（整行、不省
+// 略）。53 只全员上台：静帧
 // atlas（首帧缩到 ≤160px，≈5.4MB）+ 动图池 ≤8 只 StickerView
 // （解码成本实测准入、合计 ≤40MB，见 PetConcertConst 红线）。
 // 素材优先级：StickersCutout 抠图版 > 原贴纸（本来就透明底）。
@@ -55,8 +57,15 @@ final class PetConcertBubbleView: UIView {
     private(set) var currentKey = ""
     /// 尾尖相对本视图左缘的 x（随锚点宠物水平位置钳制）。
     private var tailX: CGFloat = 0
-    /// 尾尖在舞台坐标（showInZone 后有效），供引导线起点。
+    /// 尾尖在舞台坐标（(55) B 前供引导线用；引导线已删，
+    /// 字段保留供面包屑/后续调试，不再有绘制消费方）。
     private(set) var tailTipInParent: CGPoint?
+    /// 跟随气泡去重（(55) B）：同 key + 同锚点 + 同舞台尺寸
+    /// 时跳过重排，避免逐帧调用打断换人弹簧动画（独唱者在
+    /// 演唱窗内位置恒定，锚点天然静止，去重不丢跟随）。
+    private var lastFollowKey = ""
+    private var lastFollowAnchor: CGPoint?
+    private var lastFollowStageSize: CGSize = .zero
 
     // (54) P 整行气泡布局常量（参考 px，1080×1920 参考系）。
     /// 歌词字号下限：44 → 28（与提词条 teleFontMin 同口径，
@@ -73,6 +82,9 @@ final class PetConcertBubbleView: UIView {
     /// 466pt），整行全显更容易达成；字号下限/最多 3 行规则
     /// 与竖屏不变。
     static let lyricNormalMaxTextRefWL: CGFloat = 1050
+    /// 跟随气泡与独唱者头顶的间隙（参考 px，(55) B）：气泡
+    /// 尾尖落在头顶上方此距离处，尾长另计（apply 内 18sx）。
+    static let lyricFollowGapRef: CGFloat = 10
 
     /// 朝向换算（(54) U）：按容器宽高比选参考系。
     private func scales(_ stageSize: CGSize)
@@ -125,13 +137,16 @@ final class PetConcertBubbleView: UIView {
         return result
     }
 
-    /// 落位与绘制（show/showInZone 共用）：按实测尺寸定 bounds，
-    /// 中心由调用方给（已钳制），尾尖对 anchorX。
+    /// 落位与绘制（show/showFollowingSinger 共用）：按实测
+    /// 尺寸定 bounds，中心由调用方给（已钳制），尾尖对
+    /// anchorX。animateMove（(55) B，仅跟随气泡换 key 时）：
+    /// 气泡已可见时中心不瞬移——先回旧中心，再以系统弹簧
+    /// （0.5s / damping 0.78）移到新中心，移位与弹入缩放并行。
     private func apply(key: String, text: String,
                        solved: (font: UIFont, fontRef: CGFloat,
                                 size: CGSize, lines: Int),
                        center: CGPoint, anchorX: CGFloat,
-                       stageSize: CGSize) {
+                       stageSize: CGSize, animateMove: Bool = false) {
         let sx = scales(stageSize).sx
         let padX: CGFloat = 26 * sx, padY: CGFloat = 15 * sx
         let tail: CGFloat = 18 * sx
@@ -147,6 +162,8 @@ final class PetConcertBubbleView: UIView {
         }
         label.frame = CGRect(x: padX, y: padY,
                              width: bw - padX * 2, height: bh - padY * 2)
+        let wasVisible = !isHidden && currentKey != ""
+        let oldCenter = self.center
         self.center = center
         let newTailX = min(max(anchorX - (center.x - bw / 2), 30 * sx),
                            bw - 30 * sx)
@@ -170,6 +187,16 @@ final class PetConcertBubbleView: UIView {
                                initialSpringVelocity: 1.1, options: []) {
                     self.transform = .identity
                 }
+                if animateMove && wasVisible {
+                    // 换人跟随（(55) B）：弹簧移位到新独唱者头顶。
+                    self.center = oldCenter
+                    UIView.animate(withDuration: 0.5, delay: 0,
+                                   usingSpringWithDamping: 0.78,
+                                   initialSpringVelocity: 0.6,
+                                   options: [.beginFromCurrentState]) {
+                        self.center = center
+                    }
+                }
             }
         }
     }
@@ -181,6 +208,10 @@ final class PetConcertBubbleView: UIView {
     /// - tip: 气泡尾尖应指向的点（舞台坐标）。
     func show(key: String, text: String, fontRefPx: CGFloat,
               tip: CGPoint, stageSize: CGSize) {
+        // 通用气泡与跟随气泡共用同一视图：切回通用路径时清
+        // 跟随去重，免下一条歌词被误判「未变化」而跳过。
+        lastFollowKey = ""
+        lastFollowAnchor = nil
         let sc = scales(stageSize)
         let sx = sc.sx
         let padX: CGFloat = 26 * sx
@@ -201,19 +232,35 @@ final class PetConcertBubbleView: UIView {
         apply(key: key, text: text, solved: solved,
               center: CGPoint(x: cx, y: cy), anchorX: tip.x,
               stageSize: stageSize)
-        tailTipInParent = nil // 通用气泡不用引导线
+        tailTipInParent = nil // 通用气泡尾巴直接贴头顶，无中间线
     }
 
-    /// 歌词气泡（(54) P+Q）：整行全文固定落上方专区（垂幔
-    /// 之下、队形之上，布局零重叠），横向跟随 anchorX（独唱
-    /// 者 x），尾巴对 anchorX，归属再由渲染方引导线补强。
-    /// 自适应：常规宽 600 内降字号（44→28）至 ≤3 行；仍放
-    /// 不下走 wide——加宽到舞台全宽（留 12 边距）再降字号；
-    /// 极端长行 wide+下限仍超 3 行时按实测行数放行（加高），
-    /// 任何路径不截断、不省略。wide 触发落面包屑（按 key
-    /// 去重，只在切换时记一次）。
-    func showInZone(key: String, text: String, fontRefPx: CGFloat,
-                    stageSize: CGSize, anchorX: CGFloat) {
+    /// 歌词气泡（(55) B 第 2 项，覆盖 (54) P+Q 的固定专区＋
+    /// 引导线）：整行全文锚定在当前独唱者头顶上方——气泡底
+    /// （含尾）距头顶 lyricFollowGapRef，横向以唱者 x 为中
+    /// 心；整泡钳制在舞台内（唱者在最左/最右列时气泡向内
+    /// 偏移、尾尖在泡内滑动指向唱者，见 apply 的 tailX 钳
+    /// 制）；换人（key 变）时以系统弹簧移位跟随（apply 的
+    /// animateMove）。整行求解与 (54) P 同口径：常规宽内降
+    /// 字号（44→28）至 ≤3 行；仍放不下走 wide——加宽到舞台
+    /// 全宽（留 12 边距）再降字号；极端长行 wide+下限仍超
+    /// 3 行时按实测行数放行（加高），任何路径不截断、不省
+    /// 略。wide 触发落面包屑（按 key 去重）。
+    /// - anchor: 独唱者头顶（舞台坐标，= 唱者 frame 左上中点
+    ///   的 y 与其中心 x）；合唱行由渲染方给独唱位头顶。
+    func showFollowingSinger(key: String, text: String,
+                             fontRefPx: CGFloat,
+                             stageSize: CGSize, anchor: CGPoint) {
+        // 去重：同 key/同锚点（±1pt）/同尺寸直接返回——独唱
+        // 者演唱窗内静止，逐帧重排只会打断换人弹簧。
+        if key == lastFollowKey, let last = lastFollowAnchor,
+           abs(last.x - anchor.x) < 1, abs(last.y - anchor.y) < 1,
+           stageSize == lastFollowStageSize, !isHidden {
+            return
+        }
+        lastFollowKey = key
+        lastFollowAnchor = anchor
+        lastFollowStageSize = stageSize
         let sc = scales(stageSize)
         let sx = sc.sx, sy = sc.sy
         let padX: CGFloat = 26 * sx
@@ -240,23 +287,30 @@ final class PetConcertBubbleView: UIView {
         let tail: CGFloat = 18 * sx
         let bw = ceil(solved.size.width) + padX * 2 + 8
         let totalH = ceil(solved.size.height) + 15 * sx * 2 + tail + 4
-        let zoneTop = (sc.landscape ? PetConcertConst.bubbleZoneTopL
-                          : PetConcertConst.bubbleZoneTop) * sy
-        let zoneBottom = (sc.landscape ? PetConcertConst.bubbleZoneBottomL
-                             : PetConcertConst.bubbleZoneBottom) * sy
-        let cx = min(max(anchorX, bw / 2 + 12 * sx),
-                     stageSize.width - bw / 2 - 12 * sx)
-        var cy = (zoneTop + zoneBottom) / 2
-        if totalH <= zoneBottom - zoneTop {
-            cy = min(max(cy, zoneTop + totalH / 2),
-                     zoneBottom - totalH / 2)
-        }
+        // 横向：以唱者 x 为中心，整泡钳进舞台（左右各留 8sx）。
+        let cx = min(max(anchor.x, bw / 2 + 8 * sx),
+                     stageSize.width - bw / 2 - 8 * sx)
+        // 纵向：泡底（含尾）落在头顶上方 gap 处；钳制上界为
+        // 舞台顶 +6sy（后排唱者头顶高、长行气泡向上顶时不
+        // 出屏，尾仍指向唱者），下界不越舞台底 -6sy。
+        var cy = anchor.y - Self.lyricFollowGapRef * sy - totalH / 2
+        cy = min(max(cy, totalH / 2 + 6 * sy),
+                 stageSize.height - totalH / 2 - 6 * sy)
+        let isNewKey = key != currentKey
         apply(key: key, text: text, solved: solved,
-              center: CGPoint(x: cx, y: cy), anchorX: anchorX,
-              stageSize: stageSize)
+              center: CGPoint(x: cx, y: cy), anchorX: anchor.x,
+              stageSize: stageSize, animateMove: true)
+        if isNewKey {
+            Breadcrumbs.log("concert.bubble.follow key=\(key)"
+                + " anchor=\(Int(anchor.x)),\(Int(anchor.y))"
+                + " center=\(Int(cx)),\(Int(cy))"
+                + " clamped=\(abs(cx - anchor.x) > 1 ? 1 : 0)")
+        }
     }
 
     func hide() {
+        lastFollowKey = ""
+        lastFollowAnchor = nil
         guard !isHidden else { return }
         isHidden = true
         currentKey = ""
@@ -336,12 +390,13 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
 
     private let rootView = LyricStageRootView()
     private let backdropView = PetConcertBackdropView()
+    /// 灯光层（(55) B 第 3 项）：洗光/光束/追光/光池/脚灯辉
+    /// 光，挂在 petField 之下——光只落背景/地板/幕布，宠物
+    /// 本体零滤色（清单见 PetConcertLightView 头注）。
+    private let lightView = PetConcertLightView()
     private let curtainView = PetConcertCurtainView()
     private let petField = UIView()
     private let bubbleView = PetConcertBubbleView()
-    /// 气泡专区 → 独唱者的引导线（(54) P+Q，金色虚线）。
-    private let guideView = UIView()
-    private let guideLayer = CAShapeLayer()
     /// 独唱发光（(54) S）：贴纸 alpha 轮廓外发光图，贴在独唱
     /// 宠物身后跟随；本体层不挂任何滤镜/混合，像素零改动。
     private let singerGlowView = UIImageView()
@@ -376,13 +431,16 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         super.init()
         rootView.backgroundColor = .clear
         rootView.addSubview(backdropView)
+        // z 序（(55) B 第 3 项自证）：backdrop（背景/地板/脚
+        // 圈）→ lightView（全部环境光）→ petField（宠物本体；
+        // 独唱轮廓发光在其内部贴本体身后）→ curtainView（幕
+        // 布本体/点缀/脚灯灯体/纸屑——(55) B 后开口已让开全
+        // 部格位，不切宠物）→ bubble → teleBar。光层无一在
+        // 宠物之上，宠物像素不参与任何光层混合。
+        rootView.addSubview(lightView)
         petField.isUserInteractionEnabled = false
         rootView.addSubview(petField)
         rootView.addSubview(curtainView)
-        // 幕布在宠物之后加：侧幕/垂幔盖住队形上缘是样片口径。
-        // (54) S 后幕布层内只剩地板光池/洗光/光束等氛围，不再
-        // 有任何盖在独唱宠物身上的染⾊层；发光在 petField 内
-        // 贴本体身后生成（singerGlowView/sparkleView）。
         singerGlowView.isUserInteractionEnabled = false
         singerGlowView.contentMode = .scaleAspectFit
         singerGlowView.isHidden = true
@@ -401,13 +459,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             sparkleLayers.append(star)
         }
         petField.addSubview(sparkleView)
-        guideView.isUserInteractionEnabled = false
-        guideLayer.fillColor = nil
-        guideLayer.strokeColor = PetConcertPalette.gold
-            .withAlphaComponent(0.85).cgColor
-        guideLayer.lineCap = .round
-        guideView.layer.addSublayer(guideLayer)
-        rootView.addSubview(guideView)
+        // (55) B 第 2 项：引导线（guideView/guideLayer）已删
+        // 除——气泡直接落独唱者头顶，归属由位置本身表达。
         rootView.addSubview(bubbleView)
         bubbleView.isHidden = true
         teleBar.backgroundColor = UIColor.black.withAlphaComponent(0.45)
@@ -508,7 +561,12 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             }
         }
 
-        // 幕布/灯光（氛围层；(54) S 后不再染独唱本体）。
+        // 幕布/灯光（氛围层）：灯光层在宠物之下更新落点（追
+        // 光弹簧跟随独唱位），幕布层只走幕布/点缀/纸屑路径。
+        lightView.update(
+            t: position, phase: phase, params: params,
+            singerPos: singerCenter, singerFeetY: singerFeetY,
+            interludeIntensity: plan.interlude?.intensity ?? 0)
         curtainView.update(
             t: position, phase: phase, params: params,
             singerPos: singerCenter, singerFeetY: singerFeetY,
@@ -542,7 +600,6 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         glowAsset = nil
         singerGlowView.isHidden = true
         sparkleView.isHidden = true
-        hideGuide()
         plan = nil
         builtKey = ""
         lastPhase = nil
@@ -749,6 +806,7 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         guard plan != nil, !atmosphereReduced else { return }
         atmosphereReduced = true
         curtainView.atmosphereReduced = true
+        lightView.atmosphereReduced = true
         for asset in admittedAnimated {
             actors[asset]?.detachSticker()
         }
@@ -1057,7 +1115,10 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         }
         if phase == .interlude, let gap = plan.interlude,
            t >= gap.start + 0.45, t < gap.end - 0.55 {
-            let amp = 16 * CGFloat(gap.intensity)
+            // (55) B：16 → 12——玩耍位 y 抖动上限 30（竖屏）
+            // 与弹跳同向叠加时 30+12=42 < 最小格半高 44，中
+            // 心不出玩耍格（横屏 35+12=47 < 55 同理）。
+            let amp = 12 * CGFloat(gap.intensity)
             center.y -= abs(CGFloat(sin(5 * t + swayPhase))) * amp
         }
         // 群唱行：前排两排齐蹦。
@@ -1107,7 +1168,6 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             bubbleView.show(key: "captain", text: "稍息，立正",
                             fontRefPx: PetConcertConst.bubbleFontCaptain,
                             tip: tip, stageSize: size)
-            hideGuide()
             return
         }
         // 打招呼（(54) T）：列队落定后、开唱前，队长与前
@@ -1121,7 +1181,6 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                 text: cue.text, fontRefPx: PetConcertConst.bubbleFontChat,
                 tip: CGPoint(x: actor.center.x, y: actor.frame.minY - 6),
                 stageSize: size)
-            hideGuide()
             return
         }
         // 前奏闲聊 / 告别关心（cue 表驱动，非歌词不套整行专区）。
@@ -1134,32 +1193,28 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                 text: cue.text, fontRefPx: PetConcertConst.bubbleFontChat,
                 tip: CGPoint(x: actor.center.x, y: actor.frame.minY - 6),
                 stageSize: size)
-            hideGuide()
             return
         }
-        // 轮唱气泡（(54) P+Q）：当前行全文进上方专区，key 按
-        // 行+唱者粒度——换行/换人当帧即换 key 刷新，不残留
-        // 上一行；引导线自气泡尾尖指向独唱者头顶。
+        // 轮唱气泡（(55) B 第 2 项）：当前行全文锚定当前独唱
+        // 者头顶，key 按行+唱者粒度——换行/换人当帧即换 key，
+        // 气泡以系统弹簧移位到新唱者头顶，不残留上一行；无
+        // 固定专区、无引导线，尾巴直接指向唱者。
         if let soloLine,
            let line = plan.lines.first(where: { $0.id == soloLine }) {
             let singerActor = singerAsset.flatMap { actors[$0] }
-            bubbleView.showInZone(
+            let anchor = CGPoint(
+                x: singerActor?.center.x ?? size.width / 2,
+                y: singerActor?.frame.minY ?? size.height * 0.4)
+            bubbleView.showFollowingSinger(
                 key: "lyric-\(soloLine)-\(singerAsset ?? "none")",
                 text: line.text,
                 fontRefPx: PetConcertConst.bubbleFontLyric,
-                stageSize: size,
-                anchorX: singerActor?.center.x ?? size.width / 2)
-            if let singerActor, let tailTip = bubbleView.tailTipInParent {
-                updateGuide(from: tailTip,
-                            to: CGPoint(x: singerActor.center.x,
-                                        y: singerActor.frame.minY + 4))
-            } else {
-                hideGuide()
-            }
+                stageSize: size, anchor: anchor)
             return
         }
-        // 群唱行气泡（(54) P+Q）：同样整行进专区，引导线指向
-        // 独唱位（群唱的发声锚点），追光圈同步标明。
+        // 群唱行气泡（(55) B）：整行锚定独唱位头顶（群唱的
+        // 发声焦点，追光光池同步落此位）；无固定专区、无引
+        // 导线，与轮唱气泡同一跟随求解器。
         if let lineId = currentLine(at: position, plan: plan),
            plan.chorusLines.contains(lineId),
            let line = plan.lines.first(where: { $0.id == lineId }) {
@@ -1167,34 +1222,18 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                 landscape ? CGPoint(x: PetConcertConst.soloXL, y: PetConcertConst.soloYL)
                     : CGPoint(x: PetConcertConst.soloX, y: PetConcertConst.soloY),
                 size: size, landscape: landscape)
-            bubbleView.showInZone(
+            let anchor = CGPoint(
+                x: soloStage.x,
+                y: soloStage.y - base
+                    * (landscape ? PetConcertConst.soloScaleL
+                          : PetConcertConst.soloScale) / 2)
+            bubbleView.showFollowingSinger(
                 key: "chorus-\(lineId)", text: line.text,
                 fontRefPx: PetConcertConst.bubbleFontLyric,
-                stageSize: size, anchorX: soloStage.x)
-            if let tailTip = bubbleView.tailTipInParent {
-                updateGuide(from: tailTip,
-                            to: CGPoint(x: soloStage.x,
-                                        y: soloStage.y - base
-                                            * (landscape ? PetConcertConst.soloScaleL
-                                                  : PetConcertConst.soloScale) / 2))
-            } else {
-                hideGuide()
-            }
+                stageSize: size, anchor: anchor)
             return
         }
         bubbleView.hide()
-        hideGuide()
-    }
-
-    private func updateGuide(from: CGPoint, to: CGPoint) {
-        let path = UIBezierPath()
-        path.move(to: from)
-        path.addLine(to: to)
-        guideLayer.path = path.cgPath
-    }
-
-    private func hideGuide() {
-        guideLayer.path = nil
     }
 
     private func updateTeleprompter(position: TimeInterval,
@@ -1242,12 +1281,20 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     private func performLayout() {
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
+        // (55) B 第 1 项域内口径：本渲染器全部子层（背景/灯
+        // 光/宠物/幕布/气泡/提词条）一律 = 容器 bounds、内部
+        // 映射走等比拉伸（refToStage 的 sx/sy 独立换算），无
+        // 任何 aspect-fit 留带——横屏信箱化的唯一来源是宿主
+        // StageViewController.layoutStage 给 rendererContainer
+        // 的限高 frame（域外，精确位置与改法见 (55) B 报告）。
+        // concert.hostframe 面包屑记录容器 vs 窗口的覆盖率，
+        // 供集成后真机核验宿主修复是否生效（cover < 1 = 宿主
+        // 仍在限高/限宽）。
         backdropView.frame = bounds
         backdropView.setNeedsDisplay()
+        lightView.frame = bounds
         curtainView.frame = bounds
         petField.frame = bounds
-        guideView.frame = bounds
-        guideLayer.frame = bounds
         // (54) U 旋转重排：容器尺寸一变，全部站位在下一帧
         // frameTick 按新朝向参考系重算（plan + position 纯函
         // 数，无运行期累积位置）；提词字号须按新 sx 重解，
@@ -1258,27 +1305,30 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             lastTeleLineId = nil
             if !first || plan != nil {
                 let land = PetConcertConst.isLandscape(bounds.size)
-                let f: String, so: String, bz: String
+                let f: String, so: String
                 if land {
-                    f = "(0.109,0.306)-(0.891,0.713)"
-                    so = "(0.500,0.819)"
-                    bz = "0.134-0.292"
+                    f = "(0.088,0.255)-(0.913,0.764)"
+                    so = "(0.500,0.831)"
                 } else {
-                    f = "(0.133,0.306)-(0.867,0.715)"
+                    f = "(0.111,0.283)-(0.889,0.750)"
                     so = "(0.500,0.842)"
-                    bz = "0.140-0.281"
                 }
                 Breadcrumbs.log("concert.layout orient=\(land ? "landscape" : "portrait")"
                     + " size=\(Int(bounds.width))x\(Int(bounds.height))"
-                    + " formation=\(f) solo=\(so) bubbleY=\(bz)")
+                    + " formation=\(f) solo=\(so)")
+                if let win = rootView.window?.bounds.size, win.width > 0 {
+                    let cover = (bounds.width * bounds.height)
+                        / (win.width * win.height)
+                    Breadcrumbs.log("concert.hostframe container="
+                        + "\(Int(bounds.width))x\(Int(bounds.height))"
+                        + " window=\(Int(win.width))x\(Int(win.height))"
+                        + " cover=\(String(format: "%.3f", cover))")
+                }
             }
         }
         let landscape = PetConcertConst.isLandscape(bounds.size)
         let sx = bounds.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW)
         let sy = bounds.height / (landscape ? PetConcertConst.refHL : PetConcertConst.refH)
-        guideLayer.lineWidth = max(1.5, 2.5 * sx)
-        guideLayer.lineDashPattern = [NSNumber(value: Double(7 * sx)),
-                                      NSNumber(value: Double(5 * sx))]
         let twoLines = teleLabel.numberOfLines == 2
         // (54) U：提词字号按 sx 换算，横屏 sxL(0.444)>syL(0.364)，
         // 条高若仍按 sy 定会挤压字号行高（17.8pt 字行高 ≈21pt

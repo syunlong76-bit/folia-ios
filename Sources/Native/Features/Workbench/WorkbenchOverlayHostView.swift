@@ -29,12 +29,18 @@ final class WorkbenchOverlayHostView: UIView {
     /// 呈现分区页的宿主（HomeWallViewController）。
     weak var hostViewController: UIViewController?
     /// 侧栏展开态变化（禁/恢复墙交互）：打开在动画开始即报，
-    /// 关闭在动画完成才报（收起途中墙仍被滑出中的面板盖着）。
+    /// 关闭在面板落到关闭位后才报（收起途中墙仍被滑出中的
+    /// 面板盖着）；守卫收口路径下面板已在关闭位，等同落定、
+    /// 同样在此报。全部发送经 emitSidebarVisibility 对账去重，
+    /// false/true 严格配平（(55) 工作流 A）。
     var onSidebarVisibilityChanged: ((Bool) -> Void)?
 
     private(set) var isSidebarOpen = false
     private var isDraggingSidebar = false
     private var sidebarAnimator: UIViewPropertyAnimator?
+    /// 最近一次经 onSidebarVisibilityChanged 实际报出的可见态；
+    /// 发送对账的唯一依据，初值与关闭态一致（false）。
+    private var reportedSidebarVisible = false
 
     private let scrimView = UIView()
     private let sidebarView = UIView()
@@ -349,11 +355,10 @@ final class WorkbenchOverlayHostView: UIView {
         let width = panelWidth
         switch gesture.state {
         case .began:
-            sidebarAnimator?.stopAnimation(true)
-            sidebarAnimator = nil
+            interruptSidebarAnimator()
             isDraggingSidebar = true
             scrimView.isHidden = false
-            if opening { onSidebarVisibilityChanged?(true) }
+            if opening { emitSidebarVisibility(true, source: "drag-began") }
         case .changed:
             let translation = gesture.translation(in: self).x
             let base: CGFloat = opening ? -width : 0
@@ -385,14 +390,63 @@ final class WorkbenchOverlayHostView: UIView {
         avatarButton.alpha = chromeAlpha
     }
 
+    /// 可见态发送对账（(55) 工作流 A）：与最近一次实际报出值
+    /// 相同则不重发。这样拖动 .began 抢先报的 (true)、
+    /// setSidebarOpen 开栏报的 (true)、收口补报的 (false)
+    /// 无论哪条路径先到，回调都只发一次，false/true 配平、
+    /// 末态恒与面板实际开关态一致。
+    private func emitSidebarVisibility(_ visible: Bool, source: String) {
+        guard reportedSidebarVisible != visible else {
+            Breadcrumbs.log("workbench.sidebar.visibility dedup visible=\(visible) source=\(source)")
+            return
+        }
+        reportedSidebarVisible = visible
+        Breadcrumbs.log("workbench.sidebar.visibility visible=\(visible) source=\(source)")
+        onSidebarVisibilityChanged?(visible)
+    }
+
+    /// 打断在途 animator 且不丢 completion 语义（(55) 工作流 A）：
+    /// stopAnimation(true) 会连 completion 一起丢弃（旧版两处
+    /// 这么停，开栏收口的硬藏与关栏的 (false) 随之蒸发）；
+    /// 改走 stopAnimation(false) 保留 completion、再
+    /// finishAnimation(at: .current) 在当前位置交付 completion
+    /// （position == .current → finish 只记打断、不做落定收口，
+    /// 收口由接管的拖动/新动画负责）。
+    private func interruptSidebarAnimator() {
+        guard let animator = sidebarAnimator else { return }
+        sidebarAnimator = nil
+        animator.stopAnimation(false)
+        animator.finishAnimation(at: .current)
+    }
+
+    /// 守卫命中时的补收口（(55) 工作流 A）：目标态已同值且
+    /// 面板已在目标位，不等于「什么都不用做」——在途 animator
+    /// 可能刚被拖动打断、其 completion 已丢，硬藏 chrome 与
+    /// (false) 发送全押在那次 completion 上。此处先按保留语义
+    /// 打断残余 animator，再把面板钉到目标位并走一次落定收口，
+    /// 保证 chrome 显隐与墙交互回调必达末态。
+    private func reconcileSettledSidebar(open: Bool, reason: String) {
+        interruptSidebarAnimator()
+        let targetTx: CGFloat = open ? 0 : -panelWidth
+        Breadcrumbs.log("workbench.sidebar.reconcile open=\(open) reason=\(reason)")
+        applySidebarProgress(tx: targetTx)
+        finishSidebarAnimation(open: open, completed: true)
+    }
+
     func setSidebarOpen(_ open: Bool, animated: Bool, reason: String,
                         initialVelocityX: CGFloat = 0) {
-        // 守卫：目标态已落定且面板已在目标位才跳过；拖动松手时
-        // isSidebarOpen 可能与目标同值但面板还在途中，必须继续
-        // 走完收口（否则墙交互的恢复回调永远不到）。
+        // 守卫：目标态已落定且面板已在目标位才算同值；但同值
+        // 不许整段 return 吞掉收口——先补一次落定收口再返回
+        // （(55) 工作流 A 定案：在途 animator 被拖动打断时
+        // completion 已丢，硬藏 chrome 与 (false) 发送全押在
+        // 收口上，吞掉即冻屏/冻墙）。拖动松手时 isSidebarOpen
+        // 可能与目标同值但面板还在途中，则不走守卫、继续收口。
         let targetTx: CGFloat = open ? 0 : -panelWidth
         guard open != isSidebarOpen
-            || abs(sidebarView.transform.tx - targetTx) > 0.5 else { return }
+            || abs(sidebarView.transform.tx - targetTx) > 0.5 else {
+            reconcileSettledSidebar(open: open, reason: reason)
+            return
+        }
         isSidebarOpen = open
         Breadcrumbs.log("workbench.sidebar.\(open ? "open" : "close") reason=\(reason)")
         if open {
@@ -402,10 +456,9 @@ final class WorkbenchOverlayHostView: UIView {
             avatarButton.isHidden = false
             refreshAccountUI()
             scrimView.isHidden = false
-            onSidebarVisibilityChanged?(true)
+            emitSidebarVisibility(true, source: "set-open")
         }
-        sidebarAnimator?.stopAnimation(true)
-        sidebarAnimator = nil
+        interruptSidebarAnimator()
         let currentTx = sidebarView.transform.tx
         guard animated, !UIAccessibility.isReduceMotionEnabled,
               abs(targetTx - currentTx) > 0.5 else {
@@ -433,9 +486,18 @@ final class WorkbenchOverlayHostView: UIView {
     }
 
     private func finishSidebarAnimation(open: Bool, completed: Bool) {
-        // 只认与现态一致的收口：动画被反向打断时旧 completion
-        // 会以 .current 落到这里，此时现态已翻转，不许它再动
-        // scrim/把手/墙交互（防「开到一半被关、scrim 被旧收口藏掉」）。
+        // 被打断的 completion（position == .current）只记账、
+        // 不落定：面板还在拖动/新动画途中，此时藏 chrome、
+        // 藏 scrim 或发 (false) 都会与接管方打架。落定收口
+        // 只走 completed == true 的路径（自然播完、无动画
+        // 直达、守卫补收口三处）。
+        guard completed else {
+            Breadcrumbs.log("workbench.sidebar.finish interrupted open=\(open)")
+            return
+        }
+        // 只认与现态一致的收口：落定值与现态不符的是过期
+        // 收口，不许它再动 scrim/把手/墙交互（防「开到一半
+        // 被关、scrim 被旧收口藏掉」）。
         if open {
             if isSidebarOpen {
                 scrimView.isHidden = false
@@ -443,6 +505,9 @@ final class WorkbenchOverlayHostView: UIView {
                 // 不许只剩 alpha=0 的隐形视图压在状态行上）。
                 handleView.isHidden = true
                 avatarButton.isHidden = true
+                // 对账补报：正常路径 (true) 已在开栏时发出、
+                // 此处被去重吞掉；仅当前面发送丢失时在此补齐。
+                emitSidebarVisibility(true, source: "finish-open")
             }
         } else if !isSidebarOpen {
             scrimView.isHidden = true
@@ -451,10 +516,10 @@ final class WorkbenchOverlayHostView: UIView {
             avatarButton.isHidden = false
             handleView.alpha = 1
             avatarButton.alpha = 1
-            // 关闭落定才恢复墙交互。
-            onSidebarVisibilityChanged?(false)
+            // 关闭落定才恢复墙交互；经对账发送，与守卫补
+            // 收口、动画 completion 哪条先到都只发一次。
+            emitSidebarVisibility(false, source: "finish-close")
         }
-        _ = completed
     }
 
     // MARK: - 账户区（B 组 ProviderSessionStatusQuery，签名见报告）

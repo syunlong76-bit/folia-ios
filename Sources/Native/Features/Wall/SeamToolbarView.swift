@@ -1,0 +1,274 @@
+import UIKit
+
+/// 缝合工具条的数据段（3.7 (55) 工作流 E）：歌＝用户歌单墙
+/// （默认、本体既有数据）；推＝每日推荐歌单（/recommend/
+/// resource，歌单形条目、与墙条目模型同构）；探＝探索歌曲
+/// 流（每日推荐歌曲 /recommend/songs ＋ 私人 FM /personal_
+/// fm，曲目形条目、点按走队列起播）。三段都真接既有数据
+/// 通路（NativeDataClient+Workbench），无假段控。
+enum SeamSegment: Int, CaseIterable {
+    case songs
+    case recommend
+    case explore
+
+    var title: String {
+        switch self {
+        case .songs: return "歌"
+        case .recommend: return "推"
+        case .explore: return "探"
+        }
+    }
+
+    var crumbName: String {
+        switch self {
+        case .songs: return "songs"
+        case .recommend: return "recommend"
+        case .explore: return "explore"
+        }
+    }
+}
+
+/// 主页墙缝合工具条（3.7 (55) 工作流 E）：骑在主页墙顶部
+/// 安全区下的一条毛玻璃浮动条，按网页版缝合工具条语义适配
+/// 原生墙：歌/推/探三段切换、账户头像（点开登录页）、搜索
+/// （SearchWorkspaceView）、设置（SettingsViewController）、
+/// 布局钮（网格 ⇄ Bravais 墙）、「…」菜单钮、全屏钮（iOS
+/// 无窗口全屏——宿主落为沉浸模式，见 HomeWall 接线）。
+///
+/// 与侧栏共存口径：账户/搜索/设置与侧栏是双入口并存（同一
+/// 目标页、同一登录态显示），不互斥；侧栏打开时本条随墙一
+/// 起被侧栏宿主覆盖（宿主层级在上），本条不新造避让。
+///
+/// 本视图只管呈现与回调分发，数据与呈现目标页全在宿主
+/// （HomeWallViewController 的 seam 接线段）。
+final class SeamToolbarView: UIView {
+
+    var onSegmentChanged: ((SeamSegment) -> Void)?
+    var onAvatarTapped: (() -> Void)?
+    var onSearchTapped: (() -> Void)?
+    var onSettingsTapped: (() -> Void)?
+    var onLayoutTapped: (() -> Void)?
+    /// 「…」点按：回调带本钮作 action sheet 的锚点。
+    var onMoreTapped: ((UIView) -> Void)?
+    var onFullscreenTapped: (() -> Void)?
+
+    private let blurView = UIVisualEffectView(
+        effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let avatarButton = UIButton(type: .system)
+    private let avatarInitial = UILabel()
+    private let segmentControl = UISegmentedControl(
+        items: SeamSegment.allCases.map { $0.title })
+    private let searchButton = UIButton(type: .system)
+    private let settingsButton = UIButton(type: .system)
+    private let layoutButton = UIButton(type: .system)
+    private let moreButton = UIButton(type: .system)
+    private let fullscreenButton = UIButton(type: .system)
+
+    private(set) var segment: SeamSegment = .songs
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        build()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func build() {
+        blurView.layer.cornerRadius = 22
+        blurView.layer.borderWidth = 1
+        blurView.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+        blurView.clipsToBounds = true
+        blurView.isUserInteractionEnabled = false
+        blurView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(blurView)
+        NSLayoutConstraint.activate([
+            blurView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            blurView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            blurView.topAnchor.constraint(equalTo: topAnchor),
+            blurView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        // 头像：圆形底 + 昵称首字（登录态由宿主回填）；未登录
+        // 显示 person 符号。与侧栏头像同一登录态口径。
+        avatarButton.backgroundColor = UIColor.white.withAlphaComponent(0.16)
+        avatarButton.layer.cornerRadius = 16
+        avatarButton.clipsToBounds = true
+        avatarButton.accessibilityLabel = "账户"
+        avatarButton.translatesAutoresizingMaskIntoConstraints = false
+        avatarButton.setImage(UIImage(systemName: "person.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 13)), for: .normal)
+        avatarButton.tintColor = .white
+        avatarButton.addTarget(self, action: #selector(avatarTapped), for: .touchUpInside)
+        addSubview(avatarButton)
+        avatarInitial.font = .systemFont(ofSize: 14, weight: .semibold)
+        avatarInitial.textColor = .white
+        avatarInitial.textAlignment = .center
+        avatarInitial.isUserInteractionEnabled = false
+        avatarInitial.isHidden = true
+        avatarInitial.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(avatarInitial)
+
+        segmentControl.selectedSegmentIndex = SeamSegment.songs.rawValue
+        segmentControl.selectedSegmentTintColor = UIColor.white.withAlphaComponent(0.28)
+        segmentControl.setTitleTextAttributes(
+            [.foregroundColor: UIColor.white.withAlphaComponent(0.65),
+             .font: UIFont.systemFont(ofSize: 13, weight: .medium)], for: .normal)
+        segmentControl.setTitleTextAttributes(
+            [.foregroundColor: UIColor.white,
+             .font: UIFont.systemFont(ofSize: 13, weight: .semibold)], for: .selected)
+        segmentControl.translatesAutoresizingMaskIntoConstraints = false
+        segmentControl.addTarget(self, action: #selector(segmentChanged), for: .valueChanged)
+        addSubview(segmentControl)
+
+        configureIcon(searchButton, symbol: "magnifyingglass", label: "搜索",
+                      action: #selector(searchTapped))
+        configureIcon(settingsButton, symbol: "gearshape", label: "设置",
+                      action: #selector(settingsTapped))
+        configureIcon(layoutButton, symbol: "square.grid.2x2", label: "切换布局",
+                      action: #selector(layoutTapped))
+        configureIcon(moreButton, symbol: "ellipsis", label: "更多",
+                      action: #selector(moreTapped))
+        configureIcon(fullscreenButton, symbol: "arrow.up.left.and.arrow.down.right",
+                      label: "沉浸模式", action: #selector(fullscreenTapped))
+
+        NSLayoutConstraint.activate([
+            avatarButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
+            avatarButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            avatarButton.widthAnchor.constraint(equalToConstant: 32),
+            avatarButton.heightAnchor.constraint(equalToConstant: 32),
+            avatarInitial.centerXAnchor.constraint(equalTo: avatarButton.centerXAnchor),
+            avatarInitial.centerYAnchor.constraint(equalTo: avatarButton.centerYAnchor),
+
+            segmentControl.leadingAnchor.constraint(equalTo: avatarButton.trailingAnchor, constant: 8),
+            segmentControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            segmentControl.widthAnchor.constraint(equalToConstant: 108),
+            segmentControl.heightAnchor.constraint(equalToConstant: 30),
+
+            searchButton.leadingAnchor.constraint(equalTo: segmentControl.trailingAnchor, constant: 4),
+            settingsButton.leadingAnchor.constraint(equalTo: searchButton.trailingAnchor),
+            layoutButton.leadingAnchor.constraint(equalTo: settingsButton.trailingAnchor),
+            moreButton.leadingAnchor.constraint(equalTo: layoutButton.trailingAnchor),
+            fullscreenButton.leadingAnchor.constraint(equalTo: moreButton.trailingAnchor),
+            fullscreenButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+        ])
+        for button in [searchButton, settingsButton, layoutButton, moreButton, fullscreenButton] {
+            NSLayoutConstraint.activate([
+                button.centerYAnchor.constraint(equalTo: centerYAnchor),
+                button.widthAnchor.constraint(equalToConstant: 36),
+                button.heightAnchor.constraint(equalToConstant: 44),
+            ])
+        }
+    }
+
+    private func configureIcon(_ button: UIButton, symbol: String, label: String,
+                               action: Selector) {
+        button.setImage(UIImage(systemName: symbol,
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)),
+            for: .normal)
+        button.tintColor = UIColor.white.withAlphaComponent(0.9)
+        button.accessibilityLabel = label
+        button.translatesAutoresizingMaskIntoConstraints = false
+        button.addTarget(self, action: action, for: .touchUpInside)
+        addSubview(button)
+    }
+
+    // MARK: - 宿主回填
+
+    /// 段同步（宿主侧回滚/恢复时用，不触发回调）。
+    func setSegment(_ newSegment: SeamSegment) {
+        segment = newSegment
+        segmentControl.selectedSegmentIndex = newSegment.rawValue
+    }
+
+    /// 布局钮图标随当前形态：网格态显示墙形符号、反之网格。
+    func setLayoutMode(grid: Bool) {
+        layoutButton.setImage(UIImage(systemName: grid ? "rectangle.3.group" : "square.grid.2x2",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .medium)),
+            for: .normal)
+        layoutButton.accessibilityLabel = grid ? "切换为照片墙布局" : "切换为网格布局"
+    }
+
+    /// 登录态回填：已登录显示昵称首字，未登录回 person 符号
+    /// （与侧栏账户头同一口径：双入口、同一登录态显示）。
+    func setAccount(nickname: String?, loggedIn: Bool) {
+        if loggedIn, let first = nickname?.first {
+            avatarInitial.text = String(first)
+            avatarInitial.isHidden = false
+            avatarButton.setImage(nil, for: .normal)
+        } else {
+            avatarInitial.isHidden = true
+            avatarButton.setImage(UIImage(systemName: "person.fill",
+                withConfiguration: UIImage.SymbolConfiguration(pointSize: 13)), for: .normal)
+        }
+    }
+
+    // MARK: - 动作
+
+    @objc private func segmentChanged() {
+        guard let selected = SeamSegment(rawValue: segmentControl.selectedSegmentIndex) else { return }
+        segment = selected
+        onSegmentChanged?(selected)
+    }
+
+    @objc private func avatarTapped() { onAvatarTapped?() }
+    @objc private func searchTapped() { onSearchTapped?() }
+    @objc private func settingsTapped() { onSettingsTapped?() }
+    @objc private func layoutTapped() { onLayoutTapped?() }
+    @objc private func moreTapped() { onMoreTapped?(moreButton) }
+    @objc private func fullscreenTapped() { onFullscreenTapped?() }
+}
+
+/// 「…」菜单（3.7 (55) 工作流 E）：五项——喜欢的音乐 /
+/// 云盘 / 过滤当前页 / 管理隐藏 / 回到播放页。以 action
+/// sheet 呈现（iPad/横屏经锚点 popover 落位），每次点开按
+/// 当下状态现建：无队列时「回到播放页」置灰（UIAlertAction
+/// .isEnabled = false），过滤激活时该项带状态文案。动作全
+/// 部由宿主以闭包注入，本枚举只管菜单形态与面包屑词根。
+enum WallMoreMenu {
+
+    struct Actions {
+        var liked: () -> Void
+        var cloud: () -> Void
+        var filter: () -> Void
+        var manageHidden: () -> Void
+        var backToStage: () -> Void
+    }
+
+    static func present(from host: UIViewController, anchor: UIView,
+                        hasQueue: Bool, filterActive: Bool, actions: Actions) {
+        Breadcrumbs.log("wall.menu.open hasQueue=\(hasQueue) filter=\(filterActive)")
+        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "喜欢的音乐", style: .default) { _ in
+            Breadcrumbs.log("wall.menu.pick item=liked")
+            actions.liked()
+        })
+        sheet.addAction(UIAlertAction(title: "云盘", style: .default) { _ in
+            Breadcrumbs.log("wall.menu.pick item=cloud")
+            actions.cloud()
+        })
+        sheet.addAction(UIAlertAction(
+            title: filterActive ? "过滤当前页（已激活）" : "过滤当前页",
+            style: .default) { _ in
+            Breadcrumbs.log("wall.menu.pick item=filter")
+            actions.filter()
+        })
+        sheet.addAction(UIAlertAction(title: "管理隐藏", style: .default) { _ in
+            Breadcrumbs.log("wall.menu.pick item=hidden")
+            actions.manageHidden()
+        })
+        let back = UIAlertAction(title: "回到播放页", style: .default) { _ in
+            Breadcrumbs.log("wall.menu.pick item=stage")
+            actions.backToStage()
+        }
+        back.isEnabled = hasQueue
+        sheet.addAction(back)
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        if let popover = sheet.popoverPresentationController {
+            popover.sourceView = anchor
+            popover.sourceRect = anchor.bounds
+            popover.permittedArrowDirections = [.up, .down]
+        }
+        host.present(sheet, animated: true)
+    }
+}

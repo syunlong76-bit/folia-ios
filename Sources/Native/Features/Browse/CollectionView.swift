@@ -30,6 +30,12 @@ struct CollectionView: View {
     @State private var loadMoreFailed = false
     @State private var favoriteHint: String?
     @State private var panelAppeared = false
+    /// 收藏星显态（(55) 工作流 F）：真源 = StarStore 本地星标
+    /// （键 col:<kind>:<id>，与歌曲星标同库不同命名空间）；
+    /// 远端订阅作同步（见 favoriteTapped）。
+    @State private var isStarred = false
+    /// 收藏提示代次：连点时旧的延时清除不许抹掉新提示。
+    @State private var hintGeneration = 0
 
     /// 歌单全量 id（去重保序）与已消费到的位置，续拉/重试共用。
     @State private var allIds: [Int] = []
@@ -94,10 +100,20 @@ struct CollectionView: View {
             capsules
         }
         .toolbar(.hidden, for: .navigationBar)
+        .onReceive(NotificationCenter.default.publisher(for: .foliaStarChanged)) { note in
+            // 他面（如后续星标列表）改了本集合的星标时同步显态。
+            if (note.userInfo?["id"] as? String) == starKey {
+                isStarred = StarStore.shared.isStarred(starKey)
+            }
+        }
         .task {
+            isStarred = StarStore.shared.isStarred(starKey)
             if phase == .loading { await load() }
         }
     }
+
+    /// StarStore 里的集合键：与歌曲星标同库、col: 前缀分命名空间。
+    private var starKey: String { "col:\(collection.kind.rawValue):\(collection.id)" }
 
     // MARK: - 顶部胶囊
 
@@ -192,9 +208,9 @@ struct CollectionView: View {
                 Button {
                     favoriteTapped()
                 } label: {
-                    Image(systemName: "star")
+                    Image(systemName: isStarred ? "star.fill" : "star")
                         .font(.system(size: 18))
-                        .foregroundColor(.white.opacity(0.6))
+                        .foregroundColor(isStarred ? .yellow : .white.opacity(0.6))
                         .frame(width: 40, height: 40)
                         .background(Color.black.opacity(0.5))
                         .overlay(Circle().stroke(Color.white.opacity(0.10), lineWidth: 1))
@@ -202,7 +218,7 @@ struct CollectionView: View {
                 }
                 .buttonStyle(.plain)
                 .padding(12)
-                .accessibilityLabel("收藏歌单")
+                .accessibilityLabel(isStarred ? "取消收藏" : "收藏")
             }
 
             Text(headerName)
@@ -341,12 +357,52 @@ struct CollectionView: View {
         return "\(count)"
     }
 
-    /// 收藏依赖登录（omni 能力位把门）：登录未接，只给诚实提示，不做假动作。
+    /// 收藏星（(55) 工作流 F 接真）：本地 StarStore 先落（离线/
+    /// 未登录也成立、显态即时刷新），歌单/专辑再走远端订阅同步
+    /// ——网页 netease.ts subscribePlaylist / subscribeAlbum 的
+    /// GET /playlist/subscribe?t=1|2 与 /album/sub?t=1|2，
+    /// EdgeOne ncm-modules 均有路由，NativeDataClient.getJSON
+    /// 带会话且业务码 !=200 抛错。远端失败不回滚本地星标（本机
+    /// 星标自成真源），只把提示改成「未同步」如实告知；歌手页
+    /// 无订阅接口，只落本地星标。注：页面打开时的远端订阅态
+    /// 无现成字段可读（歌单/专辑详情 DTO 均无 subscribed），
+    /// 显态以本机星标为准，此为已知口径差。
     private func favoriteTapped() {
-        favoriteHint = "登录还没接上，收藏暂时用不了"
+        let target = !isStarred
+        StarStore.shared.setStarred(starKey, target)
+        isStarred = target
+        Breadcrumbs.log("collection.star kind=\(collection.kind.rawValue) id=\(collection.id) on=\(target)")
+        showFavoriteHint(target ? "已收藏" : "已取消收藏")
+        guard collection.kind != .artist else { return }
+        let path = collection.kind == .playlist
+            ? "/api/netease/playlist/subscribe" : "/api/netease/album/sub"
+        let collectionId = collection.id
+        let kindLabel = collection.kind.rawValue
+        Task {
+            do {
+                _ = try await NativeDataClient.shared.getJSON(
+                    path,
+                    query: [
+                        "t": target ? "1" : "2",
+                        "id": String(collectionId),
+                        "timestamp": String(Int(Date().timeIntervalSince1970 * 1000))
+                    ])
+                Breadcrumbs.log("collection.subscribe.remote ok kind=\(kindLabel) id=\(collectionId) on=\(target)")
+            } catch {
+                Breadcrumbs.log("collection.subscribe.remote fail kind=\(kindLabel) id=\(collectionId) err=\(error)")
+                showFavoriteHint(target ? "已记本机星标，云端收藏未同步" : "已取消本机星标，云端未同步")
+            }
+        }
+    }
+
+    /// 收藏提示：2.5 秒后自清，代次守卫防连点时旧任务抹新提示。
+    private func showFavoriteHint(_ text: String) {
+        favoriteHint = text
+        hintGeneration += 1
+        let generation = hintGeneration
         Task {
             try? await Task.sleep(nanoseconds: 2_500_000_000)
-            favoriteHint = nil
+            if hintGeneration == generation { favoriteHint = nil }
         }
     }
 

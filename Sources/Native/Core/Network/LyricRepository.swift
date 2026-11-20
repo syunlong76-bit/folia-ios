@@ -224,6 +224,25 @@ final class LyricRepository {
         return total
     }
 
+    // MARK: - 缓存管理（3.7 (55) 协调者集成：设置页存储签消费）
+
+    /// 当前缓存条目数与估算字节（设置页显示用）。
+    var cacheStats: (count: Int, bytes: Int) {
+        lock.lock()
+        defer { lock.unlock() }
+        return (cache.count, totalBytes)
+    }
+
+    /// 清空全部内存歌词缓存（下次取词重新拉取）。
+    func clearAll() {
+        lock.lock()
+        defer { lock.unlock() }
+        cache.removeAll()
+        lruOrder.removeAll()
+        totalBytes = 0
+        Breadcrumbs.log("lyricRepo.clearAll")
+    }
+
     // MARK: - 存储与 LRU（lock 内部版要求已持锁）
 
     private func store(_ entry: Entry, for songId: String) {
