@@ -96,7 +96,7 @@ final class PetIslandLayer: UIView {
             let passthrough = PassthroughViewController()
             passthrough.view.backgroundColor = .clear
             let win = UIWindow(windowScene: windowScene)
-            win.windowLevel = .statusBar + 1
+            win.windowLevel = .normal + 1
             win.backgroundColor = .clear
             win.rootViewController = passthrough
             layer.frame = windowScene.screen.bounds
