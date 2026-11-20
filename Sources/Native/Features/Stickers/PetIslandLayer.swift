@@ -6,11 +6,13 @@ import UIKit
 // 上蹦到灵动岛位置落座；灵动岛由系统渲染、恒在本层之上，
 // 宠物下半身被岛的黑框天然遮住、上半身露出，像坐在岛里。
 //
-// 承载：独立的穿透型 UIWindow（level 高于 App 内容、低于
-// 系统 UI），挂在窗口/根级——墙↔舞台↔主页之间导航时不消
-// 失、不重建。hitTest 只认领宠物本体，其余全穿透。仅 App
-// 前台有效（系统自动收起后台窗口）；横屏时岛位不在顶部，
-// 本层保守隐藏宠物（状态保留，回竖屏恢复）。
+// 承载：3.7 (39) 起改挂主窗根视图顶层（单窗）——独立
+// UIWindow 形态经 (36)/(37)/(38) 三轮真机二分定案为冻死
+// 充分条件（与 level、岛上内容无关），障眼法几何只依赖
+// 屏幕坐标、不依赖独立窗口，故取消建窗。挂在根视图之上，
+// 墙↔舞台↔主页之间导航时不消失、不重建。hitTest 只认领
+// 宠物本体，其余全穿透。仅 App 前台有效；横屏时岛位不在
+// 顶部，本层保守隐藏宠物（状态保留，回竖屏恢复）。
 //
 // 几何（iPhone 14 Pro 竖屏，窗口坐标）：岛黑框约宽 126、
 // 高 37、顶距屏幕上沿约 11pt。宠物 46pt，脚底落在 y≈45
@@ -69,7 +71,6 @@ final class PetIslandLayer: UIView {
     private static let seatFeetY: CGFloat = 45
 
     private var pets: [IslandPetView] = []
-    private var overlayWindow: UIWindow?
     private var tickTimer: Timer?
     private var nextBubbleAt: TimeInterval = 0
     private var nextChatAt: TimeInterval = 0
@@ -92,19 +93,22 @@ final class PetIslandLayer: UIView {
 
     static func install(in windowScene: UIWindowScene) {
         let layer = PetIslandLayer.shared
-        if layer.overlayWindow == nil {
-            let passthrough = PassthroughViewController()
-            passthrough.view.backgroundColor = .clear
-            let win = UIWindow(windowScene: windowScene)
-            win.windowLevel = .statusBar + 1
-            win.backgroundColor = .clear
-            win.rootViewController = passthrough
-            layer.frame = windowScene.screen.bounds
+        if layer.superview == nil {
+            // 3.7 (39)：不建独立窗口，取同 scene 的主窗（SceneDelegate
+            // 的 window 优先，key window 兜底），把岛层加到其根视图
+            // 最顶层；frame 与 autoresizing 跟随宿主根视图。
+            let hostWindow = (windowScene.delegate as? SceneDelegate)?.window
+                ?? windowScene.windows.first(where: { $0.isKeyWindow })
+                ?? windowScene.windows.first
+            guard let hostView = hostWindow?.rootViewController?.view else {
+                Breadcrumbs.log("island.install skipped=no-host")
+                return
+            }
+            layer.frame = hostView.bounds
             layer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            passthrough.view.addSubview(layer)
-            win.isHidden = false
-            layer.overlayWindow = win
-            Breadcrumbs.log("island.install level=\(Int(win.windowLevel.rawValue))"
+            hostView.addSubview(layer)
+            hostView.bringSubviewToFront(layer)
+            Breadcrumbs.log("island.install host=mainwindow"
                 + " residents=\(PetHomeRegistry.shared.islandResidents.count)")
             PetHomeRegistry.shared.onIslandDeparture = { [weak layer] asset in
                 layer?.releasePet(asset: asset)
@@ -416,23 +420,3 @@ final class PetIslandLayer: UIView {
     }
 }
 
-/// 穿透型根视图（3.7 (34) 热修）：UIView 默认 hitTest 在没
-/// 有子视图认领触摸时返回它自己——岛层自己穿透了也没用，
-/// 根视图会把全屏触摸兜底认领，overlay 窗口（level 高于
-/// App 窗口）遂吃掉全部事件，App 渲染正常但全面点不动
-/// （(32) 真机实锤：冷启动必现）。根视图必须把「命中自己」
-/// 翻译成 nil，事件才穿透到下层窗口；命中宠物/气泡等子
-/// 视图时原样返回，岛上交互不受影响。
-private final class PassthroughRootView: UIView {
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        let hit = super.hitTest(point, with: event)
-        return hit === self ? nil : hit
-    }
-}
-
-/// 穿透型根控制器：只承载岛层，不参与任何页面逻辑。
-private final class PassthroughViewController: UIViewController {
-    override func loadView() {
-        view = PassthroughRootView()
-    }
-}
