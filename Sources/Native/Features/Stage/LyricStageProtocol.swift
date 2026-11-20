@@ -219,8 +219,12 @@ struct LyricStageStyleInfo {
 }
 
 /// 样式注册表（已迁 8：classic、partita（(26)）与 cadenza、fume、
-/// tilt、claddagh、cappella、still（(33) A 档全量）；其余 9 个只
-/// 登记元数据，供选择器全量展示与「网页版」跳转）。
+/// tilt、claddagh、cappella、still（(33) A 档全量）；另加原创
+/// 三稿 tuning/corridor/afterglow（(40)，styleVersion 1）；其余
+/// 9 个只登记元数据，供选择器全量展示与「网页版」跳转）。选择器
+/// （StageStylePickerViewController）与 StageStyleStore 均直接
+/// 读本表，StageViewController 经 info.factory 分发渲染器，三
+/// 处无需另行登记。
 enum LyricStageRegistry {
     static let allStyles: [LyricStageStyleInfo] = [
         .init(id: "sonnet",   displayName: "商籁", order: 10,  styleVersion: 1, isNativeAvailable: false, factory: nil),
@@ -248,6 +252,12 @@ enum LyricStageRegistry {
         .init(id: "diorama",  displayName: "镜台", order: 120, styleVersion: 1, isNativeAvailable: false, factory: nil),
         .init(id: "still",    displayName: "静止", order: 130, styleVersion: 2, isNativeAvailable: true,
               factory: { StillStageRenderer() }),
+        .init(id: "tuning",   displayName: "调频", order: 140, styleVersion: 1, isNativeAvailable: true,
+              factory: { TuningStageRenderer() }),
+        .init(id: "corridor", displayName: "深廊", order: 150, styleVersion: 1, isNativeAvailable: true,
+              factory: { CorridorStageRenderer() }),
+        .init(id: "afterglow", displayName: "残光", order: 160, styleVersion: 1, isNativeAvailable: true,
+              factory: { AfterglowStageRenderer() }),
     ]
 
     static func info(for styleId: String) -> LyricStageStyleInfo? {

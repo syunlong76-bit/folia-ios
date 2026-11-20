@@ -38,6 +38,12 @@ final class HomeWallViewController: UIViewController,
     /// 则再播一轮，数据已明确失败则退场落到墙的失败态（见
     /// entryDataState）。
     private var didPlayEntryIntro = false
+    /// 海报墙回程落位待办（3.7 (40) 项8）：本墙 present 过
+    /// 曲目墙（海报 UI）后，下一次露面（曲目墙 dismiss 回
+    /// 主页）补一次 beginWallSettle 同族弹簧落位；首露面、
+    /// 入场退场露面、舞台/设置返回都不置位，不与入场侧
+    /// EntryIntro 的 view 级落位叠加。
+    private var posterReturnSettlePending = false
     private var didCenterCamera = false
     /// 入场循环的数据状态答复（3.7 (20)）：loadEntries 各落点
     /// 维护，入场呈现时以闭包快照交给 EntryIntroPresenter（按
@@ -285,6 +291,12 @@ final class HomeWallViewController: UIViewController,
             // 入场刚退场引发的露面，不重播（这次露面计入实例
             // 的「已播」：它就是首露面播出的下半程）。
             didPlayEntryIntro = true
+            // 转场落点留痕（3.7 (40) 项8）：introDidFinish 后
+            // 的落点即本露面——退场衔接已由 EntryIntro 侧
+            // 直溶 + beginWallSettle（view 级 1.02 弹簧）承
+            // 担，本处不叠第二支缩放动画，只落面包屑供真机
+            // 对账「播完→主页」衔接是否连续。
+            Breadcrumbs.log("transition entry->home appear source=intro-finish")
         } else if !didPlayEntryIntro {
             // present 受理才置位：资源缺失/呈现中被拒时不烧掉
             // 本实例唯一的一次，留待下次露面重试，不漏播真入口。
@@ -293,6 +305,14 @@ final class HomeWallViewController: UIViewController,
             }) {
                 didPlayEntryIntro = true
             }
+        }
+        // 海报墙回程落位（3.7 (40) 项8）：从曲目墙（歌单页）
+        // dismiss 回到本主页墙的这次露面，补弹簧落位衔接
+        // ——此前只有 present 侧的 crossDissolve、主页侧落
+        // 点无任何落位，观感是淡化完硬停/停顿一拍。
+        if posterReturnSettlePending {
+            posterReturnSettlePending = false
+            beginHomeWallReturnSettle(source: "poster-dismiss")
         }
         // 方向恢复兜底（3.7 (23)，DS R49 Q6）：入场退场后的
         // 竖屏请求主发点在 dismiss 完成回调（PortraitRestore），
@@ -490,6 +510,63 @@ final class HomeWallViewController: UIViewController,
         }
     }
 
+    // MARK: - 转场（3.7 (40) 项8：进/出海报墙的丝滑衔接）
+
+    /// 进海报墙的呈现侧蓄势（与 EntryIntro.beginWallSettle
+    /// 同族参数：1.02 蓄势、弹簧 damping 0.9 / velocity
+    /// 0.2）：present 的 crossDissolve 段内主页墙轻轻放大，
+    /// 目标曲目墙以 1.04→1.0 弹簧落位（WallPrototype
+    /// viewDidAppear）同段收尾——两侧同族弹簧 + 交叉淡
+    /// 化连续衔接，替原「主页静止一拍 → 淡化硬停」。主
+    /// 页被全屏曲目墙盖住后 transform 立即复位（不可见
+    /// 时刻复位、无跳变），回程落位另由
+    /// beginHomeWallReturnSettle 承担。
+    private func beginPosterTransition(source: String, playlistId: String) {
+        Breadcrumbs.log("transition home->poster begin source=\(source) playlist=\(playlistId)")
+        posterReturnSettlePending = true
+        guard !UIAccessibility.isReduceMotionEnabled else { return }
+        collectionView.transform = .identity
+        UIView.animate(withDuration: 0.45, delay: 0,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.collectionView.transform = CGAffineTransform(scaleX: 1.02, y: 1.02)
+        }
+    }
+
+    /// present 完成收口：主页已被全屏盖住，此刻复位蓄势
+    /// 缩放不可见；落面包屑标记衔接段结束（seed 等待 +
+    /// present 动画总时长可由 begin/end 两条对账）。
+    private func endPosterTransition(source: String, seedReady: Bool) {
+        collectionView.transform = .identity
+        Breadcrumbs.log("transition home->poster end source=\(source) seed=\(seedReady)")
+    }
+
+    /// 回程落位（beginWallSettle 同族）：曲目墙 dismiss
+    /// 回主页的露面处调用——主页墙先置 1.02 蓄势、弹簧
+    /// 回 1.00（0.45s / damping 0.9 / velocity 0.2，与入
+    /// 场侧墙面落位同参），与 dismiss 的 crossDissolve
+    /// 同段并行，消除「歌单 appear → 主页 appear」之间的
+    /// 停顿/硬停。作用于 collectionView 而非 view：入场
+    /// 侧 beginWallSettle 动的是 presenter.view，两者不
+    /// 叠乘。完成复位 transform。
+    private func beginHomeWallReturnSettle(source: String) {
+        Breadcrumbs.log("transition home settle begin source=\(source)")
+        if UIAccessibility.isReduceMotionEnabled {
+            collectionView.transform = .identity
+            Breadcrumbs.log("transition home settle end source=\(source) reduced=1")
+            return
+        }
+        collectionView.transform = CGAffineTransform(scaleX: 1.02, y: 1.02)
+        UIView.animate(withDuration: 0.45, delay: 0,
+                       usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.collectionView.transform = .identity
+        } completion: { [weak self] _ in
+            self?.collectionView.transform = .identity
+            Breadcrumbs.log("transition home settle end source=\(source)")
+        }
+    }
+
     // MARK: - 点按：打开该歌单的曲目墙（详情 MVP 前的桥）
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -504,10 +581,17 @@ final class HomeWallViewController: UIViewController,
         // 丝滑切入（3.7 (8)）：先预加载，最多等 250ms 让首批数据
         // 落地再 present——预热命中时墙带着内容直接切入，黑屏不
         // 出现；超时照常切入，由墙内氛围底兜住剩余等待。
+        // 转场同族化（3.7 (40) 项8）：crossDissolve 保留，
+        // 呈现侧加 1.02 弹簧蓄势、目标墙弹簧落位（见
+        // beginPosterTransition），不再是静止墙面单方淡化。
+        beginPosterTransition(source: "tap", playlistId: playlistIds[instance.queueIndex])
         wall.startPreload()
         Task { [weak self] in
-            _ = await wall.awaitSeed(timeout: 0.25)
-            self?.present(wall, animated: true)
+            guard let self else { return }
+            let seed = await wall.awaitSeed(timeout: 0.25)
+            self.present(wall, animated: true) { [weak self] in
+                self?.endPosterTransition(source: "tap", seedReady: seed)
+            }
         }
     }
 
@@ -520,10 +604,18 @@ final class HomeWallViewController: UIViewController,
         wall.modalPresentationStyle = .fullScreen
         wall.modalTransitionStyle = .crossDissolve
         wall.pendingReturnTicket = ticket
+        // 转场同族化（3.7 (40) 项8）：回程直达与点按同路
+        // ——主页刚 appear 即转曲目墙的这一跳此前是裸
+        // crossDissolve（主页闪现一拍再硬切），现与点按
+        // 路径同套蓄势/落位/面包屑，衔接连续。
+        beginPosterTransition(source: "restore", playlistId: ticket.playlistId)
         wall.startPreload()
         Task { [weak self] in
-            _ = await wall.awaitSeed(timeout: 0.25)
-            self?.present(wall, animated: true)
+            guard let self else { return }
+            let seed = await wall.awaitSeed(timeout: 0.25)
+            self.present(wall, animated: true) { [weak self] in
+                self?.endPosterTransition(source: "restore", seedReady: seed)
+            }
         }
     }
 

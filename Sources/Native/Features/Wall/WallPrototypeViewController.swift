@@ -1131,6 +1131,30 @@ final class WallPrototypeViewController: UIViewController,
     private var locateFlightInstanceId: String?
     private var locateGeneration = 0
 
+    /// P6 落点强调（3.7 (40) 项9）：飞行落定、展开交叉淡化
+    /// 后，墙面以 1.02 蓄势经系统弹簧（0.5s / damping
+    /// 0.85，与迷你台收起弹簧同参）落回 1.0，给落点弹性
+    /// 收尾，替原「淡化完即硬停」；完成复位 transform、
+    /// 无残留遮罩/缩放。展开本身仍走既有交叉淡化，不另
+    /// 造 morph（(13) 已否伪 morph 与播放页动画打架）。
+    private func emphasizeLocateLanding() {
+        Breadcrumbs.log("locate land settle begin")
+        guard !UIAccessibility.isReduceMotionEnabled else {
+            collectionView.transform = .identity
+            Breadcrumbs.log("locate land settle end reduced=1")
+            return
+        }
+        collectionView.transform = CGAffineTransform(scaleX: 1.02, y: 1.02)
+        UIView.animate(withDuration: 0.5, delay: 0,
+                       usingSpringWithDamping: 0.85, initialSpringVelocity: 0.1,
+                       options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
+            self.collectionView.transform = .identity
+        } completion: { [weak self] _ in
+            self?.collectionView.transform = .identity
+            Breadcrumbs.log("locate land settle end")
+        }
+    }
+
     private func locateCurrentTrack() {
         locateGeneration += 1
         guard let current = PlaybackEngine.shared.currentTrack else { return }
@@ -1184,6 +1208,7 @@ final class WallPrototypeViewController: UIViewController,
                               options: [.transitionCrossDissolve]) {
                 self.collectionView.reloadData()
             }
+            self.emphasizeLocateLanding()
             // 落点校验（3.7 (13.2)）：淡化落定后核对展开的确实是
             // 冻结目标，不是就纠正/重飞，全程面包屑（DS34）。
             self.locateFlightInstanceId = target.instanceId
@@ -1302,6 +1327,7 @@ final class WallPrototypeViewController: UIViewController,
                               options: [.transitionCrossDissolve]) {
                 self.collectionView.reloadData()
             }
+            self.emphasizeLocateLanding()
             self.locateFlightInstanceId = target.instanceId
             let gen = self.locateGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
@@ -1321,23 +1347,61 @@ final class WallPrototypeViewController: UIViewController,
         locateDuration = duration
         locateStartTime = CACurrentMediaTime()
         locateCompletion = completion
+        // P6 飞行起飞留痕（3.7 (40) 项9）：弹簧口径与参数供
+        // 真机对账（damping 与全仓既有弹簧 0.85–0.88 同族）。
+        Breadcrumbs.log("locate flight spring begin dur=\(String(format: "%.2f", duration)) damping=0.85")
         let link = CADisplayLink(target: self, selector: #selector(locateTick(_:)))
         link.add(to: .main, forMode: .common)
         locateLink = link
     }
 
+    /// P6 弹簧进度（3.7 (40) 项9）：欠阻尼弹簧阶跃响应
+    /// （ζ=0.85、归一化 ω=6），替原 easeInOut 三次曲线
+    /// （raw<0.5 ? 2raw² : …）——原曲线中段近匀速、末端
+    /// 硬停，是真机「近匀速长距离平移 + 突兀落点」的主因。
+    /// 弹簧进度起步速度为零、中段快、末段自然减速收敛，
+    /// 超调约 0.6%（不可见量级），raw≥1 由 tick 精确吸附
+    /// 目标点。位置与缩放共用同一进度（见 locateTick 的
+    /// 钟形缩放），不分段、不另起第二支动画。
+    private static func locateSpringProgress(_ raw: Double) -> Double {
+        guard raw > 0 else { return 0 }
+        guard raw < 1 else { return 1 }
+        let zeta = 0.85
+        let omega = 6.0
+        let omegaD = omega * (1 - zeta * zeta).squareRoot()
+        let envelope = exp(-zeta * omega * raw)
+        let ratio = zeta / (1 - zeta * zeta).squareRoot()
+        return 1 - envelope * (cos(omegaD * raw) + ratio * sin(omegaD * raw))
+    }
+
     @objc private func locateTick(_ link: CADisplayLink) {
         let raw = min((link.timestamp - locateStartTime) / locateDuration, 1)
-        let eased = raw < 0.5 ? 2 * raw * raw : 1 - pow(-2 * raw + 2, 2) / 2
+        let eased = Self.locateSpringProgress(raw)
         let before = setIdentity()
         wallLayout.worldOrigin = CGPoint(
             x: locateStartOrigin.x + (locateTargetOrigin.x - locateStartOrigin.x) * CGFloat(eased),
             y: locateStartOrigin.y + (locateTargetOrigin.y - locateStartOrigin.y) * CGFloat(eased))
+        // 缩放同支弹簧（P6）：飞行中段轻微放大（钟形，峰值
+        // 1.03、由同一弹簧进度驱动），落点回到 1.0——位置
+        // 与缩放同曲线插值，无分段跳变；Reduce Motion 不缩放。
+        if UIAccessibility.isReduceMotionEnabled {
+            collectionView.transform = .identity
+        } else {
+            let bell = CGFloat(eased * (1 - eased) * 4)
+            collectionView.transform = CGAffineTransform(scaleX: 1 + 0.03 * bell,
+                                                         y: 1 + 0.03 * bell)
+        }
         wallLayout.refreshInstances()
         if setIdentity() != before { collectionView.reloadData() }
         if raw >= 1 {
             link.invalidate()
             locateLink = nil
+            // 落点定格干净：原点精确吸附目标、缩放复位，
+            // 不留钟形缩放残值给后续展开/歌词锚定。
+            wallLayout.worldOrigin = locateTargetOrigin
+            wallLayout.refreshInstances()
+            collectionView.transform = .identity
+            Breadcrumbs.log("locate flight spring end")
             let done = locateCompletion
             locateCompletion = nil
             done?()
@@ -1364,6 +1428,9 @@ final class WallPrototypeViewController: UIViewController,
         locateLink?.invalidate()
         locateLink = nil
         locateCompletion = nil
+        // P6 状态干净（3.7 (40) 项9）：飞行途中离墙时缩放
+        // 必须复位，不许把钟形缩放残值带回下次露面。
+        collectionView.transform = .identity
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -1375,8 +1442,25 @@ final class WallPrototypeViewController: UIViewController,
         // 迷你台无操作计时（3.7 (21)）：回墙即续命（在场且
         // 完整形态才起，resetMiniIdleTimer 内部把关）。
         resetMiniIdleTimer()
-        UIView.animate(withDuration: 0.35, delay: 0, options: [.curveEaseOut]) {
-            self.collectionView.transform = .identity
+        // 转场落位（3.7 (40) 项8）：入场 1.04 蓄势的收回改系统
+        // 弹簧（原为 0.35s curveEaseOut 非弹簧收尾，与主页侧
+        // crossDissolve 叠化不在同一族、落点生硬）。与 (23)
+        // 齿轮进主页的叠化直溶同族：交叉淡化（present 侧
+        // .crossDissolve）+ 轻微缩放弹簧落位；完成复位
+        // transform，不留残留缩放。Reduce Motion 直接落位。
+        Breadcrumbs.log("transition poster settle begin playlist=\(playlistId)")
+        if UIAccessibility.isReduceMotionEnabled {
+            collectionView.transform = .identity
+            Breadcrumbs.log("transition poster settle end reduced=1")
+        } else {
+            UIView.animate(withDuration: 0.55, delay: 0,
+                           usingSpringWithDamping: 0.86, initialSpringVelocity: 0.12,
+                           options: [.curveEaseOut, .allowUserInteraction, .beginFromCurrentState]) {
+                self.collectionView.transform = .identity
+            } completion: { [weak self] _ in
+                self?.collectionView.transform = .identity
+                Breadcrumbs.log("transition poster settle end playlist=\(self?.playlistId ?? "-")")
+            }
         }
     }
 

@@ -492,28 +492,78 @@ final class QueueManager: ObservableObject {
 
     /// 封面异步补齐：下载成功且仍是当前曲时，更新 engine 封面并重推锁屏。
     /// 代际判定回主线程做（loadGeneration 只在主线程写）。
+    ///
+    /// 3.7 (40) 项5（审计 nowplaying-audit-2026-11-20 失败二）：原实现
+    /// 三个出口全静默（artworkURL 为 nil / try? 吞下载失败 / 代际守卫
+    /// 丢弃），且与墙面是两条独立链——锁屏链每首歌裸 URLSession 直下、
+    /// 无复用，静默失败时「墙上有封面、锁屏没有」可长期并存。本版：
+    /// ①每个出口各打一条 artwork.fetch 面包屑，下次导出一次定案；
+    /// ②下载改走 NativeCoverLoader 的代理/缓存链（见下），不再裸直下；
+    /// ③http→https 升级在加载器内已有（proxiedURLString 内部
+    /// upgradedHTTPS / upgradedImgPath），主路径依赖它、不再自升；
+    /// 仅加载器给不出代理地址时回退的直下分支保留原升级逻辑。
+    ///
+    /// 线程/隔离：本函数是 nonisolated async（由 loadTrackAtCurrentIndex
+    /// 的 Task await 调用）；NativeCoverLoader 是 nonisolated final class，
+    /// 其 NSCache 与 URLSession 均为线程安全构件，image(for:tier:)
+    /// 本身先查内存缓存、下载与解码都在其内部完成——从本上下文直接
+    /// await 与 StageViewController.loadBackdropFallback 的 Task 内
+    /// 调用同构，不引入新的数据竞争；触 engine 的落地仍经 MainActor.run。
     private func fetchArtworkIfNeeded(for track: FoliaTrack, generation: Int) async {
-        guard let rawArtworkURL = track.artworkURL else { return }
-        // 3.7 (31) 锁屏无封面根因：歌单详情内嵌 tracks 的 al.picUrl 是
-        // http:// 明文（同图在 /song/detail 里是 https://，实测对照过），
-        // ATS 只给本机开例外，这条裸 URLSession 直下会被系统拦死且
-        // try? 吞错无痕——封面永远不到、锁屏恒灰方块。下载前先升
-        // https（与 EdgeOneAPIClient.toFoliaTrack、NativeCoverLoader
-        // 的既有口径一致）。墙面封面走 NativeCoverLoader 代理链不受
-        // 影响，坏的只有锁屏这条补齐链。
-        let artworkURL: URL
-        if rawArtworkURL.scheme == "http",
-           let upgraded = URL(string: "https://" + rawArtworkURL.absoluteString.dropFirst(7)) {
-            artworkURL = upgraded
-        } else {
-            artworkURL = rawArtworkURL
+        guard let rawArtworkURL = track.artworkURL else {
+            Breadcrumbs.log("artwork.fetch songId=\(track.id) result=nil-url")
+            return
         }
-        guard let (data, _) = try? await URLSession.shared.data(from: artworkURL),
-              let image = UIImage(data: data) else { return }
+        let raw = rawArtworkURL.absoluteString
+        var image: UIImage?
+        // source 标记本次实际走的取图路径，随 landed/stale/download-failed
+        // 一并入面包屑，区分缓存/代理链与回退直下。
+        var source = "loader"
+        // 主路径：NativeCoverLoader。档位用 wallTier(raw, 600)：/img 形态
+        // 沿用地址内嵌档（曲目 picUrl 640）——与墙面 cell 的缓存键完全
+        // 一致，墙已解码的图直接命中其内存缓存；非 /img 形态按 600
+        // （锁屏封面最大边，见 NowPlayingController）选档得 1024。
+        // image(for:tier:) 内部先查缓存、未命中才经 LocalServer /img
+        // 代理下载（代理侧另有磁盘缓存）并降采样回填缓存。
+        let loader = NativeCoverLoader.shared
+        let tier = NativeCoverLoader.wallTier(raw: raw, pixelExtent: 600)
+        if let proxied = loader.proxiedURLString(raw, tier: tier) {
+            image = await loader.image(for: proxied, tier: tier)
+            if image == nil {
+                // 精确档下载失败时再捞任一档的已缓存图（仍算 loader 路）：
+                // 墙解码过任一档都不该让锁屏继续灰着。
+                image = loader.cachedImageAnyTier(raw: raw, excludingTier: tier)
+            }
+        } else {
+            // 加载器给不出代理地址（LocalServer 端口未就绪，或地址非
+            // /img 与 http(s) 形态）：回退原裸直下路径。3.7 (31) 的
+            // http→https 升级只在此分支保留（主路径由加载器内部升级）：
+            // 歌单详情内嵌 tracks 的 al.picUrl 是 http:// 明文，ATS 只给
+            // 本机开例外，不升级会被系统拦死。
+            source = "direct"
+            let artworkURL: URL
+            if rawArtworkURL.scheme == "http",
+               let upgraded = URL(string: "https://" + rawArtworkURL.absoluteString.dropFirst(7)) {
+                artworkURL = upgraded
+            } else {
+                artworkURL = rawArtworkURL
+            }
+            if let (data, _) = try? await URLSession.shared.data(from: artworkURL) {
+                image = UIImage(data: data)
+            }
+        }
+        guard let image else {
+            Breadcrumbs.log("artwork.fetch songId=\(track.id) result=download-failed source=\(source)")
+            return
+        }
         await MainActor.run {
             guard generation == self.loadGeneration,
-                  self.engine.currentTrack?.id == track.id else { return }
+                  self.engine.currentTrack?.id == track.id else {
+                Breadcrumbs.log("artwork.fetch songId=\(track.id) result=stale source=\(source)")
+                return
+            }
             self.engine.updateCurrentArtwork(image)
+            Breadcrumbs.log("artwork.fetch songId=\(track.id) result=landed source=\(source)")
         }
     }
 
