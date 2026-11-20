@@ -245,7 +245,7 @@ enum LyricStageRegistry {
               factory: { TiltStageRenderer() }),
         .init(id: "claddagh", displayName: "回环", order: 80,  styleVersion: 2, isNativeAvailable: true,
               factory: { CladdaghStageRenderer() }),
-        .init(id: "monet",    displayName: "莫奈", order: 90,  styleVersion: 1, isNativeAvailable: false, factory: nil),
+        .init(id: "monet",    displayName: "莫奈", order: 90,  styleVersion: 1, isNativeAvailable: true,  factory: { MonetStageRenderer() }),
         .init(id: "pendolo",  displayName: "时计", order: 100, styleVersion: 1, isNativeAvailable: false, factory: nil),
         .init(id: "cappella", displayName: "群唱", order: 110, styleVersion: 2, isNativeAvailable: true,
               factory: { CappellaStageRenderer() }),
