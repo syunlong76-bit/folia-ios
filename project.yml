@@ -8,12 +8,6 @@ options:
     iOS: "17.0"
   createIntermediateGroups: true
 
-packages:
-  # zip 解压（UpdateManager 下载前端更新包后解压用）
-  ZIPFoundation:
-    url: https://github.com/weichsel/ZIPFoundation
-    from: 0.9.19
-
 targets:
   Folia:
     type: application
@@ -23,13 +17,6 @@ targets:
       - path: Sources
       # App 图标资产目录（AppIcon.appiconset，1024 满版 PNG）
       - path: Assets.xcassets
-      # 整个 Web 文件夹以 folder reference（蓝色文件夹）打进 app 包，
-      # 保持目录结构，运行时经 Bundle.main 定位 "Web" 文件夹
-      - path: Resources/Web
-        type: folder
-      # 双壳浏览表面的前端文件（浏览构建，folder reference，运行时定位 "WebBrowse"）
-      - path: Resources/WebBrowse
-        type: folder
       # 原生特效面静态包（M2 剥离版播放页，folder reference，运行时定位 "WebEffect"）
       - path: Resources/WebEffect
         type: folder
@@ -53,7 +40,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "50"
+        CFBundleVersion: "51"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         UILaunchScreen: {}
@@ -90,11 +77,8 @@ targets:
         SWIFT_VERSION: "5.0"
         TARGETED_DEVICE_FAMILY: "1,2"
         MARKETING_VERSION: "3.7"
-        CURRENT_PROJECT_VERSION: "50"
+        CURRENT_PROJECT_VERSION: "51"
         IPHONEOS_DEPLOYMENT_TARGET: "17.0"
         # DatabaseManager 用 import SQLite3（系统库，需显式链接）
         OTHER_LDFLAGS: "-lsqlite3"
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
-    dependencies:
-      - package: ZIPFoundation
-        product: ZIPFoundation

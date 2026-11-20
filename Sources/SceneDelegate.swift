@@ -16,17 +16,28 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         //    退 classic，点歌台/route 哪条入口开台都安全。
         StageStyleStore.runLaunchStyleGuard()
 
-        // 1) 准备 Web 根目录：首次拷贝内置版本；如有已下载待生效的新版本且目录完整，切换生效
-        WebRootManager.shared.prepare()
+        // 1) WebRootManager 冷启拷贝已退役（3.7 (51) 换根）：网页
+        //    三包不再是冷启路径的前置，prepare() 调用删除；类本体
+        //    与 UpdateManager 本体由 (51) C 组删除。
 
         // M1 阶段 2：启动登录 Cookie 同步观察（原生数据链的前置）。
+        // (51) 保留 start() 的理由：CookieSync 观察的是共享
+        // WKWebsiteDataStore 的 Cookie 罐（不依赖根 WebView 存
+        // 在），其副本仍经 NativeDataClient 注入发往 LocalServer
+        // 的原生请求头；它不是登录态载体（登录串在 localStorage，
+        // A 组迁移走 WebSession 一次性读取，与本观察无关）。待
+        // (52) 桥/LocalServer 瘦身时再随之退役。
         CookieSync.shared.start()
 
-        // 2) 主界面（内含 WKWebView + 本地服务器启动）；窗口底色纯黑，
-        //    避免全屏沉浸时系统窗口在边缘透出白底
+        // 2) 主界面（3.7 (51) 换根）：根控制器 = 原生主页墙，
+        //    冷启直达原生墙（建法与原长按入口/回程呈现场景同构：
+        //    裸 HomeWallViewController、无导航壳）。网页 WebView
+        //    不再铺满全屏作主界面，只剩未迁样式的网页舞台兜底
+        //    通道（WebStageHostViewController 按需承载）。窗口底
+        //    色纯黑，避免全屏沉浸时系统窗口在边缘透出白底。
         let window = UIWindow(windowScene: windowScene)
         window.backgroundColor = .black
-        window.rootViewController = MainViewController()
+        window.rootViewController = HomeWallViewController()
         window.makeKeyAndVisible()
         self.window = window
 
@@ -48,16 +59,15 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 正当退出落定 / 守卫期重入 / giveup 三路回调进本状态机。
         wireRouteGateCallbacks()
 
-        // 2.5) 入场视频不在冷启动挂（3.7 (17) 挪位）：冷启直落
-        //     Web 主界面；v5 油画视频改由主页墙进入页触发（见
-        //     HomeWallViewController 的入场槽位），替换原电影长卷。
+        // 2.5) 入场视频（3.7 (17) 挪位、(51) 随墙作根自然生效）：
+        //     冷启直达原生墙，v5 油画视频由主页墙进入页触发（见
+        //     HomeWallViewController 的入场槽位：进墙首露面播、
+        //     播完/关闭落墙、数据未就绪循环），冷启路径上不再有
+        //     任何 WebView 第一屏。
 
-        // 3) 冷启动自动检查更新（开关开启时，后台队列执行，不阻塞启动）
-        if UpdateManager.shared.autoUpdateEnabled {
-            DispatchQueue.global(qos: .utility).async {
-                UpdateManager.shared.checkNow(completion: nil)
-            }
-        }
+        // 3) 冷启动自动检查更新已退役（3.7 (51)）：OTA 产物在现
+        //    行拓扑里从未被服务（审计 §5 空转链），冷启自动检查
+        //    段删除；UpdateManager 本体由 (51) C 组删除。
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {}
@@ -273,8 +283,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             verifyPresentedStage(generation: generation)
             return
         }
+        // 根直达兜底（3.7 (51) 换根后口径）：根已是 HomeWall，
+        // 本分支在现行根链下被上方 home-wall 分支先行接住（top
+        // === root 且 root 为 HomeWall 时先命中），仅作根形态
+        // 变更时的通用兜底保留；chain 字段仍由 chainDescription
+        // 按真实类名链生成（如 HomeWallViewController>…），判
+        // 定不依赖任何硬编码类名串。
         if top === root {
-            Breadcrumbs.log("nowplaying.route action=present-stage gen=\(generation) via=main chain=\(chainDescription())")
+            Breadcrumbs.log("nowplaying.route action=present-stage gen=\(generation) via=root chain=\(chainDescription())")
             StageViewController.routeExitProbeArmedAt = Date()
             let stage = StageViewController()
             stage.modalPresentationStyle = .fullScreen

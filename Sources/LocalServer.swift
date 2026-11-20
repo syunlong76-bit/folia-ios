@@ -5,9 +5,8 @@ import Network
 
 /// 内置本地 HTTP 服务器（与安卓版同构）：
 /// - NWListener 监听 127.0.0.1:18765（仅回环接口；端口被占则 +1 回退，最多试 11 个端口）
-/// - 静态文件：根目录 = WebRootManager 当前生效版本目录；MIME 齐全；SPA 回退 index.html
-/// - /sw.js：返回自注销 stub（壳内禁用 Folia 自带 Service Worker，避免其缓存与
-///   壳的整包版本切换机制互相打架；离线能力由本地文件本身提供）
+/// - 静态文件：根目录 = 包内 Resources/WebEffect 目录（Bundle 直查）；MIME 齐全；SPA 回退 index.html
+///   （3.7 (51) C 组瘦身：旧 Web/WebBrowse 回退根、/browse、/__bridge、/sw.js stub 已退役）
 /// - /api/*：反向代理（3.6 (4) 起主上游为各平台 EdgeOne 函数直连，传输
 ///   错误/5xx 时回退 Netlify 站点一次；GET 响应带磁盘缓存与 TTL）。
 ///   完整转发 method / 请求头（含 Cookie）/ 请求体；响应状态、响应头、Set-Cookie、响应体原样回传。
@@ -141,21 +140,16 @@ final class LocalServer {
 
     // MARK: - 请求路由
 
+    /// 包内 WebEffect 静态根（Resources/WebEffect，folder reference 打包）。
+    /// 与原 WebRootManager.webEffectDir 同一查法（Bundle 直查），(51) 随
+    /// WebRootManager 退役内联至此；WebEffectBridge 的包内校验走的也是
+    /// Bundle 直查（index.html subdirectory），不经本属性。
+    static var webEffectDir: URL? {
+        Bundle.main.url(forResource: "WebEffect", withExtension: nil)
+    }
+
     fileprivate func route(_ request: HTTPRequest, for handler: ConnectionHandler) {
         let rawPath = request.pathWithoutQuery
-
-        if rawPath == "/sw.js" || rawPath == "/browse/sw.js" {
-            handler.respond(status: 200, reason: "OK",
-                            headers: [("Content-Type", "text/javascript; charset=utf-8"),
-                                      ("Cache-Control", "no-store")],
-                            body: Data(LocalServer.serviceWorkerStub.utf8))
-            return
-        }
-
-        if rawPath.hasPrefix("/__bridge/") {
-            handleBridge(request: request, handler: handler)
-            return
-        }
 
         if rawPath == "/img" || rawPath.hasPrefix("/img/") {
             CoverImageProxy.handle(request: request, handler: handler)
@@ -167,73 +161,12 @@ final class LocalServer {
             return
         }
 
-        // 双壳浏览表面：/browse/* 映射到浏览根目录（SPA 回退在浏览根内），
-        // 其余路径仍走播放根（含 OTA 版本目录）。
-        if rawPath == "/browse" || rawPath.hasPrefix("/browse/") {
-            let sub = String(rawPath.dropFirst("/browse".count))
-            serveStatic(request: request, rawPath: sub.isEmpty ? "/" : sub,
-                        handler: handler, root: WebRootManager.shared.browseWebDir)
-            return
-        }
-
-        // 3.6：主根 = 包内 WebEffect 目录（全量前端）；缺失时回退旧 OTA 根。
-        if let webEffectDir = WebRootManager.shared.webEffectDir {
+        // 主根 = 包内 WebEffect 目录（未迁样式的网页舞台兜底靠它加载
+        // /index.html 与 assets）。(51) 起无回退根：目录缺失即 404，
+        // 不再回退旧 OTA Web 根。
+        if let webEffectDir = LocalServer.webEffectDir {
             serveStatic(request: request, rawPath: rawPath, handler: handler, root: webEffectDir)
         } else {
-            serveStatic(request: request, rawPath: rawPath, handler: handler)
-        }
-    }
-
-    // MARK: - 跨表面桥（/__bridge/*，协议见 BridgeStore）
-
-    private func handleBridge(request: HTTPRequest, handler: ConnectionHandler) {
-        let rawPath = request.pathWithoutQuery
-        let jsonHeaders: [(String, String)] = [("Content-Type", "application/json; charset=utf-8"),
-                                               ("Cache-Control", "no-store")]
-        func respondJson(_ object: [String: Any]) {
-            let data = (try? JSONSerialization.data(withJSONObject: object)) ?? Data("{}".utf8)
-            handler.respond(status: 200, reason: "OK", headers: jsonHeaders, body: data)
-        }
-        func respondBadRequest() {
-            handler.respond(status: 400, reason: "Bad Request",
-                            headers: [("Content-Type", "text/plain; charset=utf-8")],
-                            body: Data("Bad Request".utf8))
-        }
-
-        switch rawPath {
-        case "/__bridge/cmd":
-            guard request.method == "POST",
-                  let cmd = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] else {
-                respondBadRequest()
-                return
-            }
-            let assigned = BridgeStore.shared.enqueue(cmd)
-            respondJson(["ok": true, "seq": assigned])
-        case "/__bridge/cmds":
-            var since = 0
-            if let qIdx = request.target.firstIndex(of: "?") {
-                let query = request.target[request.target.index(after: qIdx)...]
-                for pair in query.split(separator: "&") {
-                    let kv = pair.split(separator: "=", maxSplits: 1)
-                    if kv.count == 2, kv[0] == "since" { since = Int(kv[1]) ?? 0 }
-                }
-            }
-            let result = BridgeStore.shared.commands(since: since)
-            respondJson(["seq": result.seq, "cmds": result.cmds])
-        case "/__bridge/state":
-            if request.method == "POST" {
-                if let state = (try? JSONSerialization.jsonObject(with: request.body)) as? [String: Any] {
-                    BridgeStore.shared.setState(state)
-                }
-                respondJson(["ok": true])
-            } else {
-                let snap = BridgeStore.shared.snapshot()
-                respondJson(["state": snap.state ?? NSNull()])
-            }
-        case "/__bridge/session":
-            let snap = BridgeStore.shared.snapshot()
-            respondJson(["lastPlay": snap.lastPlay ?? NSNull(), "state": snap.state ?? NSNull()])
-        default:
             handler.respond(status: 404, reason: "Not Found",
                             headers: [("Content-Type", "text/plain; charset=utf-8")],
                             body: Data("Not Found".utf8))
@@ -243,7 +176,7 @@ final class LocalServer {
     // MARK: - 静态文件
 
     private func serveStatic(request: HTTPRequest, rawPath: String, handler: ConnectionHandler,
-                             root: URL = WebRootManager.shared.activeWebDir) {
+                             root: URL) {
         let decoded = rawPath.removingPercentEncoding ?? rawPath
 
         var relative = decoded
@@ -322,23 +255,6 @@ final class LocalServer {
     }
 
     // MARK: - 常量
-
-    /// /sw.js 自注销 stub：装上后立即注销自身并清掉 Workbox 预缓存，
-    /// 之后页面在壳内以「无 Service Worker」方式运行。
-    static let serviceWorkerStub = """
-    // Folia iOS shell: Service Worker is disabled inside the app shell.
-    // Version management is handled by the shell itself (bundled web root + OTA bundles).
-    self.addEventListener('install', function () { self.skipWaiting(); });
-    self.addEventListener('activate', function (event) {
-      event.waitUntil((async function () {
-        try {
-          var keys = await caches.keys();
-          await Promise.all(keys.map(function (k) { return caches.delete(k); }));
-        } catch (e) {}
-        try { await self.registration.unregister(); } catch (e) {}
-      })());
-    });
-    """
 
     static func mimeType(forExtension ext: String) -> String {
         switch ext {

@@ -17,9 +17,10 @@ import UniformTypeIdentifiers
 final class StageViewController: UIViewController {
 
     /// 跳网页舞台（用户选未迁样式 / 提示条回网页 / 挂载失败回退）：
-    /// 由呈现本舞台的墙 VC 注入——它负责关掉本舞台后走原
-    /// openStageFromWall/openStageFromHome 全套（存票+收墙+恢复）。
-    var onRequestWebStage: (() -> Void)?
+    /// 3.7 (51) 起不再由墙 VC 注入回调——回程票链已整链删除，
+    /// jumpToWebStage 改为本台自身叠加 present 网页宿主（见文件
+    /// 尾 WebStageHostViewController），关网页舞台 dismiss 即回
+    /// 本台。原 onRequestWebStage 注入点随之退役。
 
     private let engine = PlaybackEngine.shared
     private let queueManager = QueueManager.shared
@@ -959,13 +960,48 @@ final class StageViewController: UIViewController {
         webJumpFired = true
         Breadcrumbs.log("stage fallback to web: \(reason)")
         // 跳网页舞台 = 程序化正当转移（3.7 (46)）：目的地仍是
-        // 舞台，闸门放行并 settle route，不走守卫 veto；墙侧
-        // host.dismiss 由同一次放行凭据覆盖。
+        // 舞台，闸门放行并 settle route，不走守卫 veto。
         StageExitGate.shared.approveProgrammaticExit(stage: self, reason: reason)
-        if let onRequestWebStage {
-            onRequestWebStage()
+        // (51) 新链：网页舞台叠加 present 在本台之上（旧链是替
+        // 换式：关原生舞台+收整摞墙、靠回程票重建）。本台不退
+        // 场——播放/队列/所选样式状态原样保留；网页舞台关闭后
+        // 宿主 dismiss，呈现栈直接落回本台。
+        // 轻量返回上下文 = 打开网页舞台前本台在演的原生样式 id
+        // （activeStyleId）：宿主关闭时把 StageStyleStore 的选
+        // 择器状态对齐回它（选网页样式时写入的 web id 只服务
+        // 本次网页会话，关后不许与本台实际样式脱节）。
+        let returnStyleId = activeStyleId
+        let host = WebStageHostViewController()
+        host.modalPresentationStyle = .fullScreen
+        host.onClosed = { [weak self] in
+            guard let self else { return }
+            self.webJumpFired = false
+            if StageStyleStore.currentStyleId != returnStyleId {
+                StageStyleStore.currentStyleId = returnStyleId
+            }
+            Breadcrumbs.log("webstage return style=\(returnStyleId)")
+        }
+        let presentHost = { [weak self] in
+            guard let self else { return }
+            guard self.presentedViewController == nil else {
+                self.webJumpFired = false
+                Breadcrumbs.log("webstage present skipped reason=already-presenting")
+                return
+            }
+            self.present(host, animated: true) {
+                // 宿主在场后才请前端开页：openStage 意图投给已
+                // 入窗的 WebView（13.5 闭环口径不变）。
+                WebEffectBridge.shared.requestOpenStage()
+            }
+        }
+        // 装配失败回退（mountRenderer 在 viewDidLoad 内调本函
+        // 数）时本台尚在被呈现途中，同帧 present 必失败，延一
+        // 拍等本台落位；其余入口（选择器/提示条）本台已在窗内，
+        // 直接呈现。
+        if isBeingPresented || view.window == nil {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.45) { presentHost() }
         } else {
-            dismiss(animated: true)
+            presentHost()
         }
     }
 
@@ -1917,5 +1953,247 @@ extension StageViewController: PHPickerViewControllerDelegate {
             alert.addAction(UIAlertAction(title: "好", style: .default))
             self.present(alert, animated: true)
         }
+    }
+}
+
+// MARK: - 网页舞台宿主（3.7 (51) 新链）
+
+/// 未迁样式的网页舞台兜底宿主（3.7 (51)）：全屏承载桥的 WebView，
+/// 由原生舞台叠加 present——本包后唯一允许的网页通道（样式选择器
+/// 8 个未迁样式 sonnet/tempera/lumiere/hanabi/machi/nebbia/pendolo/
+/// diorama 选中仍走它）。
+///
+/// 新旧差异：旧链是替换式呈现——关原生舞台、收整摞原生墙、请前端
+/// 在根 WebView 里开页，关页后靠回程票（WallReturnTicketStore）重
+/// 建主页墙+曲目墙恢复上下文；新链是叠加式——原生舞台不退场，宿
+/// 主盖在其上，网页舞台关闭（前端 stageClosed 过桥）后宿主自
+/// dismiss，呈现栈直接落回原生舞台，播放/队列/样式状态全保留，
+/// 无票据、无重建。宿主另带一个原生「关闭」键作逃生口（网页无响
+/// 应/未落到播放页时用户仍能退回原生舞台）。
+///
+/// 桥开页提示条（13.5）与桥致命错误浮层原挂 MainViewController 作
+/// 根时承载，已随 (51) 换根摘除其安装点；这两件只在 WebView 在场
+/// 时有意义，改由本宿主在 WebView 之上承载，行为口径不变。
+final class WebStageHostViewController: UIViewController {
+
+    /// 宿主被 dismiss 后回调一次（原生舞台据此复位跳网页标志、
+    /// 对齐样式选择器状态到返回上下文）。
+    var onClosed: (() -> Void)?
+    private var didFireClosed = false
+    private var noticeView: UIView?
+    private var noticeLabel: UILabel?
+    private var noticeRetryButton: UIButton?
+    private var noticeRetryLeading: NSLayoutConstraint?
+    private var noticeRetryTrailing: NSLayoutConstraint?
+    private var noticeLabelTrailing: NSLayoutConstraint?
+    private var fatalErrorView: UIView?
+    private var cancellables = Set<AnyCancellable>()
+
+    override var prefersStatusBarHidden: Bool { true }
+    override var prefersHomeIndicatorAutoHidden: Bool { true }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        overrideUserInterfaceStyle = .dark
+        view.backgroundColor = .black
+
+        let webView = WebEffectBridge.shared.webView
+        webView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(webView)
+        NSLayoutConstraint.activate([
+            webView.topAnchor.constraint(equalTo: view.topAnchor),
+            webView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            webView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            webView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
+
+        // 逃生关闭键（与主页墙关闭键同款式）：网页舞台自有关闭
+        // 走 stageClosed 通道，本键只兜网页无响应的场面。
+        let close = UIButton(type: .system)
+        close.setTitle("关闭", for: .normal)
+        close.setTitleColor(.white, for: .normal)
+        close.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        close.layer.cornerRadius = 13
+        close.translatesAutoresizingMaskIntoConstraints = false
+        close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
+        view.addSubview(close)
+        NSLayoutConstraint.activate([
+            close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            close.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            close.widthAnchor.constraint(equalToConstant: 56),
+            close.heightAnchor.constraint(equalToConstant: 26)
+        ])
+
+        // 前端 stageClosed 过桥（桥转发 .foliaStageClosed）：网页
+        // 舞台已关，宿主自 dismiss 回原生舞台。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(webStageClosed),
+            name: .foliaStageClosed, object: nil)
+
+        // 开页提示条（13.5）：原 MainViewController 的安装点随换
+        // 根摘除，改挂本宿主。
+        WebEffectBridge.shared.onOpenStageNotice = { [weak self] notice in
+            self?.updateNotice(notice)
+        }
+        // 桥致命错误浮层：同上，改挂本宿主。
+        WebEffectBridge.shared.$lastFatalError
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] error in
+                if error != nil {
+                    self?.showFatalErrorOverlay()
+                } else {
+                    self?.hideFatalErrorOverlay()
+                }
+            }
+            .store(in: &cancellables)
+        Breadcrumbs.log("webstage host loaded")
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
+
+    override func viewDidDisappear(_ animated: Bool) {
+        super.viewDidDisappear(animated)
+        guard isBeingDismissed, !didFireClosed else { return }
+        didFireClosed = true
+        // 提示回调只在宿主在场时归本宿主，退场即摘除，防桥把
+        // 后续开页提示投给已退场的宿主。
+        WebEffectBridge.shared.onOpenStageNotice = nil
+        Breadcrumbs.log("webstage host closed")
+        onClosed?()
+    }
+
+    @objc private func webStageClosed() {
+        dismiss(animated: true)
+    }
+
+    @objc private func closeTapped() {
+        dismiss(animated: true)
+    }
+
+    // MARK: 开页提示条（13.5，与原 MainViewController 承载同口径）
+
+    private func updateNotice(_ notice: WebEffectBridge.OpenStageNotice?) {
+        guard let notice else {
+            noticeView?.removeFromSuperview()
+            noticeView = nil
+            return
+        }
+        if noticeView == nil {
+            let pill = UIView()
+            pill.backgroundColor = UIColor.black.withAlphaComponent(0.78)
+            pill.layer.cornerRadius = 16
+            pill.layer.borderWidth = 0.5
+            pill.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+            pill.translatesAutoresizingMaskIntoConstraints = false
+
+            let label = UILabel()
+            label.textColor = .white
+            label.font = .systemFont(ofSize: 13, weight: .medium)
+            label.translatesAutoresizingMaskIntoConstraints = false
+
+            let retry = UIButton(type: .system)
+            retry.setTitle("重试", for: .normal)
+            retry.titleLabel?.font = .systemFont(ofSize: 13, weight: .semibold)
+            retry.tintColor = .white
+            retry.translatesAutoresizingMaskIntoConstraints = false
+            retry.addTarget(self, action: #selector(retryOpenStage), for: .touchUpInside)
+
+            pill.addSubview(label)
+            pill.addSubview(retry)
+            view.addSubview(pill)
+            // opening 态没有重试按钮：按钮隐藏时改走 label 直达
+            // 右缘的约束（13.5 审查低-3，同原承载口径）。
+            let retryLeading = retry.leadingAnchor.constraint(equalTo: label.trailingAnchor, constant: 10)
+            let retryTrailing = retry.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -12)
+            let labelTrailing = label.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -14)
+            labelTrailing.isActive = false
+            NSLayoutConstraint.activate([
+                pill.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+                pill.topAnchor.constraint(equalTo: view.topAnchor, constant: 14),
+                pill.heightAnchor.constraint(equalToConstant: 32),
+                label.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 14),
+                label.centerYAnchor.constraint(equalTo: pill.centerYAnchor),
+                retryLeading,
+                retryTrailing,
+                retry.centerYAnchor.constraint(equalTo: pill.centerYAnchor)
+            ])
+            noticeRetryLeading = retryLeading
+            noticeRetryTrailing = retryTrailing
+            noticeLabelTrailing = labelTrailing
+            noticeView = pill
+            noticeLabel = label
+            noticeRetryButton = retry
+        }
+        switch notice {
+        case .opening:
+            noticeLabel?.text = "正在打开播放页…"
+            noticeRetryButton?.isHidden = true
+            noticeRetryLeading?.isActive = false
+            noticeRetryTrailing?.isActive = false
+            noticeLabelTrailing?.isActive = true
+        case .failed:
+            noticeLabel?.text = "播放页没打开"
+            noticeRetryButton?.isHidden = false
+            noticeLabelTrailing?.isActive = false
+            noticeRetryLeading?.isActive = true
+            noticeRetryTrailing?.isActive = true
+        }
+        if let pill = noticeView {
+            view.bringSubviewToFront(pill)
+        }
+    }
+
+    @objc private func retryOpenStage() {
+        WebEffectBridge.shared.retryOpenStage()
+    }
+
+    // MARK: 桥致命错误浮层（与原 MainViewController 承载同口径）
+
+    private func showFatalErrorOverlay() {
+        guard fatalErrorView == nil else { return }
+        let container = UIView()
+        container.backgroundColor = UIColor.black.withAlphaComponent(0.88)
+        container.translatesAutoresizingMaskIntoConstraints = false
+
+        let label = UILabel()
+        label.text = "页面进程反复中断，已停止自动恢复"
+        label.textColor = .white
+        label.font = .systemFont(ofSize: 15, weight: .medium)
+        label.textAlignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let retry = UIButton(type: .system)
+        retry.setTitle("重新加载", for: .normal)
+        retry.titleLabel?.font = .systemFont(ofSize: 15, weight: .semibold)
+        retry.addTarget(self, action: #selector(retryWebContent), for: .touchUpInside)
+        retry.translatesAutoresizingMaskIntoConstraints = false
+
+        container.addSubview(label)
+        container.addSubview(retry)
+        view.addSubview(container)
+        NSLayoutConstraint.activate([
+            container.topAnchor.constraint(equalTo: view.topAnchor),
+            container.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            container.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            container.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            label.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            label.centerYAnchor.constraint(equalTo: container.centerYAnchor, constant: -24),
+            retry.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            retry.topAnchor.constraint(equalTo: label.bottomAnchor, constant: 16)
+        ])
+        fatalErrorView = container
+    }
+
+    private func hideFatalErrorOverlay() {
+        fatalErrorView?.removeFromSuperview()
+        fatalErrorView = nil
+    }
+
+    @objc private func retryWebContent() {
+        WebEffectBridge.shared.retryAfterFatalError()
     }
 }

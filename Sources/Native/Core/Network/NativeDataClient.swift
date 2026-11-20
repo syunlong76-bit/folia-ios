@@ -5,10 +5,13 @@ import Foundation
 /// 逻辑；差别只有请求方：原生 URLSession（自带 Cookie 管理关闭）。
 ///
 /// 登录会话的载体（3.7 (5) 真机纠正，详见 WebSession.swift）：不是
-/// 浏览器 Cookie，而是 Web 存在 localStorage 的整串会话，以查询
-/// 参数 `cookie=` 附在请求上——与 netease.ts 的 fetchWithCreds 完全
-/// 同构。CookieSync 的 Cookie 头注入保留（同源请求与 Web 行为对齐），
-/// 但它不是登录态的载体。
+/// 浏览器 Cookie，而是整串会话，以查询参数 `cookie=` 附在请求
+/// 上——与 netease.ts 的 fetchWithCreds 完全同构。CookieSync 的
+/// Cookie 头注入保留（同源请求与 Web 行为对齐），但它不是登录
+/// 态的载体。
+/// (51) A 组：会话存储已迁 Keychain（NativeSessionStore），
+/// WebView localStorage 只剩一次性迁移源与异常兜底，见
+/// SessionMigrator / webCookie() 的数据源优先级。
 ///
 /// 只做网易云（一期口径，与全项目「只验网易云」一致）。
 final class NativeDataClient {
@@ -28,8 +31,17 @@ final class NativeDataClient {
 
     private let session: URLSession
     /// Web 会话串缓存（凭据，只存内存）。301 时作废，下次请求重读。
+    /// (51) 起仅作迁移未完成窗口期的 webview 源缓存；native 源
+    /// 的缓存由 NativeSessionStore 自带内存层承担。
     private let sessionLock = NSLock()
     private var cachedWebCookie: String?
+    /// 当前会话数据源（(51) A 组）：native = Keychain 原生存
+    /// 储，webview = 旧 WebView 现读（迁移未完成/异常兜底）。
+    enum SessionSource: String {
+        case native
+        case webview
+    }
+    private var notedSource: SessionSource?
     /// /song/detail 单批 id 数：与 Web 侧 NETEASE_SONG_DETAIL_BATCH
     /// 对齐的已验证安全值（50）；原生侧实测调整时改这里并记规格。
     static let songDetailBatch = 50
@@ -50,28 +62,75 @@ final class NativeDataClient {
         return URL(string: "http://127.0.0.1:\(port)")
     }
 
-    // MARK: - Web 会话（登录态载体）
+    // MARK: - 会话（登录态载体，(51) 数据源改造）
 
-    /// 从 WebView 重读会话串并刷新缓存（进原生表面前调用，拿最新
-    /// 登录态：用户可能刚在本会话里扫码登录）。
+    /// 数据源面包屑：首次确定与每次切换各一条，不逐请求刷屏。
+    func noteSessionSource(_ source: SessionSource) {
+        sessionLock.lock()
+        let changed = notedSource != source
+        notedSource = source
+        sessionLock.unlock()
+        if changed {
+            Breadcrumbs.log("session.source=\(source.rawValue)")
+        }
+    }
+
+    /// 刷新会话（进原生表面前调用）。native 源以 Keychain 为
+    /// 准、无需刷新；仅迁移未完成（pending 且原生存储为空）时
+    /// 走旧法重读 WebView 并顺带触发迁移。
     func refreshWebSession() async {
+        if NativeSessionStore.shared.load() != nil {
+            noteSessionSource(.native)
+            return
+        }
+        if SessionMigrator.state == .pending {
+            SessionMigrator.triggerIfNeeded()
+        }
         let value = await WebSession.readNeteaseCookie()
         sessionLock.lock()
         cachedWebCookie = value
         sessionLock.unlock()
+        if value != nil { noteSessionSource(.webview) }
     }
 
-    /// 当前会话串：缓存有就用，没有就现读一次 WebView。
+    /// 当前会话串。数据源优先级（(51) A 组，DS 风险一终案）：
+    /// 1. NativeSessionStore（Keychain）——权威源；
+    /// 2. store 为空且迁移曾成功（state=done）：异常兜底，一次
+    ///    性回退 WebView 读取（session.fallback 面包屑），读到
+    ///    则修复原生存储后使用，不直接判登出；
+    /// 3. store 为空且迁移未完成：触发迁移（异步不阻塞），本
+    ///    次先用旧 WebView 读法（缓存/现读）。
     /// 3.7 (30) 起取流链（EdgeOneAPIClient.fetchSongStreamURL）也复用
-    /// 本方法附 `cookie` 参数——同一缓存、同一失效路径，不另造一套。
+    /// 本方法附 `cookie` 参数——同一数据源、同一失效路径。
     func webCookie() async -> String? {
+        if let stored = NativeSessionStore.shared.load() {
+            noteSessionSource(.native)
+            return stored
+        }
+        if SessionMigrator.state == .done {
+            // 迁移曾成功但原生存储异常/为空：一次性回退读取。
+            Breadcrumbs.log("session.fallback reason=native-empty")
+            if let value = await WebSession.readNeteaseCookie(),
+               NativeSessionStore.isValidNeteaseCookie(value) {
+                NativeSessionStore.shared.save(value)
+                Breadcrumbs.log("session.migrate.ok len=\(value.count) hash=\(NativeSessionStore.hash8(value)) via=fallback")
+                noteSessionSource(.native)
+                return value
+            }
+            return nil
+        }
+        SessionMigrator.triggerIfNeeded()
         sessionLock.lock()
         let cached = cachedWebCookie
         sessionLock.unlock()
-        if let cached { return cached }
+        if let cached {
+            noteSessionSource(.webview)
+            return cached
+        }
         await refreshWebSession()
         sessionLock.lock()
         defer { sessionLock.unlock() }
+        if cachedWebCookie != nil { noteSessionSource(.webview) }
         return cachedWebCookie
     }
 
@@ -81,17 +140,41 @@ final class NativeDataClient {
         sessionLock.unlock()
     }
 
+    /// 原生登录成功后收编会话：存 Keychain、标迁移 done、清
+    /// webview 源缓存，后续请求全走 native 源。
+    func adoptNativeSession(_ cookie: String) {
+        NativeSessionStore.shared.save(cookie)
+        SessionMigrator.state = .done
+        invalidateWebSession()
+        noteSessionSource(.native)
+    }
+
+    /// 清会话（退出登录/会话失效）：原生存储与 Web 侧两键同步
+    /// 清，防兜底回读把已清会话复活。
+    func clearNativeSession() {
+        NativeSessionStore.shared.clear()
+        invalidateWebSession()
+        Task { await WebSession.clearNeteaseCookie() }
+    }
+
     // MARK: - 基础请求
 
     /// GET 一个 /api/netease 路径，返回解析后的 JSON 字典。
-    /// 业务码判定：code==200 或无 code 视为成功；301 判未登录。
+    /// 业务码判定：code==200 或无 code 视为成功；301 走会话
+    /// 失效路径（见 getJSONImpl 的 DS 第 5 点终案）。
     func getJSON(_ path: String, query: [String: String] = [:]) async throws -> [String: Any] {
+        try await getJSONImpl(path, query: query, retriedAfter301: false)
+    }
+
+    private func getJSONImpl(_ path: String, query: [String: String],
+                             retriedAfter301: Bool) async throws -> [String: Any] {
         guard let base = baseURL else { throw DataError.serverNotReady }
         var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)
         var items = query.map { URLQueryItem(name: $0.key, value: $0.value) }
         // 登录会话按 Web 同构方式走 `cookie` 查询参数（见文件头）。
-        if let cookie = await webCookie() {
-            items.append(URLQueryItem(name: "cookie", value: cookie))
+        let usedCookie = await webCookie()
+        if let usedCookie {
+            items.append(URLQueryItem(name: "cookie", value: usedCookie))
         }
         if !items.isEmpty {
             components?.queryItems = items
@@ -119,8 +202,23 @@ final class NativeDataClient {
         if let codeValue = dict["code"] {
             let code = NativeJSON.int(codeValue)
             if code == 301 {
-                // 会话可能已换（重新登录/退出）：作废缓存，下次重读。
+                // (51) DS 第 5 点终案：作废缓存后按当前数据源重
+                // 读；重读到不同 cookie 才重试一次（会话已轮换）；
+                // 同一 cookie 仍 301 = 会话失效——清原生会话并
+                // 判未登录（UI 引导原生扫码登录）。
                 invalidateWebSession()
+                if !retriedAfter301 {
+                    let reread = await webCookie()
+                    if let reread,
+                       NativeSessionStore.hash8(reread) != usedCookie.map(NativeSessionStore.hash8) {
+                        return try await getJSONImpl(
+                            path, query: query, retriedAfter301: true)
+                    }
+                }
+                if usedCookie != nil || NativeSessionStore.shared.load() != nil {
+                    Breadcrumbs.log("session.invalidate reason=301")
+                    clearNativeSession()
+                }
                 throw DataError.notLoggedIn
             }
             if code != 200 { throw DataError.api(code: code) }

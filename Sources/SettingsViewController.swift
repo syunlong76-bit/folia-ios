@@ -1,6 +1,7 @@
 import UIKit
 
-/// 原生设置页：壳/前端版本信息、自动更新开关、手动检查、应用新版本提示。
+/// 原生设置页：壳版本/本地服务信息、网易云账号（(51) 原生扫码
+/// 登录/退出）、播放台与歌词特效开关、桥日志入口。
 ///
 /// v2 视觉重做（2026-11-14 真机反馈）：原白底大字 + 系统绿开关 + 英文 Done 的
 /// 原生表单风与 Folia 深色流光界面完全割裂。本版按 Folia 设计语言重做呈现：
@@ -8,7 +9,8 @@ import UIKit
 /// - 信息项收进深灰圆角分组卡（灰色小标签 + 白色值），密度对齐 Folia 设置页；
 /// - 开关/按钮用柔和紫强调色与胶囊形，去掉系统绿与系统默认排版；
 /// - 打开/关闭为淡入 + 上滑的弹簧缓动，替代系统生硬 sheet 弹跳。
-/// 功能与数据绑定与旧版一致：仍读 WebRootManager / LocalServer / UpdateManager。
+/// (51) A 组：自动更新/前端版本行随 UpdateManager 退役一并删除
+/// （OTA 空转链，见去网页版审计 §5）；账号段走 NativeSessionStore。
 final class SettingsViewController: UIViewController {
 
     /// 双壳统一设计规格（安卓 SettingsActivity 同值，改一处须同步另一处）
@@ -24,11 +26,10 @@ final class SettingsViewController: UIViewController {
     }
 
     private let shellVersionLabel = UILabel()
-    private let activeVersionLabel = UILabel()
-    private let pendingVersionLabel = UILabel()
     private let portLabel = UILabel()
-    private let lastResultLabel = UILabel()
-    private let autoSwitch = UISwitch()
+    // 网易云账号段（(51) A 组）：状态行 + 登录/退出按钮。
+    private let accountStatusLabel = UILabel()
+    private let accountActionButton = UIButton(type: .system)
     private let themeSwitch = UISwitch()
     // 歌词特效增强（3.7 (49)）：逐词强调 / 粒子换行两开关。
     private let emphasisSwitch = UISwitch()
@@ -37,15 +38,10 @@ final class SettingsViewController: UIViewController {
     private let slotPrevSwitch = UISwitch()
     private let slotNextSwitch = UISwitch()
     private let slotQueueSwitch = UISwitch()
-    private let checkButton = UIButton(type: .system)
-    private let applyButton = UIButton(type: .system)
-    private let spinner = UIActivityIndicatorView(style: .medium)
 
-    // 贴纸层（3.7 (24)，纯新增）：检查更新狗贴纸 + 贴纸伙伴
-    // 分组（门面猫/狗 + 迷你台小宠物开关）。
+    // 贴纸层（3.7 (24)，纯新增）：贴纸伙伴分组（门面猫/狗 +
+    // 迷你台小宠物开关）。
     private let companionSwitch = UISwitch()
-    private var checkDogTile: UIView?
-    private var checkDogSticker: StickerView?
     private var settingsCatSticker: StickerView?
     private var settingsCatShowingAlt = false
 
@@ -179,14 +175,12 @@ final class SettingsViewController: UIViewController {
         header.addArrangedSubview(doneButton)
         cardStack.addArrangedSubview(header)
 
-        // 信息分组卡：5 项版本/状态信息，行间发丝线
+        // 信息分组卡：壳版本/本地服务端口，行间发丝线
+        // （(51)：前端版本行随 UpdateManager 退役删除。）
         let infoGroup = makeGroupCard()
         let infoRows: [(String, UILabel)] = [
             ("壳版本", shellVersionLabel),
-            ("当前前端版本", activeVersionLabel),
-            ("待生效版本", pendingVersionLabel),
-            ("本地服务端口", portLabel),
-            ("上次检查结果", lastResultLabel)
+            ("本地服务端口", portLabel)
         ]
         for (index, pair) in infoRows.enumerated() {
             if index > 0 { infoGroup.addArrangedSubview(makeHairline()) }
@@ -194,42 +188,31 @@ final class SettingsViewController: UIViewController {
         }
         cardStack.addArrangedSubview(infoGroup)
 
-        // 自动更新分组卡：开关行 + 说明
-        let autoGroup = makeGroupCard()
-        let autoRow = UIStackView()
-        autoRow.axis = .horizontal
-        autoRow.alignment = .center
-        autoRow.isLayoutMarginsRelativeArrangement = true
-        autoRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-        let autoTitle = UILabel()
-        autoTitle.text = "自动更新"
-        autoTitle.font = .systemFont(ofSize: 15)
-        autoTitle.textColor = FoliaUI.primary
-        autoSwitch.onTintColor = FoliaUI.accent
-        // 细长胶囊感：整体略缩小，去掉系统开关的粗笨比例（绑定与事件不变）
-        autoSwitch.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-        autoSwitch.addTarget(self, action: #selector(autoSwitchChanged), for: .valueChanged)
-        autoRow.addArrangedSubview(autoTitle)
-        autoRow.addArrangedSubview(UIView())
-        autoRow.addArrangedSubview(autoSwitch)
-        autoGroup.addArrangedSubview(autoRow)
-        autoGroup.addArrangedSubview(makeHairline())
-        let autoHint = UILabel()
-        autoHint.text = "开启后，每次冷启动在后台检查一次前端更新；下载完成的新版本在下次启动时生效。"
-        autoHint.font = .systemFont(ofSize: 12)
-        autoHint.textColor = FoliaUI.secondary
-        autoHint.numberOfLines = 0
-        let hintWrap = UIView()
-        hintWrap.addSubview(autoHint)
-        autoHint.translatesAutoresizingMaskIntoConstraints = false
+        // 网易云账号分组卡（(51) A 组）：状态行 + 扫码登录/
+        // 退出登录按钮。登录态以 NativeSessionStore 为准。
+        let accountGroup = makeGroupCard()
+        accountGroup.addArrangedSubview(
+            makeInfoRow(title: "网易云账号", valueLabel: accountStatusLabel))
+        accountGroup.addArrangedSubview(makeHairline())
+        let accountButtonWrap = UIView()
+        accountActionButton.setTitle("扫码登录", for: .normal)
+        accountActionButton.setTitleColor(FoliaUI.accent, for: .normal)
+        accountActionButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        accountActionButton.backgroundColor = FoliaUI.buttonFill
+        accountActionButton.layer.cornerRadius = 12
+        accountActionButton.translatesAutoresizingMaskIntoConstraints = false
+        accountActionButton.addTarget(
+            self, action: #selector(accountActionTapped), for: .touchUpInside)
+        accountButtonWrap.addSubview(accountActionButton)
         NSLayoutConstraint.activate([
-            autoHint.topAnchor.constraint(equalTo: hintWrap.topAnchor, constant: 10),
-            autoHint.bottomAnchor.constraint(equalTo: hintWrap.bottomAnchor, constant: -12),
-            autoHint.leadingAnchor.constraint(equalTo: hintWrap.leadingAnchor, constant: 14),
-            autoHint.trailingAnchor.constraint(equalTo: hintWrap.trailingAnchor, constant: -14)
+            accountActionButton.topAnchor.constraint(equalTo: accountButtonWrap.topAnchor, constant: 10),
+            accountActionButton.bottomAnchor.constraint(equalTo: accountButtonWrap.bottomAnchor, constant: -12),
+            accountActionButton.leadingAnchor.constraint(equalTo: accountButtonWrap.leadingAnchor, constant: 14),
+            accountActionButton.trailingAnchor.constraint(equalTo: accountButtonWrap.trailingAnchor, constant: -14),
+            accountActionButton.heightAnchor.constraint(equalToConstant: 42)
         ])
-        autoGroup.addArrangedSubview(hintWrap)
-        cardStack.addArrangedSubview(autoGroup)
+        accountGroup.addArrangedSubview(accountButtonWrap)
+        cardStack.addArrangedSubview(accountGroup)
 
         // 播放台特效分组卡（3.7 (13.5)）：总开关 + 说明。关掉后
         // 两台一律素面、长按切换停用；选中的主题保留。
@@ -445,60 +428,10 @@ final class SettingsViewController: UIViewController {
         stickerGroup.addArrangedSubview(companionHintWrap)
         cardStack.addArrangedSubview(stickerGroup)
 
-        // 检查更新：整宽胶囊按钮，spinner 叠在按钮右侧
-        let checkWrap = UIView()
-        checkWrap.translatesAutoresizingMaskIntoConstraints = false
-        checkButton.setTitle("检查更新", for: .normal)
-        checkButton.setTitleColor(FoliaUI.primary, for: .normal)
-        checkButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
-        checkButton.backgroundColor = FoliaUI.buttonFill
-        checkButton.layer.cornerRadius = 12
-        checkButton.translatesAutoresizingMaskIntoConstraints = false
-        checkButton.addTarget(self, action: #selector(checkTapped), for: .touchUpInside)
-        spinner.color = .white
-        spinner.hidesWhenStopped = true
-        spinner.translatesAutoresizingMaskIntoConstraints = false
-        checkWrap.addSubview(checkButton)
-        checkWrap.addSubview(spinner)
-        NSLayoutConstraint.activate([
-            checkWrap.heightAnchor.constraint(equalToConstant: 46),
-            checkButton.topAnchor.constraint(equalTo: checkWrap.topAnchor),
-            checkButton.bottomAnchor.constraint(equalTo: checkWrap.bottomAnchor),
-            checkButton.leadingAnchor.constraint(equalTo: checkWrap.leadingAnchor),
-            checkButton.trailingAnchor.constraint(equalTo: checkWrap.trailingAnchor),
-            spinner.centerYAnchor.constraint(equalTo: checkWrap.centerYAnchor),
-            spinner.trailingAnchor.constraint(equalTo: checkWrap.trailingAnchor, constant: -16)
-        ])
-        // 贴纸层（3.7 (24)；(25) 去背景）：检查更新进行中，
-        // 按钮右侧浮狗贴纸（dog-20 探头张望，抠图透明底直
-        // 贴）。容器不拦截触摸，按钮热区不受影响；检查结束
-        // 随 spinner 一同隐藏。
-        let checkTile = UIView()
-        checkTile.backgroundColor = .clear
-        checkTile.isUserInteractionEnabled = false
-        checkTile.isHidden = true
-        checkTile.translatesAutoresizingMaskIntoConstraints = false
-        let checkDog = StickerView()
-        checkDog.crumbScene = "settings-check"
-        checkDog.translatesAutoresizingMaskIntoConstraints = false
-        checkTile.addSubview(checkDog)
-        checkWrap.addSubview(checkTile)
-        checkDogTile = checkTile
-        checkDogSticker = checkDog
-        NSLayoutConstraint.activate([
-            checkTile.widthAnchor.constraint(equalToConstant: 56),
-            checkTile.heightAnchor.constraint(equalToConstant: 56),
-            checkTile.centerYAnchor.constraint(equalTo: checkWrap.centerYAnchor),
-            checkTile.trailingAnchor.constraint(equalTo: checkWrap.trailingAnchor, constant: -52),
-            checkDog.leadingAnchor.constraint(equalTo: checkTile.leadingAnchor, constant: 4),
-            checkDog.trailingAnchor.constraint(equalTo: checkTile.trailingAnchor, constant: -4),
-            checkDog.topAnchor.constraint(equalTo: checkTile.topAnchor, constant: 4),
-            checkDog.bottomAnchor.constraint(equalTo: checkTile.bottomAnchor, constant: -4)
-        ])
-        cardStack.addArrangedSubview(checkWrap)
-
         // 桥日志（3.6 (3) 取证入口）：点歌/切歌/锁屏出问题时在这里看留痕，
-        // 可整段复制发回诊断。样式与检查更新按钮同款。
+        // 可整段复制发回诊断。
+        // （(51)：原「检查更新」按钮与「重启应用新版本」按钮随
+        // UpdateManager 退役一并删除。）
         let logButton = UIButton(type: .system)
         logButton.setTitle("桥日志", for: .normal)
         logButton.setTitleColor(FoliaUI.primary, for: .normal)
@@ -508,16 +441,6 @@ final class SettingsViewController: UIViewController {
         logButton.addTarget(self, action: #selector(logTapped), for: .touchUpInside)
         logButton.heightAnchor.constraint(equalToConstant: 46).isActive = true
         cardStack.addArrangedSubview(logButton)
-
-        // 应用新版本（仅 pending 存在时可见）：同款胶囊，危险色文字
-        applyButton.setTitle("重启应用新版本", for: .normal)
-        applyButton.setTitleColor(FoliaUI.danger, for: .normal)
-        applyButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
-        applyButton.backgroundColor = FoliaUI.group
-        applyButton.layer.cornerRadius = 12
-        applyButton.addTarget(self, action: #selector(applyTapped), for: .touchUpInside)
-        applyButton.heightAnchor.constraint(equalToConstant: 46).isActive = true
-        cardStack.addArrangedSubview(applyButton)
     }
 
     /// 分组卡容器：深灰底、16 圆角，内部纵向堆行
@@ -572,13 +495,31 @@ final class SettingsViewController: UIViewController {
         let short = info?["CFBundleShortVersionString"] as? String ?? "?"
         let build = info?["CFBundleVersion"] as? String ?? "?"
         shellVersionLabel.text = "\(short) (\(build))"
-        activeVersionLabel.text = "v\(WebRootManager.shared.activeWebVersion)"
-        let pending = WebRootManager.shared.pendingWebVersion
-        pendingVersionLabel.text = pending > 0 ? "v\(pending)（重启应用后生效）" : "无"
         portLabel.text = LocalServer.shared.isRunning ? "127.0.0.1:\(LocalServer.shared.port)" : "未启动"
-        lastResultLabel.text = UpdateManager.shared.lastCheckResult
-        autoSwitch.isOn = UpdateManager.shared.autoUpdateEnabled
-        applyButton.isHidden = pending <= 0
+        refreshAccountSection()
+    }
+
+    /// 网易云账号段刷新：以 NativeSessionStore 是否有会话为准；
+    /// 有会话时异步补昵称（/login/status），失败保留「已登录」。
+    private func refreshAccountSection() {
+        if NativeSessionStore.shared.load() != nil {
+            accountStatusLabel.text = "已登录"
+            accountActionButton.setTitle("退出登录", for: .normal)
+            accountActionButton.setTitleColor(FoliaUI.danger, for: .normal)
+            Task { [weak self] in
+                guard let status = try? await NativeDataClient.shared.fetchLoginStatus(),
+                      status.loggedIn, let nickname = status.nickname, !nickname.isEmpty else {
+                    return
+                }
+                await MainActor.run {
+                    self?.accountStatusLabel.text = "已登录 · \(nickname)"
+                }
+            }
+        } else {
+            accountStatusLabel.text = "未登录"
+            accountActionButton.setTitle("扫码登录", for: .normal)
+            accountActionButton.setTitleColor(FoliaUI.accent, for: .normal)
+        }
     }
 
     // MARK: - 动作
@@ -595,8 +536,31 @@ final class SettingsViewController: UIViewController {
         })
     }
 
-    @objc private func autoSwitchChanged() {
-        UpdateManager.shared.autoUpdateEnabled = autoSwitch.isOn
+    /// 账号按钮：未登录 → 原生扫码登录页；已登录 → 确认后退出
+    /// （清 NativeSessionStore + NativeDataClient 缓存 + Web 侧
+    /// 两键，迁移旗标回 pending 以便日后重新登录再迁）。
+    @objc private func accountActionTapped() {
+        if NativeSessionStore.shared.load() != nil {
+            let alert = UIAlertController(
+                title: "退出登录",
+                message: "退出后将清除本机保存的网易云登录状态。",
+                preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+            alert.addAction(UIAlertAction(title: "退出", style: .destructive) { [weak self] _ in
+                Breadcrumbs.log("session.logout src=settings")
+                NativeDataClient.shared.clearNativeSession()
+                SessionMigrator.state = .pending
+                self?.refreshAccountSection()
+            })
+            present(alert, animated: true)
+        } else {
+            let login = LoginViewController()
+            login.modalPresentationStyle = .overFullScreen
+            login.onLoginSuccess = { [weak self] in
+                self?.refreshAccountSection()
+            }
+            present(login, animated: true)
+        }
     }
 
     @objc private func themeSwitchChanged() {
@@ -627,22 +591,6 @@ final class SettingsViewController: UIViewController {
         NotificationCenter.default.post(name: .foliaMiniBarSlotsChanged, object: nil)
     }
 
-    @objc private func checkTapped() {
-        checkButton.isEnabled = false
-        spinner.startAnimating()
-        // 贴纸层（3.7 (24)）：检查中亮狗贴纸。
-        checkDogTile?.isHidden = false
-        checkDogSticker?.setSticker("dog-20", mode: .loop)
-        UpdateManager.shared.checkNow { [weak self] _ in
-            guard let self = self else { return }
-            self.spinner.stopAnimating()
-            // 贴纸层（3.7 (24)）：检查结束收狗贴纸。
-            self.checkDogTile?.isHidden = true
-            self.checkButton.isEnabled = true
-            self.refresh()
-        }
-    }
-
     // 贴纸层（3.7 (24) 立、(27) 改管迷你台宠物、(29) 开关改绑
     // 宠物专用新键 miniPetsEnabled，不再读写旧 companionEnabled）。
     @objc private func companionSwitchChanged() {
@@ -663,16 +611,6 @@ final class SettingsViewController: UIViewController {
         let viewer = BridgeLogViewController()
         viewer.modalPresentationStyle = .overFullScreen
         present(viewer, animated: true)
-    }
-
-    @objc private func applyTapped() {
-        // 不强杀进程：按 iOS 规范引导用户手动关闭重开，冷启动时 WebRootManager 自动切换版本
-        let alert = UIAlertController(
-            title: "新版本已就绪",
-            message: "请将 Folia 从多任务界面上滑关闭，再重新打开，新版本即会生效。",
-            preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "知道了", style: .default))
-        present(alert, animated: true)
     }
 }
 

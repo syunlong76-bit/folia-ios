@@ -1,31 +1,11 @@
 import Combine
 import UIKit
 
-/// 回程票（3.7 (13) #6）：进播放页前存下曲目墙上下文，前端
-/// stageClosed 到达后 MainViewController 按票重呈主页墙并直达
-/// 本歌单曲目墙，恢复相机与展开项。
-struct WallReturnTicket {
-    /// 来源（13.4，DS36：用 kind 枚举，不用 playlistId 哨兵空值）：
-    /// .playlist 关页后重呈主页墙并直达原曲目墙；.home 只重呈主页墙。
-    enum Kind { case playlist, home }
-    var kind: Kind = .playlist
-    let playlistId: String
-    let title: String?
-    let coverUrl: String?
-    let worldOrigin: CGPoint
-    let contentOffset: CGPoint
-    let expandedInstanceId: String?
-    let expandedQueueIndex: Int?
-}
-
-enum WallReturnTicketStore {
-    static var pending: WallReturnTicket?
-}
-
-extension Notification.Name {
-    /// 前端 stageClosed 已过桥（WebEffectBridge 转发）。
-    static let foliaStageClosed = Notification.Name("FoliaStageClosed")
-}
+/// 回程票链已整链退役（3.7 (51)）：WallReturnTicket /
+/// WallReturnTicketStore 定义删除。关原生舞台 = 纯 dismiss 回墙；
+/// 网页舞台改为叠加 present 在原生舞台之上（WebStageHostViewController），
+/// 关闭后 dismiss 回原生舞台，不再靠票据重建墙。前端 stageClosed 的
+/// 通知名 foliaStageClosed 随桥收尾迁至 WebEffectBridge.swift 定义。
 
 /// 歌词行（统一行模型）：time = 翻行时刻（秒），来源由
 /// LyricTiming.flipSource 决定（3.7 (20) 起默认 LRC：onset
@@ -160,8 +140,6 @@ final class WallPrototypeViewController: UIViewController,
     private var stickerBufferWaiting = false
     // 跳过闪现（3.7 (28)）：令牌防旧的待发隐藏误伤新一轮显示。
     private var stickerSkipFlashToken = 0
-    /// 回程恢复（3.7 (13) #6）：重呈时由主页墙注入，种子落地后应用。
-    var pendingReturnTicket: WallReturnTicket?
     /// 底部播放台（3.7 (13) #7；13.1 改版）：网页风迷你播放器，
     /// 点封面定位、点台身进播放页、进度可拖（Miller 13.1 定版）。
     private var miniBar: UIView?
@@ -1632,11 +1610,7 @@ final class WallPrototypeViewController: UIViewController,
                     self.statusLabel.isHidden = false
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
-                    if self.pendingReturnTicket != nil {
-                        self.applyReturnTicket()
-                    } else {
-                        self.centerCameraIfNeeded()
-                    }
+                    self.centerCameraIfNeeded()
                     // 丝滑切入收口：唤醒等数据的 present、氛围底退场、
                     // 首屏波次从此刻起算。
                     self.loadAttempts = 0
@@ -1741,41 +1715,6 @@ final class WallPrototypeViewController: UIViewController,
         let cell = wallLayout.cellViewSize
         collectionView.contentOffset = CGPoint(x: cell.width, y: cell.height)
         wallLayout.invalidateLayout()
-    }
-
-    /// 回程票应用（3.7 (13) #6）：种子落地后恢复相机（worldOrigin
-    /// 与 contentOffset 成对）与展开项。展开实例 id 按确定性生成
-    /// 应原样命中；不在新实例集时退到同序号离视口中心最近的一份。
-    private func applyReturnTicket() {
-        guard let ticket = pendingReturnTicket else { return }
-        pendingReturnTicket = nil
-        didCenterCamera = true
-        wallLayout.cameraScale = Self.cameraScale(forWidth: collectionView.bounds.width)
-        wallLayout.worldOrigin = ticket.worldOrigin
-        wallLayout.expandedInstanceId = nil
-        wallLayout.refreshInstances()
-        collectionView.contentOffset = ticket.contentOffset
-        if let expandedId = ticket.expandedInstanceId,
-           wallLayout.instances.contains(where: { $0.instanceId == expandedId }) {
-            wallLayout.expandedInstanceId = expandedId
-        } else if let queueIndex = ticket.expandedQueueIndex {
-            let centerWorld = CGPoint(
-                x: Double(ticket.worldOrigin.x) + Double(collectionView.bounds.width) / wallLayout.cameraScale / 2,
-                y: Double(ticket.worldOrigin.y) + Double(collectionView.bounds.height) / wallLayout.cameraScale / 2)
-            let nearest = wallLayout.instances
-                .filter { $0.queueIndex == queueIndex }
-                .min { a, b in
-                    let da = hypot(a.rect.left + a.rect.width / 2 - Double(centerWorld.x),
-                                   a.rect.top + a.rect.height / 2 - Double(centerWorld.y))
-                    let db = hypot(b.rect.left + b.rect.width / 2 - Double(centerWorld.x),
-                                   b.rect.top + b.rect.height / 2 - Double(centerWorld.y))
-                    return da < db
-                }
-            wallLayout.expandedInstanceId = nearest?.instanceId
-        }
-        wallLayout.refreshInstances()
-        collectionView.reloadData()
-        Breadcrumbs.log("return ticket applied playlist=\(ticket.playlistId)")
     }
 
     override func viewDidLayoutSubviews() {
@@ -1904,28 +1843,16 @@ final class WallPrototypeViewController: UIViewController,
         cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
     }
 
-    /// 进播放页（3.7 (13) #5/#6/#8b）：双击卡片触发。先存回程票，
-    /// 再请前端开播放页（主态直达），最后收起整摞原生墙——转场
-    /// 只剩墙淡出，不再叠封面飞行动画（(12) 的伪 morph 与播放页
-    /// 自带动画打架，Miller 点名不流畅，已删）。
     /// 原生舞台入口（3.7 (14)，M2'）：迷你台台身与双击卡片改走
-    /// 原生舞台。墙不退场、不落回程票——舞台全屏盖在墙上、关闭
-    /// 即回墙；跳网页舞台（未迁样式/回退）时先关原生舞台，再走
-    /// openStageFromWall 原套（存票+收墙+凭票恢复）。
+    /// 原生舞台。墙不退场——舞台全屏盖在墙上、关闭即纯 dismiss
+    /// 回墙。跳网页舞台（未迁样式/回退）由舞台自身叠加 present
+    /// 网页宿主（3.7 (51) 新链，见 StageViewController 的
+    /// jumpToWebStage）；原 openStageFromWall 回程票套（存票+收
+    /// 墙+凭票恢复）已随回程票链整链删除（3.7 (51)）。
     private func openNativeStageFromWall() {
         Breadcrumbs.log("stage open (native) from playlist wall")
         let stage = StageViewController()
         stage.modalPresentationStyle = .fullScreen
-        stage.onRequestWebStage = { [weak self] in
-            guard let self else { return }
-            if self.presentedViewController != nil {
-                self.dismiss(animated: false) { [weak self] in
-                    self?.openStageFromWall()
-                }
-            } else {
-                self.openStageFromWall()
-            }
-        }
         present(stage, animated: true)
     }
 
@@ -1934,30 +1861,6 @@ final class WallPrototypeViewController: UIViewController,
     /// 不另造入口。
     func openNativeStageForBackgroundReturn() {
         openNativeStageFromWall()
-    }
-
-    private func openStageFromWall() {
-        let expanded = wallLayout.instances.first {
-            $0.instanceId == wallLayout.expandedInstanceId
-        }
-        WallReturnTicketStore.pending = WallReturnTicket(
-            playlistId: playlistId,
-            title: playlistTitle,
-            coverUrl: playlistCoverUrl,
-            worldOrigin: wallLayout.worldOrigin,
-            contentOffset: collectionView.contentOffset,
-            expandedInstanceId: wallLayout.expandedInstanceId,
-            expandedQueueIndex: expanded?.queueIndex)
-        Breadcrumbs.log("stage open, ticket saved playlist=\(playlistId)")
-        // 13.5 闭环：收墙改由桥在 landed 或 1.2s 截止（先到者）
-        // 时回调；等待期锁交互防重复点（回调必到，不会锁死）。
-        view.isUserInteractionEnabled = false
-        WebEffectBridge.shared.requestOpenStage { [weak self] in
-            guard let self else { return }
-            var host: UIViewController = self
-            while let presenter = host.presentingViewController { host = presenter }
-            if host !== self { host.dismiss(animated: true) }
-        }
     }
 
     /// 双击卡片进播放页（3.7 (13) #8b）：双击的不是当前曲时先切

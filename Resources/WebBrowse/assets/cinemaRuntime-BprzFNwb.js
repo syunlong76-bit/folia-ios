@@ -1,1 +1,0 @@
-var e=()=>{throw Error(`scene runtime is not available in the browse surface`)};export{e as createCinemaRuntime};

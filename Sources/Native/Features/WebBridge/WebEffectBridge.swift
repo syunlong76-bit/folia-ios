@@ -4,6 +4,14 @@ import SwiftUI
 import UIKit
 import WebKit
 
+extension Notification.Name {
+    /// 前端 stageClosed 已过桥（WebEffectBridge 转发）：3.7 (51)
+    /// 前定义在 WallPrototypeViewController.swift 随回程票类型同
+    /// 文件存放，回程票链删除后迁至此处（发方即本桥）；唯一消费
+    /// 者为 WebStageHostViewController（自 dismiss 回原生舞台）。
+    static let foliaStageClosed = Notification.Name("FoliaStageClosed")
+}
+
 // MARK: - 桥事件枚举（native-arch.md §9：枚举化，前后端统一，不许两套并行）
 //
 // 事件语义：
@@ -567,10 +575,15 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         weakHandler.delegate = self
         webView.navigationDelegate = self
 
-        // 点播失败要上浮到前端展示（3.6 (3)）：全量前端壳没有原生报错面，
-        // 不推事件就是点了没反应还没提示。
-        QueueManager.shared.onManualLoadFailed = { [weak self] track in
-            self?.pushPlaybackError(for: track)
+        // 点播失败展示（3.6 (3) → 3.7 (51) 改线）：原接线经桥推
+        // playbackError 事件给网页展示；(51) 换根后网页不再是主
+        // 界面，此接线断开，改由原生面自展——窗口级轻量 toast
+        // （NativePlaybackFailureToast，本文件尾），墙/舞台共用。
+        // 曲目墙展开卡的持久失败态走 QueueManager.$lastError 订
+        // 阅（既有原生面，不经本回调），两路不重复：toast 只管
+        // 一次性瞬时提示。
+        QueueManager.shared.onManualLoadFailed = { track in
+            NativePlaybackFailureToast.show(trackTitle: track.title)
         }
         // 歌词行边界：引擎跨过 cue 时发 cue 事件（前端注册 cue 表，见
         // handleNativeMessage 的 registerCues）。
@@ -713,7 +726,9 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     }
 
     /// 开页提示状态（3.7 (13.5)，DS38 Q7）：经 onOpenStageNotice
-    /// 交 MainViewController 显示顶部小条；nil 表示撤下。
+    /// 交承载 WebView 的宿主显示顶部小条（3.7 (51) 起为
+    /// WebStageHostViewController，原 MainViewController 安装点
+    /// 已随换根摘除）；nil 表示撤下。
     enum OpenStageNotice {
         case opening
         case failed
@@ -747,7 +762,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     }
     private var openStageIntent: OpenStageIntent?
 
-    /// 开页提示回调（MainViewController 在 viewDidLoad 里挂）。
+    /// 开页提示回调（WebStageHostViewController 在 viewDidLoad
+    /// 里挂、退场摘除；3.7 (51) 前由 MainViewController 挂）。
     var onOpenStageNotice: ((OpenStageNotice?) -> Void)?
 
     /// 开页意图存活上限（13.4 定 60s，13.5 沿用）：覆盖进程自愈
@@ -1055,14 +1071,10 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         }
     }
 
-    /// 点播装载失败事件：前端用自己的状态消息展示（文案与原生 lastError 同口径）。
-    private func pushPlaybackError(for track: FoliaTrack) {
-        dispatchToJS(.playbackError, payload: [
-            "trackId": track.id,
-            "title": track.title,
-            "message": "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制",
-        ])
-    }
+    // 点播失败推网页展示的 pushPlaybackError 已于 3.7 (51) 删除：
+    // 接线改原生 toast（见 init 的 onManualLoadFailed 与文件尾
+    // NativePlaybackFailureToast）。BridgeEvent.playbackError 枚举
+    // 值保留（桥协议只增不改），(52) 删桥时一并清理。
 
     // MARK: - 加载
 
@@ -1519,8 +1531,10 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             // 重载后据此恢复原页。view 为 null（或缺失）表示已回首页，清除。
             handleViewState(body["view"] as? [String: Any])
         case "stageClosed":
-            // 原生墙打开的播放页已关闭（3.7 (13) #6）：转发给主 VC，
-            // 它按回程票恢复曲目墙；无票时主 VC 自行忽略。
+            // 网页舞台已关闭（3.7 (13) #6 → (51) 新链）：转发给网
+            // 页舞台宿主 WebStageHostViewController，它自 dismiss
+            // 回原生舞台。回程票恢复链已于 (51) 整链删除，不再有
+            // 按票重建墙的消费者。
             logStore.write(level: "info", module: "bridge",
                            message: "stageClosed received")
             NotificationCenter.default.post(name: .foliaStageClosed, object: nil)
@@ -1785,5 +1799,86 @@ struct WebEffectView: UIViewRepresentable {
         if uiView.window != nil {
             WebEffectBridge.shared.flushPendingReloadIfVisible()
         }
+    }
+}
+
+// MARK: - 点播失败原生提示（3.7 (51)）
+
+/// 点播装载失败的原生轻量提示（3.7 (51) 新增）：窗口级胶囊 toast，
+/// 墙/舞台共用——挂在当前 key window 顶部安全区下，弹簧入场、
+/// 3.2 秒后淡出自撤，连续失败只保留最新一条。
+///
+/// 来由：QueueManager.onManualLoadFailed 原靠桥推 playbackError 给
+/// 网页展示（3.6 (3)），(51) 换根后网页不再是主界面、该接线断开；
+/// 原生面此前只有曲目墙展开卡的持久失败态（走 $lastError 订阅、
+/// 只认领本墙在途点播），主页墙/舞台无任何失败提示，故最小新增
+/// 本 toast 补齐「点了没反应还没提示」的缺口（审计 §6-7）。文案
+/// 与 QueueManager.lastError 同口径。
+enum NativePlaybackFailureToast {
+
+    private static weak var currentPill: UIView?
+
+    static func show(trackTitle: String) {
+        DispatchQueue.main.async {
+            guard let window = keyWindow() else { return }
+            currentPill?.removeFromSuperview()
+            currentPill = nil
+
+            let pill = UIView()
+            pill.backgroundColor = UIColor.black.withAlphaComponent(0.82)
+            pill.layer.cornerRadius = 16
+            pill.layer.borderWidth = 0.5
+            pill.layer.borderColor = UIColor.white.withAlphaComponent(0.25).cgColor
+            pill.translatesAutoresizingMaskIntoConstraints = false
+
+            let label = UILabel()
+            label.text = "《\(trackTitle)》暂时无法播放，可能需要 VIP 或受版权限制"
+            label.textColor = .white
+            label.font = .systemFont(ofSize: 13, weight: .medium)
+            label.numberOfLines = 2
+            label.translatesAutoresizingMaskIntoConstraints = false
+            pill.addSubview(label)
+            window.addSubview(pill)
+            NSLayoutConstraint.activate([
+                pill.centerXAnchor.constraint(equalTo: window.centerXAnchor),
+                pill.topAnchor.constraint(equalTo: window.safeAreaLayoutGuide.topAnchor, constant: 10),
+                pill.leadingAnchor.constraint(greaterThanOrEqualTo: window.leadingAnchor, constant: 24),
+                pill.trailingAnchor.constraint(lessThanOrEqualTo: window.trailingAnchor, constant: -24),
+                label.leadingAnchor.constraint(equalTo: pill.leadingAnchor, constant: 14),
+                label.trailingAnchor.constraint(equalTo: pill.trailingAnchor, constant: -14),
+                label.topAnchor.constraint(equalTo: pill.topAnchor, constant: 7),
+                label.bottomAnchor.constraint(equalTo: pill.bottomAnchor, constant: -7)
+            ])
+            window.bringSubviewToFront(pill)
+            currentPill = pill
+
+            // iOS 系统弹簧口径入场（AGENTS.md UI 设定）：自顶部
+            // 轻落 + 淡入，禁止线性/跳变。
+            pill.alpha = 0
+            pill.transform = CGAffineTransform(translationX: 0, y: -10)
+            UIView.animate(withDuration: 0.45, delay: 0,
+                           usingSpringWithDamping: 0.85,
+                           initialSpringVelocity: 0.1,
+                           options: [.allowUserInteraction]) {
+                pill.alpha = 1
+                pill.transform = .identity
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 3.2) {
+                guard currentPill === pill else { return }
+                currentPill = nil
+                UIView.animate(withDuration: 0.3, animations: {
+                    pill.alpha = 0
+                }, completion: { _ in
+                    pill.removeFromSuperview()
+                })
+            }
+        }
+    }
+
+    private static func keyWindow() -> UIWindow? {
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
     }
 }

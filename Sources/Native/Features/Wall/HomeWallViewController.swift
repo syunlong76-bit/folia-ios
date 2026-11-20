@@ -26,8 +26,9 @@ final class HomeWallViewController: UIViewController,
     /// 触发口径（3.7 (21) 修正，audit-3721 A2）：实例级一次性
     /// ——本实例首次露面才播，同实例后续露面（歌单曲目墙/原生
     /// 舞台等子页 dismiss 返回）不播。判别成立依赖当前拓扑：
-    /// 三处顶层进墙点（MainViewController 齿轮入口/舞台回程票/
-    /// 回程直达）都是现场新建 HomeWall 实例、无复用，故「实例
+    /// 顶层进墙点（3.7 (51) 换根后：SceneDelegate 冷启直建根
+    /// 实例；存量 MainViewController 齿轮长按入口同为现场新建）
+    /// 都是新建 HomeWall 实例、无复用，故「实例
     /// 首露面 = 真进墙」严格成立；若将来改成常驻实例（如 tab
     /// 复用），必须改走显式 arm 武装。(20) 曾挂 viewDidAppear
     /// 每次露面触发，进歌单退回也重播，即 Miller 说的「镶嵌
@@ -64,6 +65,9 @@ final class HomeWallViewController: UIViewController,
     /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
     private var loadAttempts = 0
     private var loadFailed = false
+    /// 未登录落定态（(51) A 组）：状态胶囊点按改走原生扫码
+    /// 登录入口（原为「先在网页侧登录网易云」文案、无入口）。
+    private var wallNotLoggedIn = false
 
     // 贴纸层状态（3.7 (24)，纯新增视图层）：入场跑动（底部
     // dock 内横向跑过）、失败陪衬（居中）、切歌缓冲（迷你台
@@ -127,6 +131,8 @@ final class HomeWallViewController: UIViewController,
     /// 动画收进台内，替代 13.4 被否的台上方主题带；长按台身
     /// 循环切换、UserDefaults 持久化（见 MiniPlayerTheme）。
     private var miniThemeLayer: MiniPlayerThemeLayer?
+    /// (51) 右上角「关闭」键引用：作窗口根时隐藏（见 viewDidAppear）。
+    private var rootCloseButton: UIButton?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
     /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
@@ -196,6 +202,7 @@ final class HomeWallViewController: UIViewController,
         ])
 
         let close = UIButton(type: .system)
+        rootCloseButton = close
         close.setTitle("关闭", for: .normal)
         close.setTitleColor(.white, for: .normal)
         close.backgroundColor = UIColor.black.withAlphaComponent(0.55)
@@ -229,6 +236,27 @@ final class HomeWallViewController: UIViewController,
             settingsGear.heightAnchor.constraint(equalToConstant: 34),
             settingsGear.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             settingsGear.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
+        ])
+
+        // 墙内搜索按钮（3.7 (51) D 组，纯新增）：齿轮右侧同风格
+        // （34×34、半透明），与中央状态条（居中、顶距同为 8）不
+        // 重叠；点按全屏呈 SwiftUI 搜索工作区（SearchHost-
+        // Presenter 承载 SearchWorkspaceView），关闭回墙。
+        let searchButton = UIButton(type: .system)
+        searchButton.setImage(UIImage(systemName: "magnifyingglass"), for: .normal)
+        searchButton.tintColor = .white
+        searchButton.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        searchButton.layer.cornerRadius = 17
+        searchButton.alpha = 0.5
+        searchButton.accessibilityLabel = "搜索"
+        searchButton.translatesAutoresizingMaskIntoConstraints = false
+        searchButton.addTarget(self, action: #selector(homeSearchTapped), for: .touchUpInside)
+        view.addSubview(searchButton)
+        NSLayoutConstraint.activate([
+            searchButton.widthAnchor.constraint(equalToConstant: 34),
+            searchButton.heightAnchor.constraint(equalToConstant: 34),
+            searchButton.leadingAnchor.constraint(equalTo: settingsGear.trailingAnchor, constant: 8),
+            searchButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
         ])
 
         // 播放态同步：切歌/播停时刷新台面内容（与曲目墙同构）。
@@ -274,8 +302,28 @@ final class HomeWallViewController: UIViewController,
         present(settings, animated: false)
     }
 
+    /// 墙内搜索入口（3.7 (51) D 组，纯新增）：呈 SwiftUI 搜索
+    /// 工作区（承载与点歌/集合接线都在 SearchHostPresenter）。
+    @objc private func homeSearchTapped() {
+        SearchHostPresenter.presentSearch(from: self)
+    }
+
     /// 失败态点按状态胶囊：重置计数重新加载（3.7 (13) #3）。
+    /// 未登录态（(51) A 组）：点按打开原生扫码登录，成功后重拉。
     @objc private func statusTapped() {
+        if wallNotLoggedIn {
+            let login = LoginViewController()
+            login.modalPresentationStyle = .overFullScreen
+            login.onLoginSuccess = { [weak self] in
+                guard let self else { return }
+                self.wallNotLoggedIn = false
+                self.loadAttempts = 0
+                self.statusLabel.text = "主页墙加载中…"
+                self.loadEntries()
+            }
+            present(login, animated: true)
+            return
+        }
         guard loadFailed else { return }
         loadFailed = false
         loadAttempts = 0
@@ -285,6 +333,9 @@ final class HomeWallViewController: UIViewController,
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (51) 换根后本墙可作窗口根：无呈现方时「关闭」是空操作死按钮，隐藏之；
+        // 被 present 出来时照旧显示（dismiss 回呈现方）。
+        rootCloseButton?.isHidden = (presentingViewController == nil && navigationController == nil)
         Breadcrumbs.log("wall.appear kind=home")
         Breadcrumbs.log("home appear")
         Breadcrumbs.samplerStart()
@@ -371,8 +422,9 @@ final class HomeWallViewController: UIViewController,
                         // 未登录是落定态：入场播完即退场落到此提示，
                         // 不许循环掩盖把用户挡在视频后（3.7 (20)）。
                         self.entryDataState = .failed
+                        self.wallNotLoggedIn = true
                         Breadcrumbs.log("home entry-state failed reason=not-logged-in gen=\(generation)")
-                        self.statusLabel.text = "主页墙：未登录（先在网页侧登录网易云）"
+                        self.statusLabel.text = "主页墙：未登录（点按扫码登录网易云）"
                     }
                     return
                 }
@@ -381,6 +433,7 @@ final class HomeWallViewController: UIViewController,
                     guard generation == self.entryLoadGeneration else { return }
                     self.loadAttempts = 0
                     self.loadFailed = false
+                    self.wallNotLoggedIn = false
                     self.entryDataState = .ready
                     Breadcrumbs.log("home entries ok n=\(playlists.count)")
                     self.playlistIds = playlists.map(\.id)
@@ -602,30 +655,6 @@ final class HomeWallViewController: UIViewController,
             let seed = await wall.awaitSeed(timeout: 0.25)
             self.present(wall, animated: true) { [weak self] in
                 self?.endPosterTransition(source: "tap", seedReady: seed)
-            }
-        }
-    }
-
-    /// 回程恢复（3.7 (13) #6）：播放页关闭后由 MainViewController
-    /// 重呈主页墙时调用，按票直达原歌单曲目墙并恢复上下文。
-    func presentRestoredWall(ticket: WallReturnTicket) {
-        let wall = WallPrototypeViewController(
-            playlistId: ticket.playlistId,
-            title: ticket.title, coverUrl: ticket.coverUrl)
-        wall.modalPresentationStyle = .fullScreen
-        wall.modalTransitionStyle = .crossDissolve
-        wall.pendingReturnTicket = ticket
-        // 转场同族化（3.7 (40) 项8）：回程直达与点按同路
-        // ——主页刚 appear 即转曲目墙的这一跳此前是裸
-        // crossDissolve（主页闪现一拍再硬切），现与点按
-        // 路径同套蓄势/落位/面包屑，衔接连续。
-        beginPosterTransition(source: "restore", playlistId: ticket.playlistId)
-        wall.startPreload()
-        Task { [weak self] in
-            guard let self else { return }
-            let seed = await wall.awaitSeed(timeout: 0.25)
-            self.present(wall, animated: true) { [weak self] in
-                self?.endPosterTransition(source: "restore", seedReady: seed)
             }
         }
     }
@@ -1357,25 +1386,16 @@ final class HomeWallViewController: UIViewController,
         }
     }
 
-    /// 从主页墙进播放页：存主页票（关页只回主页墙）+ 请前端
-    /// 开页 + 收起整摞原生墙（与曲目墙 openStageFromWall 同构）。
     /// 原生舞台入口（3.7 (14)，M2'）：与曲目墙同构——舞台全屏
-    /// 盖在主页墙上、关闭即回墙；跳网页舞台时先关原生舞台，
-    /// 再走 openStageFromHome 原套（存票+收墙+凭票恢复）。
+    /// 盖在主页墙上、关闭即纯 dismiss 回墙。跳网页舞台由舞台自
+    /// 身叠加 present 网页宿主（3.7 (51) 新链，见 StageView-
+    /// Controller 的 jumpToWebStage）；原 openStageFromHome 回
+    /// 程票套（存票+收墙+凭票恢复）已随回程票链整链删除
+    /// （3.7 (51)）。
     private func openNativeStageFromHome() {
         Breadcrumbs.log("stage open (native) from home wall")
         let stage = StageViewController()
         stage.modalPresentationStyle = .fullScreen
-        stage.onRequestWebStage = { [weak self] in
-            guard let self else { return }
-            if self.presentedViewController != nil {
-                self.dismiss(animated: false) { [weak self] in
-                    self?.openStageFromHome()
-                }
-            } else {
-                self.openStageFromHome()
-            }
-        }
         present(stage, animated: true)
     }
 
@@ -1383,28 +1403,6 @@ final class HomeWallViewController: UIViewController,
     /// 队列 + 本墙正是顶层」时调用，与本墙既有舞台入口同路。
     func openNativeStageForBackgroundReturn() {
         openNativeStageFromHome()
-    }
-
-    private func openStageFromHome() {
-        WallReturnTicketStore.pending = WallReturnTicket(
-            kind: .home,
-            playlistId: "",
-            title: nil,
-            coverUrl: nil,
-            worldOrigin: .zero,
-            contentOffset: .zero,
-            expandedInstanceId: nil,
-            expandedQueueIndex: nil)
-        Breadcrumbs.log("stage open from home wall")
-        // 13.5 闭环：收墙改由桥在 landed 或 1.2s 截止（先到者）
-        // 时回调；等待期锁交互防重复点（回调必到，不会锁死）。
-        view.isUserInteractionEnabled = false
-        WebEffectBridge.shared.requestOpenStage { [weak self] in
-            guard let self else { return }
-            var host: UIViewController = self
-            while let presenter = host.presentingViewController { host = presenter }
-            if host !== self { host.dismiss(animated: true) }
-        }
     }
 }
 
