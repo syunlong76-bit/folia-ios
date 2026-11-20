@@ -65,8 +65,8 @@ final class SubtitleOverlayView: UIView {
         backgroundGlow.layer.cornerRadius = 14
         backgroundGlow.translatesAutoresizingMaskIntoConstraints = false
         addSubview(backgroundGlow)
-        stack.axis =.vertical
-        stack.alignment =.center
+        stack.axis = .vertical
+        stack.alignment = .center
         stack.spacing = 3
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
@@ -83,7 +83,7 @@ final class SubtitleOverlayView: UIView {
         ])
         // 宽度上限对网页 max-w-2xl（672pt）：宽屏/横屏不拉满。
         let maxWidth = stack.widthAnchor.constraint(lessThanOrEqualToConstant: 672)
-        maxWidth.priority =.required
+        maxWidth.priority = .required
         maxWidth.isActive = true
         NotificationCenter.default.addObserver(
         self, selector: #selector(settingsChanged),
@@ -176,7 +176,7 @@ final class SubtitleOverlayView: UIView {
             if !isHidden { isHidden = true }
             return
         }
-        guard!store.isHidden,!lastLines.isEmpty else {
+        guard !store.isHidden, !lastLines.isEmpty else {
             render(rows: [], upcoming: [])
             return
         }
@@ -194,7 +194,7 @@ final class SubtitleOverlayView: UIView {
                 if source == .next {
                     if nextIndex < readablePreview.count {
                         rows.append(ResolvedRow(
-                        source:.next, text: readablePreview[nextIndex].text,
+                        source: .next, text: readablePreview[nextIndex].text,
                         isSecondary: rowIndex > 0))
                     }
                     nextIndex += 1
@@ -210,8 +210,8 @@ final class SubtitleOverlayView: UIView {
                 }
                 guard let text, Self.hasReadableText(text) else { continue}
                 // 译文/罗马音与上方行同文时只显一次（网页同规则）。
-                if source!= .current,
-                rows.contains(where: { $0.source!= .next && $0.text == text}) {
+                if source != .current,
+                rows.contains(where: { $0.source != .next && $0.text == text}) {
                     continue
                 }
                 rows.append(ResolvedRow(
@@ -223,13 +223,13 @@ final class SubtitleOverlayView: UIView {
             rows = []
         }
         var upcoming: [String] = []
-        if rows.isEmpty, line!= nil, store.previewsUpcoming {
+        if rows.isEmpty, line != nil, store.previewsUpcoming {
             upcoming = readablePreview.prefix(2).map { $0.text}
         }
         render(rows: rows, upcoming: upcoming)
         // 面包屑去重：签名（行号＋行表构成＋预览数）变化才落盘。
         let signature = "\(idx ?? -1)|\(rows.map { $0.source.rawValue}.joined(separator: ","))|\(upcoming.count)|\(store.layout)"
-        if signature!= lastSignature {
+        if signature != lastSignature {
             lastSignature = signature
             Breadcrumbs.log("stage.subtitle.show idx=\(idx ?? -1)"
             + " rows=\(rows.count) upcoming=\(upcoming.count)"
@@ -254,21 +254,21 @@ final class SubtitleOverlayView: UIView {
             let label = UILabel()
             label.text = item.text
             label.textAlignment = .center
-            label.numberOfLines = item.isUpcoming? 1: 2
-            label.lineBreakMode = item.isUpcoming? .byTruncatingTail :.byWordWrapping
+            label.numberOfLines = item.isUpcoming ? 1 : 2
+            label.lineBreakMode = item.isUpcoming ? .byTruncatingTail : .byWordWrapping
             // 字号对网页 subtitleFontSizes：主行 clamp(1.125rem, 2.6vw,
             // 1.25rem) ≈ 19pt、预览行 clamp(0.875rem, 2vw, 1rem) ≈ 15pt，
             // 均乘字幕缩放；副行再乘 SECONDARY_TRACK_SIZE_FACTOR 0.88
             // 与 0.82 不透明度（subtitleTrackStyle 网页同值）。字号
             // 下限 12pt：缩放 0.85 时预览行 15×0.85≈12.75 仍达标，
             // 钳制兜底防更小。
-            let base: CGFloat = item.isUpcoming? 15: 19
+            let base: CGFloat = item.isUpcoming ? 15 : 19
             var size = base * CGFloat(store.fontScale)
             if item.isSecondary { size *= 0.88}
             label.font = .systemFont(ofSize: max(12, size),
-            weight: item.isSecondary? .regular :.medium)
+            weight: item.isSecondary ? .regular : .medium)
             label.textColor = UIColor.white.withAlphaComponent(
-            item.isSecondary? 0.82: 0.92)
+            item.isSecondary ? 0.82 : 0.92)
             if item.isUpcoming {
                 applyUpcomingStyle(to: label)
             } else {
@@ -307,8 +307,8 @@ final class SubtitleOverlayView: UIView {
     /// 当前内容在给定宽度下的高度（宿主 layoutStage 定帧用）：
     /// 无内容时 0（整层隐藏、不占位）。
     func preferredHeight(forWidth width: CGFloat) -> CGFloat {
-        guard!isHidden,!rowLabels.isEmpty else { return 0}
-        let fitting = CGSize(width: width, height:.greatestFiniteMagnitude)
+        guard !isHidden, !rowLabels.isEmpty else { return 0 }
+        let fitting = CGSize(width: width, height: .greatestFiniteMagnitude)
         return ceil(stack.systemLayoutSizeFitting(fitting).height) + 14
     }
 }
