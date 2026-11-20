@@ -184,7 +184,7 @@ final class SubtitleOverlayView: UIView {
         let line = idx.map { lastLines[$0]}
         let previewLines: [LyricLine] = idx.map { i in
             Array(lastLines.dropFirst(i + 1))
-        }?? lastLines
+        } ?? lastLines
         let readablePreview = previewLines.filter { Self.hasReadableText($0.text)}
 
         var rows: [ResolvedRow] = []
