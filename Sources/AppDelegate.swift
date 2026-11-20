@@ -2,6 +2,16 @@ import AVFoundation
 import CryptoKit
 import UIKit
 
+/// 进程启动标记（3.7 (44)）：didFinishLaunching 时刻的系统
+/// 运行时钟。SceneDelegate 据此区分「进程新生冷启」（新
+/// delegate＋进程年龄≈0）与「活进程 scene 重连」（新 delegate
+/// ＋进程已存活）——两者首次激活都未武装、外观一致，进程年
+/// 龄是唯一可靠区分；冷启绝不 route、重连按点卡处理。
+enum AppProcessMark {
+    static var launchUptime: TimeInterval =
+        ProcessInfo.processInfo.systemUptime
+}
+
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
 
@@ -25,6 +35,7 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             dogDesc = "url=\(url.path) md5=\(md5) bytes=\(data.count)"
         }
         Breadcrumbs.log("app.build short=\(shortVer) build=\(buildVer) dog11 \(dogDesc)")
+        AppProcessMark.launchUptime = ProcessInfo.processInfo.systemUptime
         Breadcrumbs.log("pet.settings.read src=appStart"
             + " miniPets=\(StickerSettings.miniPetsEnabled)"
             + " legacyCompanion=\(StickerSettings.companionEnabled)")

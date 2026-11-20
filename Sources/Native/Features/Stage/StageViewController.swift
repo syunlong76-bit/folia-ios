@@ -104,6 +104,14 @@ final class StageViewController: UIViewController {
     /// `nowplaying.route stage-exit-quick dt=` 面包屑，供下轮
     /// 定性「开台约 1 秒舞台消失」是手动关还是自动退。
     static var routeExitProbeArmedAt: Date?
+    /// 防卡死守卫证明状态（3.7 (44)）：mountRenderer 装配样式
+    /// 时武装 pending 并重置此处计数；frameStep 逐帧推进，
+    /// 满 60 帧或存活 2 秒即清 pending（该样式自此视为已证
+    /// 明存活）。进程未及证明就消亡时，pending 留给下次启动
+    /// 的 runLaunchStyleGuard 回退 classic。
+    private var styleProofStyleId: String?
+    private var styleProofFrames = 0
+    private var styleProofArmedAt: CFTimeInterval = 0
     /// settle 稳态重锚（3.7 (41) 组3，移植墙面 LyricClockDriver
     /// (20) 定案纪律）：瞬态锚（开台/切歌/播停翻转）在 +0.35s
     /// 做一次无条件稳态重锚，纠正起播瞬态锚的亚阈值恒定相位
@@ -153,6 +161,13 @@ final class StageViewController: UIViewController {
         reanchor(armSettle: true)
         // 贴纸层（3.7 (24)，纯新增）：建贴纸视图与陪伴宠物。
         stickerInstall()
+        // 冷启恢复队列装载（3.7 (44)）：冷启自动 route 取消
+        // 后，恢复态队列的装载改由「用户开台」触发——本台是
+        // 所有开台入口（墙点歌台/迷你台/热后台 route）的唯
+        // 一汇点。非恢复态为无操作（QueueManager 内部以
+        // hasRestoredQueue 把关）；装载走现换地址、默认保持
+        // 暂停（resumeRestoredQueue 既定语义不变）。
+        QueueManager.shared.resumeRestoredQueue()
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -379,6 +394,12 @@ final class StageViewController: UIViewController {
         next.applySnapshot(makeSnapshot())
         next.setLifecycle(engine.isPlaying ? .playing : .paused, active: isViewLoaded && view.window != nil)
         StageStyleStore.lastNativeStyleId = styleId
+        // 防卡死守卫武装（3.7 (44)）：样式装配即落 pending，
+        // 待 frameStep 证明存活后清除（见 styleProof* 状态）。
+        StageStyleStore.armStylePending(styleId)
+        styleProofStyleId = styleId
+        styleProofFrames = 0
+        styleProofArmedAt = CACurrentMediaTime()
     }
 
     private func swapRenderer(to styleId: String) {
@@ -1308,6 +1329,17 @@ final class StageViewController: UIViewController {
         let position = positionNow()
         logStageLineIfChanged(position: position)
         renderer?.frameTick(position: position)
+        // 防卡死守卫证明（3.7 (44)）：帧连续推进即该样式渲染
+        // 存活；满 60 帧或存活满 2 秒清 pending 并留痕。
+        if let proofStyle = styleProofStyleId {
+            styleProofFrames += 1
+            if styleProofFrames >= 60
+                || CACurrentMediaTime() - styleProofArmedAt >= 2 {
+                styleProofStyleId = nil
+                StageStyleStore.clearStylePending()
+                Breadcrumbs.log("stage style-guard proven style=\(proofStyle)")
+            }
+        }
         let second = Int(position)
         if second != lastTimeLabelSecond {
             lastTimeLabelSecond = second

@@ -372,6 +372,66 @@ enum StageTextKit {
         return width
     }
 
+    // MARK: 扫字成图预备（后台队列专用，3.7 (44)）
+
+    /// 逐 token 成图预备：把扫字词视图/静态 token 原先在主线
+    /// 程 init/configure 里同步做的全部栅格化（timed 词三图
+    /// @scale3、静态 token 单图）集中到此，专供后台队列调
+    /// 用；主线程只拿成品图装配视图。基线与字素偏移口径与
+    /// 视图侧原实现逐项一致（词盒高 = 行高）。
+    static func prepareSweepImages(
+        tokens: [StageSweepToken], font: UIFont,
+        baseColor: UIColor, fillColor: UIColor, glowColor: UIColor,
+        lineHeight: CGFloat, rtl: Bool
+    ) -> [Int: StageSweepWordImages] {
+        var result: [Int: StageSweepWordImages] = [:]
+        for (index, token) in tokens.enumerated() {
+            let offsets = graphemeOffsets(text: token.text, font: font)
+            let wordWidth = offsets.last ?? 0
+            guard wordWidth > 0 else {
+                result[index] = StageSweepWordImages(
+                    glow: nil, base: nil, fill: nil,
+                    wordWidth: 0, graphemeOffsets: offsets)
+                continue
+            }
+            let glyphH = glyphHeight(text: token.text, font: font)
+            var descent: CGFloat = 0
+            let attr = NSAttributedString(string: token.text,
+                                          attributes: [.font: font])
+            let ctLine = CTLineCreateWithAttributedString(attr)
+            _ = CTLineGetTypographicBounds(ctLine, nil, &descent, nil)
+            let baseline = (lineHeight - glyphH) / 2 + descent
+            let scale: CGFloat = 3
+            if token.timed {
+                result[index] = StageSweepWordImages(
+                    glow: rasterizeWord(
+                        text: token.text, font: font, color: glowColor,
+                        width: wordWidth, boxHeight: lineHeight,
+                        baselineFromBottom: baseline, scale: scale),
+                    base: rasterizeWord(
+                        text: token.text, font: font, color: baseColor,
+                        width: wordWidth, boxHeight: lineHeight,
+                        baselineFromBottom: baseline, scale: scale),
+                    fill: rasterizeWordFill(
+                        text: token.text, font: font, color: fillColor,
+                        width: wordWidth, boxHeight: lineHeight,
+                        baselineFromBottom: baseline, scale: scale,
+                        rtl: rtl),
+                    wordWidth: wordWidth, graphemeOffsets: offsets)
+            } else {
+                result[index] = StageSweepWordImages(
+                    glow: nil,
+                    base: rasterizeWord(
+                        text: token.text, font: font, color: baseColor,
+                        width: wordWidth, boxHeight: lineHeight,
+                        baselineFromBottom: baseline, scale: scale),
+                    fill: nil,
+                    wordWidth: wordWidth, graphemeOffsets: offsets)
+            }
+        }
+        return result
+    }
+
     /// smoothstep（网页同名函数逐行对译）。
     static func smoothstep(_ t: Double) -> Double {
         let x = min(max(t, 0), 1)
@@ -397,11 +457,25 @@ enum StageTextKit {
 
 // MARK: - 扫字词视图
 
+/// 扫字成图预备产物（3.7 (44)）：后台队列经
+/// StageTextKit.prepareSweepImages 一次备齐，视图 init 只装
+/// 配、不再栅格化。timed token 三图齐全（glow/base/fill）；
+/// 静态 token 只有 base。wordWidth/graphemeOffsets 与视图
+/// 侧原 init 的实测口径一致。
+struct StageSweepWordImages {
+    var glow: UIImage?
+    var base: UIImage?
+    var fill: UIImage?
+    var wordWidth: CGFloat
+    var graphemeOffsets: [CGFloat]
+}
+
 /// 逐词软边扫字（网页 MonetWordSweep 三层结构的原生等价）：
 /// 底字层（baseColor 图）＋填充层（fillColor 图 + 渐变 mask
 /// 逐帧推进，柔边 6–16px）＋Glow 层（两枚带 shadow 的同文
-/// 图，只动 opacity 走包络）。全部图在配置时以 CoreText
-/// 一次绘好，update 只改 mask locations 与 glow alpha。
+/// 图，只动 opacity 走包络）。全部图由 prepareSweepImages
+/// 在后台备好后注入（3.7 (44) 异步化；此前在 init 里主线
+/// 程同步绘制），update 只改 mask locations 与 glow alpha。
 final class StageSweepWordView: UIView {
 
     let start: TimeInterval
@@ -419,40 +493,28 @@ final class StageSweepWordView: UIView {
     private let fillView = UIImageView()
     private let fillMask = CAGradientLayer()
 
-    init(text: String, font: UIFont, start: TimeInterval, end: TimeInterval,
+    init(start: TimeInterval, end: TimeInterval,
          graphemeTimes: [(start: TimeInterval, end: TimeInterval)],
-         baseColor: UIColor, fillColor: UIColor, glowColor: UIColor,
+         images: StageSweepWordImages,
+         font: UIFont, glowColor: UIColor,
          isChorus: Bool, boxHeight: CGFloat, rtl: Bool) {
         self.start = start
         self.end = end
         self.graphemeTimes = graphemeTimes
         self.rtl = rtl
-        let offsets = StageTextKit.graphemeOffsets(text: text, font: font)
-        self.graphemeOffsets = offsets
-        self.wordWidth = offsets.last ?? 0
+        self.graphemeOffsets = images.graphemeOffsets
+        self.wordWidth = images.wordWidth
         let fontPx = font.pointSize
         self.edgeSoftness = min(max(fontPx * 0.45, 6), 16)
         super.init(frame: CGRect(x: 0, y: 0, width: wordWidth, height: boxHeight))
         isUserInteractionEnabled = false
-        // 基线：字形在行盒内垂直居中。
-        let glyphH = StageTextKit.glyphHeight(text: text, font: font)
-        var ascent: CGFloat = 0
-        var descent: CGFloat = 0
-        let attr = NSAttributedString(string: text, attributes: [.font: font])
-        let ctLine = CTLineCreateWithAttributedString(attr)
-        _ = CTLineGetTypographicBounds(ctLine, &ascent, &descent, nil)
-        let baseline = (boxHeight - glyphH) / 2 + descent
-        let scale: CGFloat = 3
-        let glowImage = StageTextKit.rasterizeWord(
-            text: text, font: font, color: glowColor, width: wordWidth,
-            boxHeight: boxHeight, baselineFromBottom: baseline, scale: scale)
         // Glow：双层 text-shadow 等价——两枚同文图各挂一档
         // shadow 半径（近 0.28/0.45、远 0.65/0.90 ×fontPx），
         // 合成层只动 opacity（网页 glowHalo 同口径）。
         let r1 = (fontPx * (isChorus ? 0.45 : 0.28)).rounded()
         let r2 = (fontPx * (isChorus ? 0.90 : 0.65)).rounded()
         for (glowView, radius) in [(glowViewNear, r1), (glowViewFar, r2)] {
-            glowView.image = glowImage
+            glowView.image = images.glow
             glowView.frame = bounds
             glowView.layer.shadowColor = glowColor.cgColor
             glowView.layer.shadowOpacity = 1
@@ -461,15 +523,10 @@ final class StageSweepWordView: UIView {
             glowView.alpha = 0
             addSubview(glowView)
         }
-        baseView.image = StageTextKit.rasterizeWord(
-            text: text, font: font, color: baseColor, width: wordWidth,
-            boxHeight: boxHeight, baselineFromBottom: baseline, scale: scale)
+        baseView.image = images.base
         baseView.frame = bounds
         addSubview(baseView)
-        fillView.image = StageTextKit.rasterizeWordFill(
-            text: text, font: font, color: fillColor, width: wordWidth,
-            boxHeight: boxHeight, baselineFromBottom: baseline, scale: scale,
-            rtl: rtl)
+        fillView.image = images.fill
         fillView.frame = bounds
         fillMask.startPoint = CGPoint(x: rtl ? 1 : 0, y: 0.5)
         fillMask.endPoint = CGPoint(x: rtl ? 0 : 1, y: 0.5)
@@ -544,20 +601,45 @@ final class StageSweepLineView: UIView {
     private var wordViews: [StageSweepWordView] = []
     private(set) var rowCount: Int = 0
 
-    /// 配置并完成布局。maxWidth 为行内容宽；lineHeight 为
-    /// 单行行高；返回总高（行数 × lineHeight）。
-    @discardableResult
-    func configure(tokens: [StageSweepToken], font: UIFont,
-                   baseColor: UIColor, fillColor: UIColor,
-                   glowColor: UIColor, isChorus: Bool,
-                   maxWidth: CGFloat, lineHeight: CGFloat,
-                   rtl: Bool) -> CGFloat {
-        for sub in subviews { sub.removeFromSuperview() }
-        wordViews = []
-        // 量词宽：timed/static 都按 CTLine 实测（offsets 末元）。
+    /// 纯测量（无栅格化）：与 configure 同一贪心折行口径，
+    /// 只算总高——供调用方在成图未就绪时先占住行盒（3.7
+    /// (44) 异步成图的占位高度，与成图后 configure 的返回
+    /// 值同源同值，不跳高）。
+    static func measureHeight(tokens: [StageSweepToken], font: UIFont,
+                              maxWidth: CGFloat, lineHeight: CGFloat) -> CGFloat {
         let widths = tokens.map {
             StageTextKit.graphemeOffsets(text: $0.text, font: font).last ?? 0
         }
+        var rows = 0
+        var currentWidth: CGFloat = 0
+        var rowHasToken = false
+        for tokenWidth in widths {
+            if rowHasToken && currentWidth + tokenWidth > maxWidth {
+                rows += 1
+                currentWidth = 0
+                rowHasToken = false
+            }
+            rowHasToken = true
+            currentWidth += tokenWidth
+        }
+        if rowHasToken { rows += 1 }
+        return CGFloat(rows) * lineHeight
+    }
+
+    /// 配置并完成布局。maxWidth 为行内容宽；lineHeight 为
+    /// 单行行高；返回总高（行数 × lineHeight）。成图一律取
+    /// prepared（后台 prepareSweepImages 的产物，3.7 (44)），
+    /// 本方法只做视图装配，主线程零栅格化。
+    @discardableResult
+    func configure(tokens: [StageSweepToken], font: UIFont,
+                   glowColor: UIColor, isChorus: Bool,
+                   maxWidth: CGFloat, lineHeight: CGFloat,
+                   rtl: Bool,
+                   prepared: [Int: StageSweepWordImages]) -> CGFloat {
+        for sub in subviews { sub.removeFromSuperview() }
+        wordViews = []
+        // 量词宽：取预备产物的实测宽（与成图同一口径）。
+        let widths = tokens.indices.map { prepared[$0]?.wordWidth ?? 0 }
         // 贪心折行（token 原子）：超宽 token 独占一行溢出。
         var rows: [[Int]] = []
         var currentRow: [Int] = []
@@ -583,20 +665,20 @@ final class StageSweepLineView: UIView {
                 let frame = CGRect(x: x, y: CGFloat(rowIndex) * lineHeight,
                                    width: width, height: lineHeight)
                 if token.timed {
+                    guard let images = prepared[index] else { continue }
                     let word = StageSweepWordView(
-                        text: token.text, font: font, start: token.start,
+                        start: token.start,
                         end: token.end, graphemeTimes: token.graphemeTimes,
-                        baseColor: baseColor, fillColor: fillColor,
-                        glowColor: glowColor, isChorus: isChorus,
+                        images: images,
+                        font: font, glowColor: glowColor,
+                        isChorus: isChorus,
                         boxHeight: lineHeight, rtl: rtl)
                     word.frame = frame
                     addSubview(word)
                     wordViews.append(word)
                 } else {
                     let imageView = UIImageView(frame: frame)
-                    imageView.image = Self.staticTokenImage(
-                        text: token.text, font: font, color: baseColor,
-                        width: width, boxHeight: lineHeight)
+                    imageView.image = prepared[index]?.base
                     imageView.isUserInteractionEnabled = false
                     addSubview(imageView)
                 }
@@ -607,19 +689,5 @@ final class StageSweepLineView: UIView {
 
     func update(position: TimeInterval, lineEnd: TimeInterval) {
         for word in wordViews { word.update(position: position, lineEnd: lineEnd) }
-    }
-
-    private static func staticTokenImage(text: String, font: UIFont,
-                                         color: UIColor, width: CGFloat,
-                                         boxHeight: CGFloat) -> UIImage? {
-        let glyphH = StageTextKit.glyphHeight(text: text, font: font)
-        var descent: CGFloat = 0
-        let attr = NSAttributedString(string: text, attributes: [.font: font])
-        let ctLine = CTLineCreateWithAttributedString(attr)
-        _ = CTLineGetTypographicBounds(ctLine, nil, &descent, nil)
-        let baseline = (boxHeight - glyphH) / 2 + descent
-        return StageTextKit.rasterizeWord(
-            text: text, font: font, color: color, width: width,
-            boxHeight: boxHeight, baselineFromBottom: baseline, scale: 3)
     }
 }

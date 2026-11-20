@@ -18,6 +18,13 @@ import CoreImage
 // 既定先例同口径）：副歌 isChorus（LyricLine 无此字段）、
 // 副字幕轨（宿主无译文数据）、wordColors 关键字着色。
 // 时钟纪律：只消费宿主 frameTick，不自建时钟源。
+// 成图纪律（3.7 (44) 异步化）：一切栅格成图（静态行绘制＋
+// 高斯模糊、扫字逐词三图）只在后台 bakeQueue 备好后贴入，
+// 主线程零栅格化——折行测量（CTFramesetter，无渲染）保留
+// 主线程使盒高首帧即准；未就绪先以空图/空扫字占位（底色
+// 为调色板 wash/fallback），就绪后淡入换入；成品进 LRU
+// 缓存。逐帧路径（frameTick/update）本就不栅格化。此项与
+// (43) 冷启 route 死循环互不依赖，是渲染层纵深防御。
 
 // MARK: - 颜色小工具
 
@@ -348,6 +355,17 @@ final class MonetRailLineView: UIView {
         layoutChorusGlow(boxHeight: boxHeight)
     }
 
+    /// 后台成图落地（3.7 (44)）：占位（image=nil）先行时，
+    /// 成图备好后只换图＋0.3s 交叉淡入，盒高/mask 已由
+    /// showStatic 按同一参数落好，不重排。
+    func applyBakedStaticImage(_ image: UIImage) {
+        let transition = CATransition()
+        transition.type = .fade
+        transition.duration = 0.3
+        staticView.layer.add(transition, forKey: "monet.bakeFade")
+        staticView.image = image
+    }
+
     func showSweep(_ sweep: StageSweepLineView, textFrame: CGRect,
                    boxHeight: CGFloat, key: String) {
         contentKey = key
@@ -421,6 +439,20 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     private var washTask: Task<Void, Never>?
     private var washKey: String?
     private var washCache: [(key: String, image: UIImage)] = []
+    // 成图烘焙（3.7 (44)）：后台串行队列＋LRU 缓存＋在途去
+    // 重。缓存键 = trackID|contentKey（contentKey 本身不含
+    // 曲目，跨曲必须隔离）。bakeGeneration 在切歌/unmount
+    // 时 +1，陈旧成图落地即弃。
+    private let bakeQueue = DispatchQueue(label: "folia.monet.bake",
+                                          qos: .utility)
+    private var staticBakeCache: [(key: String, image: UIImage)] = []
+    private var sweepBakeCache: [(key: String, images: [Int: StageSweepWordImages])] = []
+    private var pendingBakeKeys: Set<String> = []
+    private var bakeGeneration = 0
+    /// 高斯模糊共享 CIContext（3.7 (44)）：CIContext 创建昂
+    /// 贵，此前 blurred() 逐行新建；全渲染器共用一台，且只
+    /// 在后台 bakeQueue 上使用。
+    private static let sharedCIContext = CIContext(options: nil)
     private var lineViews: [Int: MonetRailLineView] = [:]
     private var exitingViews: [MonetRailLineView] = []
     private var focusIndex = 0
@@ -507,6 +539,9 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             lines = snapshot.lines
             coverImage = nil
             washKey = nil
+            // 在途成图作废（3.7 (44)）：代际 +1，陈旧烘焙落地即弃。
+            bakeGeneration += 1
+            pendingBakeKeys.removeAll()
             lastPosition = snapshot.anchor.position(atWallTime: CACurrentMediaTime())
             for washView in washViews { washView.removeFromSuperview() }
             washViews = []
@@ -577,6 +612,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     func unmount() {
         coverTask?.cancel()
         washTask?.cancel()
+        bakeGeneration += 1
+        pendingBakeKeys.removeAll()
         rootView.removeFromSuperview()
     }
 
@@ -857,22 +894,41 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             let key = "sweep|\(line.id)|\(paletteSig)|\(Int(m.contentWidth))"
             if lineView.contentKey != key {
                 let tokens = sweepTokens(for: line)
-                let sweep = StageSweepLineView()
                 let wordColor = palette.primary.withAlphaComponent(0.98)
                 let baseColor = palette.primary.withAlphaComponent(tone.baseAlpha)
-                let height = sweep.configure(
-                    tokens: tokens, font: font, baseColor: baseColor,
-                    fillColor: wordColor, glowColor: wordColor,
-                    isChorus: false, maxWidth: m.contentWidth,
-                    lineHeight: StageTextKit.lineHeight(
-                        text: line.text, font: font, fontPx: m.fontPx),
-                    rtl: false)
+                let lineHeight = StageTextKit.lineHeight(
+                    text: line.text, font: font, fontPx: m.fontPx)
+                // 高度纯测量先行（与成图后同源同值、不跳高）；
+                // 逐词成图后台备好再装配换入（3.7 (44)）。
+                let height = StageSweepLineView.measureHeight(
+                    tokens: tokens, font: font, maxWidth: m.contentWidth,
+                    lineHeight: lineHeight)
                 let boxHeight = padTop + height + padBottom
-                lineView.showSweep(
-                    sweep,
-                    textFrame: CGRect(x: 0, y: padTop, width: m.contentWidth,
-                                      height: height),
-                    boxHeight: boxHeight, key: key)
+                let textFrame = CGRect(x: 0, y: padTop,
+                                       width: m.contentWidth, height: height)
+                let cacheKey = "\(trackID ?? "?")|\(key)"
+                if let prepared = sweepBakeLookup(cacheKey) {
+                    let sweep = StageSweepLineView()
+                    sweep.configure(
+                        tokens: tokens, font: font, glowColor: wordColor,
+                        isChorus: false, maxWidth: m.contentWidth,
+                        lineHeight: lineHeight, rtl: false,
+                        prepared: prepared)
+                    lineView.showSweep(sweep, textFrame: textFrame,
+                                       boxHeight: boxHeight, key: key)
+                } else {
+                    // 占位：空扫字视图先占住行盒，成图落地换入。
+                    lineView.showSweep(StageSweepLineView(),
+                                       textFrame: textFrame,
+                                       boxHeight: boxHeight, key: key)
+                    scheduleSweepBake(
+                        cacheKey: cacheKey, key: key, index: index,
+                        tokens: tokens, font: font, baseColor: baseColor,
+                        fillColor: wordColor, glowColor: wordColor,
+                        lineHeight: lineHeight, maxWidth: m.contentWidth,
+                        textFrame: textFrame, boxHeight: boxHeight,
+                        lineEnd: line.end)
+                }
             }
             lineView.updateSweep(position: lastPosition, lineEnd: line.end)
         } else {
@@ -883,44 +939,142 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             let blurBucket = Int((tone.blur * 10).rounded())
             let key = "static|\(line.id)|\(status == .passed ? "p" : "w")|\(blurBucket)|\(paletteSig)|\(Int(m.contentWidth))"
             if lineView.contentKey != key {
-                var image: UIImage?
-                var rows = 1
-                var clipped = false
-                var lineHeight = StageTextKit.lineHeight(
-                    text: line.text, font: font, fontPx: m.fontPx)
-                if let baked = StageTextKit.rasterize(
-                    text: line.text, font: font, color: color,
-                    maxWidth: m.contentWidth, maxLines: maxLines,
-                    fontPx: m.fontPx, scale: 2) {
-                    image = baked.image
-                    rows = max(baked.wrapped.rows.count, 1)
-                    clipped = baked.wrapped.clipped
-                    lineHeight = baked.wrapped.lineHeight
-                    if tone.blur > 0.05, let sharp = image {
-                        image = blurred(sharp, radiusPt: tone.blur)
-                    }
-                }
+                // 折行测量主线程先行（无渲染、盒高首帧即准）；
+                // 栅格成图＋模糊走后台 bakeQueue（3.7 (44)）。
+                let wrapped = StageTextKit.wrap(
+                    text: line.text, font: font, maxWidth: m.contentWidth,
+                    maxLines: maxLines, fontPx: m.fontPx)
+                let rows = max(wrapped.rows.count, 1)
+                let clipped = wrapped.clipped
+                let lineHeight = wrapped.lineHeight
                 let textHeight = CGFloat(rows) * lineHeight
                 let boxHeight = padTop + textHeight + padBottom
-                lineView.showStatic(
-                    image: image,
-                    textFrame: CGRect(x: 0, y: padTop, width: m.contentWidth,
-                                      height: textHeight),
-                    boxHeight: boxHeight, clipped: clipped,
-                    fadeHeight: max(m.fontPx * 0.55, 12), key: key)
+                let textFrame = CGRect(x: 0, y: padTop,
+                                       width: m.contentWidth,
+                                       height: textHeight)
+                let fadeHeight = max(m.fontPx * 0.55, 12)
+                let cacheKey = "\(trackID ?? "?")|\(key)"
+                if let cached = staticBakeLookup(cacheKey) {
+                    lineView.showStatic(
+                        image: cached, textFrame: textFrame,
+                        boxHeight: boxHeight, clipped: clipped,
+                        fadeHeight: fadeHeight, key: key)
+                } else {
+                    // 占位：底色（wash/fallback）先行，成图淡入。
+                    lineView.showStatic(
+                        image: nil, textFrame: textFrame,
+                        boxHeight: boxHeight, clipped: clipped,
+                        fadeHeight: fadeHeight, key: key)
+                    scheduleStaticBake(
+                        cacheKey: cacheKey, key: key, index: index,
+                        text: line.text, font: font, color: color,
+                        maxWidth: m.contentWidth, maxLines: maxLines,
+                        fontPx: m.fontPx, blur: tone.blur)
+                }
             }
         }
     }
 
-    private func blurred(_ image: UIImage, radiusPt: CGFloat) -> UIImage {
+    /// 高斯模糊（后台专用，3.7 (44)）：共享 CIContext，不再
+    /// 逐行新建；只从 bakeQueue 调用。
+    private static func blurredImage(_ image: UIImage, radiusPt: CGFloat) -> UIImage {
         guard let ci = CIImage(image: image) else { return image }
         let blurred = ci.clampedToExtent().applyingFilter(
             "CIGaussianBlur",
             parameters: [kCIInputRadiusKey: radiusPt * image.scale])
-        let context = CIContext()
-        guard let cg = context.createCGImage(blurred, from: ci.extent)
+        guard let cg = sharedCIContext.createCGImage(blurred, from: ci.extent)
         else { return image }
         return UIImage(cgImage: cg, scale: image.scale, orientation: .up)
+    }
+
+    // MARK: 成图烘焙调度（3.7 (44)）
+
+    private func staticBakeLookup(_ cacheKey: String) -> UIImage? {
+        guard let hit = staticBakeCache.firstIndex(where: { $0.key == cacheKey })
+        else { return nil }
+        let entry = staticBakeCache.remove(at: hit)
+        staticBakeCache.append(entry)
+        return entry.image
+    }
+
+    private func sweepBakeLookup(_ cacheKey: String) -> [Int: StageSweepWordImages]? {
+        guard let hit = sweepBakeCache.firstIndex(where: { $0.key == cacheKey })
+        else { return nil }
+        let entry = sweepBakeCache.remove(at: hit)
+        sweepBakeCache.append(entry)
+        return entry.images
+    }
+
+    private func scheduleStaticBake(cacheKey: String, key: String, index: Int,
+                                    text: String, font: UIFont, color: UIColor,
+                                    maxWidth: CGFloat, maxLines: Int,
+                                    fontPx: CGFloat, blur: CGFloat) {
+        guard !pendingBakeKeys.contains(cacheKey) else { return }
+        pendingBakeKeys.insert(cacheKey)
+        let generation = bakeGeneration
+        let track = trackID
+        bakeQueue.async { [weak self] in
+            var image = StageTextKit.rasterize(
+                text: text, font: font, color: color, maxWidth: maxWidth,
+                maxLines: maxLines, fontPx: fontPx, scale: 2)?.image
+            if blur > 0.05, let sharp = image {
+                image = MonetStageRenderer.blurredImage(sharp, radiusPt: blur)
+            }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.pendingBakeKeys.remove(cacheKey)
+                guard self.bakeGeneration == generation,
+                      self.trackID == track, let image else { return }
+                self.staticBakeCache.removeAll { $0.key == cacheKey }
+                self.staticBakeCache.append((key: cacheKey, image: image))
+                if self.staticBakeCache.count > 24 {
+                    self.staticBakeCache.removeFirst()
+                }
+                guard let lineView = self.lineViews[index],
+                      lineView.contentKey == key else { return }
+                lineView.applyBakedStaticImage(image)
+            }
+        }
+    }
+
+    private func scheduleSweepBake(cacheKey: String, key: String, index: Int,
+                                   tokens: [StageSweepToken], font: UIFont,
+                                   baseColor: UIColor, fillColor: UIColor,
+                                   glowColor: UIColor, lineHeight: CGFloat,
+                                   maxWidth: CGFloat, textFrame: CGRect,
+                                   boxHeight: CGFloat, lineEnd: TimeInterval) {
+        guard !pendingBakeKeys.contains(cacheKey) else { return }
+        pendingBakeKeys.insert(cacheKey)
+        let generation = bakeGeneration
+        let track = trackID
+        bakeQueue.async { [weak self] in
+            let prepared = StageTextKit.prepareSweepImages(
+                tokens: tokens, font: font, baseColor: baseColor,
+                fillColor: fillColor, glowColor: glowColor,
+                lineHeight: lineHeight, rtl: false)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.pendingBakeKeys.remove(cacheKey)
+                guard self.bakeGeneration == generation,
+                      self.trackID == track else { return }
+                self.sweepBakeCache.removeAll { $0.key == cacheKey }
+                self.sweepBakeCache.append((key: cacheKey, images: prepared))
+                if self.sweepBakeCache.count > 8 {
+                    self.sweepBakeCache.removeFirst()
+                }
+                guard let lineView = self.lineViews[index],
+                      lineView.contentKey == key else { return }
+                let sweep = StageSweepLineView()
+                sweep.configure(
+                    tokens: tokens, font: font, glowColor: glowColor,
+                    isChorus: false, maxWidth: maxWidth,
+                    lineHeight: lineHeight, rtl: false, prepared: prepared)
+                lineView.showSweep(sweep, textFrame: textFrame,
+                                   boxHeight: boxHeight, key: key)
+                lineView.updateSweep(position: self.lastPosition,
+                                     lineEnd: lineEnd)
+            }
+        }
     }
 
     // MARK: 扫字 token（网页 resolveMonetSweepWords 对译）

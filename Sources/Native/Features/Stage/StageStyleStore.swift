@@ -41,4 +41,43 @@ enum StageStyleStore {
     static var currentStyleIsNative: Bool {
         LyricStageRegistry.nativeStyleIds.contains(currentStyleId)
     }
+
+    // MARK: - 防卡死守卫（3.7 (44)）
+
+    /// pending 标记：某样式已在舞台装配（mountRenderer）但尚
+    /// 未被证明能存活渲染（StageViewController frameStep 满
+    /// 60 帧或存活 2 秒后清除）。进程若在证明前消亡（卡死
+    /// 被杀/崩溃），标记留存到下次启动——runLaunchStyleGuard
+    /// 据此把该样式回退 classic，保证任何开台入口都不再撞
+    /// 上同一块未证明的渲染路径。纵深防御：与冷启 route 取
+    /// 消、莫奈成图异步化互不依赖。
+    private static let stylePendingKey = "folia.stage.stylePending"
+
+    static var stylePendingId: String? {
+        UserDefaults.standard.string(forKey: stylePendingKey)
+    }
+
+    static func armStylePending(_ styleId: String) {
+        UserDefaults.standard.set(styleId, forKey: stylePendingKey)
+    }
+
+    static func clearStylePending() {
+        UserDefaults.standard.removeObject(forKey: stylePendingKey)
+    }
+
+    /// 启动守卫：SceneDelegate.willConnectTo 最先调用（任何
+    /// 舞台呈现之前）。上次会话 pending 未清 = 上次开台未成
+    /// 功：回退持久化样式至 classic 并清标记、落面包屑。
+    /// 无 pending 时为空操作。
+    static func runLaunchStyleGuard() {
+        guard let pending = stylePendingId else { return }
+        clearStylePending()
+        if currentStyleId == pending {
+            currentStyleId = LyricStageRegistry.defaultStyleId
+        }
+        if lastNativeStyleId == pending {
+            UserDefaults.standard.removeObject(forKey: lastNativeKey)
+        }
+        Breadcrumbs.log("stage style-guard reset from=\(pending)")
+    }
 }
