@@ -66,6 +66,13 @@ private final class SweepLyricLineView: UIView {
         }
         dimLabel.alpha = 0.38
         maskLayer.backgroundColor = UIColor.black.cgColor
+        // 扫光迟滞摘除（3.7 (44) 呈现层审计）：progress 每帧改
+        // mask frame，未禁隐式动画时被 CALayer 默认 0.25s 隐式
+        // 动画低通——扫光边恒定拖尾约 250ms（位置量本身逐帧
+        // 精确、纯呈现层叠加）。禁 bounds/position 动作后 mask
+        // 与 progress 同帧到位，拖尾 250ms → 0。
+        maskLayer.actions = ["bounds": NSNull(), "position": NSNull(),
+                             "anchorPoint": NSNull()]
         brightLabel.layer.mask = maskLayer
     }
 

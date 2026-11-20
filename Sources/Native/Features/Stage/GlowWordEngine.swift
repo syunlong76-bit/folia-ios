@@ -347,7 +347,11 @@ final class GlowWordView: UIView {
                 self.transform = self.transform(for: .active)
             }
             UIView.animate(withDuration: 0.1) { self.alpha = 1 }
-            UIView.transition(with: bodyLabel, duration: 0.2,
+            // 激活色交叉淡化 0.2s → 0.1s（3.7 (44) 呈现层迟滞
+            // 审计）：wordLookahead 仅 0.03–0.15s，吸收不全
+            // 0.2s 淡化——词到点后全色恒晚 50–170ms。缩半后
+            // 净拖尾 ≤70ms，仍保留一帧级柔和上色不硬切。
+            UIView.transition(with: bodyLabel, duration: 0.1,
                               options: .transitionCrossDissolve) {
                 self.bodyLabel.textColor = self.activeColor
             }
