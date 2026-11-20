@@ -178,6 +178,16 @@ final class GlowWordView: UIView {
     private let baseColor: UIColor
     private let activeColor: UIColor
     private let profile: StageLineProfile
+    /// 超采样倍率（3.7 (47) 清晰度修复）：UILabel 活字由
+    /// 图层按 bounds×屏幕倍率栅格化，active 姿态 transform
+    /// （pose.scale×1.4，云阶最高 2.38）一放大就软。本视图
+    /// 改为内部按 renderScale 倍字号/几何构建、再由内容容
+    /// 器反向缩放回逻辑尺寸——栅格像素恒 ≥ 最大显示尺寸，
+    /// 姿态、弹簧与时序参数一字不动。renderScale 按本词
+    /// pose 的最大放大推导（×1.4 active 系数 ×1.1 弹簧过
+    /// 冲/容器余量，0.25 档进位，上限 3，下限 1 时直通）。
+    private let renderScale: CGFloat
+    private let contentView = UIView()
     private let bodyLabel = UILabel()
     private let glowContainer = UIView()
     private var glowLabels: [UILabel] = []
@@ -197,15 +207,22 @@ final class GlowWordView: UIView {
         self.baseColor = baseColor
         self.activeColor = activeColor
         self.profile = profile
+        let rawScale = pose.scale * 1.4 * 1.1
+        self.renderScale = rawScale <= 1.05
+            ? 1 : min(3, ceil(rawScale * 4) / 4)
         super.init(frame: .zero)
 
+        // 内部几何全在 renderScale 倍空间构建（字号、坐标、
+        // 阴影半径同倍），内容容器反向缩放回逻辑尺寸。
+        let r = renderScale
+        let rFont = font.withSize(font.pointSize * r)
         bodyLabel.text = unit.text
-        bodyLabel.font = font
+        bodyLabel.font = rFont
         bodyLabel.textColor = baseColor
         bodyLabel.textAlignment = .center
         bodyLabel.layer.shadowColor = UIColor.black.cgColor
         bodyLabel.layer.shadowOpacity = 0.45
-        bodyLabel.layer.shadowRadius = 3
+        bodyLabel.layer.shadowRadius = 3 * r
         bodyLabel.layer.shadowOffset = .zero
         bodyLabel.sizeToFit()
 
@@ -218,11 +235,11 @@ final class GlowWordView: UIView {
         for (index, g) in graphemes.enumerated() {
             let label = UILabel()
             label.text = g
-            label.font = font
+            label.font = rFont
             label.textColor = activeColor
             label.layer.shadowColor = activeColor.cgColor
             label.layer.shadowOpacity = 1
-            label.layer.shadowRadius = profile.glowRadius
+            label.layer.shadowRadius = profile.glowRadius * r
             label.layer.shadowOffset = .zero
             label.sizeToFit()
             label.frame.origin = CGPoint(x: gx, y: 0)
@@ -238,14 +255,23 @@ final class GlowWordView: UIView {
         glowContainer.alpha = 0
         glowContainer.isUserInteractionEnabled = false
 
-        let width = max(bodyLabel.bounds.width, gx)
-        let height = bodyLabel.bounds.height
+        let widthR = max(bodyLabel.bounds.width, gx)
+        let heightR = bodyLabel.bounds.height
         bodyLabel.frame = CGRect(
-            x: (width - bodyLabel.bounds.width) / 2, y: 0,
-            width: bodyLabel.bounds.width, height: height)
-        glowContainer.frame.origin = CGPoint(x: (width - gx) / 2, y: 0)
-        addSubview(glowContainer)
-        addSubview(bodyLabel)
+            x: (widthR - bodyLabel.bounds.width) / 2, y: 0,
+            width: bodyLabel.bounds.width, height: heightR)
+        glowContainer.frame.origin = CGPoint(x: (widthR - gx) / 2, y: 0)
+        let width = widthR / r
+        let height = heightR / r
+        contentView.bounds = CGRect(x: 0, y: 0, width: widthR, height: heightR)
+        contentView.center = CGPoint(x: width / 2, y: height / 2)
+        if r != 1 {
+            contentView.transform = CGAffineTransform(scaleX: 1 / r, y: 1 / r)
+        }
+        contentView.isUserInteractionEnabled = false
+        contentView.addSubview(glowContainer)
+        contentView.addSubview(bodyLabel)
+        addSubview(contentView)
         frame = CGRect(x: 0, y: 0, width: width, height: height)
         isUserInteractionEnabled = false
         applyWaitingPose(animated: false)

@@ -266,7 +266,18 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func snapshotKey(line: LyricLine, radius: CGFloat, colorRole: String) -> String {
-        "\(builtTrackId ?? "")|\(line.id)|\(Int(radius * 10))|\(colorRole)|\(Int(rootView.bounds.width))"
+        "\(builtTrackId ?? "")|\(line.id)|\(Int(radius * 10))|\(colorRole)|\(Int(rootView.bounds.width))|s\(Int(bakeScale() * 10))"
+    }
+
+    /// 烘焙倍率（3.7 (47) 清晰度修复）：旧版硬编码 @2x，
+    /// 在 @3x 屏上光显示环节就先软 1.5 倍、再叠槽位变换
+    /// （最高 1.06）共约 1.59 倍。改按当前屏幕倍率 × 槽位
+    /// 最大缩放出图（14 Pro：3×1.06≈3.18），上限 4.2 防
+    /// 极端倍率下单图失控（缓存另有字节上限兜底）。
+    private func bakeScale() -> CGFloat {
+        let display = rootView.traitCollection.displayScale > 0
+            ? rootView.traitCollection.displayScale : UIScreen.main.scale
+        return min(display * 1.06, 4.2)
     }
 
     /// 一次性快照：渲染行文本 → CIFilter 高斯模糊 → crop 回
@@ -279,8 +290,9 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
         let size = contentSize(for: line)
         guard size.width > 0 else { return nil }
         let font = StageFonts.bold(size: fontSize(for: line))
+        let scale = bakeScale()
         let format = UIGraphicsImageRendererFormat()
-        format.scale = 2
+        format.scale = scale
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let plain = renderer.image { context in
             let attributes: [NSAttributedString.Key: Any] = [
@@ -305,11 +317,14 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
         if radius > 0, let ciImage = CIImage(image: plain) {
             let filter = CIFilter(name: "CIGaussianBlur")
             filter?.setValue(ciImage.clampedToExtent(), forKey: kCIInputImageKey)
-            filter?.setValue(radius, forKey: kCIInputRadiusKey)
+            // CIFilter 半径以输入像素计：旧 @2x 下 radius 的
+            // 视觉模糊 = radius/2 pt；倍率变更后按像素比补
+            // 偿（×scale/2），视觉模糊量与旧版逐档一致。
+            filter?.setValue(radius * scale / 2, forKey: kCIInputRadiusKey)
             let context = CIContext()
             let cropped = filter?.outputImage?.cropped(to: ciImage.extent)
             if let cropped, let cg = context.createCGImage(cropped, from: cropped.extent) {
-                result = UIImage(cgImage: cg, scale: 2, orientation: .up)
+                result = UIImage(cgImage: cg, scale: scale, orientation: .up)
             }
         }
         snapshotCache.store(result, forKey: key)

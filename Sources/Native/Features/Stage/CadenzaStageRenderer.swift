@@ -355,6 +355,7 @@ private final class CadenzaWordView: UIView {
     let glyphs: [String]
     let isCJKText: Bool
     let splitGlow: Bool
+    private let contentView = UIView()
     private let bodyLabel = UILabel()
     private var glowLabels: [UILabel] = []
 
@@ -373,31 +374,58 @@ private final class CadenzaWordView: UIView {
         // 标签布局把 baseline 落到 height×0.42。
         layer.anchorPoint = CGPoint(x: 0.5, y: 0)
 
-        let labelY = placement.height * 0.42 - font.ascender
+        // 超采样（3.7 (47) 清晰度修复）：词视图由逐帧
+        // transform 放大到 placement.scale（hero 词最高约
+        // 1.56）为常态，UILabel 按逻辑 bounds 栅格化必然
+        // 发软。内部按 renderScale 倍字号/几何构建、内容
+        // 容器反向缩放回逻辑尺寸（锚点与本视图同为
+        // (0.5, 0)，枢轴不变），逐帧 transform 与包络参数
+        // 一字不动。renderScale = placement.scale×1.05
+        // 余量、0.25 档进位、上限 2、下限 1 直通。
+        let rawScale = placement.scale * 1.05
+        let renderScale: CGFloat = rawScale <= 1.05
+            ? 1 : min(2, ceil(rawScale * 4) / 4)
+        let r = renderScale
+        let rFont = font.withSize(font.pointSize * r)
+        contentView.layer.anchorPoint = CGPoint(x: 0.5, y: 0)
+        contentView.bounds = CGRect(
+            x: 0, y: 0,
+            width: placement.width * r, height: placement.height * r)
+        // 锚点 (0.5, 0) 必须落在父视图顶边中点：用 layer
+        // .position 直定锚点位置（center 在非中心锚点下会
+        // 按 frame 中心换算、整体上移半高）。
+        contentView.layer.position = CGPoint(x: placement.width / 2, y: 0)
+        if r != 1 {
+            contentView.transform = CGAffineTransform(scaleX: 1 / r, y: 1 / r)
+        }
+        contentView.isUserInteractionEnabled = false
+        addSubview(contentView)
+
+        let labelY = (placement.height * 0.42 - font.ascender) * r
         let glowTexts = splitGlow ? glyphs : [placement.text]
         var gx: CGFloat = 0
         for text in glowTexts {
             let label = UILabel()
             label.text = text
-            label.font = font
+            label.font = rFont
             label.textColor = .white
             label.layer.shadowOffset = .zero
-            label.layer.shadowRadius = 16
+            label.layer.shadowRadius = 16 * r
             label.sizeToFit()
             label.frame = CGRect(x: gx, y: labelY,
                                  width: label.bounds.width,
                                  height: label.bounds.height)
             gx += label.bounds.width
             glowLabels.append(label)
-            addSubview(label)
+            contentView.addSubview(label)
         }
         bodyLabel.text = placement.text
-        bodyLabel.font = font
+        bodyLabel.font = rFont
         bodyLabel.sizeToFit()
         bodyLabel.frame = CGRect(x: 0, y: labelY,
                                  width: bodyLabel.bounds.width,
                                  height: bodyLabel.bounds.height)
-        addSubview(bodyLabel)
+        contentView.addSubview(bodyLabel)
     }
 
     @available(*, unavailable)

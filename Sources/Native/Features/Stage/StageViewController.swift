@@ -1,6 +1,8 @@
 import UIKit
 import Combine
 import QuartzCore
+import PhotosUI
+import UniformTypeIdentifiers
 
 // 原生舞台页壳（3.7 (14)，M2'）：全屏舞台——封面氛围背景、
 // LyricStage 协议驱动的歌词面、与迷你台/展开卡同一命令入口的
@@ -24,6 +26,10 @@ final class StageViewController: UIViewController {
 
     // MARK: 视图
 
+    // 自定义背景层（3.7 (47)）：舞台最底层，位于宿主封面
+    // 氛围三件套之下；生效时三件套隐藏、底图换成用户自选
+    // 的图片/动图/视频。装配与播放控制见文件尾 custombg 段。
+    private let customBgView = CustomBackgroundView()
     private let backdropImageView = UIImageView()
     private let backdropBlur = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
     private let backdropTint = UIView()
@@ -245,6 +251,9 @@ final class StageViewController: UIViewController {
         stageToken = StageExitGate.shared.registerStage(self)
         view.backgroundColor = .black
         buildLayout()
+        // 自定义背景（3.7 (47)）：槽位有记录则装配并藏起宿主
+        // 氛围层；播放由 viewWillAppear/Disappear 钩子管。
+        refreshCustomBackground()
         installStageHeaderAutoHideRecognizers()
         context = LyricStageContext(
             sendCommand: { [weak self] command in self?.handleCommand(command) },
@@ -279,6 +288,8 @@ final class StageViewController: UIViewController {
             self?.setStageProgress(fraction)
         }
         progressDriver.start()
+        // 自定义背景回台恢复（3.7 (47)）：动图/视频续播。
+        customBgView.play()
         startDisplayLink()
         // 点播台在场边沿（3.7 (32)）：主题层门控 + 宠物钩子 +
         // 无操作计时，与墙台 setMiniBarVisible 同构。
@@ -318,6 +329,8 @@ final class StageViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        // 自定义背景离台暂停（3.7 (47)）。
+        customBgView.pause()
         progressDriver.stop()
         stageBarPresented = false
         cancelStageIdleTimer()
@@ -382,6 +395,7 @@ final class StageViewController: UIViewController {
     // MARK: 布局
 
     private func buildLayout() {
+        view.insertSubview(customBgView, at: 0)
         backdropImageView.contentMode = .scaleAspectFill
         backdropImageView.clipsToBounds = true
         backdropBlur.alpha = 0.55
@@ -443,6 +457,7 @@ final class StageViewController: UIViewController {
     private func layoutStage() {
         let bounds = view.bounds
         let safe = view.safeAreaInsets
+        customBgView.frame = bounds
         backdropImageView.frame = bounds
         backdropBlur.frame = bounds
         backdropTint.frame = bounds
@@ -987,6 +1002,21 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             self.dismiss(animated: true) { [weak self] in
                 self?.jumpToWebStage(reason: "picker open web stage entry")
+            }
+        }
+        picker.onPickCustomBackground = { [weak self] in
+            guard let self else { return }
+            self.dismiss(animated: true) { [weak self] in
+                self?.presentCustomBackgroundPicker()
+            }
+        }
+        picker.onClearCustomBackground = { [weak self] in
+            guard let self else { return }
+            self.dismiss(animated: true) { [weak self] in
+                guard let self else { return }
+                CustomBackgroundStore.clear()
+                Breadcrumbs.log("custombg.clear")
+                self.refreshCustomBackground()
             }
         }
         picker.modalPresentationStyle = .pageSheet
@@ -1708,6 +1738,113 @@ extension StageViewController {
             like.frame = CGRect(
                 x: likeX, y: region.minY + 12,
                 width: 64, height: 64)
+        }
+    }
+}
+
+// MARK: - 自定义背景（3.7 (47)）
+
+extension StageViewController: PHPickerViewControllerDelegate {
+
+    /// 按槽位现状装配/卸下自定义背景，并同步宿主氛围三件套
+    /// 显隐。viewDidLoad、选入成功、恢复样式背景三处调用。
+    func refreshCustomBackground() {
+        if let entry = CustomBackgroundStore.current {
+            customBgView.apply(kind: entry.kind, url: entry.url)
+            backdropImageView.isHidden = true
+            backdropBlur.isHidden = true
+            backdropTint.isHidden = true
+            Breadcrumbs.log("custombg.apply kind=\(entry.kind.rawValue)")
+            if view.window != nil { customBgView.play() }
+        } else {
+            customBgView.clearContent()
+            backdropImageView.isHidden = false
+            backdropBlur.isHidden = false
+            backdropTint.isHidden = false
+        }
+    }
+
+    func presentCustomBackgroundPicker() {
+        var config = PHPickerConfiguration()
+        config.filter = .any(of: [.images, .videos])
+        config.selectionLimit = 1
+        // .current 取原文件（GIF/APNG 帧与视频原片不被转码）。
+        config.preferredAssetRepresentationMode = .current
+        let picker = PHPickerViewController(configuration: config)
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+
+    func picker(_ picker: PHPickerViewController,
+                didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        guard let provider = results.first?.itemProvider else { return }
+        if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            provider.loadFileRepresentation(
+                forTypeIdentifier: UTType.movie.identifier
+            ) { [weak self] url, _ in
+                guard let self else { return }
+                guard let url else {
+                    self.customBgFail(reason: "no-file")
+                    return
+                }
+                // 临时文件仅在回调存活期内有效，装槽必须同步完成。
+                self.installCustomBackground(sourceURL: url, kind: .video)
+            }
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+            provider.loadFileRepresentation(
+                forTypeIdentifier: UTType.image.identifier
+            ) { [weak self] url, _ in
+                guard let self else { return }
+                guard let url else {
+                    self.customBgFail(reason: "no-file")
+                    return
+                }
+                let kind: CustomBackgroundKind =
+                    CustomBackgroundStore.imageFrameCount(at: url) > 1
+                    ? .animated : .image
+                self.installCustomBackground(sourceURL: url, kind: kind)
+            }
+        } else {
+            customBgFail(reason: "unsupported-type")
+        }
+    }
+
+    private func installCustomBackground(sourceURL: URL,
+                                         kind: CustomBackgroundKind) {
+        do {
+            let bytes = try CustomBackgroundStore.install(
+                sourceURL: sourceURL, kind: kind)
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                Breadcrumbs.log(
+                    "custombg.set kind=\(kind.rawValue) bytes=\(bytes)")
+                self.refreshCustomBackground()
+            }
+        } catch CustomBackgroundStore.InstallError.tooLarge(let limit) {
+            customBgFail(reason: "too-large limit=\(limit)")
+        } catch {
+            customBgFail(reason: "copy-failed")
+        }
+    }
+
+    private func customBgFail(reason: String) {
+        Breadcrumbs.log("custombg.fail reason=\(reason)")
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.view.window != nil else { return }
+            let message: String
+            if reason.hasPrefix("too-large") {
+                message = "文件太大了：图片/动图上限 30MB，视频上限 200MB。"
+            } else if reason == "unsupported-type" {
+                message = "这个文件类型不支持做背景。"
+            } else {
+                message = "背景没存上，请再试一次。"
+            }
+            let alert = UIAlertController(
+                title: "自定义背景", message: message,
+                preferredStyle: .alert)
+            alert.addAction(UIAlertAction(title: "好", style: .default))
+            self.present(alert, animated: true)
         }
     }
 }

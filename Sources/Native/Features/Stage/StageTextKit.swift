@@ -437,7 +437,7 @@ enum StageTextKit {
     static func prepareSweepImages(
         tokens: [StageSweepToken], font: UIFont,
         baseColor: UIColor, fillColor: UIColor, glowColor: UIColor,
-        lineHeight: CGFloat, rtl: Bool
+        lineHeight: CGFloat, rtl: Bool, scale: CGFloat = 3
     ) -> [Int: StageSweepWordImages] {
         var result: [Int: StageSweepWordImages] = [:]
         for (index, token) in tokens.enumerated() {
@@ -456,7 +456,9 @@ enum StageTextKit {
             let ctLine = CTLineCreateWithAttributedString(attr)
             _ = CTLineGetTypographicBounds(ctLine, nil, &descent, nil)
             let baseline = (lineHeight - glyphH) / 2 + descent
-            let scale: CGFloat = 3
+            // 栅格倍率用入参 scale（3.7 (47)：由调用方按当前
+            // 屏幕倍率传入；旧版在此恒 3，@2x 屏白烘、@3x
+            // 屏恰合，改动态后两边都贴合显示尺寸）。
             if token.timed {
                 result[index] = StageSweepWordImages(
                     glow: rasterizeWord(

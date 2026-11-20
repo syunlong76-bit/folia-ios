@@ -7,11 +7,17 @@ import UIKit
 // 如实写明。列表末尾另设常设「网页版播放页」入口（3.7 (26)
 // 补 R40 对账的设置保留网页舞台入口一项）：不改当前样式
 // 记录，随时可直达网页舞台。
+// 自定义背景段（3.7 (47)）：样式段之后加一段——「自定义
+// 背景」（从相册选图片/动图/视频，副文案回显当前槽位状态）
+// 与「恢复样式背景」（未设置时置灰禁用）。选入与清除的实际
+// 动作经回调由舞台 VC 执行（相册选择器从舞台呈现）。
 final class StageStylePickerViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
 
     var onPickNative: ((String) -> Void)?
     var onPickWeb: ((LyricStageStyleInfo) -> Void)?
     var onOpenWebStage: (() -> Void)?
+    var onPickCustomBackground: (() -> Void)?
+    var onClearCustomBackground: (() -> Void)?
 
     private let activeStyleId: String
     private let tableView = UITableView(frame: .zero, style: .insetGrouped)
@@ -62,15 +68,59 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
 
     // MARK: UITableViewDataSource
 
-    func numberOfSections(in tableView: UITableView) -> Int { 2 }
+    func numberOfSections(in tableView: UITableView) -> Int { 3 }
+
+    func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
+        section == 1 ? "背景" : nil
+    }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        section == 0 ? styles.count : 1
+        switch section {
+        case 0: return styles.count
+        case 1: return 2
+        default: return 1
+        }
     }
 
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "style", for: indexPath)
         if indexPath.section == 1 {
+            var config = UIListContentConfiguration.valueCell()
+            let current = CustomBackgroundStore.current
+            if indexPath.row == 0 {
+                config.text = "自定义背景"
+                switch current?.kind {
+                case .image: config.secondaryText = "当前：图片 · 点按更换"
+                case .animated: config.secondaryText = "当前：动图 · 点按更换"
+                case .video: config.secondaryText = "当前：视频（静音循环）· 点按更换"
+                case nil: config.secondaryText = "从相册选择图片 / 动图 / 视频"
+                }
+                config.textProperties.color = .white
+                config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.45)
+                cell.contentConfiguration = config
+                cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+                cell.accessoryType = .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = .default
+                cell.isUserInteractionEnabled = true
+            } else {
+                config.text = "恢复样式背景"
+                config.secondaryText = current == nil
+                    ? "尚未设置自定义背景" : "切回当前样式自带背景"
+                let enabled = current != nil
+                config.textProperties.color = enabled
+                    ? .white : UIColor.white.withAlphaComponent(0.35)
+                config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.45)
+                cell.contentConfiguration = config
+                cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+                cell.accessoryType = .none
+                cell.accessoryView = nil
+                cell.selectionStyle = enabled ? .default : .none
+                cell.isUserInteractionEnabled = enabled
+            }
+            return cell
+        }
+        if indexPath.section == 2 {
             var config = UIListContentConfiguration.valueCell()
             config.text = "网页版播放页"
             config.secondaryText = "打开网页舞台（样式以网页版当前设置为准）"
@@ -80,6 +130,8 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
             cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
             cell.accessoryType = .disclosureIndicator
             cell.accessoryView = nil
+            cell.selectionStyle = .default
+            cell.isUserInteractionEnabled = true
             return cell
         }
         let style = styles[indexPath.row]
@@ -91,6 +143,8 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         cell.contentConfiguration = config
         cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         cell.accessoryType = .none
+        cell.selectionStyle = .default
+        cell.isUserInteractionEnabled = true
         let isActive = style.id == activeStyleId
         let badge = UILabel()
         badge.text = style.isNativeAvailable ? " 原生 " : " 网页版 "
@@ -123,6 +177,11 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         if indexPath.section == 1 {
+            if indexPath.row == 0 { onPickCustomBackground?() }
+            else { onClearCustomBackground?() }
+            return
+        }
+        if indexPath.section == 2 {
             onOpenWebStage?()
             return
         }

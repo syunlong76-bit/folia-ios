@@ -54,6 +54,7 @@ private func monetHex(_ color: UIColor) -> String {
 // MARK: - Wash 成图管线
 
 enum MonetWashPipeline {
+    /// 缺省画布（调用方没给尺寸时的兜底，旧版固定值）。
     static let canvasW = 1920
     static let canvasH = 1080
     // 网页烘焙 tuning 缺省值（原生无设置面，恒缺省）。
@@ -69,13 +70,20 @@ enum MonetWashPipeline {
     /// 进程级单例。
     private static let sharedCIContext = CIContext(options: nil)
 
-    /// 1920×1080 一次成图：主题实色垫底 → 封面 cover 裁切
+    /// 一次成图：主题实色垫底 → 封面 cover 裁切
     /// → 模糊 → 逐像素后处理 → overlay 烘焙。逐像素段与
     /// 网页 worker 逐行同序（灰度混合 → 饱和（亮度重算）
     /// → wash（wash 色由原始亮度决定）→ round/clamp 写回）。
-    static func build(cover: UIImage, palette: PaletteTokens) -> UIImage? {
+    /// 画布尺寸（3.7 (47) 清晰度修复）：旧版恒 1920×1080
+    /// 横版画布，拉满竖屏显示时纵向放大近 2 倍；改由调用
+    /// 方按当前视图实际像素尺寸（×漂移缩放余量、带总像素
+    /// 上限）传入，横竖屏都贴合显示尺寸。canvasSize 为零
+    /// 时退回缺省 1920×1080。
+    static func build(cover: UIImage, palette: PaletteTokens,
+                      canvasSize: CGSize = .zero) -> UIImage? {
         guard let coverCG = cover.cgImage else { return nil }
-        let W = canvasW, H = canvasH
+        let W = canvasSize.width > 0 ? Int(canvasSize.width.rounded()) : canvasW
+        let H = canvasSize.height > 0 ? Int(canvasSize.height.rounded()) : canvasH
         let space = CGColorSpaceCreateDeviceRGB()
         let bitmapInfo = CGImageAlphaInfo.premultipliedLast.rawValue
             | CGBitmapInfo.byteOrder32Big.rawValue
@@ -114,7 +122,8 @@ enum MonetWashPipeline {
             else { return nil }
             post.draw(blurredCG, in: CGRect(x: 0, y: 0, width: W, height: H))
             applyPixelPost(bytes: ptr, count: bytesPerRow * H, palette: palette)
-            bakeOverlay(context: post, palette: palette)
+            bakeOverlay(context: post, palette: palette,
+                        canvasW: W, canvasH: H)
             guard let image = post.makeImage() else { return nil }
             return UIImage(cgImage: image, scale: 1, orientation: .up)
         }
@@ -181,9 +190,12 @@ enum MonetWashPipeline {
     }
 
     /// overlay 烘焙（网页 paintMonetOverlay 逐项对译；
-    /// CG 坐标 y 向上，画布坐标逐项换算）。
+    /// CG 坐标 y 向上，画布坐标逐项换算）。几何全部按传入
+    /// 画布尺寸的比例式计算（对角/光晕/veil/竖纹均为相对
+    /// 坐标），尺寸变更不改变视觉编排。
     private static func bakeOverlay(context post: CGContext,
-                                    palette: PaletteTokens) {
+                                    palette: PaletteTokens,
+                                    canvasW: Int, canvasH: Int) {
         let W = Double(canvasW), H = Double(canvasH)
         let overlay = overlayAmount
         let space = CGColorSpaceCreateDeviceRGB()
@@ -1022,6 +1034,14 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         return entry.images
     }
 
+    /// 当前屏幕栅格倍率（烘焙出图用）：traitCollection 优先，
+    /// 取不到退 UIScreen。烘焙在后台队列执行，倍率必须在主
+    /// 线程先捕获再带入（traitCollection 非线程安全）。
+    private var currentDisplayScale: CGFloat {
+        let s = rootView.traitCollection.displayScale
+        return s > 0 ? s : UIScreen.main.scale
+    }
+
     private func scheduleStaticBake(cacheKey: String, key: String, index: Int,
                                     text: String, font: UIFont, color: UIColor,
                                     maxWidth: CGFloat, maxLines: Int,
@@ -1030,6 +1050,10 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         pendingBakeKeys.insert(cacheKey)
         let generation = bakeGeneration
         let track = trackID
+        // 烘焙倍率（3.7 (47) 清晰度修复）：旧版恒 @2x，@3x
+        // 屏上静态行恒软 1.5 倍；改按当前屏幕倍率出图，与
+        // 显示尺寸 1:1（莫奈行变换 scale ≤1，无需余量）。
+        let bakeScale = currentDisplayScale
         bakeQueue.async { [weak self] in
             // bake 生命周期面包屑（3.7 (46)，DS 取证清单）：此前
             // 只有落地痕、没有入队/开工/完工痕，崩在栅格化中途
@@ -1041,7 +1065,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             autoreleasepool {
                 image = StageTextKit.rasterize(
                     text: text, font: font, color: color, maxWidth: maxWidth,
-                    maxLines: maxLines, fontPx: fontPx, scale: 2)?.image
+                    maxLines: maxLines, fontPx: fontPx, scale: bakeScale)?.image
                 if blur > 0.05, let sharp = image {
                     image = MonetStageRenderer.blurredImage(sharp, radiusPt: blur)
                 }
@@ -1067,9 +1091,11 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                 self.staticBakeCache.removeAll { $0.key == cacheKey }
                 self.staticBakeCache.append((key: cacheKey, image: image))
                 // LRU 双上限（3.7 (46)，DS 清单）：张数 24 之外
-                // 再加字节上限 64MB——@2x 大行图单张可达数 MB，
+                // 再加字节上限 64MB——大行图单张可达数 MB，
                 // 只按张数封顶时缓存字节可失控（内存硬线：舞台
-                // 纹理 ≤200–250MB）。刚入缓存者不淘汰。
+                // 纹理 ≤200–250MB）。(47) 烘焙升到屏幕倍率后
+                // 单图字节 ×2.25（@3x vs @2x），字节上限不变、
+                // 实际驻留张数自动收敛。刚入缓存者不淘汰。
                 var cacheBytes = self.staticBakeCache.reduce(0) {
                     $0 + Self.imageBytes($1.image)
                 }
@@ -1098,6 +1124,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         pendingBakeKeys.insert(cacheKey)
         let generation = bakeGeneration
         let track = trackID
+        // 扫字烘焙倍率同 static（3.7 (47)）：按当前屏幕倍率。
+        let bakeScale = currentDisplayScale
         bakeQueue.async { [weak self] in
             // bake 生命周期面包屑（3.7 (46)）：同 static bake。
             Breadcrumbs.log("monet bake start kind=sweep gen=\(generation) key=\(key)")
@@ -1107,7 +1135,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                 prepared = StageTextKit.prepareSweepImages(
                     tokens: tokens, font: font, baseColor: baseColor,
                     fillColor: fillColor, glowColor: glowColor,
-                    lineHeight: lineHeight, rtl: false)
+                    lineHeight: lineHeight, rtl: false, scale: bakeScale)
             }
             let bakeBytes = prepared.values.reduce(0) { sum, word in
                 sum + Self.imageBytes(word.glow) + Self.imageBytes(word.base)
@@ -1398,9 +1426,35 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             + "\(monetHex(palette.primary))|\(monetHex(palette.accent))|monet-v1"
     }
 
+    /// wash 目标画布（像素，3.7 (47)）：当前 bgContainer
+    /// 尺寸 × 屏幕倍率 × 漂移余量 1.07（MonetDriftTrack 在
+    /// strength 0.5 下对 bgContainer 的最大缩放约 1.062，
+    /// 留余量后显示放大恒 ≤1）。上限：长边 2600、总像素
+    /// 3.4MP——14 Pro 竖屏约 1179×2250（2.65MP、单图约
+    /// 10.6MB），LRU 3 张约 32MB，在舞台纹理预算内。
+    /// bounds 未定时退回 .zero（管线内缺省 1920×1080）。
+    private func washCanvasSize() -> CGSize {
+        let bounds = bgContainer.bounds.size
+        guard bounds.width > 0, bounds.height > 0 else { return .zero }
+        let scale = currentDisplayScale
+        var pw = bounds.width * scale * 1.07
+        var ph = bounds.height * scale * 1.07
+        let maxDim: CGFloat = 2600
+        let maxPixels: CGFloat = 3_400_000
+        var factor = min(1, maxDim / max(pw, ph))
+        if pw * ph > maxPixels {
+            factor = min(factor, sqrt(maxPixels / (pw * ph)))
+        }
+        pw *= factor
+        ph *= factor
+        return CGSize(width: pw.rounded(), height: ph.rounded())
+    }
+
     private func startWash(_ cover: UIImage) {
         guard let snap = snapshot else { return }
+        let canvasSize = washCanvasSize()
         let key = washCacheKey(palette: snap.palette)
+            + "|\(Int(canvasSize.width))x\(Int(canvasSize.height))"
         if key == washKey { return }
         if let cached = washCache.first(where: { $0.key == key })?.image {
             washKey = key
@@ -1411,7 +1465,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         let palette = snap.palette
         washTask = Task { [weak self] in
             let image = await Task.detached(priority: .utility) {
-                MonetWashPipeline.build(cover: cover, palette: palette)
+                MonetWashPipeline.build(cover: cover, palette: palette,
+                                        canvasSize: canvasSize)
             }.value
             guard let self, !Task.isCancelled, let image else { return }
             self.washKey = key
