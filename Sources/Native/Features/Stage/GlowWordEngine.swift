@@ -192,6 +192,14 @@ final class GlowWordView: UIView {
     private let glowContainer = UIView()
     private var glowLabels: [UILabel] = []
     private var graphemeSpans: [(start: TimeInterval, end: TimeInterval)] = []
+    /// 逐词强调辉光（3.7 (49)）：暖金色同文标签，垫在正文
+    /// 之下，alpha 由强调弹簧值驱动（见 tickEmphasis）。
+    private let emphasisGlowLabel = UILabel()
+    /// 强调弹簧状态（stiffness 200 / damping 15.5 积分值）。
+    private var emphasisValue: CGFloat = 1
+    private var emphasisVelocity: CGFloat = 0
+    private var emphasisApplied: CGFloat = 1
+    private var lastEmphasisTime: CFTimeInterval = 0
 
     /// active 段终点（normal 模式 = 词 end）。
     private var activeEnd: TimeInterval { unit.end }
@@ -207,9 +215,17 @@ final class GlowWordView: UIView {
         self.baseColor = baseColor
         self.activeColor = activeColor
         self.profile = profile
-        let rawScale = pose.scale * 1.4 * 1.1
+        // (49) 余量口径：逐词强调开启时，强调放大叠在姿态
+        // 之上——长音词最高 ≈1.85、短词弹簧峰值 ≈1.38，
+        // 栅格余量按词时长分档、上限放宽到 4，保证强调放
+        // 大后清晰度不退回 (47) 前；关时维持 (47) 原口径
+        // （×1.1、上限 3），关掉开关即回 (48) 观感。
+        let emphasisOn = StageEffectSettings.wordEmphasisEnabled
+        let headroom: CGFloat = emphasisOn
+            ? ((unit.end - unit.start) >= 1.0 ? 1.9 : 1.38) : 1.1
+        let rawScale = pose.scale * 1.4 * headroom * (emphasisOn ? 1.03 : 1)
         self.renderScale = rawScale <= 1.05
-            ? 1 : min(3, ceil(rawScale * 4) / 4)
+            ? 1 : min(emphasisOn ? 4 : 3, ceil(rawScale * 4) / 4)
         super.init(frame: .zero)
 
         // 内部几何全在 renderScale 倍空间构建（字号、坐标、
@@ -255,11 +271,30 @@ final class GlowWordView: UIView {
         glowContainer.alpha = 0
         glowContainer.isUserInteractionEnabled = false
 
+        // 强调辉光标签（3.7 (49)）：与正文同字同宽，暖金
+        // 色＋大半径同色阴影，alpha 恒由强调值驱动（静止
+        // 时为 0）；颜色不取样式 accent，AMLL 口径恒暖金。
+        emphasisGlowLabel.text = unit.text
+        emphasisGlowLabel.font = rFont
+        emphasisGlowLabel.textAlignment = .center
+        let warmGold = UIColor(red: 1.0, green: 0.76, blue: 0.32, alpha: 1)
+        emphasisGlowLabel.textColor = warmGold
+        emphasisGlowLabel.layer.shadowColor = warmGold.cgColor
+        emphasisGlowLabel.layer.shadowOpacity = 1
+        emphasisGlowLabel.layer.shadowRadius = 16 * r
+        emphasisGlowLabel.layer.shadowOffset = .zero
+        emphasisGlowLabel.sizeToFit()
+        emphasisGlowLabel.alpha = 0
+        emphasisGlowLabel.isUserInteractionEnabled = false
+
         let widthR = max(bodyLabel.bounds.width, gx)
         let heightR = bodyLabel.bounds.height
         bodyLabel.frame = CGRect(
             x: (widthR - bodyLabel.bounds.width) / 2, y: 0,
             width: bodyLabel.bounds.width, height: heightR)
+        emphasisGlowLabel.frame = CGRect(
+            x: (widthR - emphasisGlowLabel.bounds.width) / 2, y: 0,
+            width: emphasisGlowLabel.bounds.width, height: heightR)
         glowContainer.frame.origin = CGPoint(x: (widthR - gx) / 2, y: 0)
         let width = widthR / r
         let height = heightR / r
@@ -270,6 +305,7 @@ final class GlowWordView: UIView {
         }
         contentView.isUserInteractionEnabled = false
         contentView.addSubview(glowContainer)
+        contentView.addSubview(emphasisGlowLabel)
         contentView.addSubview(bodyLabel)
         addSubview(contentView)
         frame = CGRect(x: 0, y: 0, width: width, height: height)
@@ -313,7 +349,8 @@ final class GlowWordView: UIView {
 
     // MARK: 状态驱动
 
-    /// 每帧调用：按位置算目标状态，变化时才跑迁移。
+    /// 每帧调用：按位置算目标状态，变化时才跑迁移；
+    /// 逐词强调弹簧每帧都积分（见 tickEmphasis）。
     func update(position: TimeInterval) {
         let target: Status
         if position < unit.start - profile.wordLookahead {
@@ -323,8 +360,69 @@ final class GlowWordView: UIView {
         } else {
             target = .passed
         }
-        guard target != status else { return }
-        transition(to: target)
+        if target != status { transition(to: target) }
+        tickEmphasis(position: position)
+    }
+
+    // MARK: 逐词强调（3.7 (49)）
+
+    /// AMLL emphasize 的原生落点（借概念与弹簧参数，实
+    /// 现自研）：唱到的词放大＋暖金辉光＋上浮，长音词随
+    /// 音长持续膨胀带正弦微浪，唱完弹簧缓落。弹簧
+    /// stiffness 200 / damping 15.5（ζ≈0.55，带过冲）在
+    /// 本函数内按帧积分。数据源纪律：unit 的 start/end
+    /// 即扫光链同一时间轴（YRC 真戳或 (46) 跨曲学习 r
+    /// 分布），本层不另建分布、不重排布局、不动扫光
+    /// x 轴——变换只落在内容容器上，与状态姿态 transform
+    /// 分层合成；栅格余量已在 init 按词时长预留（见
+    /// renderScale 口径），放大后不回软。
+    private func tickEmphasis(position: TimeInterval) {
+        let now = CACurrentMediaTime()
+        let dt = lastEmphasisTime > 0
+            ? min(max(now - lastEmphasisTime, 0), 0.05) : 1.0 / 60
+        lastEmphasisTime = now
+        var target: CGFloat = 1
+        if StageEffectSettings.emphasisEnabledCached(now: now),
+           status == .active {
+            let dur = max(unit.end - unit.start, 0.05)
+            let p = CGFloat(min(max((position - unit.start) / dur, 0), 1))
+            if dur >= 1.0 {
+                // 长音：目标随演唱进度爬升至 ≈1.85（样片
+                // 定档），微浪 ±0.035 随进度渐入。
+                target = 1 + 0.85 * pow(p, 0.65)
+                    + 0.035 * CGFloat(sin((position - unit.start) * 7.0)) * p
+            } else {
+                // 短词：1.30 定档（样片 1+0.30e），词尾轻收。
+                target = 1 + 0.30 * (1 - 0.3 * p)
+            }
+        }
+        let stiffness: CGFloat = 200, damping: CGFloat = 15.5
+        let accel = -stiffness * (emphasisValue - target)
+            - damping * emphasisVelocity
+        emphasisVelocity += accel * CGFloat(dt)
+        emphasisValue += emphasisVelocity * CGFloat(dt)
+        if abs(emphasisValue - emphasisApplied) > 0.0015
+            || abs(emphasisVelocity) > 0.002 {
+            applyEmphasis()
+        }
+    }
+
+    private func applyEmphasis() {
+        emphasisApplied = emphasisValue
+        let e = emphasisValue
+        var transform = CGAffineTransform(
+            scaleX: 1 / renderScale, y: 1 / renderScale)
+        if abs(e - 1) > 0.0005 {
+            // 上浮与字号成比例：e=1.30 时 ≈17pt@50pt 字
+            // （样片定档），上限 0.8 倍字号防长音飘太远。
+            let floatY = -min((e - 1) * font.pointSize * 1.1,
+                              font.pointSize * 0.8)
+            let emphasis = CGAffineTransform(translationX: 0, y: floatY)
+                .scaledBy(x: e, y: e)
+            transform = transform.concatenating(emphasis)
+        }
+        contentView.transform = transform
+        emphasisGlowLabel.alpha = min(max((e - 1) / 0.85, 0), 1) * 0.9
     }
 
     /// 构建后立即按当前位定格（中途进台/seek 落位）：不跑
@@ -342,6 +440,11 @@ final class GlowWordView: UIView {
         layer.removeAllAnimations()
         bodyLabel.layer.removeAllAnimations()
         glowContainer.layer.removeAllAnimations()
+        // 强调弹簧同步复位（seek/中途进台不带残留膨胀）。
+        emphasisValue = 1
+        emphasisVelocity = 0
+        lastEmphasisTime = 0
+        applyEmphasis()
         transform = transform(for: target)
         switch target {
         case .waiting:

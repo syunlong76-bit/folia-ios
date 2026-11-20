@@ -27,6 +27,10 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
 
     private let rootView = LyricStageRootView()
     private let floatView = UIView()
+    /// 粒子换行层（3.7 (49)）：盖在行容器之上，过渡期间
+    /// 真实新行先藏在本层之下、reveal 点淡入衔接。
+    private let particleView = ParticleTransitionView()
+    private var particleHiddenContainer: UIView?
     private var lineContainer: UIView?
     private var wordViews: [GlowWordView] = []
     private var context: LyricStageContext?
@@ -42,6 +46,7 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
         super.init()
         rootView.backgroundColor = .clear
         rootView.addSubview(floatView)
+        rootView.addSubview(particleView)
         rootView.onLayout = { [weak self] in self?.performLayout() }
     }
 
@@ -78,11 +83,14 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
             transitionLine(to: idx, position: position)
         }
         for word in wordViews { word.update(position: position) }
+        particleView.tick()
     }
 
     func unmount() {
         isActive = false
         StageBreathingFloat.stop(on: floatView)
+        particleView.cancel()
+        particleHiddenContainer = nil
         context = nil
     }
 
@@ -105,6 +113,8 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 行构建与切换
 
     private func clearLine(animated: Bool) {
+        particleView.cancel()
+        particleHiddenContainer = nil
         if let container = lineContainer {
             container.removeFromSuperview()
         }
@@ -114,17 +124,41 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func transitionLine(to idx: Int?, position: TimeInterval) {
-        // 旧行出场：scale 1.1 + 淡出 0.3s 后移除（网页 exit）。
-        if let old = lineContainer {
-            lineContainer = nil
-            wordViews = []
-            UIView.animate(withDuration: 0.3, delay: 0,
-                           options: [.curveEaseInOut]) {
-                old.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
-                old.alpha = 0
-            } completion: { _ in old.removeFromSuperview() }
-        }
+        let oldIdx = activeLineId
+        let old = lineContainer
+        lineContainer = nil
+        wordViews = []
         activeLineId = idx
+
+        // 粒子换行（3.7 (49)）：自然顺翻（旧行→紧邻下一
+        // 行、位置落在新行行首 1.2s 内）时，旧行先快照采
+        // 样再移除，粒子散开接管出场；seek/跳行/回退/空档
+        // 断档一律走原出入场，不触发仪式。
+        var outgoingField: ParticleField?
+        if let old {
+            let oldHidden = old === particleHiddenContainer
+            if oldHidden { particleHiddenContainer = nil }
+            if !oldHidden,
+               StageEffectSettings.particleFlipEnabled,
+               particleView.isAvailable,
+               let oldIdx, let idx, idx == oldIdx + 1,
+               let snapshot, snapshot.lines.indices.contains(idx),
+               position - snapshot.lines[idx].start < 1.2 {
+                outgoingField = ParticleFieldSampler.sample(
+                    view: old, in: rootView, maxPoints: 1600)
+            }
+            if outgoingField != nil || oldHidden {
+                old.removeFromSuperview()
+                if oldHidden { particleView.cancel() }
+            } else {
+                // 旧行出场：scale 1.1 + 淡出 0.3s 后移除（网页 exit）。
+                UIView.animate(withDuration: 0.3, delay: 0,
+                               options: [.curveEaseInOut]) {
+                    old.transform = CGAffineTransform(scaleX: 1.1, y: 1.1)
+                    old.alpha = 0
+                } completion: { _ in old.removeFromSuperview() }
+            }
+        }
         guard let idx, let snapshot,
               snapshot.lines.indices.contains(idx) else { return }
         let built = buildLineContainer(line: snapshot.lines[idx])
@@ -133,6 +167,37 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
         floatView.addSubview(built.container)
         layoutLineContainer(built.container)
         for word in built.words { word.snap(position: position) }
+
+        if let outgoingField {
+            // 新行采样：snap 后词多为 waiting（alpha 0），
+            // 采样前临时全显、采完恢复。采到则真实行先隐
+            // 藏，粒子聚拢成字、reveal 点淡入衔接（跳过原
+            // 0.9 缩放入场，粒子目标即恒等几何）。
+            let savedAlphas = built.words.map { $0.alpha }
+            for word in built.words { word.alpha = 1 }
+            let incomingField = ParticleFieldSampler.sample(
+                view: built.container, in: rootView, maxPoints: 1600)
+            for (word, saved) in zip(built.words, savedAlphas) {
+                word.alpha = saved
+            }
+            if let incomingField {
+                built.container.alpha = 0
+                particleHiddenContainer = built.container
+                let container = built.container
+                particleView.onReveal = { [weak self, weak container] in
+                    guard let self, let container,
+                          self.particleHiddenContainer === container
+                    else { return }
+                    self.particleHiddenContainer = nil
+                    UIView.animate(withDuration: 0.25) {
+                        container.alpha = 1
+                    }
+                }
+                particleView.begin(outgoing: outgoingField,
+                                   incoming: incomingField)
+                return
+            }
+        }
         // 新行入场：scale 0.9/透明 → 恒等（网页 initial/animate）。
         built.container.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
         built.container.alpha = 0
@@ -303,6 +368,7 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
         floatView.frame = bounds
+        particleView.frame = bounds
         if let container = lineContainer {
             // 字号随视口变（旋转/分屏）时重建当前行保口径。
             if abs(fontSize() - builtFontSize) > 0.5, let idx = activeLineId {

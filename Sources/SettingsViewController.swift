@@ -30,6 +30,9 @@ final class SettingsViewController: UIViewController {
     private let lastResultLabel = UILabel()
     private let autoSwitch = UISwitch()
     private let themeSwitch = UISwitch()
+    // 歌词特效增强（3.7 (49)）：逐词强调 / 粒子换行两开关。
+    private let emphasisSwitch = UISwitch()
+    private let particleFlipSwitch = UISwitch()
     private let checkButton = UIButton(type: .system)
     private let applyButton = UIButton(type: .system)
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -261,6 +264,53 @@ final class SettingsViewController: UIViewController {
         ])
         themeGroup.addArrangedSubview(themeHintWrap)
         cardStack.addArrangedSubview(themeGroup)
+
+        // 歌词特效增强分组卡（3.7 (49)）：逐词强调与粒子
+        // 换行两个独立开关，缺省全开；关掉即回上一版观感。
+        let fxGroup = makeGroupCard()
+        func fxRow(_ title: String, _ toggle: UISwitch,
+                   _ action: Selector) -> UIStackView {
+            let row = UIStackView()
+            row.axis = .horizontal
+            row.alignment = .center
+            row.isLayoutMarginsRelativeArrangement = true
+            row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+            let label = UILabel()
+            label.text = title
+            label.font = .systemFont(ofSize: 15)
+            label.textColor = FoliaUI.primary
+            toggle.onTintColor = FoliaUI.accent
+            toggle.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+            toggle.addTarget(self, action: action, for: .valueChanged)
+            row.addArrangedSubview(label)
+            row.addArrangedSubview(UIView())
+            row.addArrangedSubview(toggle)
+            return row
+        }
+        emphasisSwitch.isOn = StageEffectSettings.wordEmphasisEnabled
+        fxGroup.addArrangedSubview(fxRow(
+            "逐词强调", emphasisSwitch, #selector(emphasisSwitchChanged)))
+        fxGroup.addArrangedSubview(makeHairline())
+        particleFlipSwitch.isOn = StageEffectSettings.particleFlipEnabled
+        fxGroup.addArrangedSubview(fxRow(
+            "粒子换行", particleFlipSwitch, #selector(particleFlipSwitchChanged)))
+        fxGroup.addArrangedSubview(makeHairline())
+        let fxHint = UILabel()
+        fxHint.text = "逐词强调：唱到的词放大、发光、上浮，长音持续膨胀（流光、云阶、残光、深廊）。粒子换行：换行时旧行化作粒子散开、新行聚拢成字（流光、莫奈）。"
+        fxHint.font = .systemFont(ofSize: 12)
+        fxHint.textColor = FoliaUI.secondary
+        fxHint.numberOfLines = 0
+        let fxHintWrap = UIView()
+        fxHintWrap.addSubview(fxHint)
+        fxHint.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            fxHint.topAnchor.constraint(equalTo: fxHintWrap.topAnchor, constant: 10),
+            fxHint.bottomAnchor.constraint(equalTo: fxHintWrap.bottomAnchor, constant: -12),
+            fxHint.leadingAnchor.constraint(equalTo: fxHintWrap.leadingAnchor, constant: 14),
+            fxHint.trailingAnchor.constraint(equalTo: fxHintWrap.trailingAnchor, constant: -14)
+        ])
+        fxGroup.addArrangedSubview(fxHintWrap)
+        cardStack.addArrangedSubview(fxGroup)
 
         // 贴纸伙伴分组卡（3.7 (24)）：门面猫（cat-01，点按换
         // cat-15 播一次再换回）+ 门面狗（dog-17，白 tile 承
@@ -515,6 +565,14 @@ final class SettingsViewController: UIViewController {
     @objc private func themeSwitchChanged() {
         MiniPlayerTheme.effectsEnabled = themeSwitch.isOn
         NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
+    }
+
+    @objc private func emphasisSwitchChanged() {
+        StageEffectSettings.wordEmphasisEnabled = emphasisSwitch.isOn
+    }
+
+    @objc private func particleFlipSwitchChanged() {
+        StageEffectSettings.particleFlipEnabled = particleFlipSwitch.isOn
     }
 
     @objc private func checkTapped() {

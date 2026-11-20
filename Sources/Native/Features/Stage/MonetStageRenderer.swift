@@ -472,6 +472,11 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     private static let sharedCIContext = CIContext(options: nil)
     private var lineViews: [Int: MonetRailLineView] = [:]
     private var exitingViews: [MonetRailLineView] = []
+    /// 粒子换行层（3.7 (49)）：盖在轨道之上，纯叠加——
+    /// 莫奈轨道滚动连续，真实行不隐藏，粒子只做焦点推进
+    /// 时的散开/聚拢仪式（与流光的藏行衔接不同，见回报）。
+    private let particleView = ParticleTransitionView()
+    private var prevTickPosition: TimeInterval = -1
     private var focusIndex = 0
     private var activeIndex: Int?
     private var manualFocus: Int?
@@ -522,6 +527,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         portraitClipView.isUserInteractionEnabled = false
         portraitShadowView.addSubview(portraitClipView)
         rootView.addSubview(railView)
+        rootView.addSubview(particleView)
         railView.clipsToBounds = false
         // 轨道上下羽化 mask（网页 mask-image 同 stops）。
         let railMask = CAGradientLayer()
@@ -568,6 +574,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             for (_, lineView) in lineViews { lineView.removeFromSuperview() }
             lineViews = [:]
             manualFocus = nil
+            particleView.cancel()
+            prevTickPosition = -1
             let resolved = resolveAnchor(snapshot.anchor.position(atWallTime: CACurrentMediaTime()))
             activeIndex = resolved.active
             focusIndex = resolved.anchor
@@ -603,6 +611,26 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         lastPosition = position
         guard isActive, snapshot != nil, !lines.isEmpty else { return }
         let resolved = resolveAnchor(position)
+        // 粒子换行（3.7 (49)）：自然顺翻（焦点 +1、新焦点
+        // 行刚转 active、位置连续推进）时，先在 relayout
+        // 前采旧焦点行（仍在焦点几何），relayout 后采新焦
+        // 点行。手动平移/seek 跳变/回退一律不触发。
+        let continuous = prevTickPosition >= 0
+            && position - prevTickPosition >= 0
+            && position - prevTickPosition < 0.5
+        prevTickPosition = position
+        let oldFocus = focusIndex
+        var outgoingField: ParticleField?
+        let flipCandidate = continuous
+            && StageEffectSettings.particleFlipEnabled
+            && particleView.isAvailable
+            && manualFocus == nil
+            && resolved.anchor == oldFocus + 1
+            && resolved.active == resolved.anchor
+        if flipCandidate, let oldView = lineViews[oldFocus] {
+            outgoingField = ParticleFieldSampler.sample(
+                view: oldView, in: rootView, maxPoints: 1600)
+        }
         var needsLayout = false
         if resolved.active != activeIndex {
             activeIndex = resolved.active
@@ -621,6 +649,14 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             needsLayout = true
         }
         if needsLayout { relayout(animate: true) }
+        if flipCandidate, let outgoingField,
+           let newView = lineViews[resolved.anchor],
+           let incomingField = ParticleFieldSampler.sample(
+               view: newView, in: rootView, maxPoints: 1600) {
+            particleView.begin(outgoing: outgoingField,
+                               incoming: incomingField, duration: 1.0)
+        }
+        particleView.tick()
         if let current = activeIndex, let lineView = lineViews[current] {
             lineView.updateSweep(position: position, lineEnd: lines[current].end)
         }
@@ -631,6 +667,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         washTask?.cancel()
         bakeGeneration += 1
         pendingBakeKeys.removeAll()
+        particleView.cancel()
         rootView.removeFromSuperview()
     }
 
@@ -700,6 +737,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         for washView in washViews { washView.frame = bounds }
         readabilityView.frame = bounds
         readabilityGradient.frame = bounds
+        particleView.frame = bounds
         railView.layer.mask?.frame = railView.bounds
         let portraitWidth = min(0.46 * bounds.width, 300,
                                 max(bounds.height * 0.30, 110))
