@@ -523,7 +523,7 @@ final class PetConcertCurtainView: UIView {
         while y <= bottomY { ys.append(y); y += isLand ? 40 : 70 }
 
         for side in 0..<2 { // 0 = 左，1 = 右（镜像）
-            let mirror: (CGFloat) -> CGFloat = { side == 0 ? $0 : refWNow - $0 }
+            let mirror: (CGFloat) -> CGFloat = { side == 0 ? $0 : self.refWNow - $0 }
             let edge: [CGPoint] = ys.map {
                 CGPoint(x: mirror(innerX(y: $0, t: t, params: params, openU: openU)),
                         y: $0)
