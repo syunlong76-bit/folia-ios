@@ -454,6 +454,13 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     private var lastPortraitKey: String?
     private var coverTask: Task<Void, Never>?
     private var washTask: Task<Void, Never>?
+    // 莫奈护栏（3.7 (53)，DS 对账）：cover/wash 各自代际
+    // token——每次启动递增，await 恢复后 token 不符即陈旧
+    // 提交、整段放弃。分开计数：cover 完成后才启 wash，
+    // 共用一枚会让 wash 启动误杀 cover 的收尾校验；反之
+    // wash 重成图（主题色更新）也不该作废在途 cover。
+    private var coverGeneration = 0
+    private var washGeneration = 0
     private var washKey: String?
     private var washCache: [(key: String, image: UIImage)] = []
     // 成图烘焙（3.7 (44)）：后台串行队列＋LRU 缓存＋在途去
@@ -687,6 +694,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     func unmount() {
         coverTask?.cancel()
         washTask?.cancel()
+        coverGeneration += 1
+        washGeneration += 1
         bakeGeneration += 1
         pendingBakeKeys.removeAll()
         particleView.cancel()
@@ -1415,6 +1424,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     private func loadCoverAndWash(_ snapshot: LyricStageSnapshot) {
         coverTask?.cancel()
         washTask?.cancel()
+        coverGeneration += 1
+        washGeneration += 1
         guard let raw = snapshot.track?.artworkURL, !raw.isEmpty else {
             fadeOutPortrait()
             return
@@ -1425,22 +1436,54 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             tempCoverView.isHidden = false
         }
         let taskTrack = trackID
+        let myCoverGen = coverGeneration
         coverTask = Task { [weak self] in
             let image = await NativeCoverLoader.shared.image(for: urlString,
                                                              tier: 1024)
-            guard let self, !Task.isCancelled, self.trackID == taskTrack
-            else { return }
-            guard let image else {
-                self.fadeOutPortrait()
+            guard let self else { return }
+            // 护栏采样（切换前）：恢复线程不保证主线程，
+            // isMainThread 必须在切 MainActor 之前取。
+            let wasMain = Thread.isMainThread
+            Breadcrumbs.log("monet.guard.cover isMainThread=\(wasMain) gen=\(myCoverGen)")
+            if Task.isCancelled || self.coverGeneration != myCoverGen {
+                Breadcrumbs.log("monet.guard.drop kind=cover reason=\(Task.isCancelled ? "cancelled" : "stale") gen=\(myCoverGen) current=\(self.coverGeneration)")
                 return
             }
-            self.coverImage = image
-            self.pushPortrait(image, key: urlString)
-            self.startWash(image)
+            guard self.trackID == taskTrack else {
+                Breadcrumbs.log("monet.guard.drop kind=cover reason=stale gen=\(myCoverGen) current=\(self.coverGeneration)")
+                return
+            }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // MainActor 落地前复检：排队等待主线程期间
+                // 新一代可能已启动，陈旧提交（含 fade）整段
+                // 放弃，绝不许旧任务收尾误伤新状态。
+                guard !Task.isCancelled,
+                      self.coverGeneration == myCoverGen,
+                      self.trackID == taskTrack else {
+                    Breadcrumbs.log("monet.guard.drop kind=cover reason=\(Task.isCancelled ? "cancelled" : "stale") gen=\(myCoverGen) current=\(self.coverGeneration)")
+                    return
+                }
+                guard let image else {
+                    self.fadeOutPortrait()
+                    return
+                }
+                self.coverImage = image
+                self.pushPortrait(image, key: urlString)
+                self.startWash(image)
+            }
         }
     }
 
     private func pushPortrait(_ image: UIImage, key: String) {
+        // 主线程护栏（3.7 (53)）：直操 UIKit，非主线程整段
+        // 跳转主线程重入；已在主线程直接走、时序不变。
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.pushPortrait(image, key: key)
+            }
+            return
+        }
         guard key != lastPortraitKey else { return }
         lastPortraitKey = key
         let layer = UIImageView(image: image)
@@ -1470,6 +1513,16 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func fadeOutPortrait() {
+        // 主线程护栏（3.7 (53)）：同 pushPortrait。调用方
+        // 归属见 (53) 报告——同步无图路径与 coverTask 的
+        // MainActor 提交段是仅有的两个合法入口，陈旧任务
+        // 的 fade 已在提交段代际校验处被拦下、到不了这里。
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.fadeOutPortrait()
+            }
+            return
+        }
         lastPortraitKey = nil
         let layers = portraitLayers
         portraitLayers = []
@@ -1517,27 +1570,60 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             + "|\(Int(canvasSize.width))x\(Int(canvasSize.height))"
         if key == washKey { return }
         if let cached = washCache.first(where: { $0.key == key })?.image {
+            // 缓存命中同步提交：先作废在途 wash，防其落地
+            // 覆盖本次命中图（护栏补强，视觉路径不变）。
+            washTask?.cancel()
+            washGeneration += 1
             washKey = key
             setWash(cached)
             return
         }
         washTask?.cancel()
+        washGeneration += 1
+        let myWashGen = washGeneration
         let palette = snap.palette
         washTask = Task { [weak self] in
             let image = await Task.detached(priority: .utility) {
                 MonetWashPipeline.build(cover: cover, palette: palette,
                                         canvasSize: canvasSize)
             }.value
-            guard let self, !Task.isCancelled, let image else { return }
-            self.washKey = key
-            self.washCache.append((key: key, image: image))
-            if self.washCache.count > 3 { self.washCache.removeFirst() }
-            self.setWash(image)
-            Breadcrumbs.log("stage monet wash built")
+            guard let self else { return }
+            // 护栏采样（切换前）：detached 成图恢复线程恒
+            // 非主线程的概率最高，此值即取证点。
+            let wasMain = Thread.isMainThread
+            Breadcrumbs.log("monet.guard.wash isMainThread=\(wasMain) gen=\(myWashGen)")
+            if Task.isCancelled || self.washGeneration != myWashGen {
+                Breadcrumbs.log("monet.guard.drop kind=wash reason=\(Task.isCancelled ? "cancelled" : "stale") gen=\(myWashGen) current=\(self.washGeneration)")
+                return
+            }
+            guard let image else { return }
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                // 落地前复检（同 cover）：等待主线程期间被
+                // 新一代取代则整段放弃，不写 washKey/缓存、
+                // 不调 setWash。
+                guard !Task.isCancelled,
+                      self.washGeneration == myWashGen else {
+                    Breadcrumbs.log("monet.guard.drop kind=wash reason=\(Task.isCancelled ? "cancelled" : "stale") gen=\(myWashGen) current=\(self.washGeneration)")
+                    return
+                }
+                self.washKey = key
+                self.washCache.append((key: key, image: image))
+                if self.washCache.count > 3 { self.washCache.removeFirst() }
+                self.setWash(image)
+                Breadcrumbs.log("stage monet wash built")
+            }
         }
     }
 
     private func setWash(_ image: UIImage) {
+        // 主线程护栏（3.7 (53)）：同 pushPortrait。
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in
+                self?.setWash(image)
+            }
+            return
+        }
         let washView = UIImageView(image: image)
         washView.contentMode = .scaleAspectFill
         washView.clipsToBounds = true

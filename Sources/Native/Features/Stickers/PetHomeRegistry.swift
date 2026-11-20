@@ -11,9 +11,13 @@ import Foundation
 // 1. 在场互斥：各 MiniBarPetStage 把自己当前在场名单登记在
 //    live 表里，取人时排除「在别处在场」的宠物，杜绝同一只
 //    同时出现在两个台面上。
-// 2. 岛上限与顺序：islandOrder 保持落座顺序，上限 3 只由
-//    分流决策方（墙台告别流）查 islandResidents 后决定
-//    （3.7 (43) 路1：容量 2→3，目标构成 {猫2, 狗1}）。
+// 2. 岛上限与顺序：islandOrder 保持落座顺序，上限由分流
+//    决策方（墙台告别流）查 islandResidents 后决定。
+//    (53) 工作流 M 改定（Miller 2026-11-21）：居民不再是
+//    (43) 的「容量 3／{猫2, 狗1}／活泼优先轮换」——恒为固定
+//    双人组 islandFixedDuo（捂脸猫 cat-live + 爱心狗
+//    dog-11），容量随之改 2；非双人组写入 .island 时在
+//    setHome 改道回池（见下），islandOrder 恒只含双人组。
 
 enum PetHome: String {
     case wallBar, island, stageBar, pool
@@ -28,7 +32,13 @@ final class PetHomeRegistry {
     private var homes: [String: PetHome] = [:]
     /// 灵动岛落座顺序（先到先坐，点岛回台/被召回时移除）。
     private(set) var islandOrder: [String] = []
-    static let islandCapacity = 3
+    /// 灵动岛固定居民（(53) 工作流 M 定版）：捂脸猫
+    /// cat-live（歌单加载页 LoadingBackdropView 定版同只，
+    /// APNG 原帧）+ 爱心狗 dog-11（抱大红爱心，贴纸包内
+    /// 唯一抱爱心者）。数组序即岛上站位序（猫左狗右）。
+    static let islandFixedDuo: [String] = ["cat-live", "dog-11"]
+    /// 岛容量 = 固定双人组人数（(43) 的 3 退役）。
+    static let islandCapacity = 2
 
     /// 各宠物层当前在场名单（key = 层实例标识）。
     private var liveByStage: [ObjectIdentifier: Set<String>] = [:]
@@ -51,16 +61,32 @@ final class PetHomeRegistry {
     /// home 恒 .pool、各名单恒空），取人退回 (30) 口径。
     func setHome(_ asset: String, _ newHome: PetHome) {
         if FoliaBisect.pet32SubsystemsBypassed { return }
+        // (53) M 固定双人组闸：岛居民选角的唯一数据源在此
+        // ——非双人组不得登记为岛民。墙台告别分流（MiniBar
+        // PetStage 的 (43) 缺口/活泼优先挑选，本工作流禁改
+        // 该文件）仍会把任意宠物标向岛，其 setHome(.island)
+        // 在此改道回池：该宠物说完告别词离台后回池待下次
+        // 上台，岛上恒只有双人组；双人组被标向岛时照常
+        // 落座，不受影响。改道落 island.resident.redirect
+        // 面包屑供真机对账（与 pet.farewell.dest 的 island=
+        // 名单对照即知哪些被改道）。
+        var target = newHome
+        if newHome == .island, !Self.islandFixedDuo.contains(asset) {
+            target = .pool
+            Breadcrumbs.log("island.resident.redirect asset=\(asset)"
+                + " resident=fixedDuo"
+                + " duo=\(Self.islandFixedDuo.joined(separator: ","))")
+        }
         let old = home(of: asset)
-        guard old != newHome else { return }
-        homes[asset] = newHome
-        if newHome == .island {
+        guard old != target else { return }
+        homes[asset] = target
+        if target == .island {
             if !islandOrder.contains(asset) { islandOrder.append(asset) }
         } else {
             islandOrder.removeAll { $0 == asset }
         }
         Breadcrumbs.log("pet.move asset=\(asset)"
-            + " from=\(old.logName) to=\(newHome.logName)")
+            + " from=\(old.logName) to=\(target.logName)")
         if old == .island {
             onIslandDeparture?(asset)
         }

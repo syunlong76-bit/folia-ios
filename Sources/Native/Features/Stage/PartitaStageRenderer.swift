@@ -390,7 +390,7 @@ final class PartitaStageRenderer: LyricStageRenderer {
         }
         let totalGraphemes = max(graphemeCount, units.count, 1)
         let densityScale: CGFloat = totalGraphemes > 40 ? 0.8 : 1
-        let fontSize = (vmin > 0
+        var fontSize = (vmin > 0
             ? max(40, min(5.5 * vmin / 100, 72)) : 40) * densityScale
         let font = StageFonts.bold(size: fontSize)
 
@@ -472,6 +472,58 @@ final class PartitaStageRenderer: LyricStageRenderer {
             columnHeight += chunkHeight + 9.6
         }
         if !chunks.isEmpty { columnHeight -= 9.6 }
+        // 宽适配（3.7 (53) 工作流 K）：原布局按视口高定行数
+        // 切 chunk、从不核宽——chunk 实测宽 + 横向错位
+        // （stagger ±20–100，chunk 帧恒居中于列/屏中心，
+        // 视觉半 extent = 宽/2 + |stagger|）+ 引导线外伸
+        // （横线宽 = chunk 宽 + 36）可超屏宽，长行/大错位
+        // 时冲出框（网页版同构、亦无核宽，属移植带入的隐
+        // 患）。修法两段、只在超宽时生效、互不连坐：
+        // ①错位夹取：逐 chunk 把 |stagger| 夹到当前宽恰好
+        //   落框的额度（错位是位置量，夹它不动字号；未超
+        //   额者逐值不变）；
+        // ②字号缩放：宽本身（含引导线外伸 40）仍超框才
+        //   按额度等比缩字号重算宽高（词宽∝字号；切分/
+        //   种子/词距不变；下限 0.5，触限后错位再夹一遍
+        //   兜底——>40 字素行已有 densityScale 0.8 前置，
+        //   0.5 下限内可解，见工作流 K 报告推导）。
+        let availW = (rootView.bounds.width > 0
+            ? rootView.bounds.width : snapshot.viewport.width) - 16
+        if availW > 0, !chunks.isEmpty {
+            func clampStaggers() {
+                for i in chunks.indices {
+                    let allowed = max(
+                        0, (availW - (chunks[i].width + 40)) / 2)
+                    chunks[i].x = min(max(chunks[i].x, -allowed), allowed)
+                }
+            }
+            clampStaggers()
+            var scale: CGFloat = 1
+            for chunk in chunks {
+                let n = CGFloat(chunk.units.count)
+                let sumW = chunk.width - 16 - 12.8 * n
+                guard sumW > 0 else { continue }
+                let room = availW - 40 - 12.8 * n - 16
+                if room < sumW { scale = min(scale, max(room, 1) / sumW) }
+            }
+            if scale < 1 {
+                scale = max(scale, 0.5)
+                fontSize *= scale
+                columnWidth = 0
+                columnHeight = 0
+                let newChunkHeight = fontSize * 1.22 + 6.4
+                for i in chunks.indices {
+                    let n = CGFloat(chunks[i].units.count)
+                    let sumW = chunks[i].width - 16 - 12.8 * n
+                    chunks[i].width = sumW * scale + 12.8 * n + 16
+                    chunks[i].height = newChunkHeight
+                    columnWidth = max(columnWidth, chunks[i].width)
+                    columnHeight += newChunkHeight + 9.6
+                }
+                columnHeight -= 9.6
+                clampStaggers()
+            }
+        }
         return PartitaLayout(
             chunks: chunks, fontSize: fontSize, profile: profile,
             columnWidth: columnWidth, columnHeight: columnHeight)

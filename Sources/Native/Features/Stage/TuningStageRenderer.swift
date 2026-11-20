@@ -361,6 +361,10 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
     private var builtTrackId: String? = nil
     private var builtLineCount = -1
     private var lastPosition: TimeInterval? = nil
+    /// 行视图建成时的根宽（3.7 (53) 工作流 K）：旋转/分屏后
+    /// 根宽变化即说明在场行视图的字号适配口径已过期，
+    /// performLayout 据此整行重建（见 performLayout）。
+    private var builtBoundsWidth: CGFloat = 0
 
     override init() {
         view = rootView
@@ -534,6 +538,7 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
             rootView.addSubview(built)
             placeNext(built)
         }
+        logLayoutBreadcrumb()
         rootView.setNeedsLayout()
     }
 
@@ -559,11 +564,49 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func makeLineView(line: LyricLine) -> TuningLineView {
+        builtBoundsWidth = rootView.bounds.width
         guard let snapshot else {
             return TuningLineView(line: line, fontSize: 36, palette: .neutralDark)
         }
-        return TuningLineView(line: line, fontSize: fittedSize(for: line),
-                              palette: snapshot.palette)
+        var size = fittedSize(for: line)
+        var built = TuningLineView(line: line, fontSize: size,
+                                   palette: snapshot.palette)
+        // 渲染路径保证适配（3.7 (53) 工作流 K）：fittedSize
+        // 按整串文本宽估算且下限 14——逐字素槽位宽求和与整
+        // 串宽有系统差（kerning/连字），理想字号 <14 的长行
+        // 更是被下限直接顶回溢出。以行视图实测 contentWidth
+        // 为准再等比折算重建一次（字宽∝字号，一次收敛、
+        // 无下限），任意行宽 ≤ 可用宽为硬线。
+        let avail = max(rootView.bounds.width - 64, 0)
+        if avail > 0, built.contentWidth > avail {
+            let refit = StageTextKit.resizedToFit(
+                currentSize: size, measuredWidth: built.contentWidth,
+                availWidth: avail)
+            if refit < size {
+                size = refit
+                built = TuningLineView(line: line, fontSize: size,
+                                       palette: snapshot.palette)
+            }
+        }
+        return built
+    }
+
+    /// 布局自检面包屑（3.7 (53) 工作流 K）：行切换与尺寸
+    /// 变化重建时各落一条（transition 是两者的共同入口），
+    /// 逐帧不落。longest = 在场两行中渲染宽最大者的实测
+    /// 尺寸（下一行取未缩放的槽位宽），font = 该行字号。
+    private func logLayoutBreadcrumb() {
+        let bounds = rootView.bounds
+        guard bounds.width > 0 else { return }
+        let candidates = [currentView, nextView].compactMap { $0 }
+        guard let widest = candidates.max(by: {
+            $0.contentWidth < $1.contentWidth
+        }) else { return }
+        Breadcrumbs.log(
+            "tuning.layout box=\(Int(bounds.width))x\(Int(bounds.height))"
+            + " longest=\(Int(widest.contentWidth.rounded()))x\(Int(widest.contentHeight.rounded()))"
+            + " font=\(String(format: "%.1f", widest.fontPointSize))"
+            + " orient=\(bounds.width > bounds.height ? "landscape" : "portrait")")
     }
 
     /// 当前行槽位：居中于舞台 42% 高处，恒等变换。
@@ -597,6 +640,20 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func performLayout() {
+        // 尺寸变化重建（3.7 (53) 工作流 K）：旧版 performLayout
+        // 只重定中心，行视图字号仍按建成时根宽适配——横屏建
+        // 行（可用宽大、字号大）转竖屏后整行恒溢出，直到下
+        // 一次自然行切换才恢复。根宽变化时以当前位 snap 重
+        // 建在场两行（transition 内 makeLineView 按新宽重
+        // 算适配并落自检面包屑）；builtBoundsWidth 已在重
+        // 建时更新，本路径不会自触发循环。
+        if rootView.bounds.width > 0,
+           abs(rootView.bounds.width - builtBoundsWidth) > 0.5,
+           currentView != nil || nextView != nil {
+            transition(to: currentIndex,
+                       position: lastPosition ?? context?.positionNow() ?? 0,
+                       snap: true)
+        }
         if let current = currentView {
             let center = CGPoint(x: rootView.bounds.width / 2,
                                  y: rootView.bounds.height * 0.42)

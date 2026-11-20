@@ -276,6 +276,10 @@ enum LyricStageRegistry {
               factory: { CorridorStageRenderer() }),
         .init(id: "afterglow", displayName: "残光", order: 160, styleVersion: 1, isNativeAvailable: true,
               factory: { AfterglowStageRenderer() }),
+        // (53) J 组：宠物演唱会「汪汪队开大会」（七态状态机＋独唱跑位＋
+        // v3 贴纸风幕布；样式生效期间迷你台/灵动岛宠物迁移回舞台）。
+        .init(id: "petconcert", displayName: "汪汪队开大会", order: 170, styleVersion: 1, isNativeAvailable: true,
+              factory: { PetConcertStageRenderer() }),
     ]
 
     static func info(for styleId: String) -> LyricStageStyleInfo? {

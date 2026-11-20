@@ -308,6 +308,12 @@ enum PetLines {
 
 // MARK: - 迷你台宠物层（管理器）
 
+/// 弱引用盒（(53) J 迁移实例注册表用；实例消亡自动失效）。
+private final class WeakMiniBarPetStageBox {
+    weak var stage: MiniBarPetStage?
+    init(_ stage: MiniBarPetStage) { self.stage = stage }
+}
+
 final class MiniBarPetStage: UIView {
 
     /// 覆盖层总高：展开台高 70 + 台面上方活动带 176。地面
@@ -450,6 +456,9 @@ final class MiniBarPetStage: UIView {
         isUserInteractionEnabled = true
         isHidden = true
         seenAssets = Set(UserDefaults.standard.stringArray(forKey: Self.seenKey) ?? [])
+        // (53) J 迁移注册：活实例登记，供 PetConcertRelocation
+        // 经类方法够到全部迷你台（墙/舞台角色）。
+        Self.registerLiveInstance(self)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -471,6 +480,87 @@ final class MiniBarPetStage: UIView {
         }
     }
 
+    // MARK: 演唱会迁移（(53) 工作流 J，仅迁移钩子）
+
+    /// 活实例注册表：PetConcertRelocation 经类方法够到全部
+    /// 迷你台（墙台/详情页台/原型墙台谁活着谁响应）。
+    private static var liveInstanceBoxes: [WeakMiniBarPetStageBox] = []
+
+    private static func registerLiveInstance(_ stage: MiniBarPetStage) {
+        liveInstanceBoxes.removeAll { $0.stage == nil }
+        liveInstanceBoxes.append(WeakMiniBarPetStageBox(stage))
+    }
+
+    static func concertRelocateAll() {
+        for box in liveInstanceBoxes { box.stage?.concertRelocateOut() }
+    }
+
+    static func concertRestoreAll() {
+        for box in liveInstanceBoxes { box.stage?.concertRestore() }
+    }
+
+    /// 迁移态：为真时本台宠物已撤下、一切自动重组被门控
+    /// （tick 重生/形态落定/切歌/呈现钩子逐处查此标志）。
+    private var concertRelocated = false
+    /// 本次迁移撤下的名单（离场收口写去向登记用）。
+    private var concertEvacuatedAssets: [String] = []
+
+    /// 撤下（PetConcertRelocation 调用）：走既有告别流平滑
+    /// 退场——逐个弹离开词气泡再淡出，不硬闪。不走三地分流
+    /// （cancelFlow 已清 divert 标记）：宠物只属于演唱会了。
+    func concertRelocateOut() {
+        guard !concertRelocated else { return }
+        concertRelocated = true
+        guard barPresented else { return }
+        Breadcrumbs.log("concert.pets.relocate surface=minibar role=\(role)")
+        cancelFlow()
+        pendingSpawns.removeAll()
+        batchActive = false
+        hideDialog()
+        hideBubbles()
+        closeCare()
+        cancelChat()
+        let leaving = allActors
+        concertEvacuatedAssets = leaving.map { $0.asset }
+        guard !leaving.isEmpty else {
+            finishConcertRelocateOut()
+            return
+        }
+        startFarewell(of: leaving) { [weak self] in
+            self?.finishConcertRelocateOut()
+        }
+    }
+
+    /// 离场收口：去向统一回池（墙台）/保留等候登记（详情页
+    /// 台——恢复时原班底优先回台）；整层隐藏、班底清空。
+    /// seen 名单/人格/冷却等状态一概不动（不丢的论证见
+    /// PetConcertRelocation 文件头）。
+    private func finishConcertRelocateOut() {
+        if role == .wall {
+            for asset in concertEvacuatedAssets
+            where PetHomeRegistry.shared.home(of: asset) == .wallBar {
+                PetHomeRegistry.shared.setHome(asset, .pool)
+            }
+        }
+        concertEvacuatedAssets = []
+        clearCast()
+        petsActive = false
+        isHidden = true
+    }
+
+    /// 恢复（切走演唱会样式/退出舞台时调用）：按当前形态走
+    /// 既有取人重组（展开台班底/进度条批次），平滑入场。
+    func concertRestore() {
+        guard concertRelocated else { return }
+        concertRelocated = false
+        guard barPresented else { return }
+        Breadcrumbs.log("concert.pets.restore surface=minibar role=\(role)")
+        guard StickerSettings.miniPetsEnabled else { return }
+        isHidden = false
+        petsActive = true
+        if collapsed { spawnBatch() } else { ensureExpandedCast() }
+    }
+
     // MARK: 墙侧钩子（一行级订阅：显隐/形态/切歌边沿）
 
     /// 迷你台显隐边沿（setMiniBarVisible 内一行钩子）。
@@ -489,7 +579,7 @@ final class MiniBarPetStage: UIView {
             collapsed = false
             cancelFlow()
             startLink()
-            if StickerSettings.miniPetsEnabled {
+            if StickerSettings.miniPetsEnabled, !concertRelocated {
                 isHidden = false
                 petsActive = true
                 syncFrame()
@@ -532,6 +622,15 @@ final class MiniBarPetStage: UIView {
     func barFormChanged(collapsed newValue: Bool) {
         guard barPresented, newValue != collapsed else { return }
         collapsed = newValue
+        if concertRelocated {
+            // (53) J：迁移中只同步形态状态，不打断迁移告别流
+            // （cancelFlow 会作废其 completion）；恢复时按新
+            // 形态重组班底。
+            hideDialog()
+            hideBubbles()
+            closeCare()
+            return
+        }
         cancelFlow()
         hideDialog()
         hideBubbles()
@@ -549,7 +648,7 @@ final class MiniBarPetStage: UIView {
         guard id != lastTrackId else { return }
         lastTrackId = id
         trackSerial += 1
-        guard barPresented, petsActive else { return }
+        guard barPresented, petsActive, !concertRelocated else { return }
         // 常驻按曲轮换只属墙台（3.7 (32)）：详情页台的班底是
         // 「等在此处」的具体宠物，换素材即换身份，流转模型
         // 下不许轮换；舞台只做探头反应。
@@ -1643,12 +1742,14 @@ final class MiniBarPetStage: UIView {
             }
             return
         }
-        if !petsActive {
+        if !petsActive, !concertRelocated {
             petsActive = true
             isHidden = false
             if collapsed { spawnBatch() } else { ensureExpandedCast() }
         }
-        if !collapsed, pendingForm == nil, resident == nil { ensureExpandedCast() }
+        if !collapsed, pendingForm == nil, resident == nil, !concertRelocated {
+            ensureExpandedCast()
+        }
 
         let engine = PlaybackEngine.shared
         let playing = engine.isPlaying

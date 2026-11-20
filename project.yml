@@ -31,6 +31,11 @@ targets:
       # "Stickers/<名>.png"，原素材真帧不改帧）
       - path: Resources/Stickers
         type: folder
+      # 演唱会抠图版贴纸（3.7 (53) 工作流 J，folder reference，运行时
+      # 定位 "StickersCutout/<名>.png"；仅带矩形底素材的真抠图版，
+      # 演唱会加载优先于原贴纸）
+      - path: Resources/StickersCutout
+        type: folder
     info:
       path: Info.plist
       # 注意：XcodeGen 在 generate 时按这里的 properties 重写 Info.plist，
@@ -40,10 +45,15 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "52"
+        CFBundleVersion: "53"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
-        UILaunchScreen: {}
+        # (53) I 组：启动屏直接垫油画海报图 + 海报主色，冷启第一帧
+        # 即油画（资源在 Assets.xcassets/EntryPoster.imageset 与
+        # EntryPosterColor.colorset，海报主色与 EntryPosterArt 同源）。
+        UILaunchScreen:
+          UIImageName: EntryPoster
+          UIColorName: EntryPosterColor
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations:

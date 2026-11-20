@@ -151,6 +151,12 @@ final class StageViewController: UIViewController {
     /// 行号）变化时落盘，与墙面 lrc line 同口径。
     private var lastStageLineTrackId: String?
     private var lastStageLineIndex: Int?
+    /// sync.probe 扫光 50% 过线状态位（3.7 (53) 工作流 F，
+    /// 只埋点不改行为）：记住已落屑的（曲目, 行号），每行
+    /// 只触发一次；当前行与记录不符即视为新行未过线（行
+    /// 切换/切曲时自然复位，无额外重置点）。
+    private var syncProbeSweepTrackId: String?
+    private var syncProbeSweepLineIndex: Int?
     private var gateTimer: Timer?
     private var lastLayoutSize: CGSize = .zero
     private var lastTimeLabelSecond = -1
@@ -1682,6 +1688,29 @@ final class StageViewController: UIViewController {
                 hi = mid - 1
             }
         }
+        // sync.probe 扫光 50% 过线（3.7 (53) 工作流 F，只
+        // 埋点）：扫光由同一呈现钟 position 驱动（宿主帧循
+        // 环喂给各渲染方），position 跨过本行时间跨度中点
+        // 即扫光过半——判定点只能落在本函数：GlowWordView /
+        // StageSweepWordView 均为词级视图，无曲目/行号/
+        // rawPlayhead 可见性（且 GlowWordEngine 纪律为只消
+        // 费宿主喂入位置）。状态位保证每行只落一条；拼串
+        // 只发生在真正过线的那一帧，逐帧零格式化。
+        if syncProbeSweepTrackId != track.id
+            || syncProbeSweepLineIndex != idx {
+            syncProbeSweepTrackId = track.id
+            syncProbeSweepLineIndex = idx
+            let line = lines[idx]
+            let mid = line.start + (line.end - line.start) * 0.5
+            if mid > line.start, position >= mid {
+                Breadcrumbs.log("sync.probe kind=sweep50 track=\(track.id) lineIdx=\(idx) lineStart=\(String(format: "%.3f", line.start)) mid=\(String(format: "%.3f", mid)) judgeNow=\(String(format: "%.3f", position)) rawPlayhead=\(String(format: "%.3f", engine.rawPlayhead())) wall=\(String(format: "%.3f", CACurrentMediaTime()))")
+            } else {
+                // 尚未过线：清掉记录，下帧继续判定（记录只
+                // 在落屑后才成为「已触发」的锁存）。
+                syncProbeSweepTrackId = nil
+                syncProbeSweepLineIndex = nil
+            }
+        }
         if lastStageLineTrackId == track.id, lastStageLineIndex == idx { return }
         let isFlip = lastStageLineTrackId == track.id && lastStageLineIndex != nil
         lastStageLineTrackId = track.id
@@ -1689,6 +1718,13 @@ final class StageViewController: UIViewController {
         Breadcrumbs.log("stage line track=\(track.id) idx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].start)) judge=\(String(format: "%.3f", position)) raw=\(String(format: "%.3f", engine.rawPlayhead())) engine=\(String(format: "%.3f", engine.currentTime)) delta=\(String(format: "%.3f", position - engine.currentTime))")
         if isFlip {
             Breadcrumbs.log("stage flip src=judge track=\(track.id) idx=\(idx) judgeLag=\(String(format: "%.3f", position - lines[idx].start))")
+            // sync.probe judge 翻行（3.7 (53) 工作流 F，只
+            // 埋点）：与 sweep50 同字段同口径——judgeNow =
+            // 本台锚外推呈现钟（与 stage line 的 judge 同
+            // 值）、rawPlayhead = PlaybackEngine 真值直读、
+            // wall = CACurrentMediaTime 墙钟戳；两探针的
+            // judgeNow − rawPlayhead 差值可比对恒定偏移。
+            Breadcrumbs.log("sync.probe kind=judge track=\(track.id) lineIdx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].start)) judgeNow=\(String(format: "%.3f", position)) rawPlayhead=\(String(format: "%.3f", engine.rawPlayhead())) wall=\(String(format: "%.3f", CACurrentMediaTime()))")
         }
     }
 

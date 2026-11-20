@@ -56,6 +56,11 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
     private var ghosts: [UIImageView] = []
     private var ghostSerial = 0
     private var currentIndex: Int? = nil
+    /// 当前行建成时的最终字号（3.7 (53) 工作流 K）：经两遍
+    /// 适配折算后的实际值。残影印制与辉光余辉必须用它——
+    /// 旧版各自重算 fontSize(for:)（未折算），长行时字形
+    /// 比活字槽位大一截、冲出槽位/图框（见 printGhost）。
+    private var currentFontSize: CGFloat = 0
     private var currentLineFrame: CGRect = .zero
     private var builtTrackId: String? = nil
     private var builtLineCount = -1
@@ -219,6 +224,7 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
     private func clearCurrentLine() {
         for word in wordViews { word.removeFromSuperview() }
         wordViews = []
+        currentFontSize = 0
         graphemeLayout = []
         segments = []
         nextPrintIndex = 0
@@ -276,17 +282,22 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
         }
         var (words, total) = makeWords(font)
         // 两遍适配（3.7 (46)）：词宽含辉光垫、纯文本测量估不
-        // 到，合计超可用宽时按比例缩字号重建一遍（下限 8）；
-        // 其后字素布局与扫光 mask 都用重建后的 font，几何一致。
+        // 到，合计超可用宽时按比例缩字号重建一遍；其后字素
+        // 布局与扫光 mask 都用重建后的 font，几何一致。
+        // 无下限折算（3.7 (53) 工作流 K）：旧下限 8 在极端长
+        // 行仍溢出，改走 StageTextKit.resizedToFit 按实测合
+        // 计宽等比折算（词宽∝字号，一次收敛、无下限）。
         let availW = max(rootView.bounds.width - 64, 0)
         if total > availW, total > 0 {
-            let scaled = max(8, size * availW / total)
+            let scaled = StageTextKit.resizedToFit(
+                currentSize: size, measuredWidth: total, availWidth: availW)
             if scaled < size {
                 size = scaled
                 font = StageFonts.bold(size: size)
                 (words, total) = makeWords(font)
             }
         }
+        currentFontSize = size
         let bounds = rootView.bounds
         let lineHeight = size * 1.5
         let containerFrame = CGRect(
@@ -319,6 +330,21 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
         installSweepMask(line: line, font: font, containerSize: containerFrame.size)
         updateNextLabel()
         lastSweepSegment = -1
+        logLayoutBreadcrumb(totalWidth: total, lineHeight: lineHeight)
+    }
+
+    /// 布局自检面包屑（3.7 (53) 工作流 K）：行切换与尺寸变
+    /// 化重建时各落一条（两者都走 buildCurrentLine），逐帧
+    /// 不落。longest = 当前行活字实测合计宽 × 行高，font =
+    /// 两遍适配后的最终字号。
+    private func logLayoutBreadcrumb(totalWidth: CGFloat, lineHeight: CGFloat) {
+        let bounds = rootView.bounds
+        guard bounds.width > 0 else { return }
+        Breadcrumbs.log(
+            "afterglow.layout box=\(Int(bounds.width))x\(Int(bounds.height))"
+            + " longest=\(Int(totalWidth.rounded()))x\(Int(lineHeight.rounded()))"
+            + " font=\(String(format: "%.1f", currentFontSize))"
+            + " orient=\(bounds.width > bounds.height ? "landscape" : "portrait")")
     }
 
     private func updateNextLabel() {
@@ -384,11 +410,20 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
                 times[i] = (prevEnd, max(nextStart, prevEnd))
             }
         }
+        // 横向压回（3.7 (53) 工作流 K）：本表按逐字素宽求和
+        // （含空格），活字两遍适配测的是词宽合计（不含空
+        // 格）——含空格较多的行（英文词间空格）本表总宽可
+        // 能反超容器宽，起点 gx 转负、残影/擦光定位整体出
+        // 框。仅超宽时把 x/width 等比压回容器内（时刻表不
+        // 动），未超宽逐值不变。
+        let squeeze = totalWidth > containerWidth && totalWidth > 0
+            ? containerWidth / totalWidth : 1
         var result: [(x: CGFloat, width: CGFloat, start: TimeInterval, end: TimeInterval)] = []
-        var gx = (containerWidth - totalWidth) / 2
+        var gx = (containerWidth - totalWidth * squeeze) / 2
         for i in graphemes.indices {
-            result.append((x: gx, width: widths[i], start: times[i].start, end: times[i].end))
-            gx += widths[i]
+            result.append((x: gx, width: widths[i] * squeeze,
+                           start: times[i].start, end: times[i].end))
+            gx += widths[i] * squeeze
         }
         return result
     }
@@ -483,7 +518,11 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
             completion: { _ in oldest.removeFromSuperview() }
         }
         let line = snapshot.lines[idx]
-        let size = fontSize(for: line)
+        // 字号与活字同源（3.7 (53) 工作流 K）：用建行时两遍
+        // 适配后的最终字号——旧版重算 fontSize(for:)（未折
+        // 算），长行残影字形大于 graphemeLayout 槽位宽，段
+        // 图按槽位宽出图后字形被裁/冲出图框。
+        let size = currentFontSize > 0 ? currentFontSize : fontSize(for: line)
         let font = StageFonts.bold(size: size)
         let color = fumeMixColor(snapshot.palette.secondary, snapshot.palette.accent,
                                  0.35, alpha: 1)
@@ -555,7 +594,12 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
         for (index, word) in wordViews.enumerated() {
             guard position > word.unit.end, !echoedUnits.contains(index) else { continue }
             echoedUnits.insert(index)
-            let size = fontSize(for: snapshot.lines[currentIndex ?? 0])
+            // 字号与活字同源（3.7 (53) 工作流 K）：余辉标签框
+            // = 词视图帧（已折算字号排布），字体须用建行最
+            // 终字号；旧版重算未折算字号，UILabel 不裁剪、
+            // 字形直接溢出词框。
+            let size = currentFontSize > 0
+                ? currentFontSize : fontSize(for: snapshot.lines[currentIndex ?? 0])
             let echo = UILabel(frame: word.frame)
             echo.text = word.unit.text
             echo.font = StageFonts.bold(size: size)

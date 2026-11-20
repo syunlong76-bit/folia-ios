@@ -125,6 +125,10 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
     private var lastPosition: TimeInterval = 0
     private var hasPosition = false
     private var springInFlight = false
+    /// 上次 performLayout 处理过的根宽（3.7 (53) 工作流 K）：
+    /// 宽度真变化时才重建活字/重烘快照，避免普通布局 pass
+    /// 反复重建（见 performLayout）。
+    private var lastLayoutWidth: CGFloat = 0
     private static let breathingKey = "corridor.breathing"
 
     override init() {
@@ -252,12 +256,23 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
     /// 呼吸 1.015 的乘积留余量。缩到下限仍超宽的极端行由
     /// buildLive 的 fitScale（活字）与 bakeSnapshot 的横向压
     /// 印（快照）兜底，任何行不溢出为硬线。
+    /// 除数订正（3.7 (53) 工作流 K）：旧除数 1.08 只算了槽位
+    /// scale 1.06 与呼吸，未算透视放大——上一行槽位 z=140
+    /// 经父层 sublayerTransform（m34=−1/900）的投影放大 =
+    /// 900/(900−140) ≈ 1.184，合成最大投影倍率 = 1.06 ×
+    /// 1.184 × 1.005（呼吸峰值）≈ 1.262。故除数改 1.27，
+    /// 保证任一行在任一槽位的投影宽都 ≤ 可用宽。下限同
+    /// 步取消（floor 1 = 只防零除）：旧下限 12 会把触下限
+    /// 长行顶回宽 300pt 级、经上一行槽位投影放大后仍超
+    /// 框——保证适配优先于字号下限，与调频/残光的无下限
+    /// 折算同口径。buildLive 的实测折算（活字）与
+    /// bakeSnapshot 的横向压印（快照）仍作渲染路径兜底。
     private func fontSize(for line: LyricLine) -> CGFloat {
         let avail = max(rootView.bounds.width - 64, 0)
         guard avail > 0 else { return baseFontSize() }
         return StageTextKit.fittedBoldSize(
             text: line.text, base: baseFontSize(),
-            availWidth: avail / 1.08, floor: 12)
+            availWidth: avail / 1.27, floor: 1)
     }
 
     private func contentSize(for line: LyricLine) -> CGSize {
@@ -395,7 +410,12 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
         var size = fontSize(for: line)
         var (words, widths, total) = makeWords(fontSize: size)
         if total > content.bounds.width, total > 0 {
-            let scaled = max(8, size * content.bounds.width / total)
+            // 无下限折算（3.7 (53) 工作流 K）：旧下限 8 在极端
+            // 长行仍会溢出；改走 StageTextKit.resizedToFit 按
+            // 实测合计宽等比折算（词宽∝字号，一次收敛）。
+            let scaled = StageTextKit.resizedToFit(
+                currentSize: size, measuredWidth: total,
+                availWidth: content.bounds.width)
             if scaled < size {
                 size = scaled
                 (words, widths, total) = makeWords(fontSize: size)
@@ -424,14 +444,61 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
             content.layer.transform = CATransform3DMakeScale(
                 geometry.scale, geometry.scale, 1)
         } else {
+            // 纵向防溢出（3.7 (53) 工作流 K）：槽位纵距 =
+            // yFactor × 字号，字号下限 36 与容器高无关——横屏
+            // 容器高骤降（宿主扣顶栏/点播台后约 200pt）时远端
+            // 槽位（下二行 −2.4 倍字号）投影中心直接落到框
+            // 外。按投影半高（槽位 scale × 透视因子，rotateX
+            // 只缩短投影高、忽略它是保守口径）把平移量夹回
+            // 框内：仅溢出时生效，竖屏与正常横屏几何不变。
+            var ty = geometry.yFactor * size
+            if bounds.height > 0 {
+                let perspective = 900 / (900 - geometry.z)
+                let halfProjected = content.bounds.height / 2
+                    * geometry.scale * perspective
+                let centerY = bounds.height * 0.44
+                if bounds.height - halfProjected * 2 <= 0 {
+                    ty = bounds.height / 2 - centerY
+                } else {
+                    let clamped = min(max(centerY + ty, halfProjected),
+                                      bounds.height - halfProjected)
+                    ty = clamped - centerY
+                }
+            }
             var transform = CATransform3DMakeTranslation(
-                0, geometry.yFactor * size, geometry.z)
+                0, ty, geometry.z)
             transform = CATransform3DRotate(
                 transform, geometry.rotateXDegrees * .pi / 180, 1, 0, 0)
             transform = CATransform3DScale(transform, geometry.scale, geometry.scale, 1)
             content.layer.transform = transform
         }
         content.alpha = geometry.alpha
+    }
+
+    /// 布局自检面包屑（3.7 (53) 工作流 K）：行切换落位时落
+    /// 一条（snapToBase / transitionToBase 各调一次），逐帧
+    /// 不落。longest = 在场各行中实测文本宽最大者（以其适
+    /// 配字号实测、未含槽位投影倍率），font = 该行字号。
+    private func logLayoutBreadcrumb() {
+        let bounds = rootView.bounds
+        guard bounds.width > 0, let snapshot, !contents.isEmpty else { return }
+        var widest: (width: CGFloat, height: CGFloat, font: CGFloat)? = nil
+        for (lineIndex, _) in contents {
+            guard snapshot.lines.indices.contains(lineIndex) else { continue }
+            let line = snapshot.lines[lineIndex]
+            let size = fontSize(for: line)
+            let width = (line.text as NSString)
+                .size(withAttributes: [.font: StageFonts.bold(size: size)]).width
+            if widest == nil || width > widest!.width {
+                widest = (width, size * 1.5, size)
+            }
+        }
+        guard let widest else { return }
+        Breadcrumbs.log(
+            "corridor.layout box=\(Int(bounds.width))x\(Int(bounds.height))"
+            + " longest=\(Int(widest.width.rounded()))x\(Int(widest.height.rounded()))"
+            + " font=\(String(format: "%.1f", widest.font))"
+            + " orient=\(bounds.width > bounds.height ? "landscape" : "portrait")")
     }
 
     private func makeContent(lineIndex: Int) -> CorridorLineView? {
@@ -484,6 +551,7 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
                 focusBreathing(on: content)
             }
         }
+        logLayoutBreadcrumb()
     }
 
     /// 对焦呼吸：scale 1.015→1.0、0.3s（内层容器，不碰槽位变换）。
@@ -580,6 +648,8 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
             } completion: { _ in content.removeFromSuperview() }
         }
 
+        logLayoutBreadcrumb()
+
         // 四槽同支弹簧：0.85s、damping 0.82、velocity 0.2
         // （Reduce Motion 改为 0.3s 原地交叉淡化口径）。
         let duration = reduceMotion ? 0.3 : 0.85
@@ -647,6 +717,15 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
         // 缓存 key 含宽度）。
         guard let base = baseIndex, !springInFlight else { return }
         let reduceMotion = UIAccessibility.isReduceMotionEnabled
+        // 宽度真变化时的内容重建（3.7 (53) 工作流 K）：旧版只
+        // 改内容框尺寸——快照图被 scaleToFill 拉伸尚能落框，
+        // 活字词视图不重建、仍按旧宽排布，横→竖旋转后当前
+        // 行恒溢出新框。宽度变化时活字按新宽重建（buildLive
+        // 内含实测折算）、快照按新宽重烘（缓存 key 含宽度、
+        // 旧图自动失效）；高度-only 变化不触发。
+        let widthChanged = lastLayoutWidth > 0
+            && abs(bounds.width - lastLayoutWidth) > 0.5
+        lastLayoutWidth = bounds.width
         for (lineIndex, content) in contents {
             let slot = lineIndex - base + 1
             guard (0..<4).contains(slot), let snapshot,
@@ -654,9 +733,20 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
             content.frame.size = contentSize(for: snapshot.lines[lineIndex])
             content.imageView.frame = content.bounds
             content.liveContainer.frame = content.bounds
+            if widthChanged {
+                let line = snapshot.lines[lineIndex]
+                if lineIndex == liveIndex {
+                    buildLive(into: content, line: line, position: lastPosition)
+                    content.liveContainer.alpha = 1
+                    content.imageView.alpha = 0
+                } else {
+                    content.showSnapshot(snapshotImage(line: line, slot: slot))
+                }
+            }
             applyGeometry(to: content, slot: slot,
                           size: fontSize(for: snapshot.lines[lineIndex]),
                           reduceMotion: reduceMotion)
         }
+        if widthChanged { logLayoutBreadcrumb() }
     }
 }

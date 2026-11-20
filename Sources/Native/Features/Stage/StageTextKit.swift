@@ -230,6 +230,23 @@ enum StageTextKit {
         return max(floor, base * availWidth / width)
     }
 
+    /// 渲染路径实测后的保证适配（3.7 (53) 工作流 K 新增，
+    /// 只新增不改 fittedBoldSize 既有口径）：fittedBoldSize
+    /// 以整串文本宽估算、且带业务下限（12/14），与各样式的
+    /// 真实渲染宽（逐字素求和 / GlowWord 词宽合计 + 间距 /
+    /// 辉光垫）存在系统差，下限处更是直接放弃适配——长行
+    /// 恒溢出框。本函数供各样式在「按自身渲染路径实测出
+    /// 实际内容宽」后调用：超宽则按实测宽等比折算字号，
+    /// 不设业务下限（字宽与字号成正比，一次折算即精确落
+    /// 回可用宽内）；未超宽原样返回。调用方以折算字号重
+    /// 建一次即收敛，不做逐帧/循环调用。
+    static func resizedToFit(currentSize: CGFloat, measuredWidth: CGFloat,
+                             availWidth: CGFloat) -> CGFloat {
+        guard currentSize > 0, measuredWidth > availWidth,
+              measuredWidth > 0, availWidth > 0 else { return currentSize }
+        return currentSize * availWidth / measuredWidth
+    }
+
     // MARK: CoreText 栅格
 
     /// 显式位图上下文栅格（3.7 (46)，DS 莫奈 H2 定案）：替代

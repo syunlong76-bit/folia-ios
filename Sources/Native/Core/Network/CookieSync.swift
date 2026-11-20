@@ -78,7 +78,16 @@ final class CookieSync: NSObject, WKHTTPCookieStoreObserver {
     /// 过期与 path 前缀按 RFC 规则逐个判定；Secure 标志的 Cookie 在
     /// 本地可信源上由 WebView 本就会发送，原生手工拼头同样包含
     /// （我们构造的是发往同一本地源的请求头，与浏览器行为一致）。
+    ///
+    /// (53) B 组：按业务 provider 分发——本地源 Cookie 罐是网易云
+    /// 登录链的产物（MUSIC_U 等），绝不发往 /api/qq、/api/kugou
+    /// 路由（防串话）；QQ/酷狗的原生会话载体走 NativeSessionStore
+    /// + 各自 transport（QQ 头/query、酷狗 query），不经本拼头。
     func cookieHeader(for path: String) -> String? {
+        if let provider = NativeSessionStore.Provider.fromAPIPath(path),
+           provider != .netease {
+            return nil
+        }
         let now = Date()
         lock.lock()
         let cookies = snapshot

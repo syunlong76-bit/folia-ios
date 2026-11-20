@@ -76,6 +76,8 @@ struct SearchWorkspaceView: View {
         var id: String { track.id }
     }
 
+    /// 速记簿（(53) 工作流 D）：行尾按钮的已收/未收视觉态随它刷新。
+    @ObservedObject private var sketchbookStore = SketchbookStore.shared
     @State private var query = ""
     @State private var submittedQuery = ""
     @State private var kind: SearchKind = .song
@@ -369,15 +371,23 @@ struct SearchWorkspaceView: View {
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundColor(FoliaTheme.secondary)
 
-            // 行尾动作（34×34）：速记簿 / 收藏依赖未接系统 → 诚实禁用态；加入队列可用。
+            // 行尾动作（34×34）：速记簿已接通（(53) 工作流 D，点按收进/移出，
+            // 视觉态随已收切换）；收藏仍为诚实禁用态；加入队列可用。
             HStack(spacing: 2) {
-                Button {} label: {
-                    Image(systemName: "note.text")
+                let inSketchbook = sketchbookStore.contains(trackId: track.id)
+                Button {
+                    if inSketchbook {
+                        sketchbookStore.remove(trackId: track.id, source: "search")
+                    } else {
+                        sketchbookStore.add(track, source: "search")
+                    }
+                } label: {
+                    Image(systemName: inSketchbook ? "checkmark.circle.fill" : "note.text")
                         .font(.system(size: 16))
+                        .foregroundColor(inSketchbook ? ink : FoliaTheme.secondary)
                         .frame(width: 34, height: 34)
                 }
-                .disabled(true)
-                .opacity(0.3)
+                .buttonStyle(.plain)
 
                 Button {} label: {
                     Image(systemName: "star")

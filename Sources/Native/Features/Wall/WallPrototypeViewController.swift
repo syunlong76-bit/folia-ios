@@ -106,6 +106,9 @@ final class WallPrototypeViewController: UIViewController,
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
     private var statusLabel: UILabel!
+    /// 关闭键 chrome 容器（3.7 (53) L 组 ✕ 毛玻璃圆钮）：按压
+    /// 反馈作用于整件（命中 44pt + 视觉圆 34pt）。
+    private var closeChromeView: UIView?
     private var backdrop: LoadingBackdropView?
     private var didCenterCamera = false
     private var isWrapping = false
@@ -113,8 +116,8 @@ final class WallPrototypeViewController: UIViewController,
     // 丝滑切入（3.7 (8)）：预加载 + 等首批数据再 present 的信号。
     private(set) var seedReady = false
     private var seedWaiters: [CheckedContinuation<Bool, Never>] = []
-    /// 加载胶囊防闪：出现时刻（>600ms 才显示、最小展示 300ms）。
-    private var pillShownAt: Date?
+    // 加载胶囊已随 (53) L 组提示条删除退役（加载反馈归拍立得
+    // 背板 + 小猫贴纸），原 pillShownAt 防闪记账一并删除。
     /// 首屏波次入场：种子落地时刻 + 已发出的波次序号。
     private var waveStart: Date?
     private var waveCount = 0
@@ -248,12 +251,20 @@ final class WallPrototypeViewController: UIViewController,
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
 
+        // 顶部行动胶囊（3.7 (53) L 组）：原常驻提示条（曲目计数
+        // 与操作说明文案）与加载态文字条（加载中/计数进度文案）
+        // 整条删除——歌单加载
+        // 反馈由 LoadingBackdropView 的拍立得 + 捂脸哭小猫贴纸
+        // 承担（背板在位、本组不动）。本胶囊只保留可点按的最终
+        // 失败重试与定位瞬时提示，经 showStatusNotice 出现，
+        // 其余时刻恒隐藏、无占位高度残留。
         statusLabel = UILabel()
-        statusLabel.text = "墙原型加载中…"
         statusLabel.isHidden = true
         statusLabel.textColor = .white
         statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        statusLabel.layer.cornerRadius = 13
+        statusLabel.clipsToBounds = true
         statusLabel.textAlignment = .center
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.isUserInteractionEnabled = true
@@ -267,25 +278,63 @@ final class WallPrototypeViewController: UIViewController,
             statusLabel.heightAnchor.constraint(equalToConstant: 26)
         ])
 
+        // 关闭键（3.7 (53) L 组）：文字胶囊「关闭」→ iOS 系统式
+        // ✕ 毛玻璃圆钮（与主页墙同构）。视觉圆 34pt（系统超薄
+        // 材质 + 亮边，与迷你台毛玻璃同款口径）居中于 44pt 命中
+        // 容器；锚点与旧胶囊一致（safeArea.top+8、trailing-12）。
+        // 关闭行为不变：仍走 closeTapped（拍立得背板
+        // requestClose 契约 + dismiss 回主页墙）。加载态（背板
+        // 在场）共用同一键，背板插在胶囊之下、键保持在背板之
+        // 上可点（原 z 序不变）。按压反馈见 closePressBegan/Ended。
+        let closeChrome = UIView()
+        closeChrome.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(closeChrome)
+        closeChromeView = closeChrome
+        let closeBlur = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        closeBlur.layer.cornerRadius = 17
+        closeBlur.layer.borderWidth = 1
+        closeBlur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        closeBlur.clipsToBounds = true
+        closeBlur.isUserInteractionEnabled = false
+        closeBlur.translatesAutoresizingMaskIntoConstraints = false
+        closeChrome.addSubview(closeBlur)
         let close = UIButton(type: .system)
-        close.setTitle("关闭", for: .normal)
-        close.setTitleColor(.white, for: .normal)
-        close.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        close.layer.cornerRadius = 13
+        close.setImage(UIImage(systemName: "xmark",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)),
+            for: .normal)
+        close.tintColor = .white
+        close.accessibilityLabel = "关闭"
         close.translatesAutoresizingMaskIntoConstraints = false
         close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        view.addSubview(close)
+        close.addTarget(self, action: #selector(closePressBegan),
+                        for: [.touchDown, .touchDragEnter])
+        close.addTarget(self, action: #selector(closePressEnded),
+                        for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+        closeChrome.addSubview(close)
         NSLayoutConstraint.activate([
-            close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            close.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            close.widthAnchor.constraint(equalToConstant: 56),
-            close.heightAnchor.constraint(equalToConstant: 26)
+            closeChrome.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            closeChrome.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            closeChrome.widthAnchor.constraint(equalToConstant: 44),
+            closeChrome.heightAnchor.constraint(equalToConstant: 44),
+            closeBlur.centerXAnchor.constraint(equalTo: closeChrome.centerXAnchor),
+            closeBlur.centerYAnchor.constraint(equalTo: closeChrome.centerYAnchor),
+            closeBlur.widthAnchor.constraint(equalToConstant: 34),
+            closeBlur.heightAnchor.constraint(equalToConstant: 34),
+            close.topAnchor.constraint(equalTo: closeChrome.topAnchor),
+            close.bottomAnchor.constraint(equalTo: closeChrome.bottomAnchor),
+            close.leadingAnchor.constraint(equalTo: closeChrome.leadingAnchor),
+            close.trailingAnchor.constraint(equalTo: closeChrome.trailingAnchor)
         ])
+        Breadcrumbs.log("wall.chrome playlist hintBar=removed close=glass-x")
 
         // 墙内设置齿轮（3.7 (36)）：固定左上角（顶部带右上角是
-        // 关闭键、正中是状态条，左上角不挡拼贴操作），样式与主
-        // 界面边缘齿轮一致（34×34、半透明），点按打开同一个设
-        // 置页；边缘老齿轮保留不动。
+        // 关闭键、正中是行动胶囊（非常驻），左上角不挡拼贴操
+        // 作），样式与主界面边缘齿轮一致（34×34、半透明），点
+        // 按打开同一个设置页；边缘老齿轮保留不动。
+        // (53) L 组保留决定：曲目墙无工作台侧栏，本齿轮是本面
+        // 唯一的设置路径（主页墙齿轮已因侧栏完整覆盖删除，
+        // 两面口径不同，不跟随删除）。
         let settingsGear = UIButton(type: .system)
         settingsGear.setImage(UIImage(systemName: "gearshape.fill"), for: .normal)
         settingsGear.tintColor = .white
@@ -1217,11 +1266,12 @@ final class WallPrototypeViewController: UIViewController,
             + "queueIndex=\(matches.first ?? -1) sameId=\(matches.count) "
             + "ui=\(miniTitle.text ?? "") entries=\(entries.count)/\(wallLayout.totalEntries)")
         guard let queueIndex = matches.first else {
-            statusLabel.text = "当前歌曲不在这个歌单里"
-            statusLabel.isHidden = false
+            // 瞬时提示（3.7 (53) L 组改）：提示条删除后不再回填
+            // 常驻文案，2.5 秒后直接隐藏胶囊（显隐时长不变）。
+            showStatusNotice("当前歌曲不在这个歌单里")
             DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
                 guard let self, self.statusLabel.text == "当前歌曲不在这个歌单里" else { return }
-                self.statusLabel.text = "墙原型：\(self.wallLayout.totalEntries) 首 · 拖动平移 · 点按展开"
+                self.hideStatusNotice()
             }
             return
         }
@@ -1333,11 +1383,10 @@ final class WallPrototypeViewController: UIViewController,
         let wantShort = String((locateTargetTitle ?? targetId).prefix(12))
         let gotShort = String((gotTitle ?? "未知").prefix(12))
         let failText = "定位失败：要找《\(wantShort)》，落到《\(gotShort)》"
-        statusLabel.text = failText
-        statusLabel.isHidden = false
+        showStatusNotice(failText)
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
             guard let self, self.statusLabel.text == failText else { return }
-            self.statusLabel.text = "墙原型：\(self.wallLayout.totalEntries) 首 · 拖动平移 · 点按展开"
+            self.hideStatusNotice()
         }
     }
 
@@ -1522,15 +1571,53 @@ final class WallPrototypeViewController: UIViewController,
         guard loadFailed else { return }
         loadFailed = false
         loadAttempts = 0
-        statusLabel.text = "墙原型加载中…"
+        hideStatusNotice()
         loadEntries()
     }
 
     @objc private func closeTapped() {
+        Breadcrumbs.log("wall.chrome.close kind=playlist")
         // 拍立得背板关闭契约（3.7 (24) 起）：旋转动画取消后
         // requestClose 恒放行，点关闭即收墙。
         if let backdrop, !backdrop.requestClose() { return }
         dismiss(animated: true)
+    }
+
+    /// 关闭键按压反馈（3.7 (53) L 组）：按下缩 0.86 + 压暗，
+    /// 松手系统弹簧回弹；只动 chrome 容器的 transform/alpha，
+    /// 不碰关闭语义。Reduce Motion 时不缩放（guard 直接返回，
+    /// ended 仍复位防残留）。
+    @objc private func closePressBegan() {
+        guard !UIAccessibility.isReduceMotionEnabled,
+              let chrome = closeChromeView else { return }
+        UIView.animate(withDuration: 0.18, delay: 0,
+                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            chrome.transform = CGAffineTransform(scaleX: 0.86, y: 0.86)
+            chrome.alpha = 0.75
+        }
+    }
+
+    @objc private func closePressEnded() {
+        guard let chrome = closeChromeView else { return }
+        UIView.animate(withDuration: 0.35, delay: 0,
+                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            chrome.transform = .identity
+            chrome.alpha = 1
+        }
+    }
+
+    /// 顶部行动胶囊显隐收口（3.7 (53) L 组）：提示条删除后，
+    /// 胶囊只为可点按的最终失败与定位瞬时提示出现，其余时刻
+    /// 恒隐藏；点按分发仍走 statusTapped，语义不变。
+    private func showStatusNotice(_ text: String) {
+        statusLabel.text = text
+        statusLabel.isHidden = false
+    }
+
+    private func hideStatusNotice() {
+        statusLabel.isHidden = true
     }
 
     /// 墙内齿轮打开设置页：与主界面边缘齿轮同一呈现方式
@@ -1583,17 +1670,11 @@ final class WallPrototypeViewController: UIViewController,
                 // 含 picUrl），一次往返数据全齐、封面立刻全量开取。
                 // 3.7 (6) 的分页拼接只留作缺口兜底：超大歌单内嵌被
                 // 截断时，从已得数量处继续分页补齐。
-                // 加载胶囊延迟出现：600ms 内种子落地就不显示加载态，
-                // 防快路径下胶囊一闪（DS 第二十四轮 e 项）。
-                Task { [weak self] in
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                    await MainActor.run {
-                        guard let self, !self.seedReady else { return }
-                        self.pillShownAt = Date()
-                        self.statusLabel.text = "墙原型加载中…"
-                        self.statusLabel.isHidden = false
-                    }
-                }
+                // 加载文字条已删（3.7 (53) L 组）：原「600ms 未落
+                // 地才显示加载胶囊」的延迟任务整段退役——加载期
+                // 反馈只剩拍立得背板 + 小猫贴纸（LoadingBackdrop-
+                // View 在位），种子等待者仍由 seedReady/flush-
+                // SeedWaiters 原路收口，不受影响。
                 let detail = try await NativeDataClient.shared.fetchPlaylistDetail(id: playlistId)
                 let total = detail.trackCount
                 let seed = detail.tracks.map {
@@ -1604,10 +1685,10 @@ final class WallPrototypeViewController: UIViewController,
                     self.allTrackIds = detail.trackIds
                     self.entries = seed
                     self.wallLayout.totalEntries = total
-                    self.statusLabel.text = seed.count >= total
-                        ? "墙原型：\(total) 首 · 拖动平移 · 点按展开"
-                        : "墙原型：共 \(total) 首 · 加载中 \(seed.count)"
-                    self.statusLabel.isHidden = false
+                    // 提示条已删（3.7 (53) L 组）：种子落地只收口
+                    // 胶囊（清上一轮可能残留的失败提示），计数/
+                    // 进度文案不再上屏（背板退场、墙面即反馈）。
+                    self.hideStatusNotice()
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
@@ -1666,9 +1747,8 @@ final class WallPrototypeViewController: UIViewController,
                         self.entries.append(contentsOf: chunk.map {
                             Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl, subtitle: $0.artists)
                         })
-                        self.statusLabel.text = reachedEnd || self.entries.count >= total
-                            ? "墙原型：\(total) 首 · 拖动平移 · 点按展开"
-                            : "墙原型：共 \(total) 首 · 加载中 \(self.entries.count)"
+                        // 分页进度文案已删（3.7 (53) L 组）：拼接
+                        // 照常推进，只刷新墙面，不再上屏计数。
                         self.collectionView.reloadData()
                     }
                     if reachedEnd || !progressed { break }
@@ -1681,9 +1761,10 @@ final class WallPrototypeViewController: UIViewController,
                         level: "error", module: "wall",
                         message: "tracks load failed playlist=\(self.playlistId) attempt=\(self.loadAttempts): \(error)")
                     Breadcrumbs.log("tracks load failed attempt=\(self.loadAttempts)")
-                    self.statusLabel.isHidden = false
                     if self.loadAttempts < 2 {
-                        self.statusLabel.text = "加载失败，正在重试…"
+                        // 自动重试期不上屏（3.7 (53) L 组）：胶囊
+                        // 只在最终失败落定时以可点按态出现。
+                        self.hideStatusNotice()
                         self.flushSeedWaiters()
                         self.backdrop?.dismiss()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
@@ -1691,7 +1772,7 @@ final class WallPrototypeViewController: UIViewController,
                         }
                     } else {
                         self.loadFailed = true
-                        self.statusLabel.text = "加载失败，点按这里重试"
+                        self.showStatusNotice("加载失败，点按这里重试")
                         self.flushSeedWaiters()
                         self.backdrop?.dismiss()
                     }

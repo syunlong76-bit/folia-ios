@@ -1,16 +1,22 @@
 import UIKit
 
-/// 原生设置页：壳版本/本地服务信息、网易云账号（(51) 原生扫码
-/// 登录/退出）、播放台与歌词特效开关、桥日志入口。
+/// 原生设置页：账号（(51) 原生扫码登录/退出）、播放与歌词
+/// 设置、壳信息、桥日志入口。
 ///
-/// v2 视觉重做（2026-11-14 真机反馈）：原白底大字 + 系统绿开关 + 英文 Done 的
-/// 原生表单风与 Folia 深色流光界面完全割裂。本版按 Folia 设计语言重做呈现：
-/// - 半透明黑色遮罩 + 近黑浮层卡片从底部滑入，底下的播放器页面隐约透出；
-/// - 信息项收进深灰圆角分组卡（灰色小标签 + 白色值），密度对齐 Folia 设置页；
-/// - 开关/按钮用柔和紫强调色与胶囊形，去掉系统绿与系统默认排版；
-/// - 打开/关闭为淡入 + 上滑的弹簧缓动，替代系统生硬 sheet 弹跳。
-/// (51) A 组：自动更新/前端版本行随 UpdateManager 退役一并删除
-/// （OTA 空转链，见去网页版审计 §5）；账号段走 NativeSessionStore。
+/// v2 视觉（2026-11-14）：半透明黑遮罩 + 近黑浮层卡片底部滑
+/// 入，Folia 深色设计语言（深灰分组卡、柔和紫强调色、系统弹
+/// 簧入场），与播放器界面同调。
+///
+/// (53) 工作流 C 全量重做：分组照网页版四组（界面 / 音乐 /
+/// 应用 / 系统）重排；落盘统一经 SettingsStore（新键
+/// settings.* 为主、旧键兼容读、旧键不删），既有开关行为不
+/// 变；新增网页对应物两项——循环模式（消费者 QueueManager
+/// .playMode）与歌词时间轴偏移（仅存储+入口，歌词时钟未接
+/// 入，文案如实标注）。布局不复刻旧病：行标签一律直挂横向
+/// 行/带边距的堆叠行，hint 为直挂 UILabel 不再用空 UIView
+/// 包裹，信息行改横向行内标签；viewDidAppear 落一条
+/// settings.selfcheck 面包屑汇总各组行数与首行校验，供真机
+/// 一轮判死旧版空白行问题（诊断 B-1）。
 final class SettingsViewController: UIViewController {
 
     /// 双壳统一设计规格（安卓 SettingsActivity 同值，改一处须同步另一处）
@@ -45,6 +51,27 @@ final class SettingsViewController: UIViewController {
     private var settingsCatSticker: StickerView?
     private var settingsCatShowingAlt = false
 
+    // 循环模式（(53) 新增，网页 loopMode 对应物）：分段控件与
+    // QueueManager.playMode 一一对应，与队列面板模式按钮同源。
+    private let loopModeControl = UISegmentedControl(
+        items: ["列表循环", "单曲循环", "随机", "不循环"])
+    private static let loopModes: [QueueManager.PlayMode] =
+        [.loopAll, .repeatOne, .shuffle, .off]
+
+    // 歌词时间轴偏移（(53) 新增，网页 globalLyricTimeline
+    // OffsetMs 对应物）：仅存储+入口，歌词时钟未接入（见
+    // SettingsStore 注释与组内 hint 的如实文案）。
+    private let offsetStepper = UIStepper()
+    private let offsetValueLabel = UILabel()
+    private let offsetResetButton = UIButton(type: .system)
+
+    // 自检记账（(53)）：按分组收集本页全部 UILabel，viewDid
+    // Appear 时校验 text 非空与 frame 非零，落 settings
+    // .selfcheck 面包屑（诊断 B-1 的一轮判死法）。
+    private var checkNames: [String] = []
+    private var checkLabels: [[UILabel]] = []
+    private var didRunSelfCheck = false
+
     private let backdropView = UIView()
     private let cardView = UIView()
     private var didRunEntrance = false
@@ -71,6 +98,7 @@ final class SettingsViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        runSelfCheckIfNeeded()
         guard !didRunEntrance else { return }
         didRunEntrance = true
         UIView.animate(withDuration: 0.55, delay: 0,
@@ -79,6 +107,50 @@ final class SettingsViewController: UIViewController {
             self.backdropView.alpha = 1
             self.cardView.transform = .identity
         }
+    }
+
+    // MARK: - 自检记账
+
+    private func beginCheckGroup(_ name: String) {
+        checkNames.append(name)
+        checkLabels.append([])
+    }
+
+    private func track(_ label: UILabel) {
+        guard !checkLabels.isEmpty else { return }
+        checkLabels[checkLabels.count - 1].append(label)
+    }
+
+    /// 旧版空白行一轮判死（诊断 B-1 验证法）：强制布局后逐组
+    /// 汇总行数、首行 text 长度、首行/全行 frame 非零与 text
+    /// 非空，落一条面包屑。frame 异常 → 布局问题；text 为空
+    /// → 数据/时序问题；皆正常仍不可见 → 渲染/颜色问题。
+    private func runSelfCheckIfNeeded() {
+        guard !didRunSelfCheck else { return }
+        didRunSelfCheck = true
+        view.layoutIfNeeded()
+        var parts: [String] = []
+        var allOK = true
+        for (index, name) in checkNames.enumerated() {
+            let labels = index < checkLabels.count ? checkLabels[index] : []
+            let first = labels.first
+            let firstLen = first?.text?.count ?? -1
+            let firstFrameOK = first.map {
+                $0.bounds.width > 0 && $0.bounds.height > 0
+            } ?? false
+            let laidOK = !labels.isEmpty && labels.allSatisfy {
+                $0.bounds.width > 0 && $0.bounds.height > 0
+            }
+            let textsOK = !labels.isEmpty && labels.allSatisfy {
+                !($0.text ?? "").isEmpty
+            }
+            if !(firstFrameOK && laidOK && textsOK) { allOK = false }
+            parts.append("\(name)[n=\(labels.count) firstLen=\(firstLen)"
+                + " firstFrame=\(firstFrameOK ? 1 : 0)"
+                + " laid=\(laidOK ? 1 : 0) texts=\(textsOK ? 1 : 0)]")
+        }
+        Breadcrumbs.log("settings.selfcheck ok=\(allOK ? 1 : 0) "
+            + parts.joined(separator: " "))
     }
 
     // MARK: - 布局
@@ -175,18 +247,122 @@ final class SettingsViewController: UIViewController {
         header.addArrangedSubview(doneButton)
         cardStack.addArrangedSubview(header)
 
-        // 信息分组卡：壳版本/本地服务端口，行间发丝线
-        // （(51)：前端版本行随 UpdateManager 退役删除。）
-        let infoGroup = makeGroupCard()
-        let infoRows: [(String, UILabel)] = [
-            ("壳版本", shellVersionLabel),
-            ("本地服务端口", portLabel)
-        ]
-        for (index, pair) in infoRows.enumerated() {
-            if index > 0 { infoGroup.addArrangedSubview(makeHairline()) }
-            infoGroup.addArrangedSubview(makeInfoRow(title: pair.0, valueLabel: pair.1))
-        }
-        cardStack.addArrangedSubview(infoGroup)
+        // ===== 一、界面组（网页：外观 / 播放器 / 主页 / 图形）=====
+        beginCheckGroup("界面")
+        cardStack.addArrangedSubview(makeSectionHeader("界面"))
+
+        // 播放台特效分组卡（3.7 (13.5)）：总开关 + 说明。关掉后
+        // 两台一律素面、长按切换停用；选中的主题保留。
+        let themeGroup = makeGroupCard()
+        themeGroup.addArrangedSubview(makeSwitchRow(
+            "播放台主题特效", themeSwitch, #selector(themeSwitchChanged)))
+        themeGroup.addArrangedSubview(makeHairline())
+        themeGroup.addArrangedSubview(makeHintRow(
+            "开启后，长按播放台可循环切换花海、雪景、星空、海洋四款主题；关掉后播放台恢复素面，特效全部停用。"))
+        cardStack.addArrangedSubview(themeGroup)
+
+        // 点播台按钮分组卡（3.7 (50)）：三键显隐，默认全开 =
+        // 现状；关掉的键在三台同步隐藏并收拢让位。主页墙台本
+        // 无播放列表键，该开关只影响曲目墙台与舞台台。
+        let slotGroup = makeGroupCard()
+        slotGroup.addArrangedSubview(makeSwitchRow(
+            "上一首按钮", slotPrevSwitch, #selector(slotPrevSwitchChanged)))
+        slotGroup.addArrangedSubview(makeHairline())
+        slotGroup.addArrangedSubview(makeSwitchRow(
+            "下一首按钮", slotNextSwitch, #selector(slotNextSwitchChanged)))
+        slotGroup.addArrangedSubview(makeHairline())
+        slotGroup.addArrangedSubview(makeSwitchRow(
+            "播放列表按钮", slotQueueSwitch, #selector(slotQueueSwitchChanged)))
+        slotGroup.addArrangedSubview(makeHairline())
+        slotGroup.addArrangedSubview(makeHintRow(
+            "控制点播台上的按钮显隐，三台同步生效；播放按钮恒显。隐藏的按钮会收拢让位，不留空槽。"))
+        cardStack.addArrangedSubview(slotGroup)
+        cardStack.setCustomSpacing(20, after: slotGroup)
+
+        // ===== 二、音乐组（网页：播放 / 歌词）=====
+        beginCheckGroup("音乐")
+        cardStack.addArrangedSubview(makeSectionHeader("音乐"))
+
+        // 播放分组卡（(53) 新增）：循环模式，网页 loopMode 对
+        // 应物。消费者 = QueueManager.playMode（完播推进与随
+        // 机取序），与播放列表面板的模式按钮同源、双向同步。
+        let playbackGroup = makeGroupCard()
+        let loopRow = UIStackView()
+        loopRow.axis = .vertical
+        loopRow.spacing = 10
+        loopRow.isLayoutMarginsRelativeArrangement = true
+        loopRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        let loopTitle = UILabel()
+        loopTitle.text = "循环模式"
+        loopTitle.font = .systemFont(ofSize: 15)
+        loopTitle.textColor = FoliaUI.primary
+        track(loopTitle)
+        loopModeControl.selectedSegmentTintColor = FoliaUI.accent
+        loopModeControl.setTitleTextAttributes(
+            [.foregroundColor: FoliaUI.primary,
+             .font: UIFont.systemFont(ofSize: 12)], for: .normal)
+        loopModeControl.setTitleTextAttributes(
+            [.foregroundColor: UIColor.white,
+             .font: UIFont.systemFont(ofSize: 12, weight: .semibold)], for: .selected)
+        loopModeControl.addTarget(
+            self, action: #selector(loopModeChanged), for: .valueChanged)
+        loopRow.addArrangedSubview(loopTitle)
+        loopRow.addArrangedSubview(loopModeControl)
+        playbackGroup.addArrangedSubview(loopRow)
+        playbackGroup.addArrangedSubview(makeHairline())
+        playbackGroup.addArrangedSubview(makeHintRow(
+            "与播放列表面板的播放模式同步：整队循环、单曲循环、随机播放、播完最后一首停住。"))
+        cardStack.addArrangedSubview(playbackGroup)
+
+        // 歌词分组卡：逐词强调 / 粒子换行（3.7 (49)，缺省全开，
+        // 关掉即回上一版观感）+ 歌词时间轴偏移（(53) 新增，
+        // 仅存储，见 hint 如实文案）。
+        let lyricsGroup = makeGroupCard()
+        lyricsGroup.addArrangedSubview(makeSwitchRow(
+            "逐词强调", emphasisSwitch, #selector(emphasisSwitchChanged)))
+        lyricsGroup.addArrangedSubview(makeHairline())
+        lyricsGroup.addArrangedSubview(makeSwitchRow(
+            "粒子换行", particleFlipSwitch, #selector(particleFlipSwitchChanged)))
+        lyricsGroup.addArrangedSubview(makeHairline())
+        let offsetRow = UIStackView()
+        offsetRow.axis = .horizontal
+        offsetRow.alignment = .center
+        offsetRow.spacing = 8
+        offsetRow.isLayoutMarginsRelativeArrangement = true
+        offsetRow.layoutMargins = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
+        let offsetTitle = UILabel()
+        offsetTitle.text = "歌词时间轴偏移"
+        offsetTitle.font = .systemFont(ofSize: 15)
+        offsetTitle.textColor = FoliaUI.primary
+        track(offsetTitle)
+        offsetValueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        offsetValueLabel.textColor = FoliaUI.primary
+        track(offsetValueLabel)
+        offsetStepper.minimumValue = -2000
+        offsetStepper.maximumValue = 2000
+        offsetStepper.stepValue = 50
+        offsetStepper.addTarget(
+            self, action: #selector(offsetStepperChanged), for: .valueChanged)
+        offsetResetButton.setTitle("归零", for: .normal)
+        offsetResetButton.setTitleColor(FoliaUI.accent, for: .normal)
+        offsetResetButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
+        offsetResetButton.addTarget(
+            self, action: #selector(offsetResetTapped), for: .touchUpInside)
+        offsetRow.addArrangedSubview(offsetTitle)
+        offsetRow.addArrangedSubview(UIView())
+        offsetRow.addArrangedSubview(offsetValueLabel)
+        offsetRow.addArrangedSubview(offsetStepper)
+        offsetRow.addArrangedSubview(offsetResetButton)
+        lyricsGroup.addArrangedSubview(offsetRow)
+        lyricsGroup.addArrangedSubview(makeHairline())
+        lyricsGroup.addArrangedSubview(makeHintRow(
+            "歌词时间轴偏移（暂存，待测量结论启用）：当前版本仅保存数值，歌词时钟尚未接入它；待真机测得歌词与声音的实际偏差后再启用。网页版同名设置用于补偿蓝牙等输出延迟。范围 ±2000 毫秒，步进 50。"))
+        cardStack.addArrangedSubview(lyricsGroup)
+        cardStack.setCustomSpacing(20, after: lyricsGroup)
+
+        // ===== 三、应用组（网页：通用 / 交互 / 集成 / 存储）=====
+        beginCheckGroup("应用")
+        cardStack.addArrangedSubview(makeSectionHeader("应用"))
 
         // 网易云账号分组卡（(51) A 组）：状态行 + 扫码登录/
         // 退出登录按钮。登录态以 NativeSessionStore 为准。
@@ -214,126 +390,8 @@ final class SettingsViewController: UIViewController {
         accountGroup.addArrangedSubview(accountButtonWrap)
         cardStack.addArrangedSubview(accountGroup)
 
-        // 播放台特效分组卡（3.7 (13.5)）：总开关 + 说明。关掉后
-        // 两台一律素面、长按切换停用；选中的主题保留。
-        let themeGroup = makeGroupCard()
-        let themeRow = UIStackView()
-        themeRow.axis = .horizontal
-        themeRow.alignment = .center
-        themeRow.isLayoutMarginsRelativeArrangement = true
-        themeRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-        let themeTitle = UILabel()
-        themeTitle.text = "播放台主题特效"
-        themeTitle.font = .systemFont(ofSize: 15)
-        themeTitle.textColor = FoliaUI.primary
-        themeSwitch.onTintColor = FoliaUI.accent
-        themeSwitch.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-        themeSwitch.isOn = MiniPlayerTheme.effectsEnabled
-        themeSwitch.addTarget(self, action: #selector(themeSwitchChanged), for: .valueChanged)
-        themeRow.addArrangedSubview(themeTitle)
-        themeRow.addArrangedSubview(UIView())
-        themeRow.addArrangedSubview(themeSwitch)
-        themeGroup.addArrangedSubview(themeRow)
-        themeGroup.addArrangedSubview(makeHairline())
-        let themeHint = UILabel()
-        themeHint.text = "开启后，长按播放台可循环切换花海、雪景、星空、海洋四款主题；关掉后播放台恢复素面，特效全部停用。"
-        themeHint.font = .systemFont(ofSize: 12)
-        themeHint.textColor = FoliaUI.secondary
-        themeHint.numberOfLines = 0
-        let themeHintWrap = UIView()
-        themeHintWrap.addSubview(themeHint)
-        themeHint.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            themeHint.topAnchor.constraint(equalTo: themeHintWrap.topAnchor, constant: 10),
-            themeHint.bottomAnchor.constraint(equalTo: themeHintWrap.bottomAnchor, constant: -12),
-            themeHint.leadingAnchor.constraint(equalTo: themeHintWrap.leadingAnchor, constant: 14),
-            themeHint.trailingAnchor.constraint(equalTo: themeHintWrap.trailingAnchor, constant: -14)
-        ])
-        themeGroup.addArrangedSubview(themeHintWrap)
-        cardStack.addArrangedSubview(themeGroup)
-
-        // 歌词特效增强分组卡（3.7 (49)）：逐词强调与粒子
-        // 换行两个独立开关，缺省全开；关掉即回上一版观感。
-        let fxGroup = makeGroupCard()
-        func fxRow(_ title: String, _ toggle: UISwitch,
-                   _ action: Selector) -> UIStackView {
-            let row = UIStackView()
-            row.axis = .horizontal
-            row.alignment = .center
-            row.isLayoutMarginsRelativeArrangement = true
-            row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-            let label = UILabel()
-            label.text = title
-            label.font = .systemFont(ofSize: 15)
-            label.textColor = FoliaUI.primary
-            toggle.onTintColor = FoliaUI.accent
-            toggle.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-            toggle.addTarget(self, action: action, for: .valueChanged)
-            row.addArrangedSubview(label)
-            row.addArrangedSubview(UIView())
-            row.addArrangedSubview(toggle)
-            return row
-        }
-        emphasisSwitch.isOn = StageEffectSettings.wordEmphasisEnabled
-        fxGroup.addArrangedSubview(fxRow(
-            "逐词强调", emphasisSwitch, #selector(emphasisSwitchChanged)))
-        fxGroup.addArrangedSubview(makeHairline())
-        particleFlipSwitch.isOn = StageEffectSettings.particleFlipEnabled
-        fxGroup.addArrangedSubview(fxRow(
-            "粒子换行", particleFlipSwitch, #selector(particleFlipSwitchChanged)))
-        fxGroup.addArrangedSubview(makeHairline())
-        let fxHint = UILabel()
-        fxHint.text = "逐词强调：唱到的词放大、发光、上浮，长音持续膨胀（流光、云阶、残光、深廊）。粒子换行：换行时旧行化作粒子散开、新行聚拢成字（流光、莫奈）。"
-        fxHint.font = .systemFont(ofSize: 12)
-        fxHint.textColor = FoliaUI.secondary
-        fxHint.numberOfLines = 0
-        let fxHintWrap = UIView()
-        fxHintWrap.addSubview(fxHint)
-        fxHint.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            fxHint.topAnchor.constraint(equalTo: fxHintWrap.topAnchor, constant: 10),
-            fxHint.bottomAnchor.constraint(equalTo: fxHintWrap.bottomAnchor, constant: -12),
-            fxHint.leadingAnchor.constraint(equalTo: fxHintWrap.leadingAnchor, constant: 14),
-            fxHint.trailingAnchor.constraint(equalTo: fxHintWrap.trailingAnchor, constant: -14)
-        ])
-        fxGroup.addArrangedSubview(fxHintWrap)
-        cardStack.addArrangedSubview(fxGroup)
-
-        // 点播台按钮分组卡（3.7 (50)）：三键显隐，默认全开 =
-        // 现状；关掉的键在三台同步隐藏并收拢让位。主页墙台本
-        // 无播放列表键，该开关只影响曲目墙台与舞台台。
-        let slotGroup = makeGroupCard()
-        slotPrevSwitch.isOn = MiniBarSlotSettings.showPrev
-        slotGroup.addArrangedSubview(fxRow(
-            "上一首按钮", slotPrevSwitch, #selector(slotPrevSwitchChanged)))
-        slotGroup.addArrangedSubview(makeHairline())
-        slotNextSwitch.isOn = MiniBarSlotSettings.showNext
-        slotGroup.addArrangedSubview(fxRow(
-            "下一首按钮", slotNextSwitch, #selector(slotNextSwitchChanged)))
-        slotGroup.addArrangedSubview(makeHairline())
-        slotQueueSwitch.isOn = MiniBarSlotSettings.showQueue
-        slotGroup.addArrangedSubview(fxRow(
-            "播放列表按钮", slotQueueSwitch, #selector(slotQueueSwitchChanged)))
-        slotGroup.addArrangedSubview(makeHairline())
-        let slotHint = UILabel()
-        slotHint.text = "控制点播台上的按钮显隐，三台同步生效；播放按钮恒显。隐藏的按钮会收拢让位，不留空槽。"
-        slotHint.font = .systemFont(ofSize: 12)
-        slotHint.textColor = FoliaUI.secondary
-        slotHint.numberOfLines = 0
-        let slotHintWrap = UIView()
-        slotHintWrap.addSubview(slotHint)
-        slotHint.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            slotHint.topAnchor.constraint(equalTo: slotHintWrap.topAnchor, constant: 10),
-            slotHint.bottomAnchor.constraint(equalTo: slotHintWrap.bottomAnchor, constant: -12),
-            slotHint.leadingAnchor.constraint(equalTo: slotHintWrap.leadingAnchor, constant: 14),
-            slotHint.trailingAnchor.constraint(equalTo: slotHintWrap.trailingAnchor, constant: -14)
-        ])
-        slotGroup.addArrangedSubview(slotHintWrap)
-        cardStack.addArrangedSubview(slotGroup)
-
         // 贴纸伙伴分组卡（3.7 (24)）：门面猫（cat-01，点按换
-        // cat-15 播一次再换回）+ 门面狗（dog-17，白 tile 承
+        // cat-15 播一次再换回）+ 门面狗（dog-17，透明底承
         // 载）+ 迷你台小宠物开关。贴纸均为 APNG 原素材真帧。
         let stickerGroup = makeGroupCard()
         let stickerHeadRow = UIStackView()
@@ -357,11 +415,13 @@ final class SettingsViewController: UIViewController {
         stickerTitle.text = "贴纸伙伴"
         stickerTitle.font = .systemFont(ofSize: 15)
         stickerTitle.textColor = FoliaUI.primary
+        track(stickerTitle)
         let stickerSub = UILabel()
         stickerSub.text = "小猫小狗会在加载、失败、空状态等时刻出来陪你。"
         stickerSub.font = .systemFont(ofSize: 12)
         stickerSub.textColor = FoliaUI.secondary
         stickerSub.numberOfLines = 0
+        track(stickerSub)
         let stickerTitles = UIStackView(arrangedSubviews: [stickerTitle, stickerSub])
         stickerTitles.axis = .vertical
         stickerTitles.spacing = 3
@@ -393,40 +453,32 @@ final class SettingsViewController: UIViewController {
         ])
         stickerGroup.addArrangedSubview(dogTileWrap)
         stickerGroup.addArrangedSubview(makeHairline())
-        let companionRow = UIStackView()
-        companionRow.axis = .horizontal
-        companionRow.alignment = .center
-        companionRow.isLayoutMarginsRelativeArrangement = true
-        companionRow.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
-        let companionTitle = UILabel()
-        companionTitle.text = "迷你台小宠物"
-        companionTitle.font = .systemFont(ofSize: 15)
-        companionTitle.textColor = FoliaUI.primary
-        companionSwitch.onTintColor = FoliaUI.accent
-        companionSwitch.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
-        companionSwitch.isOn = StickerSettings.miniPetsEnabled
-        companionSwitch.addTarget(self, action: #selector(companionSwitchChanged), for: .valueChanged)
-        companionRow.addArrangedSubview(companionTitle)
-        companionRow.addArrangedSubview(UIView())
-        companionRow.addArrangedSubview(companionSwitch)
-        stickerGroup.addArrangedSubview(companionRow)
+        stickerGroup.addArrangedSubview(makeSwitchRow(
+            "迷你台小宠物", companionSwitch, #selector(companionSwitchChanged)))
         stickerGroup.addArrangedSubview(makeHairline())
-        let companionHint = UILabel()
-        companionHint.text = "开启后，底部播放台的台面上会有小宠物陪你听歌，播放台收起成进度条时它们会轮流上场玩耍：点宠物头顶有小反应、点身上会说话，它们还会互相打招呼、时不时关心你一句（点气泡可以摸摸头、亲亲、抱抱）；按住拖动可以把它安置在台面一处。每首歌主宠物会换一只。"
-        companionHint.font = .systemFont(ofSize: 12)
-        companionHint.textColor = FoliaUI.secondary
-        companionHint.numberOfLines = 0
-        let companionHintWrap = UIView()
-        companionHintWrap.addSubview(companionHint)
-        companionHint.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            companionHint.topAnchor.constraint(equalTo: companionHintWrap.topAnchor, constant: 10),
-            companionHint.bottomAnchor.constraint(equalTo: companionHintWrap.bottomAnchor, constant: -12),
-            companionHint.leadingAnchor.constraint(equalTo: companionHintWrap.leadingAnchor, constant: 14),
-            companionHint.trailingAnchor.constraint(equalTo: companionHintWrap.trailingAnchor, constant: -14)
-        ])
-        stickerGroup.addArrangedSubview(companionHintWrap)
+        stickerGroup.addArrangedSubview(makeHintRow(
+            "开启后，底部播放台的台面上会有小宠物陪你听歌，播放台收起成进度条时它们会轮流上场玩耍：点宠物头顶有小反应、点身上会说话，它们还会互相打招呼、时不时关心你一句（点气泡可以摸摸头、亲亲、抱抱）；按住拖动可以把它安置在台面一处。每首歌主宠物会换一只。"))
         cardStack.addArrangedSubview(stickerGroup)
+
+        // 信息分组卡：壳版本/本地服务端口，横向行（标题左、
+        // 值右），行间发丝线。（(51)：前端版本行随
+        // UpdateManager 退役删除；(53)：由旧版纵向堆叠行改
+        // 横向行内标签，见类头注释。）
+        let infoGroup = makeGroupCard()
+        let infoRows: [(String, UILabel)] = [
+            ("壳版本", shellVersionLabel),
+            ("本地服务端口", portLabel)
+        ]
+        for (index, pair) in infoRows.enumerated() {
+            if index > 0 { infoGroup.addArrangedSubview(makeHairline()) }
+            infoGroup.addArrangedSubview(makeInfoRow(title: pair.0, valueLabel: pair.1))
+        }
+        cardStack.addArrangedSubview(infoGroup)
+        cardStack.setCustomSpacing(20, after: infoGroup)
+
+        // ===== 四、系统组（网页：桌面 / Mods / 开发者 / 帮助）=====
+        beginCheckGroup("系统")
+        cardStack.addArrangedSubview(makeSectionHeader("系统"))
 
         // 桥日志（3.6 (3) 取证入口）：点歌/切歌/锁屏出问题时在这里看留痕，
         // 可整段复制发回诊断。
@@ -440,7 +492,10 @@ final class SettingsViewController: UIViewController {
         logButton.layer.cornerRadius = 12
         logButton.addTarget(self, action: #selector(logTapped), for: .touchUpInside)
         logButton.heightAnchor.constraint(equalToConstant: 46).isActive = true
+        if let logTitle = logButton.titleLabel { track(logTitle) }
         cardStack.addArrangedSubview(logButton)
+        cardStack.addArrangedSubview(makeHintRow(
+            "点歌、切歌、锁屏出问题时，先在这里看留痕，可整段复制发回诊断。"))
     }
 
     /// 分组卡容器：深灰底、16 圆角，内部纵向堆行
@@ -452,6 +507,16 @@ final class SettingsViewController: UIViewController {
         group.layer.cornerRadius = 16
         group.clipsToBounds = true
         return group
+    }
+
+    /// 分节标题：直挂 UILabel（自检记账随当前分组）。
+    private func makeSectionHeader(_ title: String) -> UILabel {
+        let label = UILabel()
+        label.text = title
+        label.font = .systemFont(ofSize: 13, weight: .semibold)
+        label.textColor = FoliaUI.secondary
+        track(label)
+        return label
     }
 
     private func makeHairline() -> UIView {
@@ -470,10 +535,14 @@ final class SettingsViewController: UIViewController {
         return wrap
     }
 
+    /// 信息行（(53) 改横向）：小灰标题左 + 值右，同处一个横
+    /// 向行内——与开关行同构造族（旧版纵向堆叠直挂为诊断
+    /// B-1 的失效集合构造，不再复刻）。
     private func makeInfoRow(title: String, valueLabel: UILabel) -> UIView {
         let row = UIStackView()
-        row.axis = .vertical
-        row.spacing = 2
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 12
         row.isLayoutMarginsRelativeArrangement = true
         row.layoutMargins = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
         let titleLabel = UILabel()
@@ -482,13 +551,56 @@ final class SettingsViewController: UIViewController {
         titleLabel.textColor = FoliaUI.secondary
         valueLabel.font = .systemFont(ofSize: 15)
         valueLabel.textColor = FoliaUI.primary
-        valueLabel.numberOfLines = 0
+        valueLabel.textAlignment = .right
+        valueLabel.numberOfLines = 1
+        track(titleLabel)
+        track(valueLabel)
         row.addArrangedSubview(titleLabel)
+        row.addArrangedSubview(UIView())
         row.addArrangedSubview(valueLabel)
         return row
     }
 
-    // MARK: - 数据刷新（与旧版一致，未改数据源与口径）
+    /// 开关行：标题 UILabel + 开关，同处一个横向行内。
+    private func makeSwitchRow(_ title: String, _ toggle: UISwitch,
+                               _ action: Selector) -> UIStackView {
+        let row = UIStackView()
+        row.axis = .horizontal
+        row.alignment = .center
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        let label = UILabel()
+        label.text = title
+        label.font = .systemFont(ofSize: 15)
+        label.textColor = FoliaUI.primary
+        track(label)
+        toggle.onTintColor = FoliaUI.accent
+        toggle.transform = CGAffineTransform(scaleX: 0.85, y: 0.85)
+        toggle.addTarget(self, action: action, for: .valueChanged)
+        row.addArrangedSubview(label)
+        row.addArrangedSubview(UIView())
+        row.addArrangedSubview(toggle)
+        return row
+    }
+
+    /// 说明行（(53) 改直挂）：UILabel 直挂带边距的堆叠行，
+    /// 不再用空 UIView 包裹（旧构造为诊断 B-1 的失效集合）。
+    private func makeHintRow(_ text: String) -> UIStackView {
+        let row = UIStackView()
+        row.axis = .vertical
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 10, left: 14, bottom: 12, right: 14)
+        let label = UILabel()
+        label.text = text
+        label.font = .systemFont(ofSize: 12)
+        label.textColor = FoliaUI.secondary
+        label.numberOfLines = 0
+        track(label)
+        row.addArrangedSubview(label)
+        return row
+    }
+
+    // MARK: - 数据刷新
 
     private func refresh() {
         let info = Bundle.main.infoDictionary
@@ -497,6 +609,26 @@ final class SettingsViewController: UIViewController {
         shellVersionLabel.text = "\(short) (\(build))"
         portLabel.text = LocalServer.shared.isRunning ? "127.0.0.1:\(LocalServer.shared.port)" : "未启动"
         refreshAccountSection()
+        // 开关与控件状态一律回读存储/生效面，不靠构建时初值：
+        // 外部改动（如队列面板改播放模式）后重开设置页即对齐。
+        themeSwitch.isOn = SettingsStore.miniPlayerThemeEffectsEnabled
+        emphasisSwitch.isOn = StageEffectSettings.wordEmphasisEnabled
+        particleFlipSwitch.isOn = StageEffectSettings.particleFlipEnabled
+        slotPrevSwitch.isOn = MiniBarSlotSettings.showPrev
+        slotNextSwitch.isOn = MiniBarSlotSettings.showNext
+        slotQueueSwitch.isOn = MiniBarSlotSettings.showQueue
+        companionSwitch.isOn = SettingsStore.miniPetsEnabled
+        if let index = Self.loopModes.firstIndex(of: QueueManager.shared.playMode) {
+            loopModeControl.selectedSegmentIndex = index
+        }
+        let offset = SettingsStore.globalLyricTimelineOffsetMs
+        offsetStepper.value = Double(offset)
+        offsetValueLabel.text = Self.offsetText(offset)
+    }
+
+    private static func offsetText(_ ms: Int) -> String {
+        if ms > 0 { return "+\(ms) ms" }
+        return "\(ms) ms"
     }
 
     /// 网易云账号段刷新：以 NativeSessionStore 是否有会话为准；
@@ -564,37 +696,69 @@ final class SettingsViewController: UIViewController {
     }
 
     @objc private func themeSwitchChanged() {
-        MiniPlayerTheme.effectsEnabled = themeSwitch.isOn
+        SettingsStore.miniPlayerThemeEffectsEnabled = themeSwitch.isOn
+        Breadcrumbs.log("settings.themeEffects value=\(themeSwitch.isOn)")
         NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
     }
 
     @objc private func emphasisSwitchChanged() {
         StageEffectSettings.wordEmphasisEnabled = emphasisSwitch.isOn
+        Breadcrumbs.log("settings.wordEmphasis value=\(emphasisSwitch.isOn)")
     }
 
     @objc private func particleFlipSwitchChanged() {
         StageEffectSettings.particleFlipEnabled = particleFlipSwitch.isOn
+        Breadcrumbs.log("settings.particleFlip value=\(particleFlipSwitch.isOn)")
     }
 
     @objc private func slotPrevSwitchChanged() {
         MiniBarSlotSettings.showPrev = slotPrevSwitch.isOn
+        Breadcrumbs.log("settings.showPrev value=\(slotPrevSwitch.isOn)")
         NotificationCenter.default.post(name: .foliaMiniBarSlotsChanged, object: nil)
     }
 
     @objc private func slotNextSwitchChanged() {
         MiniBarSlotSettings.showNext = slotNextSwitch.isOn
+        Breadcrumbs.log("settings.showNext value=\(slotNextSwitch.isOn)")
         NotificationCenter.default.post(name: .foliaMiniBarSlotsChanged, object: nil)
     }
 
     @objc private func slotQueueSwitchChanged() {
         MiniBarSlotSettings.showQueue = slotQueueSwitch.isOn
+        Breadcrumbs.log("settings.showQueue value=\(slotQueueSwitch.isOn)")
         NotificationCenter.default.post(name: .foliaMiniBarSlotsChanged, object: nil)
     }
 
     // 贴纸层（3.7 (24) 立、(27) 改管迷你台宠物、(29) 开关改绑
-    // 宠物专用新键 miniPetsEnabled，不再读写旧 companionEnabled）。
+    // 宠物专用新键 miniPetsEnabled，不再读写旧 companionEnabled；
+    // (53) 落盘改经 SettingsStore，同步写旧键，StickerSettings
+    // 读者行为不变）。
     @objc private func companionSwitchChanged() {
-        StickerSettings.miniPetsEnabled = companionSwitch.isOn
+        SettingsStore.miniPetsEnabled = companionSwitch.isOn
+        Breadcrumbs.log("settings.miniPets value=\(companionSwitch.isOn)")
+    }
+
+    @objc private func loopModeChanged() {
+        let index = loopModeControl.selectedSegmentIndex
+        guard Self.loopModes.indices.contains(index) else { return }
+        let mode = Self.loopModes[index]
+        QueueManager.shared.playMode = mode
+        SettingsStore.loopModeRaw = mode.rawValue
+        Breadcrumbs.log("settings.loopMode value=\(mode.rawValue)")
+    }
+
+    /// 偏移仅落存储（歌词时钟未接入）：写 SettingsStore 钳制
+    /// 后的值并回显，面包屑带 storedOnly 标记防误读为已生效。
+    @objc private func offsetStepperChanged() {
+        let ms = Int(offsetStepper.value)
+        SettingsStore.globalLyricTimelineOffsetMs = ms
+        offsetValueLabel.text = Self.offsetText(ms)
+        Breadcrumbs.log("settings.lyricOffsetMs value=\(ms) storedOnly=1")
+    }
+
+    @objc private func offsetResetTapped() {
+        offsetStepper.value = 0
+        offsetStepperChanged()
     }
 
     @objc private func settingsCatTapped() {

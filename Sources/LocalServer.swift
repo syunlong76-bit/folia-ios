@@ -756,9 +756,38 @@ private enum Proxy {
         return data
     }
 
+    /// (53) B 组：GET 缓存的会话作用域材料——缓存键必须按
+    /// provider 的真实会话载体取值，否则 QQ（X-QQ-Session 头）/
+    /// 酷狗（?cookie= 参数）的登录态不进键、跨账号串缓存。
+    /// 网易云维持原口径（Cookie 头哈希）。
+    private static func sessionScopeMaterial(for request: HTTPRequest) -> String {
+        guard let provider = NativeSessionStore.Provider.fromAPIPath(request.target) else {
+            return request.header("Cookie") ?? ""
+        }
+        switch provider {
+        case .netease:
+            return request.header("Cookie") ?? ""
+        case .qq:
+            return request.header("X-QQ-Session")
+                ?? NativeSessionStore.shared.qqSessionToken()
+                ?? request.header("Cookie") ?? ""
+        case .kugou:
+            if let query = request.target.components(separatedBy: "?").dropFirst().first {
+                for pair in query.split(separator: "&") {
+                    let kv = pair.split(separator: "=", maxSplits: 1)
+                    if kv.count == 2, kv[0] == "cookie" {
+                        return (kv[1].removingPercentEncoding ?? String(kv[1]))
+                    }
+                }
+            }
+            return NativeSessionStore.shared.kugouCookieString()
+                ?? request.header("Cookie") ?? ""
+        }
+    }
+
     static func proxy(request: HTTPRequest, handler: ConnectionHandler) {
         let startedAt = Date()
-        let cookieHash = sha256Hex(request.header("Cookie") ?? "")
+        let cookieHash = sha256Hex(sessionScopeMaterial(for: request))
         // GET 缓存先行：新鲜条目直接回，不打上游（存的是已改写封面的成品体）。
         var cacheTarget: String?
         if request.method == "GET", let ttl = cacheTTL(for: request.target) {
@@ -886,6 +915,41 @@ private enum Proxy {
         return nil
     }
 
+    /// (53) B 组：会话注入按业务 provider 分发（以请求路径
+    /// /api/<provider> 前缀为键）：
+    /// - 网易云：原样转发入站 Cookie 头（(51) 既有行为不动）；
+    /// - QQ：剥掉入站 Cookie 头（本地源 Cookie 罐是网易云的，
+    ///   发往 QQ 上游即串话）；入站没带 X-QQ-Session 时用
+    ///   NativeSessionStore 的裸 token 补头（同源入口只收裸
+    ///   token，见 qqTransport）；
+    /// - 酷狗：剥掉入站 Cookie 头；目标没带 ?cookie= 时用
+    ///   NativeSessionStore 的整串 cookie 补 query 参数
+    ///   （酷狗 Web 载体只有 query，见 kugouTransport）。
+    /// 凭据只进请求头/参数，绝不写日志。
+    private static func applyProviderSession(to upstream: inout URLRequest, target: String) {
+        guard let provider = NativeSessionStore.Provider.fromAPIPath(target) else { return }
+        switch provider {
+        case .netease:
+            return
+        case .qq:
+            upstream.setValue(nil, forHTTPHeaderField: "Cookie")
+            if upstream.value(forHTTPHeaderField: "X-QQ-Session") == nil,
+               let token = NativeSessionStore.shared.qqSessionToken() {
+                upstream.setValue(token, forHTTPHeaderField: "X-QQ-Session")
+            }
+        case .kugou:
+            upstream.setValue(nil, forHTTPHeaderField: "Cookie")
+            guard let cookie = NativeSessionStore.shared.kugouCookieString(),
+                  !target.contains("cookie="),
+                  let url = upstream.url else { return }
+            let allowed = CharacterSet(
+                charactersIn: "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
+            guard let encoded = cookie.addingPercentEncoding(withAllowedCharacters: allowed) else { return }
+            let separator = url.absoluteString.contains("?") ? "&" : "?"
+            upstream.url = URL(string: url.absoluteString + separator + "cookie=" + encoded)
+        }
+    }
+
     private static func perform(url: URL, request: HTTPRequest,
                                 completion: @escaping (Data?, HTTPURLResponse?, Error?) -> Void) {
         var upstream = URLRequest(url: url)
@@ -898,6 +962,7 @@ private enum Proxy {
             upstream.addValue(value, forHTTPHeaderField: name)
         }
         upstream.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        applyProviderSession(to: &upstream, target: request.target)
         if !request.body.isEmpty {
             upstream.httpBody = request.body
         }

@@ -131,8 +131,14 @@ final class HomeWallViewController: UIViewController,
     /// 动画收进台内，替代 13.4 被否的台上方主题带；长按台身
     /// 循环切换、UserDefaults 持久化（见 MiniPlayerTheme）。
     private var miniThemeLayer: MiniPlayerThemeLayer?
-    /// (51) 右上角「关闭」键引用：作窗口根时隐藏（见 viewDidAppear）。
-    private var rootCloseButton: UIButton?
+    /// (51) 右上角关闭键引用：作窗口根时隐藏（见 viewDidAppear）。
+    /// (53) L 组改版为 iOS 式 ✕ 毛玻璃圆钮后，引用指整件 chrome
+    /// 容器（命中 44pt + 视觉圆 34pt），显隐仍作用于整件。
+    private var rootCloseButton: UIView?
+    /// 工作台浮层宿主（3.7 (53) A 组）：书库侧栏/头像区叠在
+    /// 墙上，关闭态只占把手与头像两个小命中区；侧栏展开时经
+    /// 其回调禁墙交互。安装在 viewDidLoad 末尾（见彼处）。
+    private var workbenchHost: WorkbenchOverlayHostView?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
     /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
@@ -150,7 +156,10 @@ final class HomeWallViewController: UIViewController,
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .black
+        // 入场黑帧缝（3.7 (53) I 组定级）：窗口首帧先渲染本视图，
+        // 入场 veil 在 viewDidAppear present 时才就位——底色用海报
+        // 主色（EntryPosterArt），1~2 帧露出也是油画色域而非黑。
+        view.backgroundColor = EntryPosterArt.dominantColor
         overrideUserInterfaceStyle = .dark
         // 播放台特效总开关/主题变更（设置页）即时同步。
         NotificationCenter.default.addObserver(
@@ -166,7 +175,8 @@ final class HomeWallViewController: UIViewController,
             name: .foliaTrackSkippedUnplayable, object: nil)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
-        collectionView.backgroundColor = .black
+        // 同 view 底色口径（(53) I 组）：墙画布未铺满/回弹露底时同为海报主色。
+        collectionView.backgroundColor = EntryPosterArt.dominantColor
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.prefetchDataSource = self
@@ -183,11 +193,19 @@ final class HomeWallViewController: UIViewController,
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
 
+        // 顶部行动胶囊（3.7 (53) L 组）：原常驻提示条（歌单计数
+        // 与操作说明文案，及各加载中文案）整条
+        // 删除——加载反馈由入场动画与贴纸层承担，信息文案不再
+        // 上屏。本胶囊只保留两个可点按落定态：未登录（点按扫码
+        // 登录）与最终加载失败（点按重试），经 showStatusNotice
+        // 出现，其余时刻恒隐藏、无占位高度残留。
         statusLabel = UILabel()
-        statusLabel.text = "主页墙加载中…"
+        statusLabel.isHidden = true
         statusLabel.textColor = .white
         statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
         statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        statusLabel.layer.cornerRadius = 13
+        statusLabel.clipsToBounds = true
         statusLabel.textAlignment = .center
         statusLabel.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.isUserInteractionEnabled = true
@@ -201,63 +219,61 @@ final class HomeWallViewController: UIViewController,
             statusLabel.heightAnchor.constraint(equalToConstant: 26)
         ])
 
+        // 关闭键（3.7 (53) L 组）：文字胶囊「关闭」→ iOS 系统式
+        // ✕ 毛玻璃圆钮。视觉圆 34pt（UIVisualEffectView 系统超薄
+        // 材质 + 亮边，与迷你台毛玻璃同款口径）居中于 44pt 命中
+        // 容器；锚点与旧胶囊一致（safeArea.top+8、trailing-12）。
+        // 关闭行为不变：仍走 closeTapped → dismiss；作窗口根时
+        // 整件隐藏（rootCloseButton 指容器，viewDidAppear 收口）。
+        // 按压反馈见 closePressBegan/Ended。
+        let closeChrome = UIView()
+        closeChrome.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(closeChrome)
+        rootCloseButton = closeChrome
+        let closeBlur = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        closeBlur.layer.cornerRadius = 17
+        closeBlur.layer.borderWidth = 1
+        closeBlur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        closeBlur.clipsToBounds = true
+        closeBlur.isUserInteractionEnabled = false
+        closeBlur.translatesAutoresizingMaskIntoConstraints = false
+        closeChrome.addSubview(closeBlur)
         let close = UIButton(type: .system)
-        rootCloseButton = close
-        close.setTitle("关闭", for: .normal)
-        close.setTitleColor(.white, for: .normal)
-        close.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        close.layer.cornerRadius = 13
+        close.setImage(UIImage(systemName: "xmark",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)),
+            for: .normal)
+        close.tintColor = .white
+        close.accessibilityLabel = "关闭"
         close.translatesAutoresizingMaskIntoConstraints = false
         close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        view.addSubview(close)
+        close.addTarget(self, action: #selector(closePressBegan),
+                        for: [.touchDown, .touchDragEnter])
+        close.addTarget(self, action: #selector(closePressEnded),
+                        for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
+        closeChrome.addSubview(close)
         NSLayoutConstraint.activate([
-            close.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            close.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            close.widthAnchor.constraint(equalToConstant: 56),
-            close.heightAnchor.constraint(equalToConstant: 26)
+            closeChrome.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            closeChrome.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            closeChrome.widthAnchor.constraint(equalToConstant: 44),
+            closeChrome.heightAnchor.constraint(equalToConstant: 44),
+            closeBlur.centerXAnchor.constraint(equalTo: closeChrome.centerXAnchor),
+            closeBlur.centerYAnchor.constraint(equalTo: closeChrome.centerYAnchor),
+            closeBlur.widthAnchor.constraint(equalToConstant: 34),
+            closeBlur.heightAnchor.constraint(equalToConstant: 34),
+            close.topAnchor.constraint(equalTo: closeChrome.topAnchor),
+            close.bottomAnchor.constraint(equalTo: closeChrome.bottomAnchor),
+            close.leadingAnchor.constraint(equalTo: closeChrome.leadingAnchor),
+            close.trailingAnchor.constraint(equalTo: closeChrome.trailingAnchor)
         ])
 
-        // 墙内设置齿轮（3.7 (36)）：固定左上角（顶部带右上角是
-        // 关闭键、正中是状态条，左上角不挡拼贴操作），样式与主
-        // 界面边缘齿轮一致（34×34、半透明），点按打开同一个设
-        // 置页；边缘老齿轮保留不动。
-        let settingsGear = UIButton(type: .system)
-        settingsGear.setImage(UIImage(systemName: "gearshape.fill"), for: .normal)
-        settingsGear.tintColor = .white
-        settingsGear.backgroundColor = UIColor.black.withAlphaComponent(0.25)
-        settingsGear.layer.cornerRadius = 17
-        settingsGear.alpha = 0.5
-        settingsGear.accessibilityLabel = "设置"
-        settingsGear.translatesAutoresizingMaskIntoConstraints = false
-        settingsGear.addTarget(self, action: #selector(wallSettingsTapped), for: .touchUpInside)
-        view.addSubview(settingsGear)
-        NSLayoutConstraint.activate([
-            settingsGear.widthAnchor.constraint(equalToConstant: 34),
-            settingsGear.heightAnchor.constraint(equalToConstant: 34),
-            settingsGear.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            settingsGear.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
-        ])
-
-        // 墙内搜索按钮（3.7 (51) D 组，纯新增）：齿轮右侧同风格
-        // （34×34、半透明），与中央状态条（居中、顶距同为 8）不
-        // 重叠；点按全屏呈 SwiftUI 搜索工作区（SearchHost-
-        // Presenter 承载 SearchWorkspaceView），关闭回墙。
-        let searchButton = UIButton(type: .system)
-        searchButton.setImage(UIImage(systemName: "magnifyingglass"), for: .normal)
-        searchButton.tintColor = .white
-        searchButton.backgroundColor = UIColor.black.withAlphaComponent(0.25)
-        searchButton.layer.cornerRadius = 17
-        searchButton.alpha = 0.5
-        searchButton.accessibilityLabel = "搜索"
-        searchButton.translatesAutoresizingMaskIntoConstraints = false
-        searchButton.addTarget(self, action: #selector(homeSearchTapped), for: .touchUpInside)
-        view.addSubview(searchButton)
-        NSLayoutConstraint.activate([
-            searchButton.widthAnchor.constraint(equalToConstant: 34),
-            searchButton.heightAnchor.constraint(equalToConstant: 34),
-            searchButton.leadingAnchor.constraint(equalTo: settingsGear.trailingAnchor, constant: 8),
-            searchButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
-        ])
+        // 墙面齿轮/搜索已删（3.7 (53) L 组入口合并）：工作台
+        // 侧栏（(53) A 组）完整覆盖——设置走侧栏底部设置行、
+        // 搜索走侧栏搜索分区行、登录走侧栏账户头/关闭态头像
+        // 钮，三者与原墙面键调起同一 SettingsViewController /
+        // SearchHostPresenter / LoginViewController；桥日志仍
+        // 由设置页进入（设置→桥日志）。原 wallSettingsTapped /
+        // homeSearchTapped 随键一并删除，无唯一路径丢失。
 
         // 播放态同步：切歌/播停时刷新台面内容（与曲目墙同构）。
         PlaybackEngine.shared.$currentTrack
@@ -287,25 +303,79 @@ final class HomeWallViewController: UIViewController,
             self.setMiniProgress(fraction)
         }
 
+        // 工作台浮层安装（3.7 (53) A 组，DS 对账：不换 root、
+        // 不建容器 VC，只在墙上叠一层宿主视图）：关闭态命中
+        // 只认把手/头像、其余穿透；侧栏展开时禁墙平移与卡片
+        // 点按、关闭恢复。墙画布/入场/点卡 route 均不受影响
+        // （宿主不参与这些链，入场 present 走 VC 层级、盖在
+        // 宿主之上）。贴纸层视图是懒加的、会盖在本宿主之上，
+        // 但其视图不拦触摸（dock 已关交互、失败/缓冲贴纸只在
+        // 特定状态短暂出现且不在把手/头像命中区）。
+        let workbench = WorkbenchOverlayHostView(hostViewController: self)
+        workbench.onSidebarVisibilityChanged = { [weak self] open in
+            self?.collectionView.isUserInteractionEnabled = !open
+            Breadcrumbs.log("workbench.wallInteraction enabled=\(!open)")
+        }
+        workbench.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(workbench)
+        NSLayoutConstraint.activate([
+            workbench.topAnchor.constraint(equalTo: view.topAnchor),
+            workbench.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            workbench.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            workbench.trailingAnchor.constraint(equalTo: view.trailingAnchor)
+        ])
+        workbenchHost = workbench
+        // (53) D 组速记簿：左缘把手＋抽屉宿主，装在工作台宿主之后
+        // 成为墙面最上层子视图（其 hitTest 只认把手/抽屉、其余穿透，
+        // 非模态不挡墙操作；宠物岛走 window.layer 独立层级、互不影响）。
+        _ = SketchbookHost.install(into: view)
+        // (53) L 组 chrome 收口留痕：提示条删除 + ✕ 关闭键 +
+        // 齿轮/搜索并入侧栏，真机对账以此行确认新包在跑。
+        Breadcrumbs.log("wall.chrome home hintBar=removed gearSearch=sidebar close=glass-x")
+
         loadEntries()
     }
 
     @objc private func closeTapped() {
+        Breadcrumbs.log("wall.chrome.close kind=home")
         dismiss(animated: true)
     }
 
-    /// 墙内齿轮打开设置页：与主界面边缘齿轮同一呈现方式
-    /// （overFullScreen 浮层、animated: false）。
-    @objc private func wallSettingsTapped() {
-        let settings = SettingsViewController()
-        settings.modalPresentationStyle = .overFullScreen
-        present(settings, animated: false)
+    /// 关闭键按压反馈（3.7 (53) L 组）：按下缩 0.86 + 压暗，
+    /// 松手系统弹簧回弹；只动 chrome 容器的 transform/alpha，
+    /// 不碰关闭语义。Reduce Motion 时不缩放（guard 直接返回，
+    /// ended 仍复位防残留）。
+    @objc private func closePressBegan() {
+        guard !UIAccessibility.isReduceMotionEnabled,
+              let chrome = rootCloseButton else { return }
+        UIView.animate(withDuration: 0.18, delay: 0,
+                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            chrome.transform = CGAffineTransform(scaleX: 0.86, y: 0.86)
+            chrome.alpha = 0.75
+        }
     }
 
-    /// 墙内搜索入口（3.7 (51) D 组，纯新增）：呈 SwiftUI 搜索
-    /// 工作区（承载与点歌/集合接线都在 SearchHostPresenter）。
-    @objc private func homeSearchTapped() {
-        SearchHostPresenter.presentSearch(from: self)
+    @objc private func closePressEnded() {
+        guard let chrome = rootCloseButton else { return }
+        UIView.animate(withDuration: 0.35, delay: 0,
+                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            chrome.transform = .identity
+            chrome.alpha = 1
+        }
+    }
+
+    /// 顶部行动胶囊显隐收口（3.7 (53) L 组）：提示条删除后，
+    /// 胶囊只为可点按的落定态（未登录/最终失败）出现，其余
+    /// 时刻恒隐藏；点按分发仍走 statusTapped，语义不变。
+    private func showStatusNotice(_ text: String) {
+        statusLabel.text = text
+        statusLabel.isHidden = false
+    }
+
+    private func hideStatusNotice() {
+        statusLabel.isHidden = true
     }
 
     /// 失败态点按状态胶囊：重置计数重新加载（3.7 (13) #3）。
@@ -318,7 +388,7 @@ final class HomeWallViewController: UIViewController,
                 guard let self else { return }
                 self.wallNotLoggedIn = false
                 self.loadAttempts = 0
-                self.statusLabel.text = "主页墙加载中…"
+                self.hideStatusNotice()
                 self.loadEntries()
             }
             present(login, animated: true)
@@ -327,7 +397,7 @@ final class HomeWallViewController: UIViewController,
         guard loadFailed else { return }
         loadFailed = false
         loadAttempts = 0
-        statusLabel.text = "主页墙加载中…"
+        hideStatusNotice()
         loadEntries()
     }
 
@@ -436,7 +506,7 @@ final class HomeWallViewController: UIViewController,
                         self.entryDataState = .failed
                         self.wallNotLoggedIn = true
                         Breadcrumbs.log("home entry-state failed reason=not-logged-in gen=\(generation)")
-                        self.statusLabel.text = "主页墙：未登录（点按扫码登录网易云）"
+                        self.showStatusNotice("未登录，点按扫码登录网易云")
                     }
                     return
                 }
@@ -457,7 +527,9 @@ final class HomeWallViewController: UIViewController,
                             subtitle: "歌单 · \(playlist.trackCount)")
                     }
                     self.wallLayout.totalEntries = self.entries.count
-                    self.statusLabel.text = "主页墙：\(self.entries.count) 个歌单 · 拖动平移 · 点按打开"
+                    // 提示条已删（3.7 (53) L 组）：成功态不上屏
+                    // 文案，只收口胶囊（清未登录/失败残留）。
+                    self.hideStatusNotice()
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
@@ -475,7 +547,9 @@ final class HomeWallViewController: UIViewController,
                     if self.loadAttempts < 2 {
                         // 首次失败先自动重试；加载失败（含最终失败）
                         // 不触发入场退场，视频继续播到关闭/播完（3.7 (18)）。
-                        self.statusLabel.text = "主页墙加载失败，正在重试…"
+                        // 自动重试期不上屏（3.7 (53) L 组）：胶囊
+                        // 只在最终失败落定时以可点按态出现。
+                        self.hideStatusNotice()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                             self?.loadEntries()
                         }
@@ -487,7 +561,7 @@ final class HomeWallViewController: UIViewController,
                         // 落点之一（另一处是未登录落定）。
                         self.entryDataState = .failed
                         Breadcrumbs.log("home entry-state failed reason=load-failed gen=\(generation)")
-                        self.statusLabel.text = "主页墙加载失败，点按这里重试"
+                        self.showStatusNotice("加载失败，点按这里重试")
                     }
                 }
             }
