@@ -71,7 +71,7 @@ enum PetPersonalities {
         "cat-08": .mischievous, // 翻滚摔跤
         "cat-17": .mischievous, // 拉长身体
         "cat-21": .mischievous, // 墨镜摇头晃脑
-        // 忧郁（18）：困倦/垂泪/蜷缩/躺平气质
+        // 忧郁（19）：困倦/垂泪/蜷缩/躺平气质
         "dog-09": .melancholy, // 躺床睡觉
         "dog-13": .melancholy, // 对着电脑发蔫
         "dog-17": .melancholy, // 月夜依偎出神
@@ -87,15 +87,15 @@ enum PetPersonalities {
         "cat-14": .melancholy, // 躺着刷手机
         "cat-16": .melancholy, // 捂脸哭
         "cat-19": .melancholy, // 躺床玩手机
+        "cat-20": .melancholy, // 甩头飙泪（(40) 裁定：大哭归忧郁，非炸毛）
         "cat-22": .melancholy, // 系领带垂泪
         "cat-24": .melancholy, // 躺倒流泪
         "cat-25": .melancholy, // 角落小只独坐
-        // 愤怒·傲娇（6）：瞪眼/抱臂/背对/打闹的炸毛感（不伤人）
+        // 愤怒·傲娇（5）：瞪眼/抱臂/背对/打闹的炸毛感（不伤人）
         "dog-06": .grumpy, // 叼领带一脸得意
         "dog-20": .grumpy, // 端坐臭脸
         "dog-24": .grumpy, // 两只打闹扑咬
         "cat-13": .grumpy, // 背对生闷气
-        "cat-20": .grumpy, // 甩头飙泪
         "cat-23": .grumpy, // 抱臂翘腿大佬坐
         // 爱开玩笑（6）：笑闹/夸张表情
         "dog-04": .joker, // 高频抖头

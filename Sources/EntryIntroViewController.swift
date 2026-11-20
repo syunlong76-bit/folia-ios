@@ -371,6 +371,7 @@ final class EntryIntroViewController: UIViewController {
                 Breadcrumbs.log("entry veil cleared")
             }
             self.checkDissolveGate()
+            self.checkLoopDataReadyExit()
         }
 
         scheduleWatchdog()
@@ -412,6 +413,41 @@ final class EntryIntroViewController: UIViewController {
         UIView.animate(withDuration: dissolveDuration, delay: 0,
                        options: [.curveEaseInOut], animations: {
             self.playerView.alpha = 0
+        })
+    }
+
+    /// 循环软化已起跑（3.7 (40)）：见 checkLoopDataReadyExit。
+    private var loopExitBegan = false
+
+    /// 循环软化（3.7 (40)，Miller 16:32 拍板）：第一轮
+    /// （loopCount == 0）逻辑一字不动——播满、数据就绪也不
+    /// 提前退（唯一出口是尾段叠化窗，见 checkDissolveGate）。
+    /// 一旦已进入循环（round ≥ 1，是数据迟到才被迫续播掩
+    /// 盖），数据就绪即在当前播放点溶出退场，不再把这一轮
+    /// 陪播满：溶出与尾段叠化同手法（视频层 alpha → 0、
+    /// 0.6s easeInOut），随后走标准 dismissIntro；溶出期间
+    /// 数据状态若翻回未就绪（极端竞态），恢复画面并复位旗
+    /// 标、按原循环口径继续，不误退场。
+    private func checkLoopDataReadyExit() {
+        guard loopCount >= 1, !isDismissing, !dissolveBegan, !loopExitBegan
+        else { return }
+        guard EntryIntroPresenter.currentDataState == .ready else { return }
+        loopExitBegan = true
+        dissolveBegan = true
+        Breadcrumbs.log("entry loop exit reason=data-ready")
+        UIView.animate(withDuration: 0.6, delay: 0,
+                       options: [.curveEaseInOut], animations: {
+            self.playerView.alpha = 0
+        }, completion: { [weak self] _ in
+            guard let self else { return }
+            if EntryIntroPresenter.currentDataState == .ready {
+                self.dismissIntro(reason: "data-ready", animated: true)
+            } else {
+                self.loopExitBegan = false
+                self.dissolveBegan = false
+                self.playerView.layer.removeAllAnimations()
+                self.playerView.alpha = 1
+            }
         })
     }
 

@@ -138,13 +138,16 @@ final class EdgeOneAPIClient {
 
     /// 双节点并行竞速 GET（DS26 Q3，只给取流用）：串行故障转移在主
     /// 节点冷/慢时要等满 6 秒才切备节点，实测凑出 11–12 秒死等；
-    /// 改为两节点同时发、单次超时 3 秒、先成功先用，赢家锁定为
-    /// 后续请求的优先节点。两节点同参同结果，首个成功即权威。
+    /// 改为两节点同时发、先成功先用，赢家锁定为后续请求的优先
+    /// 节点。两节点同参同结果，首个成功即权威。单节点超时 3.7
+    /// (40) 由 3s 放宽到 6s：2026-11-20 函数冷路径实测（冷实例
+    /// init 0.93–1.68s + 上游长尾）常把双节点一起顶过 3s 造成
+    /// 取流全灭，函数侧瘦身后残余冷极值约 5.6s，6s 兜住尾部。
     func requestDataHedged(
         provider: AudioSourceType,
         path: String,
         queryItems: [URLQueryItem] = [],
-        perNodeTimeout: TimeInterval = 3
+        perNodeTimeout: TimeInterval = 6
     ) async throws -> Data {
         guard let pair = Self.nodes(for: provider) else {
             throw EdgeOneError.providerUnverified(provider: provider, method: path)

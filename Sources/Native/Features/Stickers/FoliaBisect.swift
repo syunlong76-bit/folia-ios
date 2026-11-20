@@ -21,5 +21,5 @@ import Foundation
 /// 定位到具体子系统后再拆细。
 enum FoliaBisect {
     static let islandWindowDisabled = false
-    static let pet32SubsystemsBypassed = true
+    static let pet32SubsystemsBypassed = false
 }
