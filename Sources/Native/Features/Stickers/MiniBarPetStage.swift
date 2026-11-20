@@ -561,7 +561,13 @@ final class MiniBarPetStage: UIView {
                 syncLiveRegistry()
             }
         }
-        for actor in allActors { actor.placed = false }
+        // 切歌解除停靠（(32) 规格内口径）：逐个落 revoke 面
+        // 包屑（3.7 (41) 组4），解停靠从此可判读；形态/告别
+        // 两条旧解停靠路径已由本版 ②③ 堵掉，不再发生。
+        for actor in allActors where actor.placed {
+            actor.placed = false
+            Breadcrumbs.log("pet.park.revoke asset=\(actor.asset) reason=track")
+        }
         if PlaybackEngine.shared.isPlaying {
             for actor in allActors where actor.mode != .dragged {
                 // 停聊中的一对不被切歌探头打断（细修 5 让位）。
@@ -905,9 +911,15 @@ final class MiniBarPetStage: UIView {
         }
         ensureExpandedCast()
         for actor in allActors {
-            actor.placed = false
-            actor.mode = .idle
-            actor.until = activeTime + 1 + .random(in: 0...2)
+            // 停靠者只做尺寸弹簧、不解停靠（3.7 (41) 组4）：
+            // placed/mode/until 全保留，与上方裁员循环的豁免
+            // 对齐——此前此循环无条件清 placed，展开落定即全
+            // 员解停靠、宠物 1–3 秒后恢复漫游（审计 pet-dock
+            // 候选 2）。
+            if !actor.placed {
+                actor.mode = .idle
+                actor.until = activeTime + 1 + .random(in: 0...2)
+            }
             let size = Self.expandedPetSize
             if actor.bounds.width != size {
                 UIView.animate(withDuration: 0.35, delay: 0,
@@ -966,6 +978,9 @@ final class MiniBarPetStage: UIView {
 
     fileprivate func petDragBegan(_ actor: MiniPetActor) {
         guard !isHidden, petsActive else { return }
+        // 拖动链埋点（3.7 (41) 组4）：此前 begin/end 全无面
+        // 包屑，落点被改写只能靠推断（审计 pet-dock 缺口）。
+        Breadcrumbs.log("pet.drag.begin asset=\(actor.asset)")
         hideDialog()
         closeCare()
         cancelChatIfParticipant(actor)
@@ -983,29 +998,38 @@ final class MiniBarPetStage: UIView {
 
     fileprivate func petDragEnded(_ actor: MiniPetActor, at point: CGPoint) {
         UIView.animate(withDuration: 0.2) { actor.transform = .identity }
-        dropActor(actor, at: point)
+        dropActor(actor, at: point, src: "ended")
     }
 
     fileprivate func petDragCancelled(_ actor: MiniPetActor) {
         UIView.animate(withDuration: 0.2) { actor.transform = .identity }
-        dropActor(actor, at: actor.center)
+        dropActor(actor, at: actor.center, src: "cancelled")
     }
 
-    /// 松手：横向落位（夹回活动范围）、竖直吸附回地面并小
-    /// 跳一下，进入停靠态（3.7 (32) 细修 4 修订 (27) 的安置
-    /// 语义）：定格在落点、不被队形/轮换/批次逻辑拽走；停
-    /// 靠后 5 秒内无任何与它的互动（点/双击/再拖，互动刷
-    /// 新计时）→ 淡出消失回池。停靠仅会话内有效；切歌/形
-    /// 态切换仍按原口径解除停靠。
-    private func dropActor(_ actor: MiniPetActor, at point: CGPoint) {
-        let range = walkRange(for: actor)
-        actor.center.x = min(max(point.x, range.lowerBound), range.upperBound)
-        actor.feetY = currentGroundY()
+    /// 松手（3.7 (41) 组4 修订落位语义，Miller 2026-11-20
+    /// 拍板「二维定格：放哪停哪」）：落点 x/y 都保真——只夹
+    /// 进本层可视范围（整只不出界、保证还能再被抓到），不
+    /// 再夹回 walkRange、不再把 y 钉回地面；主循环的地面吸
+    /// 附对 placed 同步豁免（几何豁免与行为豁免对齐），停
+    /// 靠态这才在结构上成立（(40) 前 dropActor 无条件销毁
+    /// 落点 y + tick 每帧吸附兜底，拖到哪都当帧弹回台沿——
+    /// 审计 pet-dock 候选 1 定案）。定格后不被队形/轮换/批
+    /// 次/告别拽走；停靠后 5 秒内无任何与它的互动（点/双
+    /// 击/再拖，互动刷新计时）→ 淡出消失回池。停靠仅会话
+    /// 内有效；切歌仍按 (32) 口径解除停靠。
+    private func dropActor(_ actor: MiniPetActor, at point: CGPoint, src: String) {
+        let half = actor.bounds.width / 2
+        let cx = min(max(point.x, half), max(half, bounds.width - half))
+        let cy = min(max(point.y, half), max(half, bounds.height - half))
+        actor.center = CGPoint(x: cx, y: cy)
         actor.placed = true
         actor.parkedClock = clockTime
         actor.mode = .idle
         actor.until = activeTime + 2
         actor.hopStart = activeTime
+        Breadcrumbs.log("pet.drag.end asset=\(actor.asset) src=\(src)"
+            + " drop=(\(Int(point.x)),\(Int(point.y)))"
+            + " parked=(\(Int(actor.center.x)),\(Int(actor.center.y)))")
         Breadcrumbs.log("pet.park asset=\(actor.asset)"
             + " x=\(Int(actor.center.x)) y=\(Int(actor.center.y))"
             + " form=\(collapsed ? "collapsed" : "expanded")")
@@ -1525,9 +1549,12 @@ final class MiniBarPetStage: UIView {
         }
 
         // 吸附：脚底恒贴地面（台上沿演示层位置），升降与台
-        // 子同曲线同时长；拖动中的演员除外。
+        // 子同曲线同时长；拖动中的演员除外。停靠中的演员同
+        // 样豁免（3.7 (41) 组4）：二维定格的几何豁免与行为
+        // 豁免对齐——否则落点保真只活一帧，下一帧即被拽回
+        // 地面（审计 pet-dock 候选 1 的兜底一半）。
         let ground = currentGroundY()
-        for actor in allActors where actor.mode != .dragged {
+        for actor in allActors where actor.mode != .dragged && !actor.placed {
             actor.feetY = ground
         }
 
@@ -1535,11 +1562,15 @@ final class MiniBarPetStage: UIView {
         if let pending = pendingForm, clockTime >= pending.at {
             pendingForm = nil
             if pending.collapsed {
+                // 停靠者不进告别流（3.7 (41) 组4）：分流打标与
+                // 告别名单都先滤掉 placed，停靠者由自身 5 秒
+                // 过期扫描退场（审计 pet-dock 候选 3）。
+                let farewellActors = allActors.filter { !$0.placed }
                 // 3.7 (35) 二分门：告别分流旁路（不打标，回池口径）。
                 if !FoliaBisect.pet32SubsystemsBypassed {
-                    prepareFarewellDestinations(allActors)
+                    prepareFarewellDestinations(farewellActors)
                 }
-                startFarewell(of: allActors) { [weak self] in
+                startFarewell(of: farewellActors) { [weak self] in
                     self?.spawnBatch()
                 }
             } else {
@@ -1563,11 +1594,13 @@ final class MiniBarPetStage: UIView {
         if batchActive, pendingSpawns.isEmpty, !farewellActive,
            clockTime >= batchEndsAt, !allActors.isEmpty {
             batchActive = false
+            // 停靠者不进告别流（3.7 (41) 组4，同收起落定处）。
+            let farewellActors = allActors.filter { !$0.placed }
             // 3.7 (35) 二分门：告别分流旁路（不打标，回池口径）。
             if !FoliaBisect.pet32SubsystemsBypassed {
-                prepareFarewellDestinations(allActors)
+                prepareFarewellDestinations(farewellActors)
             }
-            startFarewell(of: allActors) { [weak self] in
+            startFarewell(of: farewellActors) { [weak self] in
                 self?.spawnBatch()
             }
         }

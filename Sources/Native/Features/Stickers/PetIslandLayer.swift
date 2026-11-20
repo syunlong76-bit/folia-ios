@@ -6,13 +6,23 @@ import UIKit
 // 上蹦到灵动岛位置落座；灵动岛由系统渲染、恒在本层之上，
 // 宠物下半身被岛的黑框天然遮住、上半身露出，像坐在岛里。
 //
-// 承载：3.7 (39) 起改挂主窗根视图顶层（单窗）——独立
+// 承载：3.7 (39) 改挂主窗根视图顶层（单窗）——独立
 // UIWindow 形态经 (36)/(37)/(38) 三轮真机二分定案为冻死
 // 充分条件（与 level、岛上内容无关），障眼法几何只依赖
-// 屏幕坐标、不依赖独立窗口，故取消建窗。挂在根视图之上，
-// 墙↔舞台↔主页之间导航时不消失、不重建。hitTest 只认领
-// 宠物本体，其余全穿透。仅 App 前台有效；横屏时岛位不在
-// 顶部，本层保守隐藏宠物（状态保留，回竖屏恢复）。
+// 屏幕坐标、不依赖独立窗口，故取消建窗。
+// 3.7 (41) 组1（审计 folia40-failures A1 定案）：(39) 的根
+// 视图宿主被呈现栈整体盖住——主页/曲目墙/舞台/设置页全是
+// 一层层 present 上去的，被 present 的视图恒在根视图之上，
+// install 时那一次 bringSubviewToFront 对呈现栈无效，宠物
+// 爬升/落座/停聊全程在被盖住的层里空跑（日志机制全活、
+// Miller 从未看见）。改挂**主窗本体**的顶层子视图（仍是同
+// 一个窗的子视图，不新建独立 UIWindow，不碰 (39) 冻案红
+// 线），并设 0.5s 置顶守护：任一呈现/散场后窗口子视图顺序
+// 有变，下一拍即把本层重新置顶；呈现完成时刻另有事件驱动
+// 的即时置顶（install/激活/收宠物）。墙↔舞台↔主页之间导
+// 航时不消失、不重建。hitTest 只认领宠物本体，其余全穿
+// 透。仅 App 前台有效；横屏时岛位不在顶部，本层保守隐藏
+// 宠物（状态保留，回竖屏恢复）。
 //
 // 几何（iPhone 14 Pro 竖屏，窗口坐标）：岛黑框约宽 126、
 // 高 37、顶距屏幕上沿约 11pt。宠物 46pt，脚底落在 y≈45
@@ -72,6 +82,12 @@ final class PetIslandLayer: UIView {
 
     private var pets: [IslandPetView] = []
     private var tickTimer: Timer?
+    /// 宿主主窗（3.7 (41) 组1）：本层是它的直接子视图；scene
+    /// 重连会换新窗，install 时按当前窗重新挂载。
+    private weak var hostWindow: UIWindow?
+    /// 置顶守护（3.7 (41) 组1）：0.5s 一拍核对本层是否仍是
+    /// 主窗最顶子视图，不是则重新置顶并落 island.refront。
+    private var refrontTimer: Timer?
     private var nextBubbleAt: TimeInterval = 0
     private var nextChatAt: TimeInterval = 0
     private var chatLines: [(pet: IslandPetView, text: String)] = []
@@ -93,33 +109,64 @@ final class PetIslandLayer: UIView {
 
     static func install(in windowScene: UIWindowScene) {
         let layer = PetIslandLayer.shared
-        if layer.superview == nil {
-            // 3.7 (39)：不建独立窗口，取同 scene 的主窗（SceneDelegate
-            // 的 window 优先，key window 兜底），把岛层加到其根视图
-            // 最顶层；frame 与 autoresizing 跟随宿主根视图。
-            let hostWindow = (windowScene.delegate as? SceneDelegate)?.window
-                ?? windowScene.windows.first(where: { $0.isKeyWindow })
-                ?? windowScene.windows.first
-            guard let hostView = hostWindow?.rootViewController?.view else {
-                Breadcrumbs.log("island.install skipped=no-host")
-                return
-            }
-            layer.frame = hostView.bounds
+        // 3.7 (41) 组1：宿主改主窗本体（SceneDelegate 的 window
+        // 优先，key window 兜底）。superview 不是当前主窗（首
+        // 装/scene 重连换了新窗）就重新挂载；frame 与
+        // autoresizing 跟随窗口 bounds，落座几何口径不变。
+        let hostWindow = (windowScene.delegate as? SceneDelegate)?.window
+            ?? windowScene.windows.first(where: { $0.isKeyWindow })
+            ?? windowScene.windows.first
+        guard let window = hostWindow else {
+            Breadcrumbs.log("island.install skipped=no-host")
+            return
+        }
+        if layer.superview !== window {
+            layer.removeFromSuperview()
+            layer.frame = window.bounds
             layer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-            hostView.addSubview(layer)
-            hostView.bringSubviewToFront(layer)
-            Breadcrumbs.log("island.install host=mainwindow"
+            window.addSubview(layer)
+            window.bringSubviewToFront(layer)
+            layer.hostWindow = window
+            Breadcrumbs.log("island.install host=window"
                 + " residents=\(PetHomeRegistry.shared.islandResidents.count)")
             PetHomeRegistry.shared.onIslandDeparture = { [weak layer] asset in
                 layer?.releasePet(asset: asset)
             }
         }
+        layer.startRefrontGuard()
         // 冷启动时登记表为空；若已有岛民（重连场景）补落座。
         for asset in PetHomeRegistry.shared.islandResidents
         where !layer.pets.contains(where: { $0.asset == asset }) {
             layer.seatPet(asset: asset, animated: false, fromRect: nil)
         }
         layer.updateVisibility()
+    }
+
+    // MARK: 置顶守护（3.7 (41) 组1）
+
+    /// 启动置顶守护（幂等）：0.5s 一拍（.common 模式，转场/
+    /// 滚动期间照常走）。守护只做一件事——本层不是主窗最顶
+    /// 子视图时重新置顶；呈现栈怎么变都不需要逐个挂钩。
+    private func startRefrontGuard() {
+        guard refrontTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            self?.refrontIfNeeded(logged: true)
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        refrontTimer = timer
+    }
+
+    /// 即时置顶（事件驱动入口：SceneDelegate 激活、收宠物
+    /// 时调用）：守护拍之间的呈现变化不等下一拍。
+    func refrontIfNeeded() {
+        refrontIfNeeded(logged: false)
+    }
+
+    private func refrontIfNeeded(logged: Bool) {
+        guard let window = hostWindow, superview === window else { return }
+        guard window.subviews.last !== self else { return }
+        window.bringSubviewToFront(self)
+        if logged { Breadcrumbs.log("island.refront") }
     }
 
     // MARK: 触摸穿透（只认领宠物本体）
@@ -152,8 +199,10 @@ final class PetIslandLayer: UIView {
     // MARK: 落座 / 撤下
 
     /// 墙台分流送达：从出发点（主窗口坐标，与本层同屏几何）
-    /// 蹦到岛上座位（弹簧 + 两下蹦跳）。
+    /// 蹦到岛上座位（弹簧 + 两下蹦跳）。爬升动画开始前先即
+    /// 时置顶一次，不等守护拍（3.7 (41) 组1）。
     func receive(asset: String, fromRect: CGRect?) {
+        refrontIfNeeded()
         seatPet(asset: asset, animated: true, fromRect: fromRect)
     }
 

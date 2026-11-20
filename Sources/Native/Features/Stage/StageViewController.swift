@@ -98,8 +98,28 @@ final class StageViewController: UIViewController {
     private var lastFrameTimestamp: CFTimeInterval = 0
     private var frameDurations: [Double] = []
     private var driftTimer: Timer?
-    /// 漂移连续超限计数（3.7 (23)）：连续 2 次 >0.15s 才重锚。
-    private var driftOverCount = 0
+    /// 舞台速退探针（3.7 (41) 组2取证，只记日志不改逻辑）：
+    /// SceneDelegate 每次 route 派发开台/归位时以 Date() 武装；
+    /// 本台若在 3 秒内被 dismiss，viewWillDisappear 落
+    /// `nowplaying.route stage-exit-quick dt=` 面包屑，供下轮
+    /// 定性「开台约 1 秒舞台消失」是手动关还是自动退。
+    static var routeExitProbeArmedAt: Date?
+    /// settle 稳态重锚（3.7 (41) 组3，移植墙面 LyricClockDriver
+    /// (20) 定案纪律）：瞬态锚（开台/切歌/播停翻转）在 +0.35s
+    /// 做一次无条件稳态重锚，纠正起播瞬态锚的亚阈值恒定相位
+    /// 差（舞台此前无 settle、阈值死区内恒差可整场存活——
+    /// 审计 lyric-sync 候选 1）。窗口内漂移重锚可重新武装，
+    /// 上限 3 次（墙面 (22) 同口径）。
+    private var settleTimer: Timer?
+    private var settleReanchorAt: CFTimeInterval?
+    private var settleTrackId: String?
+    private var settleRearmCount = 0
+    private static let settleWindow: CFTimeInterval = 0.35
+    private static let settleRearmLimit = 3
+    /// 舞台行级面包屑去重状态（3.7 (41) 组3）：只在（曲目,
+    /// 行号）变化时落盘，与墙面 lrc line 同口径。
+    private var lastStageLineTrackId: String?
+    private var lastStageLineIndex: Int?
     private var gateTimer: Timer?
     private var lastLayoutSize: CGSize = .zero
     private var lastTimeLabelSecond = -1
@@ -130,7 +150,7 @@ final class StageViewController: UIViewController {
         // 这里补一次页眉空态。
         subscribePlayback()
         refreshHeader()
-        reanchor()
+        reanchor(armSettle: true)
         // 贴纸层（3.7 (24)，纯新增）：建贴纸视图与陪伴宠物。
         stickerInstall()
     }
@@ -178,6 +198,15 @@ final class StageViewController: UIViewController {
         renderer?.setLifecycle(engine.isPlaying ? .playing : .paused, active: false)
         Breadcrumbs.samplerStop()
         if isBeingDismissed {
+            // 速退探针结算（3.7 (41) 组2）：route 开台后 3 秒
+            // 内被 dismiss 才落盘，超时自动作废不留痕。
+            if let armedAt = Self.routeExitProbeArmedAt {
+                Self.routeExitProbeArmedAt = nil
+                let dt = Date().timeIntervalSince(armedAt)
+                if dt <= 3 {
+                    Breadcrumbs.log("nowplaying.route stage-exit-quick dt=\(String(format: "%.2f", dt))")
+                }
+            }
             Breadcrumbs.log("stage gate exit frames \(frameStatsText())")
             teardown()
         }
@@ -195,6 +224,9 @@ final class StageViewController: UIViewController {
     private func teardown() {
         guard !tornDown else { return }
         tornDown = true
+        settleTimer?.invalidate()
+        settleTimer = nil
+        settleReanchorAt = nil
         lyricsTask?.cancel()
         backdropTask?.cancel()
         renderer?.setLifecycle(.destroyed, active: false)
@@ -394,7 +426,7 @@ final class StageViewController: UIViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in
                 guard let self else { return }
-                self.reanchor()
+                self.reanchor(armSettle: true)
                 self.refreshPlayButton()
                 self.renderer?.setLifecycle(
                     self.engine.isPlaying ? .playing : .paused,
@@ -411,7 +443,7 @@ final class StageViewController: UIViewController {
         backdropTint.backgroundColor = palette.background.withAlphaComponent(0.5)
         refreshHeader()
         refreshLikeButton()
-        reanchor()
+        reanchor(armSettle: true)
         pushSnapshot()
         loadLyrics(for: track)
         loadBackdropFallback(for: track)
@@ -549,7 +581,15 @@ final class StageViewController: UIViewController {
     /// +0.48~0.68s 的主因）。改直读 rawPlayhead() 真值；每
     /// 次重锚落 `stage anchor` 面包屑（锚值 + raw 与旧台阶
     /// 缓存之差），补舞台路径此前零锚点埋点的可观测性缺口。
-    private func reanchor() {
+    ///
+    /// armSettle（3.7 (41) 组3，移植墙面 (20) 定案）：瞬态锚
+    /// （开台/切歌/播停翻转）采在播放器时钟起步瞬态上，外推
+    /// 可带进亚阈值恒定相位差（墙面实测约 +0.09–0.10）且死
+    /// 区内无人纠正、整场存活。修法同墙面：瞬态锚在 +0.35s
+    /// 后做一次稳态重锚（performSettle），纠正量落
+    /// `stage settle drift=`；漂移重锚采行进中真值、不 arm，
+    /// 避免链式重锚（窗口内重武装见 checkDrift）。
+    private func reanchor(armSettle: Bool = false) {
         let raw = engine.rawPlayhead()
         anchor = PlaybackAnchor(
             trackId: engine.currentTrack?.id ?? "",
@@ -558,25 +598,91 @@ final class StageViewController: UIViewController {
             rate: engine.isPlaying ? 1 : 0,
             anchorSeq: anchor.anchorSeq + 1)
         Breadcrumbs.log("stage anchor pos=\(String(format: "%.3f", raw)) cacheDelta=\(String(format: "%.3f", raw - engine.currentTime)) seq=\(anchor.anchorSeq)")
+        if armSettle {
+            settleRearmCount = 0
+            if engine.isPlaying, LyricTiming.settleReanchorEnabled {
+                settleTrackId = engine.currentTrack?.id
+                settleReanchorAt = CACurrentMediaTime() + Self.settleWindow
+                settleTimer?.invalidate()
+                settleTimer = Timer.scheduledTimer(
+                    withTimeInterval: Self.settleWindow, repeats: false) { [weak self] _ in
+                    self?.performSettle()
+                }
+            } else {
+                if settleReanchorAt != nil {
+                    Breadcrumbs.log("stage settle disarm reason=not-playing")
+                }
+                disarmSettle()
+            }
+        }
+    }
+
+    private func disarmSettle() {
+        settleTimer?.invalidate()
+        settleTimer = nil
+        settleReanchorAt = nil
+        settleTrackId = nil
+    }
+
+    /// 稳态重锚落点（3.7 (41) 组3）：武装时刻 +0.35s 触发；
+    /// 已暂停/已切歌则作废并留痕（墙面同口径）。纠正量同记
+    /// 三基准（engine 台阶缓存 / rawPlayhead 真值 / 锚外推），
+    /// 与墙面 `lrc clock settle drift=` 同字段供对账。
+    private func performSettle() {
+        settleTimer = nil
+        guard settleReanchorAt != nil else { return }
+        settleReanchorAt = nil
+        guard LyricTiming.settleReanchorEnabled else { return }
+        guard engine.isPlaying else {
+            Breadcrumbs.log("stage settle disarm reason=paused")
+            return
+        }
+        guard engine.currentTrack?.id == settleTrackId else {
+            Breadcrumbs.log("stage settle disarm reason=track-changed")
+            return
+        }
+        let extrapolated = positionNow()
+        let raw = engine.rawPlayhead()
+        let drift = raw - extrapolated
+        reanchor()
+        Breadcrumbs.log("stage settle drift=\(String(format: "%.3f", drift)) engine=\(String(format: "%.3f", engine.currentTime)) raw=\(String(format: "%.3f", raw)) extrapolated=\(String(format: "%.3f", extrapolated))")
     }
 
     private func positionNow() -> TimeInterval {
         anchor.position(atWallTime: CACurrentMediaTime())
     }
 
-    /// 漂移校正（3.7 (23)）：比对对象改 rawPlayhead 真值（禁
-    /// 自比）；阈值 0.15s、连续 2 次超限才重锚，防单帧抖动
-    /// 误纠（driftTimer 周期 0.3s，两次 ≈ 0.6s 确认窗）。
+    /// 漂移校正（3.7 (23) 定比对对象为 rawPlayhead 真值、禁
+    /// 自比；3.7 (41) 组3 纠偏纪律向墙面看齐）：阈值改用墙面
+    /// 同一常量 LyricTiming.reanchorThreshold（0.12，不再各
+    /// 守一套死区），超限即重锚——去掉 (23) 的连续 2 次确认
+    /// （≈0.6s 确认窗被审计点名为锯齿来源；墙面逐帧即时重
+    /// 锚已实证稳定）。0.3s 检查周期保留（本台无逐帧时钟维
+    /// 护点，frameStep 只管渲染与行级面包屑）。settle 武装
+    /// 窗口内的漂移重锚按墙面 (22) 口径重新武装 settle，上
+    /// 限 3 次，超限永久解除并留痕。
     private func checkDrift() {
         guard engine.currentTrack != nil else { return }
-        if abs(engine.rawPlayhead() - positionNow()) > 0.15 {
-            driftOverCount += 1
-            if driftOverCount >= 2 {
-                driftOverCount = 0
-                reanchor()
+        guard abs(engine.rawPlayhead() - positionNow())
+                > LyricTiming.reanchorThreshold else { return }
+        let settleWasArmed = settleReanchorAt != nil
+        reanchor()
+        if settleWasArmed {
+            if LyricTiming.settleReanchorEnabled, engine.isPlaying,
+               settleRearmCount < Self.settleRearmLimit {
+                settleRearmCount += 1
+                settleTrackId = engine.currentTrack?.id
+                settleReanchorAt = CACurrentMediaTime() + Self.settleWindow
+                settleTimer?.invalidate()
+                settleTimer = Timer.scheduledTimer(
+                    withTimeInterval: Self.settleWindow, repeats: false) { [weak self] _ in
+                    self?.performSettle()
+                }
+                Breadcrumbs.log("stage settle rearm n=\(settleRearmCount) reason=drift")
+            } else {
+                disarmSettle()
+                Breadcrumbs.log("stage settle disarm reason=drift-cap n=\(settleRearmCount)")
             }
-        } else {
-            driftOverCount = 0
         }
     }
 
@@ -1198,12 +1304,50 @@ final class StageViewController: UIViewController {
         }
         lastFrameTimestamp = link.timestamp
         let position = positionNow()
+        logStageLineIfChanged(position: position)
         renderer?.frameTick(position: position)
         let second = Int(position)
         if second != lastTimeLabelSecond {
             lastTimeLabelSecond = second
             currentTimeLabel.text = Self.formatTime(position)
             if engine.duration > 0 { totalTimeLabel.text = Self.formatTime(engine.duration) }
+        }
+    }
+
+    /// 舞台行级面包屑（3.7 (41) 组3）：与墙面 `lrc line` /
+    /// `lrc flip src=judge` 同构——lineStart/judge/raw/engine/
+    /// delta 同定义（judge = 本台锚外推位置即呈现钟；raw =
+    /// rawPlayhead 真值；engine = 200ms 台阶缓存；delta =
+    /// judge − engine）。补审计 lyric-sync §5 的舞台零行级
+    /// 埋点缺口：此前舞台翻行迟到无任何日志可量，本版起每
+    /// 次（曲目, 行号）变化落一行 `stage line`、真翻行再补
+    /// `stage flip src=judge judgeLag=`（judge 越过行界的
+    /// 量）。暂停时 position 冻结、行号恒定，不刷屏；seek
+    /// 跳行同样落盘（judgeLag 即落点在行内的相位）。
+    private func logStageLineIfChanged(position: TimeInterval) {
+        guard let track = engine.currentTrack,
+              let lines = linesCache[track.id], !lines.isEmpty else { return }
+        // 当前行 = start <= position 的最后一行（行表按 start
+        // 升序，二分）；position 在首行之前时取首行（前奏预告，
+        // 与墙面同口径）。
+        var idx = 0
+        var lo = 0, hi = lines.count - 1
+        while lo <= hi {
+            let mid = (lo + hi) / 2
+            if lines[mid].start <= position {
+                idx = mid
+                lo = mid + 1
+            } else {
+                hi = mid - 1
+            }
+        }
+        if lastStageLineTrackId == track.id, lastStageLineIndex == idx { return }
+        let isFlip = lastStageLineTrackId == track.id && lastStageLineIndex != nil
+        lastStageLineTrackId = track.id
+        lastStageLineIndex = idx
+        Breadcrumbs.log("stage line track=\(track.id) idx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].start)) judge=\(String(format: "%.3f", position)) raw=\(String(format: "%.3f", engine.rawPlayhead())) engine=\(String(format: "%.3f", engine.currentTime)) delta=\(String(format: "%.3f", position - engine.currentTime))")
+        if isFlip {
+            Breadcrumbs.log("stage flip src=judge track=\(track.id) idx=\(idx) judgeLag=\(String(format: "%.3f", position - lines[idx].start))")
         }
     }
 

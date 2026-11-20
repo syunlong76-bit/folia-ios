@@ -200,6 +200,10 @@ final class LyricWindowView: UIView {
         setWindow(texts: [], lineStart: 0, lineDuration: 0, slide: false)
         lyricLinesContainer.layer.removeAllAnimations()
         lyricLinesContainer.transform = .identity
+        for row in 0..<6 where row != 2 {
+            lyricPlainLabels[row]?.layer.removeAllAnimations()
+            lyricPlainLabels[row]?.transform = .identity
+        }
         lyricSweepView.layer.removeAllAnimations()
         lyricSweepView.transform = .identity
         lyricSweepView.progress = 0
@@ -230,11 +234,13 @@ final class LyricWindowView: UIView {
             // + 扫光与滑行同帧启动，不再等 0.18s 滑行 completion
             // ——旧实现把点亮/扫光推迟整段滑行时长，(17) 时被
             // +150ms lead 抵掉大半、(19) 摘 lead 后全额裸露。
-            // 做法：先渲染新窗并起扫光，容器预置 +1 行偏移（新
+            // 做法：先渲染新窗并起扫光，邻行预置 +1 行偏移（新
             // 行 1 恰落在旧行 2 的视觉位、与旧路径轨迹一致），
             // 再动画收回 identity——动画只动 transform。唯一与
             // 旧轨迹的差别：滑行期间最上一行（alpha 0.28 的最远
-            // 邻行）暂缺，到位时随新窗行 0 一并落定。
+            // 邻行）暂缺，到位时随新窗行 0 一并落定。（3.7 (41)
+            // 组3 起偏移与动画改由邻行标签各自承担、扫光行不
+            // 再参与，见下方解耦注。）
             renderLyricWindow()
             if lineActive {
                 beginSweep(lineStart: lineStart, lineDuration: lineDuration)
@@ -244,21 +250,39 @@ final class LyricWindowView: UIView {
                 stopSweep()
                 lyricSweepView.progress = 0
             }
-            lyricLinesContainer.transform =
-                CGAffineTransform(translationX: 0, y: lyricLineHeight)
+            // 滑行与高亮解耦（3.7 (41) 组3，审计 lyric-sync
+            // 候选 2）：扫光行（行 2）不再随容器滑行——翻行
+            // 同帧新行已在行 2 定格位置点亮扫光（上文同帧渲
+            // 染+起扫光不变）；仅邻行标签各自预置 +1 行偏移、
+            // 0.18s 滑回落位，逐行轨迹与旧容器滑行一致。旧
+            // 容器滑行里扫光行要等 0.18s 走完才停稳在行 2，
+            // 人眼判「换行完成」恒晚约 0.1s 级，与翻行面包
+            // 屑的准点并存——本版把这段拖尾从当前行身上摘掉。
+            for row in 0..<6 where row != 2 {
+                lyricPlainLabels[row]?.transform =
+                    CGAffineTransform(translationX: 0, y: lyricLineHeight)
+            }
             UIView.animate(withDuration: 0.18, delay: 0,
                            options: [.curveEaseOut]) {
-                self.lyricLinesContainer.transform = .identity
+                for row in 0..<6 where row != 2 {
+                    self.lyricPlainLabels[row]?.transform = .identity
+                }
             } completion: { finished in
                 // 被打断（finished=false）时打断方已接管 transform
                 // 与内容（非滑行路径/removeAllAnimations），此处
                 // 不再触碰任何状态——保留防行窗双写的守卫语义。
                 guard finished else { return }
-                self.lyricLinesContainer.transform = .identity
+                for row in 0..<6 where row != 2 {
+                    self.lyricPlainLabels[row]?.transform = .identity
+                }
             }
         } else {
             lyricLinesContainer.layer.removeAllAnimations()
             lyricLinesContainer.transform = .identity
+            for row in 0..<6 where row != 2 {
+                lyricPlainLabels[row]?.layer.removeAllAnimations()
+                lyricPlainLabels[row]?.transform = .identity
+            }
             renderLyricWindow()
             if lineActive {
                 beginSweep(lineStart: lineStart, lineDuration: lineDuration)
