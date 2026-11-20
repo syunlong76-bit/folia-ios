@@ -543,6 +543,13 @@ final class StageSweepWordView: UIView {
     private let graphemeOffsets: [CGFloat]
     private let edgeSoftness: CGFloat
     private let rtl: Bool
+    /// 逻辑字号（逐词强调上浮量纲，见 tickEmphasis）。
+    private let fontPx: CGFloat
+    /// 逐词强调弹簧状态（3.7 (50)，与 GlowWord 系同参数）。
+    private var emphasisValue: CGFloat = 1
+    private var emphasisVelocity: CGFloat = 0
+    private var emphasisApplied: CGFloat = 1
+    private var lastEmphasisTime: CFTimeInterval = 0
 
     private let glowViewFar = UIImageView()
     private let glowViewNear = UIImageView()
@@ -562,6 +569,7 @@ final class StageSweepWordView: UIView {
         self.graphemeOffsets = images.graphemeOffsets
         self.wordWidth = images.wordWidth
         let fontPx = font.pointSize
+        self.fontPx = fontPx
         self.edgeSoftness = min(max(fontPx * 0.45, 6), 16)
         super.init(frame: CGRect(x: 0, y: 0, width: wordWidth, height: boxHeight))
         isUserInteractionEnabled = false
@@ -631,7 +639,57 @@ final class StageSweepWordView: UIView {
             position: position, start: start, end: end, lineEnd: lineEnd)
         glowViewNear.alpha = CGFloat(glow)
         glowViewFar.alpha = CGFloat(glow)
+        tickEmphasis(position: position)
         CATransaction.commit()
+    }
+
+    /// 逐词强调（3.7 (50) 莫奈扫字层接入，与 GlowWord 系同口
+    /// 径同参数）：弹簧 stiffness 200 / damping 15.5 按墙钟
+    /// dt 积分（本视图 update 无 dt 入参，自管上帧时刻，与
+    /// GlowWordView 同法）；目标只在唱到本词时非 1——长音按
+    /// 词真实时长（YRC 真戳或均分×r，与扫光同一时间轴）爬
+    /// 升至约 1.85 带微浪、短词 1.30。合成 = 本视图 transform
+    /// （放大 + 上浮）：布局方只写 frame、无人写本视图
+    /// transform，不与任何既有动画相争。两点取舍（已定案）：
+    /// ①暖金辉光层不做——词图由后台烘焙链以样式色出图，
+    /// 再烘一版暖金图须动烘焙链，该链闪退未定案、冻结不
+    /// 碰；辉光沿用样式自身包络。②词图为 3 倍率烘焙位图，
+    /// 强调峰值缩放期间有瞬时柔化，属位图词视图的固有取
+    /// 舍（活字样式无此问题）。
+    private func tickEmphasis(position: TimeInterval) {
+        let now = CACurrentMediaTime()
+        let dt = lastEmphasisTime > 0
+            ? min(max(now - lastEmphasisTime, 0), 0.05) : 1.0 / 60
+        lastEmphasisTime = now
+        var target: CGFloat = 1
+        if StageEffectSettings.emphasisEnabledCached(now: now),
+           position >= start, position <= end {
+            let dur = max(end - start, 0.05)
+            let p = CGFloat(min(max((position - start) / dur, 0), 1))
+            if dur >= 1.0 {
+                target = 1 + 0.85 * pow(p, 0.65)
+                    + 0.035 * CGFloat(sin((position - start) * 7.0)) * p
+            } else {
+                target = 1 + 0.30 * (1 - 0.3 * p)
+            }
+        }
+        let stiffness: CGFloat = 200, damping: CGFloat = 15.5
+        let accel = -stiffness * (emphasisValue - target)
+            - damping * emphasisVelocity
+        emphasisVelocity += accel * CGFloat(dt)
+        emphasisValue += emphasisVelocity * CGFloat(dt)
+        if abs(emphasisValue - emphasisApplied) > 0.0015
+            || abs(emphasisVelocity) > 0.002 {
+            emphasisApplied = emphasisValue
+            let e = emphasisValue
+            if abs(e - 1) > 0.0005 {
+                let floatY = -min((e - 1) * fontPx * 1.1, fontPx * 0.8)
+                transform = CGAffineTransform(translationX: 0, y: floatY)
+                    .scaledBy(x: e, y: e)
+            } else {
+                transform = .identity
+            }
+        }
     }
 }
 

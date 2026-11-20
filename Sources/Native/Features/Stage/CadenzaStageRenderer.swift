@@ -31,9 +31,9 @@ import QuartzCore
 //    localFloat 与 glow blurScale，energy=0 时公式自然退化，
 //    故按 energy≡0 落地（motionEnergy=0、blurScale=1），
 //    requiresSpectrum 填 false。
-//  - 逐字戳：协议 words 恒 nil，用共享 StageLyricUnits 的
-//    行内均分兜底（与网页无逐字数据时 even grapheme timing
-//    同口径）作为词时序；wordColors 缺失 → 每词颜色恒为
+//  - 逐字戳：经共享 StageLyricUnits 取词时序——有 YRC 覆盖
+//    的行用真戳、无覆盖行用行内均分兜底（与网页无逐字数据
+//    时 even grapheme timing 同口径）；wordColors 缺失 → 每词颜色恒为
 //    palette.accent（网页 resolveWordColor 的回退色）；
 //  - isChorus 缺失 → 副歌涟漪永不触发；animationIntensity
 //    缺失 → 恒 normal 档（baseMargin 6、baseScale 1.01、
@@ -342,6 +342,10 @@ private struct CadenzaAnimatedState {
     var blur: Double
     var activeMix: Double
     var glowAlpha: Double
+    /// 逐词强调弹簧状态（3.7 (50)，与 GlowWord 系同参数）：
+    /// 强调值与速度，随本状态同生命周期（跨行同 id 延续）。
+    var emphasisValue: Double = 1
+    var emphasisVelocity: Double = 0
 }
 
 // MARK: - 单词视图（cadenzaOverlayNodes 的原生对应物）
@@ -358,12 +362,29 @@ private final class CadenzaWordView: UIView {
     private let contentView = UIView()
     private let bodyLabel = UILabel()
     private var glowLabels: [UILabel] = []
+    /// 逐词强调辉光（3.7 (50)）：暖金同文标签，垫在正文之下。
+    private let emphasisGlowLabel = UILabel()
+    /// 超采样倍率与逻辑字号（强调变换合成用，见 applyEmphasis）。
+    private let renderScale: CGFloat
+    private let fontPx: CGFloat
 
     init(placement: CadenzaPlacement, font: UIFont, splitGlow: Bool) {
         self.placement = placement
         self.glyphs = placement.text.map { String($0) }
         self.isCJKText = CadenzaStageRenderer.isCJKText(placement.text)
         self.splitGlow = splitGlow
+        // 强调栅格余量（3.7 (50)，与 GlowWordView 同口径）：强
+        // 调开启时按词时长预留放大余量（长音 1.9 / 短词 1.38、
+        // 上限放宽到 3），否则强调放大后清晰度跌回 (47) 前；
+        // 关闭时与 (47) 原口径逐字一致（×1.05、上限 2）。
+        let emphasisOn = StageEffectSettings.wordEmphasisEnabled
+        let wordDuration = placement.wordEnd - placement.wordStart
+        let emphasisHeadroom: CGFloat = emphasisOn
+            ? (wordDuration >= 1.0 ? 1.9 : 1.38) : 1
+        let rawScaleInit = placement.scale * 1.05 * emphasisHeadroom
+        self.renderScale = rawScaleInit <= 1.05
+            ? 1 : min(emphasisOn ? 3 : 2, ceil(rawScaleInit * 4) / 4)
+        self.fontPx = font.pointSize
         super.init(frame: CGRect(x: 0, y: 0,
                                  width: placement.width,
                                  height: placement.height))
@@ -380,11 +401,8 @@ private final class CadenzaWordView: UIView {
         // 发软。内部按 renderScale 倍字号/几何构建、内容
         // 容器反向缩放回逻辑尺寸（锚点与本视图同为
         // (0.5, 0)，枢轴不变），逐帧 transform 与包络参数
-        // 一字不动。renderScale = placement.scale×1.05
-        // 余量、0.25 档进位、上限 2、下限 1 直通。
-        let rawScale = placement.scale * 1.05
-        let renderScale: CGFloat = rawScale <= 1.05
-            ? 1 : min(2, ceil(rawScale * 4) / 4)
+        // 一字不动。renderScale 的计算（含 (50) 强调余量）
+        // 在 init 属性段完成，此处只取用。
         let r = renderScale
         let rFont = font.withSize(font.pointSize * r)
         contentView.layer.anchorPoint = CGPoint(x: 0.5, y: 0)
@@ -419,6 +437,25 @@ private final class CadenzaWordView: UIView {
             glowLabels.append(label)
             contentView.addSubview(label)
         }
+        // 逐词强调辉光标签（3.7 (50)）：与正文同字同位，暖金
+        // 色 + 同色大半径阴影，alpha 恒由 applyEmphasis 驱动
+        // （静止 0）；颜色不取样式 accent，与 GlowWord 系同口径。
+        emphasisGlowLabel.text = placement.text
+        emphasisGlowLabel.font = rFont
+        let warmGold = UIColor(red: 1.0, green: 0.76, blue: 0.32, alpha: 1)
+        emphasisGlowLabel.textColor = warmGold
+        emphasisGlowLabel.layer.shadowColor = warmGold.cgColor
+        emphasisGlowLabel.layer.shadowOpacity = 1
+        emphasisGlowLabel.layer.shadowRadius = 16 * r
+        emphasisGlowLabel.layer.shadowOffset = .zero
+        emphasisGlowLabel.sizeToFit()
+        emphasisGlowLabel.frame = CGRect(x: 0, y: labelY,
+                                         width: emphasisGlowLabel.bounds.width,
+                                         height: emphasisGlowLabel.bounds.height)
+        emphasisGlowLabel.alpha = 0
+        emphasisGlowLabel.isUserInteractionEnabled = false
+        contentView.addSubview(emphasisGlowLabel)
+
         bodyLabel.text = placement.text
         bodyLabel.font = rFont
         bodyLabel.sizeToFit()
@@ -426,6 +463,25 @@ private final class CadenzaWordView: UIView {
                                  width: bodyLabel.bounds.width,
                                  height: bodyLabel.bounds.height)
         contentView.addSubview(bodyLabel)
+    }
+
+    /// 逐词强调合成（3.7 (50)，与 GlowWordView 同口径）：强调
+    /// 变换只落 contentView——基底是 init 的 1/renderScale 反
+    /// 向缩放，叠加放大与上浮（上浮与逻辑字号成比例、钳 0.8
+    /// 倍字号）；渲染方写在本视图上的旋转/缩放是另一层，两
+    /// 层互不相扰。枢轴 = contentView 锚点 (0.5, 0)，词自锚
+    /// 点生长，与渲染方的 position 定位口径一致。
+    func applyEmphasis(_ e: CGFloat) {
+        var transform = CGAffineTransform(
+            scaleX: 1 / renderScale, y: 1 / renderScale)
+        if abs(e - 1) > 0.0005 {
+            let floatY = -min((e - 1) * fontPx * 1.1, fontPx * 0.8)
+            let emphasis = CGAffineTransform(translationX: 0, y: floatY)
+                .scaledBy(x: e, y: e)
+            transform = transform.concatenating(emphasis)
+        }
+        contentView.transform = transform
+        emphasisGlowLabel.alpha = min(max((e - 1) / 0.85, 0), 1) * 0.9
     }
 
     @available(*, unavailable)
@@ -772,6 +828,33 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
             s.blur = cadenzaMix(s.blur, targetBlur, visualAmount)
             s.activeMix = cadenzaMix(s.activeMix, targetActiveMix, visualAmount)
             s.glowAlpha = cadenzaMix(s.glowAlpha, targetGlowAlpha, glowAmount)
+            // 逐词强调弹簧（3.7 (50)，与 GlowWord 系同口径同参
+            // 数）：stiffness 200 / damping 15.5 按本帧 dt 积分；
+            // 目标只在 active 词上非 1——长音按词真实时长
+            // （wordEnd−wordStart，源自 StageLyricUnits 同一时
+            // 间轴：YRC 真戳或均分×r）爬升至约 1.85 带微浪，
+            // 短词 1.30 词尾轻收；唱完弹簧缓落回 1。合成落点
+            // 在词视图 contentView（见 applyEmphasis），不扰本
+            // 视图的旋转/缩放与包络状态。
+            let emphasisTarget: Double
+            if StageEffectSettings.emphasisEnabledCached(
+                now: CACurrentMediaTime()), status == 1 {
+                let dur = max(placement.wordEnd - placement.wordStart, 0.05)
+                let p = min(max((time - placement.wordStart) / dur, 0), 1)
+                if dur >= 1.0 {
+                    emphasisTarget = 1 + 0.85 * pow(p, 0.65)
+                        + 0.035 * sin((time - placement.wordStart) * 7.0) * p
+                } else {
+                    emphasisTarget = 1 + 0.30 * (1 - 0.3 * p)
+                }
+            } else {
+                emphasisTarget = 1
+            }
+            let springDt = min(max(dt, 0), 0.05)
+            let springAccel = -200 * (s.emphasisValue - emphasisTarget)
+                - 15.5 * s.emphasisVelocity
+            s.emphasisVelocity += springAccel * springDt
+            s.emphasisValue += s.emphasisVelocity * springDt
             animatedStates[placement.id] = s
 
             if s.bodyAlpha < 0.015 && s.glowAlpha < 0.015 {
@@ -787,6 +870,7 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
             wordView.transform = CGAffineTransform(
                 rotationAngle: CGFloat(s.rotation) * .pi / 180)
                 .scaledBy(x: CGFloat(s.scale), y: CGFloat(s.scale))
+            wordView.applyEmphasis(CGFloat(s.emphasisValue))
 
             let bodyColor = Self.mixColor(palette.primary, palette.accent,
                                           amount: s.activeMix)
