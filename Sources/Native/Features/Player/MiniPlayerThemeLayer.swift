@@ -269,9 +269,10 @@ final class MiniPlayerThemeLayer: UIView {
         guard theme == .ocean, bounds.width > 40 else { return }
         let headX = 20 + CGFloat(fraction) * (bounds.width - 40)
         let bob = CGFloat(sin(animTime * 1.7)) * 1.5
-        // 轨道中心在台高 70 的 y=61 处；鳍高 31，鳍心上提让
-        // 鳍底浪花压住轨道上方一点。
-        finView.center = CGPoint(x: headX, y: 61 - 13 + bob)
+        // 轨道中心 = 台高 − 9（底距 7 + 轨道半高 2）：(54) H
+        // 台高 70→118 后改按 bounds 推导（旧写死 61 仅合 70 台）；
+        // 鳍高 31，鳍心上提让鳍底浪花压住轨道上方一点。
+        finView.center = CGPoint(x: headX, y: bounds.height - 9 - 13 + bob)
     }
 
     // MARK: 星空流星
@@ -290,7 +291,10 @@ final class MiniPlayerThemeLayer: UIView {
         let t = phase / flight
         let headX = 20 + CGFloat(fraction) * (bounds.width - 40)
         let cx = headX - 26 + CGFloat(t) * 44
-        let cy = 24 + CGFloat(t) * 22
+        // 划行带相对轨道定位（(54) H 台高 118 后改推导：旧
+        // 24..46 是 70 台的上中段；现按「轨道上方 37→15pt」
+        // 同距换算，落点仍在进度头上方、不压上排按键区）。
+        let cy = (bounds.height - 46) + CGFloat(t) * 22
         let path = UIBezierPath()
         path.move(to: CGPoint(x: cx - 15, y: cy - 8))
         path.addLine(to: CGPoint(x: cx, y: cy))

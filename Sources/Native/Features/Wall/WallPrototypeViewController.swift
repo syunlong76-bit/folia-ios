@@ -105,7 +105,10 @@ final class WallPrototypeViewController: UIViewController,
     private var lastExpandedCellCrumb: String?
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
-    private var statusLabel: UILabel!
+    // 顶部行动胶囊已整段撤除（3.7 (54) 工作流 L）：原 statusLabel
+    // 及其 showStatusNotice/statusTapped 一并删除——未登录入口归
+    // 主页侧栏账户区、失败重试归失败贴纸点按、定位瞬时提示归窗口
+    // 级 toast（NativePlaybackFailureToast.show(message:)）。
     /// 关闭键 chrome 容器（3.7 (53) L 组 ✕ 毛玻璃圆钮）：按压
     /// 反馈作用于整件（命中 44pt + 视觉圆 34pt）。
     private var closeChromeView: UIView?
@@ -158,6 +161,13 @@ final class WallPrototypeViewController: UIViewController,
     private var miniBarWidthConstraint: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
+    /// 点播台上排（3.7 (54) 工作流 H）：网页整排的上排（喜欢/
+    /// 打乱/模式/睡眠/设置，MiniBarQuickRowView 唯一实现），
+    /// 展开态台高 70→118、主排下移；形态名单（淡出/禁交互）
+    /// 与主排同收口。主排 centerY 约束存引用供形态切换改常量
+    /// （展开 +13 / 收起 −5，与旧 70pt 台的 −5 同值兜底）。
+    private var miniQuickRow: MiniBarQuickRowView?
+    private var miniMainCenterY: [NSLayoutConstraint] = []
     /// 迷你台收起态（3.7 (21)：5 秒无操作自动收成进度条）：
     /// 与 miniBarPresented 分工——后者管在不在场，本标志管
     /// 完整/细条形态。收起形态 (22) 定版：背景全去（主题层/
@@ -251,32 +261,13 @@ final class WallPrototypeViewController: UIViewController,
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
 
-        // 顶部行动胶囊（3.7 (53) L 组）：原常驻提示条（曲目计数
-        // 与操作说明文案）与加载态文字条（加载中/计数进度文案）
-        // 整条删除——歌单加载
-        // 反馈由 LoadingBackdropView 的拍立得 + 捂脸哭小猫贴纸
-        // 承担（背板在位、本组不动）。本胶囊只保留可点按的最终
-        // 失败重试与定位瞬时提示，经 showStatusNotice 出现，
-        // 其余时刻恒隐藏、无占位高度残留。
-        statusLabel = UILabel()
-        statusLabel.isHidden = true
-        statusLabel.textColor = .white
-        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        statusLabel.layer.cornerRadius = 13
-        statusLabel.clipsToBounds = true
-        statusLabel.textAlignment = .center
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.isUserInteractionEnabled = true
-        statusLabel.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(statusTapped)))
-        view.addSubview(statusLabel)
-        NSLayoutConstraint.activate([
-            statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
-            statusLabel.heightAnchor.constraint(equalToConstant: 26)
-        ])
+        // 顶部行动胶囊整段撤除（3.7 (54) 工作流 L，Miller 拍板
+        // 按网页版收口）：墙面顶部彻底无条无胶囊。原胶囊三条
+        // 路径的新归宿：未登录入口 → 主页侧栏账户区（本面无此
+        // 路径）；最终失败重试 → 失败贴纸 cat-03 点按（见
+        // stickerEnsureViews 的 failureStickerTapped）；定位
+        // 瞬时提示 → 窗口级 toast。歌单加载反馈仍由
+        // LoadingBackdropView 的拍立得 + 捂脸哭小猫承担。
 
         // 关闭键（3.7 (53) L 组）：文字胶囊「关闭」→ iOS 系统式
         // ✕ 毛玻璃圆钮（与主页墙同构）。视觉圆 34pt（系统超薄
@@ -360,7 +351,7 @@ final class WallPrototypeViewController: UIViewController,
         }
         backdropView.setCover(rawUrl: playlistCoverUrl)
         backdropView.translatesAutoresizingMaskIntoConstraints = false
-        view.insertSubview(backdropView, belowSubview: statusLabel)
+        view.addSubview(backdropView)
         NSLayoutConstraint.activate([
             backdropView.topAnchor.constraint(equalTo: view.topAnchor),
             backdropView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -514,6 +505,26 @@ final class WallPrototypeViewController: UIViewController,
             glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
+        // 点播台上排（3.7 (54) 工作流 H）：网页整排接入——上排
+        // 44pt 贴台顶（喜欢/打乱/模式/睡眠＋右端设置），主排
+        // 整体下移、台高 70→118。功能走 MiniBarQuickRowView
+        // 唯一实现（与舞台/主页墙同件）；点按先行回调重置无
+        // 操作计时（与台面其他操作同口径续命）；设置入口走
+        // 本面既有 wallSettingsTapped 呈现方式。
+        let quickRow = MiniBarQuickRowView()
+        quickRow.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(quickRow)
+        miniQuickRow = quickRow
+        quickRow.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
+        quickRow.onOpenSettings = { [weak self] in self?.wallSettingsTapped() }
+        NSLayoutConstraint.activate([
+            quickRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
+            quickRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            quickRow.topAnchor.constraint(equalTo: bar.topAnchor, constant: 3),
+            quickRow.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        Breadcrumbs.log("minibar.webrow wallproto attached h=118")
+
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
         progressTrack.layer.cornerRadius = 2
@@ -627,7 +638,7 @@ final class WallPrototypeViewController: UIViewController,
         // 收起形态切换（70↔16）。
         miniBarWidthConstraint = bar.widthAnchor.constraint(
             equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
-        miniBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 70)
+        miniBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 118)
         miniBarWidthConstraint?.isActive = true
         miniBarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
@@ -649,30 +660,28 @@ final class WallPrototypeViewController: UIViewController,
             knob.heightAnchor.constraint(equalToConstant: 9),
 
             miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            miniCover.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniCover.widthAnchor.constraint(equalToConstant: 44),
             miniCover.heightAnchor.constraint(equalToConstant: 44),
 
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
             miniTitle.trailingAnchor.constraint(equalTo: miniPrevButton.leadingAnchor, constant: -6),
-            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 13),
+            // 标题跟封面顶对齐（旧口径 = 封面顶 +5）：(54) H 主
+            // 排下移后改相对锚，形态切换只动 centerY 常量一处。
+            miniTitle.topAnchor.constraint(equalTo: miniCover.topAnchor, constant: 5),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
             miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-            miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
-            miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
             miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
-            miniPrevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
             miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
 
@@ -684,6 +693,14 @@ final class WallPrototypeViewController: UIViewController,
         miniKnobLeading = knob.leadingAnchor.constraint(
             equalTo: progressTrack.leadingAnchor, constant: -4.5)
         miniKnobLeading?.isActive = true
+        // 主排纵向位置（3.7 (54) H）：展开 118 台里主排中心在
+        // 上排（3..47）与 seek 命中带（98..118）之间，相对台
+        // 中心 +13；收起态回 −5（内容已淡出、仅动画观感）。
+        // 形态切换在 setMiniBarForm 里统一改这组常量。
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton].map {
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 13)
+        }
+        NSLayoutConstraint.activate(miniMainCenterY)
         // 轨道底距存引用（3.7 (21)）：收起形态 −7→−6 使轨道
         // 在 16pt 细条内居中（轨道高 4：(16−4)/2=6）。
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
@@ -830,6 +847,8 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point) { return }
+        // 上排（(54) H）长按不切主题：与按键区同口径豁免。
+        if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
         miniTheme = miniTheme.next
         MiniPlayerTheme.stored = miniTheme
         applyMiniTheme()
@@ -882,6 +901,9 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point) { return }
+        // 上排（(54) H）：键各自处理、排内空隙不落台身分发
+        // （防瞄准上排时误触进详情页）。
+        if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
         if miniCover.frame.contains(point) {
             locateCurrentTrack()
             return
@@ -1060,7 +1082,7 @@ final class WallPrototypeViewController: UIViewController,
         miniIdleWorkItem = nil
     }
 
-    /// 收成细进度条：同位置同宽，高度 70→16、轨道居中，封面/
+    /// 收成细进度条：同位置同宽，高度 118→16、轨道居中，封面/
     /// 标题/歌手/按键淡出且按键禁交互；背景全去（3.7 (22)：
     /// 主题层/毛玻璃/玻璃高光隐藏），只保留轨道（极淡底轨）
     /// + 填充 + 发光圆点，由 setMiniProgress 继续步进。系统
@@ -1117,7 +1139,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
     /// 直接置位即瞬时生效。
     private func setMiniBarForm(collapsed: Bool) {
-        miniBarHeightConstraint?.constant = collapsed ? 16 : 70
+        miniBarHeightConstraint?.constant = collapsed ? 16 : 118
+        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 13 }
         miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
@@ -1142,8 +1165,9 @@ final class WallPrototypeViewController: UIViewController,
     private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
         // 圆点不在淡出名单（3.7 (22)）：收起态保留发光圆点
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
+        // (54) H：上排整排同入淡出名单（收起细条上只留轨道）。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton]
+                                miniPrevButton, miniNextButton, miniQuickRow]
         for view in views {
             view?.alpha = alpha
         }
@@ -1154,6 +1178,8 @@ final class WallPrototypeViewController: UIViewController,
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
+        // (54) H：上排以整件开关交互（收起态不许点到隐形键）。
+        miniQuickRow?.isUserInteractionEnabled = interactive
     }
 
     /// 显隐边沿的形态无动画复位：收起态不跨显隐周期残留。
@@ -1271,13 +1297,9 @@ final class WallPrototypeViewController: UIViewController,
             + "queueIndex=\(matches.first ?? -1) sameId=\(matches.count) "
             + "ui=\(miniTitle.text ?? "") entries=\(entries.count)/\(wallLayout.totalEntries)")
         guard let queueIndex = matches.first else {
-            // 瞬时提示（3.7 (53) L 组改）：提示条删除后不再回填
-            // 常驻文案，2.5 秒后直接隐藏胶囊（显隐时长不变）。
-            showStatusNotice("当前歌曲不在这个歌单里")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-                guard let self, self.statusLabel.text == "当前歌曲不在这个歌单里" else { return }
-                self.hideStatusNotice()
-            }
+            // 瞬时提示（3.7 (54) 工作流 L）：胶囊撤除后改走窗口
+            // 级 toast（自动消失、墙面不留条），文案不变。
+            NativePlaybackFailureToast.show(message: "当前歌曲不在这个歌单里")
             return
         }
         let scale = wallLayout.cameraScale
@@ -1388,11 +1410,9 @@ final class WallPrototypeViewController: UIViewController,
         let wantShort = String((locateTargetTitle ?? targetId).prefix(12))
         let gotShort = String((gotTitle ?? "未知").prefix(12))
         let failText = "定位失败：要找《\(wantShort)》，落到《\(gotShort)》"
-        showStatusNotice(failText)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) { [weak self] in
-            guard let self, self.statusLabel.text == failText else { return }
-            self.hideStatusNotice()
-        }
+        // 瞬时提示（3.7 (54) 工作流 L）：改走窗口级 toast，
+        // 双歌名证据文案不变（全名仍在面包屑）。
+        NativePlaybackFailureToast.show(message: failText)
     }
 
     /// 重飞（校验纠正专用）：目标已冻结，直接按冻结下标找最近拷贝，
@@ -1571,12 +1591,15 @@ final class WallPrototypeViewController: UIViewController,
         Breadcrumbs.log("tracks disappear playlist=\(playlistId)")
     }
 
-    /// 失败态点按状态胶囊：重置计数重新加载（3.7 (13) #3）。
-    @objc private func statusTapped() {
+    /// 失败态点按失败贴纸重试（3.7 (54) 工作流 L）：行动胶囊
+    /// 撤除后，最终失败的重试入口落在失败陪衬贴纸 cat-03 上
+    /// （stickerEnsureViews 给它开交互 + 本手势）——原胶囊
+    /// statusTapped 的重置口径逐字保留（计数清零、重新加载）。
+    @objc private func failureStickerTapped() {
         guard loadFailed else { return }
+        Breadcrumbs.log("wallproto failure-sticker tap action=retry")
         loadFailed = false
         loadAttempts = 0
-        hideStatusNotice()
         loadEntries()
     }
 
@@ -1611,18 +1634,6 @@ final class WallPrototypeViewController: UIViewController,
             chrome.transform = .identity
             chrome.alpha = 1
         }
-    }
-
-    /// 顶部行动胶囊显隐收口（3.7 (53) L 组）：提示条删除后，
-    /// 胶囊只为可点按的最终失败与定位瞬时提示出现，其余时刻
-    /// 恒隐藏；点按分发仍走 statusTapped，语义不变。
-    private func showStatusNotice(_ text: String) {
-        statusLabel.text = text
-        statusLabel.isHidden = false
-    }
-
-    private func hideStatusNotice() {
-        statusLabel.isHidden = true
     }
 
     /// 墙内齿轮打开设置页：与主界面边缘齿轮同一呈现方式
@@ -1690,10 +1701,9 @@ final class WallPrototypeViewController: UIViewController,
                     self.allTrackIds = detail.trackIds
                     self.entries = seed
                     self.wallLayout.totalEntries = total
-                    // 提示条已删（3.7 (53) L 组）：种子落地只收口
-                    // 胶囊（清上一轮可能残留的失败提示），计数/
-                    // 进度文案不再上屏（背板退场、墙面即反馈）。
-                    self.hideStatusNotice()
+                    // 提示条/胶囊均已删（(53) L 组删条、(54) L
+                    // 撤胶囊）：种子落地无任何上屏文案，背板退场、
+                    // 墙面即反馈。
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
@@ -1767,17 +1777,19 @@ final class WallPrototypeViewController: UIViewController,
                         message: "tracks load failed playlist=\(self.playlistId) attempt=\(self.loadAttempts): \(error)")
                     Breadcrumbs.log("tracks load failed attempt=\(self.loadAttempts)")
                     if self.loadAttempts < 2 {
-                        // 自动重试期不上屏（3.7 (53) L 组）：胶囊
-                        // 只在最终失败落定时以可点按态出现。
-                        self.hideStatusNotice()
+                        // 自动重试期不上屏：静默重拉。
                         self.flushSeedWaiters()
                         self.backdrop?.dismiss()
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                             self?.loadEntries()
                         }
                     } else {
+                        // 最终失败落定（3.7 (54) 工作流 L）：胶囊已
+                        // 撤，loadFailed 置位即经 didSet 亮出失败
+                        // 贴纸 cat-03，重试入口即贴纸点按
+                        // （failureStickerTapped），墙面无文字条。
                         self.loadFailed = true
-                        self.showStatusNotice("加载失败，点按这里重试")
+                        Breadcrumbs.log("wallproto entry-state failed reason=load-failed")
                         self.flushSeedWaiters()
                         self.backdrop?.dismiss()
                     }
@@ -3032,6 +3044,13 @@ extension WallPrototypeViewController {
             let failure = StickerView()
             failure.crumbScene = "wall-offline"
             failure.isHidden = true
+            // 失败重试入口（3.7 (54) 工作流 L）：胶囊撤除后本
+            // 贴纸是最终失败的唯一可点补救——StickerView 默认
+            // 关交互，这里单独给失败贴纸开交互 + 点按手势；
+            // 其余贴纸（空态/缓冲）保持不可点、不抢手势。
+            failure.isUserInteractionEnabled = true
+            failure.addGestureRecognizer(
+                UITapGestureRecognizer(target: self, action: #selector(failureStickerTapped)))
             view.addSubview(failure)
             stickerFailureView = failure
         }

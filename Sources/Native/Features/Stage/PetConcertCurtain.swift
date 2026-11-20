@@ -4,15 +4,17 @@ import QuartzCore
 // 汪汪队开大会（3.7 (53) J）：手绘贴纸风幕布与灯光（v3 定版）。
 //
 // 程序绘制（CAShapeLayer/UIBezierPath），无图片素材：
-//  - 底景：深紫渐变 + 中央柔光 + 星点 + 奶油舞台板（透视横纹）
-//    + 独唱位金色脚圈，静态一层绘制（PetConcertBackdropView）。
+//  - 底景：深紫渐变 + 中央柔光 + 星点 + 木地板（(54) Q 透
+//    视板缝纵深、满屏）+ 独唱位金色脚圈，静态一层绘制
+//    （PetConcertBackdropView）。
 //  - 侧幕：粉色立幕，内缘按 v3 波形呼吸摆动；奶油镶边 + 褶皱
 //    条纹 + 底边 scallop；开幕 1.35s easeOutBack 弹性拉开。
 //  - 垂幔：7 扇 scallop 垂幔（粉底 + 奶油面）+ 流苏圆点 +
 //    星星/爱心/爪印点缀，点缀低频错峰闪烁（缩放脉动）。
 //  - 脚灯：11 盏圆点脚灯，逐盏错相脉动。
-//  - 追光：光锥 + 脚下光池 + 身周柔光，逐帧跟随独唱者贝塞尔
-//    位置；无独唱者时按 v3 口径在中场缓摆。
+//  - 追光：只剩脚下光池逐帧跟随独唱者（(54) S：原光锥与
+//    身周柔光以色调罩染宠物本体，已摘除；独唱发光由渲染
+//    方按贴纸 alpha 轮廓在本体身后生成）。
 //  - 洗光：整场染色随相位（前奏紫/轮唱暖金/间奏蓝紫振荡/
 //    告别转暖），间奏另有三束摇摆光束与五彩纸屑——氛围层，
 //    降级顺序最先砍（atmosphereReduced），歌词可读性永不砍。
@@ -40,6 +42,10 @@ enum PetConcertPalette {
     static let floorA = UIColor(red: 247/255, green: 227/255, blue: 195/255, alpha: 1)
     static let floorB = UIColor(red: 243/255, green: 214/255, blue: 174/255, alpha: 1)
     static let floorLine = UIColor(red: 196/255, green: 164/255, blue: 120/255, alpha: 1)
+    /// 木地板（(54) Q）：暖棕板面 + 深棕缝线，贴纸风低对比。
+    static let woodA = UIColor(red: 198/255, green: 152/255, blue: 102/255, alpha: 1)
+    static let woodB = UIColor(red: 186/255, green: 138/255, blue: 90/255, alpha: 1)
+    static let woodLine = UIColor(red: 128/255, green: 90/255, blue: 56/255, alpha: 1)
     static let bubbleFill = UIColor(red: 255/255, green: 250/255, blue: 238/255, alpha: 1)
     static let bubbleText = UIColor(red: 62/255, green: 45/255, blue: 32/255, alpha: 1)
 }
@@ -66,8 +72,8 @@ final class PetConcertBackdropView: UIView {
             locations: [0, 1])!
         ctx.drawLinearGradient(grad, start: .zero,
                                end: CGPoint(x: 0, y: h), options: [])
-        // 中央柔光（径向，白紫低 alpha）。
-        let glowCenter = CGPoint(x: w / 2, y: 710 * sy)
+        // 中央柔光（径向，白紫低 alpha）；(54) Q 对准新队形中心。
+        let glowCenter = CGPoint(x: w / 2, y: 980 * sy)
         let glow = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [UIColor(red: 120/255, green: 100/255, blue: 170/255,
@@ -90,27 +96,47 @@ final class PetConcertBackdropView: UIView {
             UIBezierPath(ovalIn: CGRect(x: x - r, y: y - r,
                                         width: r * 2, height: r * 2)).fill()
         }
-        // 奶油舞台板：9 带透视横纹（y 边按 (i/9)^1.35 收分）。
+        // 木地板（(54) Q）：地平线 floorTopY 向后收分、向前满
+        // 屏延伸。9 带横板（y 边按 (i/9)^1.35 透视收分，越靠
+        // 前带越宽）+ 自灭点 (w/2, y0) 放射的纵向板缝 + 每带
+        // 错位短横缝，拼出木板纵深；整幅 0…w × y0…h 无露底。
         let y0 = PetConcertConst.floorTopY * sy, y1 = h
         var edges: [CGFloat] = []
         for i in 0...9 {
             edges.append(y0 + (y1 - y0) * pow(CGFloat(i) / 9, 1.35))
         }
         for i in 0..<9 {
-            (i % 2 == 0 ? PetConcertPalette.floorA
-                : PetConcertPalette.floorB).setFill()
+            (i % 2 == 0 ? PetConcertPalette.woodA
+                : PetConcertPalette.woodB).setFill()
             UIBezierPath(rect: CGRect(x: 0, y: edges[i], width: w,
                                       height: edges[i + 1] - edges[i])).fill()
-            PetConcertPalette.floorLine.setFill()
+            PetConcertPalette.woodLine.setFill()
             UIBezierPath(rect: CGRect(x: 0, y: edges[i], width: w,
                                       height: max(1, 3 * sy))).fill()
+            // 带内错位短横缝（板长错落，种子固定不闪烁）。
+            let seamY = (edges[i] + edges[i + 1]) / 2
+            let seamX = w * (i % 2 == 0 ? 0.30 : 0.68)
+            UIBezierPath(rect: CGRect(x: seamX, y: edges[i], width: max(1, 3 * sx),
+                                      height: seamY - edges[i])).fill()
         }
-        // 独唱位金色脚圈（双圈）。
+        // 纵向板缝：自灭点放射到地板前缘（透视收分）。
+        ctx.saveGState()
+        PetConcertPalette.woodLine.setStroke()
+        let seams = UIBezierPath()
+        for f in [CGFloat(0.06), 0.22, 0.38, 0.62, 0.78, 0.94] {
+            seams.move(to: CGPoint(x: w / 2, y: y0))
+            seams.addLine(to: CGPoint(x: w * f, y: y1))
+        }
+        seams.lineWidth = max(1, 2.5 * sx)
+        seams.stroke()
+        ctx.restoreGState()
+        // 独唱位金色脚圈（双圈，(54) Q 放大至 190×42 参考 px）。
         let ringCenter = CGPoint(x: PetConcertConst.soloX * sx,
                                  y: PetConcertConst.soloRingY * sy)
-        let ringRect = CGRect(x: ringCenter.x - 152 * sx,
-                              y: ringCenter.y - 34 * sy,
-                              width: 304 * sx, height: 68 * sy)
+        let ringRect = CGRect(x: ringCenter.x - PetConcertConst.soloRingRX * sx,
+                              y: ringCenter.y - PetConcertConst.soloRingRY * sy,
+                              width: PetConcertConst.soloRingRX * 2 * sx,
+                              height: PetConcertConst.soloRingRY * 2 * sy)
         let ring = UIBezierPath(ovalIn: ringRect)
         ring.lineWidth = 11 * sx
         UIColor(red: 240/255, green: 203/255, blue: 120/255, alpha: 1).setStroke()
@@ -238,16 +264,21 @@ final class PetConcertCurtainView: UIView {
             layer.addSublayer(beam)
             beamLayers.append(beam)
         }
-        // 追光：光池（径向渐变贴图）→ 身周柔光 → 光锥。
+        // 追光（(54) S 改版）：只保留脚下光池（地板面光斑，不
+        // 覆盖宠物身体）。原身周柔光 haloView 与暖色光锥
+        // coneLayer 均以普通混合整层盖在宠物身上、把本体染
+        // 成暖色调——Miller 点名摘除：halo 不再挂载显示，
+        // cone 永不赋 path；独唱发光改由渲染方按贴纸 alpha
+        // 轮廓在宠物身后生成（见 PetConcertRenderer 的
+        // singerGlow），本体像素零滤色。
         poolView.image = Self.radialGlowImage()
         poolView.isUserInteractionEnabled = false
         addSubview(poolView)
         haloView.image = Self.radialGlowImage()
         haloView.isUserInteractionEnabled = false
-        addSubview(haloView)
+        haloView.alpha = 0 // (54) S：停用，不显示
         coneLayer.fillColor = UIColor(red: 255/255, green: 238/255,
                                       blue: 190/255, alpha: 0.26).cgColor
-        layer.addSublayer(coneLayer)
         // 侧幕。
         for _ in 0..<2 {
             let fill = CAShapeLayer()
@@ -390,28 +421,22 @@ final class PetConcertCurtainView: UIView {
         washView.backgroundColor = washColor(t: t, phase: phase,
                                              intensity: interludeIntensity)
 
-        // 追光（逐帧跟随）。
+        // 追光落点（逐帧跟随）：仅驱动脚下光池的水平位置。
+        // (54) S：光锥与身周柔光已摘除（染本体色），此处不再
+        // 给 coneLayer 赋 path、haloView 恒 alpha 0。
         let target: CGPoint
         if let singerPos {
             target = singerPos
         } else {
             target = CGPoint(x: (540 + 180 * sin(0.5 * t)) * sx, y: 980 * sy)
         }
-        let apex = CGPoint(x: w / 2, y: 40 * sy)
-        let cone = UIBezierPath()
-        cone.move(to: CGPoint(x: apex.x - 11 * sx, y: apex.y))
-        cone.addLine(to: CGPoint(x: apex.x + 11 * sx, y: apex.y))
-        cone.addLine(to: CGPoint(x: target.x + 108 * sx, y: target.y + 60 * sy))
-        cone.addLine(to: CGPoint(x: target.x - 108 * sx, y: target.y + 60 * sy))
-        cone.close()
-        coneLayer.path = cone.cgPath
-        let feetY = singerFeetY ?? (1490 * sy)
-        poolView.frame = CGRect(x: target.x - 130 * sx, y: feetY - 26 * sy,
-                                width: 260 * sx, height: 52 * sy)
+        coneLayer.path = nil
+        let feetY = singerFeetY ?? (1724 * sy)
+        // 光池随 (54) Q 放大的独唱圈同步放大（地板面，不染本体）。
+        poolView.frame = CGRect(x: target.x - 170 * sx, y: feetY - 34 * sy,
+                                width: 340 * sx, height: 68 * sy)
         poolView.alpha = 0.55
-        haloView.frame = CGRect(x: target.x - 105 * sx, y: target.y - 80 * sy,
-                                width: 210 * sx, height: 160 * sy)
-        haloView.alpha = 0.35
+        haloView.alpha = 0
 
         // 路径类 15Hz 节流。
         guard t - lastPathUpdate >= 1.0 / 15.0 || lastPathUpdate < 0 else { return }
@@ -427,7 +452,7 @@ final class PetConcertCurtainView: UIView {
         switch phase {
         case .dropping, .formation:
             return UIColor(red: 168/255, green: 158/255, blue: 220/255, alpha: 0.08)
-        case .preludeChat, .singing1, .singing2:
+        case .greeting, .preludeChat, .singing1, .singing2:
             return UIColor(red: 255/255, green: 206/255, blue: 120/255, alpha: 0.10)
         case .interlude:
             let u = CGFloat(0.5 + 0.5 * sin(t * 1.4)) * CGFloat(intensity)
@@ -469,9 +494,11 @@ final class PetConcertCurtainView: UIView {
         let w = bounds.width
         let openU = curtainOpenU(t: t)
         let outer: CGFloat = -60
+        // (54) Q 全屏化：侧幕自画布顶 (y=0) 一直落到 1740，
+        // 顶/两侧不留暗带；内缘开口 126 仍在队形左缘 144 之外。
         var ys: [CGFloat] = []
-        var y: CGFloat = 168
-        while y <= 1568 { ys.append(y); y += 70 }
+        var y: CGFloat = 0
+        while y <= 1740 { ys.append(y); y += 70 }
 
         for side in 0..<2 { // 0 = 左，1 = 右（镜像）
             let mirror: (CGFloat) -> CGFloat = { side == 0 ? $0 : PetConcertConst.refW - $0 }
@@ -480,16 +507,16 @@ final class PetConcertCurtainView: UIView {
                         y: $0)
             }
             // 底边 scallop 回到外缘。
-            var poly: [CGPoint] = [CGPoint(x: mirror(outer), y: 150)]
+            var poly: [CGPoint] = [CGPoint(x: mirror(outer), y: -20)]
             poly += edge
-            let bx0 = innerX(y: 1568, t: t, params: params, openU: openU)
+            let bx0 = innerX(y: 1740, t: t, params: params, openU: openU)
             for i in 1...12 {
                 let u = CGFloat(i) / 12
                 let bx = bx0 + (outer - bx0) * u
-                let by = 1568 + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
+                let by = 1740 + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
                 poly.append(CGPoint(x: mirror(bx), y: by))
             }
-            poly.append(CGPoint(x: mirror(outer), y: 1610))
+            poly.append(CGPoint(x: mirror(outer), y: 1800))
             let path = UIBezierPath()
             for (i, p) in poly.enumerated() {
                 let pt = CGPoint(x: p.x * sx, y: p.y * sy)
@@ -524,7 +551,7 @@ final class PetConcertCurtainView: UIView {
             for i in 1...12 {
                 let u = CGFloat(i) / 12
                 let bx = bx0 + (outer - bx0) * u
-                let by = 1568 + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
+                let by = 1740 + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
                 edgeLine.addLine(to: CGPoint(x: mirror(bx) * sx, y: by * sy))
             }
             sideHem[side].path = hem.cgPath
@@ -646,8 +673,8 @@ final class PetConcertCurtainView: UIView {
             let path = UIBezierPath()
             path.move(to: CGPoint(x: (ox - 13) * sx, y: 45 * sy))
             path.addLine(to: CGPoint(x: (ox + 13) * sx, y: 45 * sy))
-            path.addLine(to: CGPoint(x: (tx + 100) * sx, y: 1520 * sy))
-            path.addLine(to: CGPoint(x: (tx - 100) * sx, y: 1520 * sy))
+            path.addLine(to: CGPoint(x: (tx + 100) * sx, y: 1600 * sy))
+            path.addLine(to: CGPoint(x: (tx - 100) * sx, y: 1600 * sy))
             path.close()
             beam.path = path.cgPath
         }

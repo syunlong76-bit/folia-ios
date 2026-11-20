@@ -20,31 +20,54 @@ enum EntryIntroDataState {
 enum EntryPosterArt {
 
     private static var cachedImage: UIImage?
+    private static var cachedFirstFrame: UIImage?
     private static var cachedColor: UIColor?
 
+    /// 强制解码：把图绘进 scale=1 位图上下文完成解压缩，
+    /// 之后绘制零等待（默认按设备 scale 解码会放大数倍）。
+    private static func decoded(_ raw: UIImage) -> UIImage {
+        let size = raw.size
+        guard size.width > 0, size.height > 0 else { return raw }
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = 1
+        format.opaque = true
+        return UIGraphicsImageRenderer(size: size, format: format).image { _ in
+            raw.draw(in: CGRect(origin: .zero, size: size))
+        }
+    }
+
     /// 预解码后的海报图（1280×720，母带 2.0s 帧）：首次调用
-    /// 同步解码并绘进位图上下文强制完成解压缩，之后命中缓
-    /// 存、绘制零等待。资源缺失返回 nil（调用方以主色兜底）。
+    /// 同步解码并缓存，之后命中缓存。资源缺失返回 nil（调
+    /// 用方以主色兜底）。
     static func image() -> UIImage? {
         if let cachedImage { return cachedImage }
         guard let path = Bundle.main.path(forResource: "entry-poster",
                                           ofType: "jpg",
                                           inDirectory: "EntryVideo"),
               let raw = UIImage(contentsOfFile: path) else { return nil }
-        let size = raw.size
-        guard size.width > 0, size.height > 0 else {
-            cachedImage = raw
-            return raw
-        }
-        // scale=1 按像素原尺寸解码（默认按设备 scale 会放大数倍）。
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = 1
-        format.opaque = true
-        let decoded = UIGraphicsImageRenderer(size: size, format: format).image { _ in
-            raw.draw(in: CGRect(origin: .zero, size: size))
-        }
-        cachedImage = decoded
-        return decoded
+        let decodedImage = decoded(raw)
+        cachedImage = decodedImage
+        return decodedImage
+    }
+
+    /// 视频首帧图（3.7 (54) 工作流 O）：entry-firstframe.jpg
+    /// 是 faststart 产物 time=0 首帧的提取帧。离线逐像素比
+    /// 对实锤：现有海报 entry-poster.jpg 是母带 2.0s 帧（与
+    /// 2.0s 提取帧 64×36 缩图 RMSE 0.47、平均色逐位相同），
+    /// 与首帧不是同一图（RMSE 80.1）——VC 内垫底用海报时，
+    /// 首帧交接瞬间画面内容跳一帧，是「卡帧」观感的来源之
+    /// 一。VC 内垫底改用本图，与视频第一帧像素级同图、交
+    /// 接无跳变；window 层 veil 与 LaunchScreen 仍用海报
+    /// （不在本条范围）。资源缺失返回 nil，调用方回退海报。
+    static func firstFrameImage() -> UIImage? {
+        if let cachedFirstFrame { return cachedFirstFrame }
+        guard let path = Bundle.main.path(forResource: "entry-firstframe",
+                                          ofType: "jpg",
+                                          inDirectory: "EntryVideo"),
+              let raw = UIImage(contentsOfFile: path) else { return nil }
+        let decodedImage = decoded(raw)
+        cachedFirstFrame = decodedImage
+        return decodedImage
     }
 
     /// 海报平均主色：把解码图绘进 1×1 上下文取平均（图已解
@@ -168,7 +191,140 @@ enum EntryPosterArt {
 ///   .cleared 保留）、海报层淡出；窗口底色改海报平均主
 ///   色。入场语义（横屏/关闭键/只认关闭与自然播完/未就绪
 ///   循环/就绪不提前退场/退场淡出回竖屏）一概未动。
+/// - 卡帧修复（3.7 (54) 工作流 O，Miller 01:26 录屏点名
+///   「点进去视频要立刻播放、不许有卡帧」）：(53) 后黑帧已
+///   除，但播放器在呈现后才装配/加载，海报静帧停留被感知
+///   为卡帧。三管齐下：①视频资源换 faststart 版（moov 前
+///   置，流拷贝重排、与母带逐流 framemd5 一致，见
+///   EntryPlayerPreheat 与 project.yml 注释）；②播放器预
+///   热——SceneDelegate 建窗阶段先建好 player/item 异步加
+///   载至可播并 preroll，VC 呈现时接管同一实例直接 play；
+///   退场后 player 泊回预热仓 seek 回零，第二次进墙即时再
+///   播（「每次进墙都播」语义不变）；预热失败/未就绪静默
+///   回退 VC 现装配路径；③VC 内垫底图换视频首帧同图
+///   （EntryPosterArt.firstFrameImage），交接像素级无跳
+///   变。新增面包屑 entry playback firstframe（rate>0 且
+///   首帧已可显示的首个时刻），与 entry poster presented
+///   / entry video readyForDisplay 同为 Breadcrumbs 写行时
+///   的 ISO8601 时钟、三点间隔可直接对账。
+
+/// 入场播放器预热仓（3.7 (54) 工作流 O）：所有权与生命
+/// 周期——本枚举静态持有预热的 AVPlayer/AVPlayerItem；
+/// SceneDelegate 建窗时 warmUp() 建仓（全程异步加载，不
+/// 阻塞建窗；资源缺失/加载失败静默弃仓，VC 回退现装配）；
+/// EntryIntroViewController 起播时 take() 接管同一实例
+/// （所有权移交 VC，仓清空）；VC teardown 时 park() 泊
+/// 回（pause + seek 回零 + 复位静音），仓重新持有待下次
+/// take。仓内 item 只有 .readyToPlay 才可被 take，未就
+/// 绪一律回退现装配路径，不许等它。
+enum EntryPlayerPreheat {
+
+    private static var player: AVPlayer?
+    private static var item: AVPlayerItem?
+    private static var statusObservation: NSKeyValueObservation?
+    private static var isReady = false
+    /// VC 已接管在用：warmUp 不重复建仓、take 不二次移交。
+    private static var inUse = false
+
+    /// 建仓预热（SceneDelegate 建窗阶段调用，主线程）：建
+    /// player/item 后即返回，加载走 AVFoundation 异步通
+    /// 道；preferredForwardBufferDuration=2——10s 本地短片
+    /// 预缓冲 2s 足够起播即满帧，后段在本机文件读取下瞬
+    /// 时补齐；automaticallyWaitsToMinimizeStalling=false
+    /// ——素材是 Bundle 本地文件、无网络卡顿源，等待最小
+    /// 化卡顿的逻辑只会平添起播延迟，与「立刻播放」目标
+    /// 相悖。readyToPlay 后 preroll 把首段解码也预做完。
+    static func warmUp() {
+        guard player == nil, !inUse else { return }
+        guard let url = EntryIntroPresenter.videoURL else {
+            NSLog("[EntryIntro] preheat skipped: entry video missing from bundle")
+            return
+        }
+        let asset = AVURLAsset(url: url)
+        let newItem = AVPlayerItem(asset: asset)
+        newItem.preferredForwardBufferDuration = 2
+        let newPlayer = AVPlayer(playerItem: newItem)
+        newPlayer.automaticallyWaitsToMinimizeStalling = false
+        newPlayer.actionAtItemEnd = .pause
+        item = newItem
+        player = newPlayer
+        isReady = false
+        Breadcrumbs.log("entry preheat begin")
+        statusObservation = newItem.observe(\.status, options: [.new]) { observedItem, _ in
+            DispatchQueue.main.async {
+                switch observedItem.status {
+                case .readyToPlay:
+                    isReady = true
+                    newPlayer.preroll(atRate: 1) { _ in }
+                    Breadcrumbs.log("entry preheat ready")
+                case .failed:
+                    NSLog("[EntryIntro] preheat item failed: \(observedItem.error?.localizedDescription ?? "?")")
+                    Breadcrumbs.log("entry preheat failed")
+                    discard()
+                default:
+                    break
+                }
+            }
+        }
+        asset.loadValuesAsynchronously(forKeys: ["playable", "duration"]) {}
+    }
+
+    /// VC 接管预热实例：仅仓内 item 已 .readyToPlay 时移
+    /// 交（所有权归 VC、仓清空并置 inUse）；未就绪/失败/
+    /// 空仓返回 nil，VC 走现装配路径，不等预热。
+    static func take() -> (player: AVPlayer, item: AVPlayerItem)? {
+        guard let player, let item, isReady,
+              item.status == .readyToPlay else { return nil }
+        statusObservation?.invalidate()
+        statusObservation = nil
+        self.player = nil
+        self.item = nil
+        isReady = false
+        inUse = true
+        return (player, item)
+    }
+
+    /// VC 退场泊回：pause + seek 回零 + 复位静音，仓重新
+    /// 持有；下次进墙 take 时 seek 已归零、可即时再播。
+    /// item 状态以泊回时实查为准（播过的 item 仍
+    /// .readyToPlay），不达标则弃仓、下次 warmUp 重建。
+    static func park(player parkedPlayer: AVPlayer, item parkedItem: AVPlayerItem) {
+        inUse = false
+        parkedPlayer.pause()
+        parkedPlayer.isMuted = false
+        guard parkedItem.status == .readyToPlay else {
+            Breadcrumbs.log("entry preheat discard reason=item-not-ready")
+            return
+        }
+        player = parkedPlayer
+        item = parkedItem
+        isReady = true
+        parkedPlayer.seek(to: .zero)
+        Breadcrumbs.log("entry preheat parked")
+    }
+
+    /// 预热失败弃仓：清持有待下次 warmUp 重建；VC 侧从未
+    /// 依赖仓，弃仓对呈现零影响。
+    private static func discard() {
+        statusObservation?.invalidate()
+        statusObservation = nil
+        player = nil
+        item = nil
+        isReady = false
+    }
+}
+
 enum EntryIntroPresenter {
+
+    /// 入场视频资源（3.7 (54) 工作流 O 起为 faststart 版：
+    /// moov 前置的流拷贝重排产物，与母带逐流 framemd5 一
+    /// 致；原 entry-v5.mp4 保留在同目录、不再被加载）。
+    /// Presenter 的缺失守卫与预热仓共用同一出处。
+    static var videoURL: URL? {
+        Bundle.main.url(forResource: "entry-v5-faststart",
+                        withExtension: "mp4",
+                        subdirectory: "EntryVideo")
+    }
 
     private static var isPresenting = false
     private static var suppressNextPresent = false
@@ -214,11 +370,9 @@ enum EntryIntroPresenter {
     static func present(from presenter: UIViewController,
                         dataState: @escaping () -> EntryIntroDataState) -> Bool {
         guard !isPresenting else { return false }
-        guard let url = Bundle.main.url(forResource: "entry-v5",
-                                        withExtension: "mp4",
-                                        subdirectory: "EntryVideo") else {
+        guard let url = videoURL else {
             // 资源缺失：静默放行，绝不因入场面挡住主页墙
-            NSLog("[EntryIntro] entry-v5.mp4 missing from bundle, skip")
+            NSLog("[EntryIntro] entry-v5-faststart.mp4 missing from bundle, skip")
             return false
         }
         guard let window = presenter.view.window else { return false }
@@ -297,6 +451,13 @@ final class EntryIntroViewController: UIViewController {
 
     private let url: URL
     private var player: AVPlayer?
+    /// 本次播放用的是预热实例（3.7 (54) 工作流 O）：退场
+    /// teardown 时泊回预热仓复用，不直接弃置。
+    private var usesPreheatedPlayer = false
+    /// 首帧真播时刻已落面包屑（3.7 (54) 工作流 O）：entry
+    /// playback firstframe 每呈现只落一次。
+    private var firstFrameLogged = false
+    private var timeControlObservation: NSKeyValueObservation?
     private var itemStatusObservation: NSKeyValueObservation?
     /// 首帧可显示观察（3.7 (53) 工作流 I）：AVPlayerLayer
     /// .isReadyForDisplay 的 KVO，海报交接的权威触发。
@@ -374,7 +535,10 @@ final class EntryIntroViewController: UIViewController {
         // 同步就位（图已由 Presenter 预解码），播放器层背景
         // 改透明，首帧渲染确认（readyForDisplay）前画面恒为
         // 海报，确认后淡出交接（见 clearEntryPoster）。
-        posterView.image = EntryPosterArt.image()
+        // 垫底图 = 视频首帧同图（3.7 (54) 工作流 O）：原海
+        // 报是母带 2.0s 帧、与首帧不同图，交接瞬间内容跳变
+        // 即卡帧观感；改用首帧提取图（缺失才回退海报）。
+        posterView.image = EntryPosterArt.firstFrameImage() ?? EntryPosterArt.image()
         posterView.backgroundColor = EntryPosterArt.dominantColor
         posterView.contentMode = .scaleAspectFill
         posterView.clipsToBounds = true
@@ -422,11 +586,37 @@ final class EntryIntroViewController: UIViewController {
 
     private func startPlayback() {
         Breadcrumbs.log("entry show")
-        let item = AVPlayerItem(url: url)
-        let player = AVPlayer(playerItem: item)
+        // 播放器来源（3.7 (54) 工作流 O）：优先接管预热仓
+        // 已加载至可播的同一实例、呈现即 play；预热未就绪/
+        // 失败时回退现装配（原路径一字未改）。接管时 item
+        // 已 seek 归零（建仓起点/泊回时归零），起播点恒为 0。
+        let item: AVPlayerItem
+        let player: AVPlayer
+        if let preheated = EntryPlayerPreheat.take() {
+            item = preheated.item
+            player = preheated.player
+            usesPreheatedPlayer = true
+            Breadcrumbs.log("entry preheat reused")
+        } else {
+            item = AVPlayerItem(url: url)
+            player = AVPlayer(playerItem: item)
+        }
         player.actionAtItemEnd = .pause
+        // 本地短片不起播等待（口径与预热仓一致，见 warmUp）。
+        player.automaticallyWaitsToMinimizeStalling = false
         self.player = player
         playerView.playerLayer.player = player
+
+        // 首帧真播时刻（3.7 (54) 工作流 O）：timeControlStatus
+        // 转 .playing 的 KVO 为主触发，noteFirstFrameIfNeeded
+        // 另要求 rate>0 且首帧已可显示，三者齐备才落 entry
+        // playback firstframe；周期观察者同口径兜底（见下）。
+        timeControlObservation = player.observe(
+            \.timeControlStatus, options: [.new]
+        ) { [weak self] observedPlayer, _ in
+            guard observedPlayer.timeControlStatus == .playing else { return }
+            DispatchQueue.main.async { self?.noteFirstFrameIfNeeded() }
+        }
 
         // 首帧渲染确认（3.7 (53) 工作流 I）：AVPlayerLayer
         // .isReadyForDisplay 是「首帧已可显示」的权威信号——
@@ -458,6 +648,9 @@ final class EntryIntroViewController: UIViewController {
             mutedForEngine = true
             Breadcrumbs.log("entry audio muted reason=engine-playing-at-entry")
         } else {
+            // 预热复用实例的静音态显式复位（泊回已复位，此为
+            // 起播侧双保险）：本入场未因引擎静音就不许哑播。
+            player.isMuted = false
             let session = AVAudioSession.sharedInstance()
             do {
                 try session.setCategory(.playback, mode: .default)
@@ -499,12 +692,29 @@ final class EntryIntroViewController: UIViewController {
             if !self.veilCleared, self.playerView.playerLayer.isReadyForDisplay {
                 self.handleVideoReadyForDisplay()
             }
+            self.noteFirstFrameIfNeeded()
             self.checkDissolveGate()
             self.checkLoopDataReadyExit()
         }
 
         scheduleWatchdog()
         player.play()
+    }
+
+    /// 首帧真播时刻（3.7 (54) 工作流 O）：rate>0（真在播、
+    /// 非暂停持帧）且播放器层首帧已可显示的首个时刻，落
+    /// entry playback firstframe——与 entry poster presented
+    /// / entry video readyForDisplay 同走 Breadcrumbs 写行
+    /// ISO8601 时钟，三点间隔可直接对账。KVO（timeControl
+    /// Status）与周期观察者共用入口，每呈现只落一次；退场
+    /// 后迟到触发由 isDismissing 封口。
+    private func noteFirstFrameIfNeeded() {
+        guard !firstFrameLogged, !isDismissing, let player,
+              player.rate > 0,
+              player.timeControlStatus == .playing,
+              playerView.playerLayer.isReadyForDisplay else { return }
+        firstFrameLogged = true
+        Breadcrumbs.log("entry playback firstframe rate=\(String(format: "%.2f", player.rate))")
     }
 
     /// 首帧已可显示（3.7 (53) 工作流 I）：readyForDisplay 的
@@ -753,6 +963,8 @@ final class EntryIntroViewController: UIViewController {
         timeObserver = nil
         readyForDisplayObservation?.invalidate()
         readyForDisplayObservation = nil
+        timeControlObservation?.invalidate()
+        timeControlObservation = nil
         player?.pause()
         if let endObserver { NotificationCenter.default.removeObserver(endObserver) }
         if let failObserver { NotificationCenter.default.removeObserver(failObserver) }
@@ -763,6 +975,15 @@ final class EntryIntroViewController: UIViewController {
         enginePlaySubscription?.cancel()
         enginePlaySubscription = nil
         playerView.playerLayer.player = nil
+        // 预热实例泊回（3.7 (54) 工作流 O）：VC 侧观察者已
+        // 全部摘除后才泊回，仓内实例无任何 VC 残留订阅；
+        // park 内部 seek 回零，下次进墙接管即从头即时再播。
+        // 现装配实例照旧弃置（player=nil 后 ARC 释放）。
+        if usesPreheatedPlayer, let outgoingPlayer = player,
+           let outgoingItem = outgoingPlayer.currentItem {
+            EntryPlayerPreheat.park(player: outgoingPlayer, item: outgoingItem)
+            usesPreheatedPlayer = false
+        }
         player = nil
 
         // 音频会话收尾（3.7 (23) 双声纪律）：只在本入场亲手

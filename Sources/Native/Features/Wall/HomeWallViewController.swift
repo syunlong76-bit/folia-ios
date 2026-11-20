@@ -20,7 +20,10 @@ final class HomeWallViewController: UIViewController,
     private var playlistIds: [String] = []
     private let wallLayout = WallLayout()
     private var collectionView: UICollectionView!
-    private var statusLabel: UILabel!
+    // 顶部行动胶囊已整段撤除（3.7 (54) 工作流 L）：原 statusLabel
+    // 及其 showStatusNotice/statusTapped 一并删除——未登录入口归
+    // 侧栏账户区（与网页版一致）、失败重试归失败贴纸点按、墙面
+    // 顶部彻底无条无胶囊。
     /// 入场视频槽位（3.7 (17)，替换 (12) 的电影长卷）：由
     /// EntryIntroPresenter 以横屏 modal 呈现 v5 油画视频。
     /// 触发口径（3.7 (21) 修正，audit-3721 A2）：实例级一次性
@@ -65,8 +68,9 @@ final class HomeWallViewController: UIViewController,
     /// 加载失败重试（3.7 (13) #3）：自动重试一次，之后点按重试。
     private var loadAttempts = 0
     private var loadFailed = false
-    /// 未登录落定态（(51) A 组）：状态胶囊点按改走原生扫码
-    /// 登录入口（原为「先在网页侧登录网易云」文案、无入口）。
+    /// 未登录落定态（(51) A 组）：登录主入口在侧栏账户区
+    /// （(53) A 组、(54) L 收口）；失败贴纸点按作补救同走登录
+    /// （failureStickerTapped 按本标志分发）。
     private var wallNotLoggedIn = false
 
     // 贴纸层状态（3.7 (24)，纯新增视图层）：入场跑动（底部
@@ -112,6 +116,13 @@ final class HomeWallViewController: UIViewController,
     private var miniBarWidthConstraint: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
+    /// 点播台上排（3.7 (54) 工作流 H）：网页整排的上排（喜欢/
+    /// 打乱/模式/睡眠/设置，MiniBarQuickRowView 唯一实现），
+    /// 展开态台高 70→118、主排下移；形态名单与主排同收口。
+    /// 主排 centerY 约束存引用供形态切换改常量（展开 +13 /
+    /// 收起 −5）。
+    private var miniQuickRow: MiniBarQuickRowView?
+    private var miniMainCenterY: [NSLayoutConstraint] = []
     /// 迷你台收起态（3.7 (21)：5 秒无操作自动收成进度条）：
     /// 与 miniBarPresented 分工——后者管在不在场，本标志管
     /// 完整/细条形态。收起形态 (22) 定版：背景全去（主题层/
@@ -139,6 +150,10 @@ final class HomeWallViewController: UIViewController,
     /// 墙上，关闭态只占把手与头像两个小命中区；侧栏展开时经
     /// 其回调禁墙交互。安装在 viewDidLoad 末尾（见彼处）。
     private var workbenchHost: WorkbenchOverlayHostView?
+    /// 速记簿抽屉宿主（(53) D 组装、(54) N 组起持有）：侧栏
+    /// 打开时经 setExternallyCovered 整层隐藏（照网页版
+    /// is-covered），关栏恢复。
+    private var sketchbookDrawer: SketchbookDrawerView?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
     /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
@@ -193,31 +208,14 @@ final class HomeWallViewController: UIViewController,
             collectionView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
 
-        // 顶部行动胶囊（3.7 (53) L 组）：原常驻提示条（歌单计数
-        // 与操作说明文案，及各加载中文案）整条
-        // 删除——加载反馈由入场动画与贴纸层承担，信息文案不再
-        // 上屏。本胶囊只保留两个可点按落定态：未登录（点按扫码
-        // 登录）与最终加载失败（点按重试），经 showStatusNotice
-        // 出现，其余时刻恒隐藏、无占位高度残留。
-        statusLabel = UILabel()
-        statusLabel.isHidden = true
-        statusLabel.textColor = .white
-        statusLabel.font = .systemFont(ofSize: 13, weight: .medium)
-        statusLabel.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        statusLabel.layer.cornerRadius = 13
-        statusLabel.clipsToBounds = true
-        statusLabel.textAlignment = .center
-        statusLabel.translatesAutoresizingMaskIntoConstraints = false
-        statusLabel.isUserInteractionEnabled = true
-        statusLabel.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(statusTapped)))
-        view.addSubview(statusLabel)
-        NSLayoutConstraint.activate([
-            statusLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            statusLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            statusLabel.widthAnchor.constraint(greaterThanOrEqualToConstant: 160),
-            statusLabel.heightAnchor.constraint(equalToConstant: 26)
-        ])
+        // 顶部行动胶囊整段撤除（3.7 (54) 工作流 L，Miller 拍板
+        // 按网页版收口）：墙面顶部彻底无条无胶囊。原胶囊两条
+        // 路径的新归宿：未登录 → 工作台侧栏账户头/关闭态头像
+        // 钮（(53) A 组已落、与网页版账户位同位，点按进三家
+        // 登录页）；最终加载失败 → 失败贴纸 cat-03 点按重试
+        // （见 stickerEnsureViews 的 failureStickerTapped，
+        // 未登录落定态点贴纸同走登录、作最小可点补救）。加载
+        // 反馈由入场动画与贴纸层承担，信息文案不上屏。
 
         // 关闭键（3.7 (53) L 组）：文字胶囊「关闭」→ iOS 系统式
         // ✕ 毛玻璃圆钮。视觉圆 34pt（UIVisualEffectView 系统超薄
@@ -314,6 +312,10 @@ final class HomeWallViewController: UIViewController,
         let workbench = WorkbenchOverlayHostView(hostViewController: self)
         workbench.onSidebarVisibilityChanged = { [weak self] open in
             self?.collectionView.isUserInteractionEnabled = !open
+            // 速记簿共存（3.7 (54) 工作流 N，照网页版 is-covered
+            // 口径）：侧栏打开时速记簿整层隐藏——把手绝不浮压
+            // 侧栏之上；关栏原样恢复（抽屉状态保留）。
+            self?.sketchbookDrawer?.setExternallyCovered(open)
             Breadcrumbs.log("workbench.wallInteraction enabled=\(!open)")
         }
         workbench.translatesAutoresizingMaskIntoConstraints = false
@@ -328,7 +330,9 @@ final class HomeWallViewController: UIViewController,
         // (53) D 组速记簿：左缘把手＋抽屉宿主，装在工作台宿主之后
         // 成为墙面最上层子视图（其 hitTest 只认把手/抽屉、其余穿透，
         // 非模态不挡墙操作；宠物岛走 window.layer 独立层级、互不影响）。
-        _ = SketchbookHost.install(into: view)
+        // (54) N 组起持有引用：侧栏开关经 onSidebarVisibilityChanged
+        // 调 setExternallyCovered 整层隐藏/恢复（见上闭包）。
+        sketchbookDrawer = SketchbookHost.install(into: view)
         // (53) L 组 chrome 收口留痕：提示条删除 + ✕ 关闭键 +
         // 齿轮/搜索并入侧栏，真机对账以此行确认新包在跑。
         Breadcrumbs.log("wall.chrome home hintBar=removed gearSearch=sidebar close=glass-x")
@@ -366,38 +370,31 @@ final class HomeWallViewController: UIViewController,
         }
     }
 
-    /// 顶部行动胶囊显隐收口（3.7 (53) L 组）：提示条删除后，
-    /// 胶囊只为可点按的落定态（未登录/最终失败）出现，其余
-    /// 时刻恒隐藏；点按分发仍走 statusTapped，语义不变。
-    private func showStatusNotice(_ text: String) {
-        statusLabel.text = text
-        statusLabel.isHidden = false
-    }
-
-    private func hideStatusNotice() {
-        statusLabel.isHidden = true
-    }
-
-    /// 失败态点按状态胶囊：重置计数重新加载（3.7 (13) #3）。
-    /// 未登录态（(51) A 组）：点按打开原生扫码登录，成功后重拉。
-    @objc private func statusTapped() {
+    /// 失败态点按失败贴纸（3.7 (54) 工作流 L）：行动胶囊撤除
+    /// 后，失败陪衬贴纸 cat-03 是落定态的最小可点补救（见
+    /// stickerEnsureViews 给它开交互 + 本手势），分发与原胶囊
+    /// statusTapped 逐字同口径：
+    /// - 未登录落定：打开原生登录页（三家登录），成功后重拉
+    ///   ——主入口仍是侧栏账户区（网页版同位），此为补救路径。
+    /// - 最终加载失败：重置计数重新加载（3.7 (13) #3）。
+    @objc private func failureStickerTapped() {
         if wallNotLoggedIn {
+            Breadcrumbs.log("home failure-sticker tap action=login")
             let login = LoginViewController()
             login.modalPresentationStyle = .overFullScreen
             login.onLoginSuccess = { [weak self] in
                 guard let self else { return }
                 self.wallNotLoggedIn = false
                 self.loadAttempts = 0
-                self.hideStatusNotice()
                 self.loadEntries()
             }
             present(login, animated: true)
             return
         }
         guard loadFailed else { return }
+        Breadcrumbs.log("home failure-sticker tap action=retry")
         loadFailed = false
         loadAttempts = 0
-        hideStatusNotice()
         loadEntries()
     }
 
@@ -501,12 +498,14 @@ final class HomeWallViewController: UIViewController,
                 guard status.loggedIn, let userId = status.userId else {
                     await MainActor.run {
                         guard generation == self.entryLoadGeneration else { return }
-                        // 未登录是落定态：入场播完即退场落到此提示，
-                        // 不许循环掩盖把用户挡在视频后（3.7 (20)）。
+                        // 未登录是落定态：入场播完即退场落到失败
+                        // 态，不许循环掩盖把用户挡在视频后（3.7
+                        // (20)）。墙面不上任何文字（3.7 (54) L）：
+                        // 登录主入口在侧栏账户区，失败贴纸点按作
+                        // 补救同走登录（failureStickerTapped）。
                         self.entryDataState = .failed
                         self.wallNotLoggedIn = true
                         Breadcrumbs.log("home entry-state failed reason=not-logged-in gen=\(generation)")
-                        self.showStatusNotice("未登录，点按扫码登录网易云")
                     }
                     return
                 }
@@ -527,9 +526,8 @@ final class HomeWallViewController: UIViewController,
                             subtitle: "歌单 · \(playlist.trackCount)")
                     }
                     self.wallLayout.totalEntries = self.entries.count
-                    // 提示条已删（3.7 (53) L 组）：成功态不上屏
-                    // 文案，只收口胶囊（清未登录/失败残留）。
-                    self.hideStatusNotice()
+                    // 提示条/胶囊均已删（(53) L 组删条、(54) L
+                    // 撤胶囊）：成功态不上屏任何文案。
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
@@ -547,9 +545,7 @@ final class HomeWallViewController: UIViewController,
                     if self.loadAttempts < 2 {
                         // 首次失败先自动重试；加载失败（含最终失败）
                         // 不触发入场退场，视频继续播到关闭/播完（3.7 (18)）。
-                        // 自动重试期不上屏（3.7 (53) L 组）：胶囊
-                        // 只在最终失败落定时以可点按态出现。
-                        self.hideStatusNotice()
+                        // 自动重试期不上屏：静默重拉。
                         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
                             self?.loadEntries()
                         }
@@ -561,7 +557,9 @@ final class HomeWallViewController: UIViewController,
                         // 落点之一（另一处是未登录落定）。
                         self.entryDataState = .failed
                         Breadcrumbs.log("home entry-state failed reason=load-failed gen=\(generation)")
-                        self.showStatusNotice("加载失败，点按这里重试")
+                        // 墙面无文字条（3.7 (54) L）：失败态由贴纸
+                        // 层呈现（entryDataState=.failed → cat-03），
+                        // 重试入口即贴纸点按（failureStickerTapped）。
                     }
                 }
             }
@@ -816,6 +814,31 @@ final class HomeWallViewController: UIViewController,
             glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
+        // 点播台上排（3.7 (54) 工作流 H）：网页整排接入——上排
+        // 44pt 贴台顶（喜欢/打乱/模式/睡眠＋右端设置），主排
+        // 整体下移、台高 70→118。功能走 MiniBarQuickRowView
+        // 唯一实现（与曲目墙/舞台同件）；点按先行回调重置无
+        // 操作计时；设置入口按墙面既有口径直呈设置页（本面
+        // 齿轮已随 (53) L 并入侧栏，此键与侧栏设置行同落点）。
+        let quickRow = MiniBarQuickRowView()
+        quickRow.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(quickRow)
+        miniQuickRow = quickRow
+        quickRow.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
+        quickRow.onOpenSettings = { [weak self] in
+            guard let self else { return }
+            let settings = SettingsViewController()
+            settings.modalPresentationStyle = .overFullScreen
+            self.present(settings, animated: false)
+        }
+        NSLayoutConstraint.activate([
+            quickRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
+            quickRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            quickRow.topAnchor.constraint(equalTo: bar.topAnchor, constant: 3),
+            quickRow.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        Breadcrumbs.log("minibar.webrow homewall attached h=118")
+
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
         progressTrack.layer.cornerRadius = 2
@@ -902,7 +925,7 @@ final class HomeWallViewController: UIViewController,
         // 收起形态切换（70↔16）。
         miniBarWidthConstraint = bar.widthAnchor.constraint(
             equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
-        miniBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 70)
+        miniBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 118)
         miniBarWidthConstraint?.isActive = true
         miniBarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
@@ -924,30 +947,28 @@ final class HomeWallViewController: UIViewController,
             knob.heightAnchor.constraint(equalToConstant: 9),
 
             miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            miniCover.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniCover.widthAnchor.constraint(equalToConstant: 44),
             miniCover.heightAnchor.constraint(equalToConstant: 44),
 
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
             miniTitle.trailingAnchor.constraint(equalTo: miniPrevButton.leadingAnchor, constant: -6),
-            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 13),
+            // 标题跟封面顶对齐（旧口径 = 封面顶 +5）：(54) H 主
+            // 排下移后改相对锚，形态切换只动 centerY 常量一处。
+            miniTitle.topAnchor.constraint(equalTo: miniCover.topAnchor, constant: 5),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
             miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-            miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
-            miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
             miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
-            miniPrevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
             miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
 
@@ -959,6 +980,14 @@ final class HomeWallViewController: UIViewController,
         miniKnobLeading = knob.leadingAnchor.constraint(
             equalTo: progressTrack.leadingAnchor, constant: -4.5)
         miniKnobLeading?.isActive = true
+        // 主排纵向位置（3.7 (54) H）：展开 118 台里主排中心在
+        // 上排（3..47）与 seek 命中带（98..118）之间，相对台
+        // 中心 +13；收起态回 −5（内容已淡出、仅动画观感）。
+        // 形态切换在 setMiniBarForm 里统一改这组常量。
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton].map {
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 13)
+        }
+        NSLayoutConstraint.activate(miniMainCenterY)
         // 轨道底距存引用（3.7 (21)）：收起形态 −7→−6 使轨道
         // 在 16pt 细条内居中（轨道高 4：(16−4)/2=6）。
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
@@ -1100,6 +1129,8 @@ final class HomeWallViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point) { return }
+        // 上排（(54) H）长按不切主题：与按键区同口径豁免。
+        if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
         miniTheme = miniTheme.next
         MiniPlayerTheme.stored = miniTheme
         applyMiniTheme()
@@ -1142,6 +1173,9 @@ final class HomeWallViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point) { return }
+        // 上排（(54) H）：键各自处理、排内空隙不落台身分发
+        // （防瞄准上排时误触进详情页）。
+        if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
         // 封面优先于底部进度带（与曲目墙分发序一致）：封面下缘
         // 与 seekHit 带约 2pt 重叠，点封面应开页不跳点。
         if miniCover.frame.contains(point) {
@@ -1375,7 +1409,8 @@ final class HomeWallViewController: UIViewController,
     /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
     /// 直接置位即瞬时生效。
     private func setMiniBarForm(collapsed: Bool) {
-        miniBarHeightConstraint?.constant = collapsed ? 16 : 70
+        miniBarHeightConstraint?.constant = collapsed ? 16 : 118
+        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 13 }
         miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
@@ -1400,8 +1435,9 @@ final class HomeWallViewController: UIViewController,
     private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
         // 圆点不在淡出名单（3.7 (22)）：收起态保留发光圆点
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
+        // (54) H：上排整排同入淡出名单（收起细条上只留轨道）。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton]
+                                miniPrevButton, miniNextButton, miniQuickRow]
         for view in views {
             view?.alpha = alpha
         }
@@ -1412,6 +1448,8 @@ final class HomeWallViewController: UIViewController,
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
+        // (54) H：上排以整件开关交互（收起态不许点到隐形键）。
+        miniQuickRow?.isUserInteractionEnabled = interactive
     }
 
     /// 显隐边沿的形态无动画复位：收起态不跨显隐周期残留。
@@ -1520,6 +1558,14 @@ extension HomeWallViewController {
             let failure = StickerView()
             failure.crumbScene = "home-offline"
             failure.isHidden = true
+            // 失败落定补救入口（3.7 (54) 工作流 L）：胶囊撤除后
+            // 本贴纸是失败态的最小可点补救——StickerView 默认
+            // 关交互，这里单独给失败贴纸开交互 + 点按手势（分
+            // 发见 failureStickerTapped：未登录走登录、加载失败
+            // 走重试）；跑动/缓冲贴纸保持不可点、不抢手势。
+            failure.isUserInteractionEnabled = true
+            failure.addGestureRecognizer(
+                UITapGestureRecognizer(target: self, action: #selector(failureStickerTapped)))
             view.addSubview(failure)
             stickerFailureView = failure
         }

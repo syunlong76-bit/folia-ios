@@ -24,7 +24,11 @@ targets:
       - path: Resources/ThemeArt
         type: folder
       # 主页墙入场视频（3.7 (16) 挂冷启、(17) 挪到墙进入槽，v5 全油画
-      # 入场动画，folder reference，运行时定位 "EntryVideo/entry-v5.mp4"）
+      # 入场动画，folder reference，运行时定位 "EntryVideo/entry-v5-faststart.mp4"；
+      # 3.7 (54) 工作流 O 起加载 faststart 版：entry-v5-faststart.mp4 为
+      # entry-v5.mp4 的流拷贝重排产物（moov 前置、字节数不变、与母带逐流
+      # framemd5 一致），原 entry-v5.mp4 仍在同目录但不再被加载；
+      # entry-v5-faststart.mp4 首帧提取图 entry-firstframe.jpg 同目录收录）
       - path: Resources/EntryVideo
         type: folder
       # 猫狗贴纸 APNG（3.7 (24)，folder reference，运行时定位
@@ -45,7 +49,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "53"
+        CFBundleVersion: "54"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (53) I 组：启动屏直接垫油画海报图 + 海报主色，冷启第一帧

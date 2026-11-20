@@ -48,8 +48,12 @@ final class WorkbenchOverlayHostView: UIView {
     private let accountHintLabel = UILabel()
     private let providerStack = UIStackView()
     private var providerLabels: [NativeSessionStore.Provider: UILabel] = [:]
+    private var providerDots: [NativeSessionStore.Provider: UIView] = [:]
 
-    private var avatarLoadKey = ""
+    /// 已加载头像的 URL 键；nil = 还没刷过（旧值 "" 与「无头像」
+    /// 的键撞车，首刷时 setFallback 被整段跳过、占位「?」糊脸，
+    /// (54) 工作流 N 修）。
+    private var avatarLoadKey: String?
 
     private var panelWidth: CGFloat {
         bounds.width > 0 ? min(304, bounds.width * 0.84) : 304
@@ -138,12 +142,30 @@ final class WorkbenchOverlayHostView: UIView {
         providerStack.translatesAutoresizingMaskIntoConstraints = false
         sidebarView.addSubview(providerStack)
         for provider in NativeSessionStore.Provider.allCases {
+            // 每行自带状态点（8×8，贴行首、与文字同行居中）：
+            // 旧版三行只有文字、全侧栏的状态点只长在两个头像上，
+            // 关闭态头像浮在侧栏之上时它的绿点正飘进文字行里
+            // （(53) 真机截图，(54) 工作流 N 修）。
+            let row = UIStackView()
+            row.axis = .horizontal
+            row.spacing = 8
+            row.alignment = .center
+            row.translatesAutoresizingMaskIntoConstraints = false
+            let dot = UIView()
+            dot.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+            dot.layer.cornerRadius = 4
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
+            dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
+            row.addArrangedSubview(dot)
             let label = UILabel()
             label.font = .systemFont(ofSize: 12)
             label.textColor = WorkbenchTheme.secondary
             label.translatesAutoresizingMaskIntoConstraints = false
-            providerStack.addArrangedSubview(label)
+            row.addArrangedSubview(label)
+            providerStack.addArrangedSubview(row)
             providerLabels[provider] = label
+            providerDots[provider] = dot
         }
         NSLayoutConstraint.activate([
             providerStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
@@ -271,6 +293,15 @@ final class WorkbenchOverlayHostView: UIView {
         let avatarSize: CGFloat = 40
         avatarButton.frame = CGRect(
             x: 10, y: safeAreaInsets.top + 50, width: avatarSize, height: avatarSize)
+        // 关闭态 chrome（把手/头像）是叠在 sidebarView 之上的
+        // 兄弟视图（后加装、层级更高），侧栏落定打开时必须硬藏，
+        // 不能只靠动画里的 alpha——alpha 没被驱动到 0 的任何一帧
+        // 它都会浮在登录状态行上（(53) 截图：淡圆圈压网易云行、
+        // 绿点飘进 QQ 音乐字里，(54) 工作流 N 修）。
+        if isSidebarOpen, sidebarAnimator == nil, !isDraggingSidebar {
+            handleView.isHidden = true
+            avatarButton.isHidden = true
+        }
     }
 
     // MARK: - 命中仲裁（DS 结论 2/3）
@@ -365,6 +396,10 @@ final class WorkbenchOverlayHostView: UIView {
         isSidebarOpen = open
         Breadcrumbs.log("workbench.sidebar.\(open ? "open" : "close") reason=\(reason)")
         if open {
+            // 动画期间 chrome 靠 applySidebarProgress 的 alpha
+            // 淡出，先确保它们没被上一轮落定的 isHidden 藏死。
+            handleView.isHidden = false
+            avatarButton.isHidden = false
             refreshAccountUI()
             scrimView.isHidden = false
             onSidebarVisibilityChanged?(true)
@@ -402,10 +437,18 @@ final class WorkbenchOverlayHostView: UIView {
         // 会以 .current 落到这里，此时现态已翻转，不许它再动
         // scrim/把手/墙交互（防「开到一半被关、scrim 被旧收口藏掉」）。
         if open {
-            if isSidebarOpen { scrimView.isHidden = false }
+            if isSidebarOpen {
+                scrimView.isHidden = false
+                // 落定硬藏关闭态 chrome（与 layoutSubviews 同口径，
+                // 不许只剩 alpha=0 的隐形视图压在状态行上）。
+                handleView.isHidden = true
+                avatarButton.isHidden = true
+            }
         } else if !isSidebarOpen {
             scrimView.isHidden = true
             scrimView.alpha = 0
+            handleView.isHidden = false
+            avatarButton.isHidden = false
             handleView.alpha = 1
             avatarButton.alpha = 1
             // 关闭落定才恢复墙交互。
@@ -447,13 +490,23 @@ final class WorkbenchOverlayHostView: UIView {
             } else {
                 label?.text = "\(providerDisplayName(status.provider)) · 未登录"
             }
+            // 状态点贴本行行首（行视图自带点，见 buildScrimAndSidebar），
+            // 按本家登录态着色，不再借头像上的点。
+            providerDots[status.provider]?.backgroundColor = status.isLoggedIn
+                ? UIColor(red: 0.30, green: 0.85, blue: 0.45, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.35)
         }
         // 头像：第一家已登录且有头像的；状态点：任一家已登录为亮。
         let avatarStatus = loggedIn.first { $0.avatarURL != nil } ?? statuses.first { $0.avatarURL != nil }
         let anyLoggedIn = !loggedIn.isEmpty
         avatarButton.setLoggedIn(anyLoggedIn)
         sidebarAvatar.setLoggedIn(anyLoggedIn)
-        let key = avatarStatus?.avatarURL?.absoluteString ?? ""
+        // 占位每次刷新都重算（不许挂在头像加载键变化的分支里：
+        // 昵称后到、头像 URL 不变时旧版永远不更新占位）。
+        let fallbackName = loggedIn.first?.displayName ?? statuses.first?.displayName
+        avatarButton.setFallback(name: fallbackName, hasImage: avatarStatus?.avatarURL != nil)
+        sidebarAvatar.setFallback(name: fallbackName, hasImage: avatarStatus?.avatarURL != nil)
+        let key = avatarStatus?.avatarURL?.absoluteString
         if key != avatarLoadKey {
             avatarLoadKey = key
             let expectedKey = key
@@ -463,9 +516,6 @@ final class WorkbenchOverlayHostView: UIView {
             WorkbenchCover.loadAvatar(url: avatarStatus?.avatarURL, into: sidebarAvatar.imageView) { [weak self] in
                 self?.avatarLoadKey == expectedKey
             }
-            let fallbackName = loggedIn.first?.displayName ?? statuses.first?.displayName
-            avatarButton.setFallback(name: fallbackName, hasImage: avatarStatus?.avatarURL != nil)
-            sidebarAvatar.setFallback(name: fallbackName, hasImage: avatarStatus?.avatarURL != nil)
         }
     }
 
@@ -535,11 +585,13 @@ enum WorkbenchSection: String {
     case settings
 }
 
-/// 圆形头像小件：图 + 无图时昵称首字兜底 + 登录状态点。
+/// 圆形头像小件：图 + 无图时昵称首字兜底（没昵称时人形图标
+/// 占位，诚实空态，不许「?」糊脸）+ 登录状态点。
 final class WorkbenchAvatarView: UIView {
 
     let imageView = UIImageView()
     private let fallbackLabel = UILabel()
+    private let placeholderIcon = UIImageView()
     private let dotView = UIView()
 
     override init(frame: CGRect) {
@@ -552,9 +604,14 @@ final class WorkbenchAvatarView: UIView {
         fallbackLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         fallbackLabel.textColor = UIColor.white.withAlphaComponent(0.75)
         fallbackLabel.textAlignment = .center
-        fallbackLabel.text = "?"
+        fallbackLabel.isHidden = true
         fallbackLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(fallbackLabel)
+        placeholderIcon.image = UIImage(systemName: "person.crop.circle.fill")
+        placeholderIcon.tintColor = UIColor.white.withAlphaComponent(0.45)
+        placeholderIcon.contentMode = .scaleAspectFit
+        placeholderIcon.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(placeholderIcon)
         dotView.backgroundColor = UIColor.white.withAlphaComponent(0.35)
         dotView.layer.cornerRadius = 4
         dotView.layer.borderWidth = 1.5
@@ -568,6 +625,10 @@ final class WorkbenchAvatarView: UIView {
             imageView.trailingAnchor.constraint(equalTo: trailingAnchor),
             fallbackLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             fallbackLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            placeholderIcon.centerXAnchor.constraint(equalTo: centerXAnchor),
+            placeholderIcon.centerYAnchor.constraint(equalTo: centerYAnchor),
+            placeholderIcon.widthAnchor.constraint(equalToConstant: 22),
+            placeholderIcon.heightAnchor.constraint(equalToConstant: 22),
             dotView.widthAnchor.constraint(equalToConstant: 8),
             dotView.heightAnchor.constraint(equalToConstant: 8),
             dotView.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -1),
@@ -591,10 +652,17 @@ final class WorkbenchAvatarView: UIView {
     func setFallback(name: String?, hasImage: Bool) {
         if hasImage {
             fallbackLabel.text = nil
+            fallbackLabel.isHidden = true
+            placeholderIcon.isHidden = true
         } else if let first = name?.first {
             fallbackLabel.text = String(first)
+            fallbackLabel.isHidden = false
+            placeholderIcon.isHidden = true
         } else {
-            fallbackLabel.text = "?"
+            // 无图又无昵称：人形图标占位（数据未到的诚实空态）。
+            fallbackLabel.text = nil
+            fallbackLabel.isHidden = true
+            placeholderIcon.isHidden = false
         }
     }
 }

@@ -70,6 +70,13 @@ final class StageViewController: UIViewController {
     private var stageBarWidthConstraint: NSLayoutConstraint?
     private var stageBarHeightConstraint: NSLayoutConstraint?
     private var stageTrackBottomConstraint: NSLayoutConstraint?
+    /// 点播台上排（3.7 (54) 工作流 H）：网页整排的上排（喜欢/
+    /// 打乱/模式/睡眠/设置，MiniBarQuickRowView 唯一实现），
+    /// 展开态台高 70→118、主排下移；形态名单与主排同收口。
+    /// 主排 centerY 约束存引用供形态切换改常量（展开 +13 /
+    /// 收起 −5）。喜欢态变化经回调同步顶栏红心。
+    private var stageQuickRow: MiniBarQuickRowView?
+    private var stageMainCenterY: [NSLayoutConstraint] = []
     private var stageKnobLeading: NSLayoutConstraint?
     private var stageTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var stageBarCollapsed = false
@@ -248,6 +255,202 @@ final class StageViewController: UIViewController {
         if !headerChromeHidden { scheduleStageHeaderHide() }
     }
 
+    // MARK: 样式长按轮换（3.7 (54) 工作流 R，Miller 01:32 定）
+    //
+    // 舞台画面（rendererContainer 歌词/背景区）长按满 5 秒 →
+    // 洗牌袋（StageStyleCycleBag）取下一只 → 走与样式选择器
+    // 完全相同的选样式通路（applyNativeStyleSelection /
+    // applyWebStyleSelection，含 StageStyleStore 持久化、
+    // mountRenderer 的 style-guard 武装、汪汪队宠物迁移）。
+    //
+    // 识别区纪律：两个识别器只挂 rendererContainer——点播台
+    // （stageBar 及其宠物层 stagePetStage）、顶栏按钮、提示
+    // 条都是它的兄弟视图而非子孙，从它们上面起的手势天然
+    // 不进本识别器；容器内的贴纸浮层（StickerView）一律
+    // isUserInteractionEnabled=false、触摸穿透，无死点。
+    // 触发本体是 minimumPressDuration=5 的真长按：满时前
+    // 它停在 .possible 不识别、不取消触摸——单击/双击（顶
+    // 栏恢复）、莫奈轨道 pan/tap 在 5 秒内该触发照常触发；
+    // 指头漂移超 allowableMovement 它自动失败、本次作废。
+    // 等待期的进度环由 StageCyclePressObserver（永不识别的
+    // 观察器）驱动显隐，与触发识别器互不干扰。
+
+    private var styleCycleRing: StageCycleProgressRingView?
+    private var styleCycleRingWorkItem: DispatchWorkItem?
+    /// 进度环延迟出环：短点按与莫奈轨道滑动（< 0.22s）不闪
+    /// 环，环只服务于真正的按住等待；填充时长相应扣掉这段
+    /// 延迟，与 5 秒触发时刻对齐补满。
+    private let styleCycleRingDelay: TimeInterval = 0.22
+    private var styleCyclePressPoint: CGPoint = .zero
+    private var styleCyclePressActive = false
+    private var styleCycleFired = false
+    private var styleCycleToast: UILabel?
+    private var styleCycleToastWorkItem: DispatchWorkItem?
+
+    private func installStyleCycleRecognizers() {
+        let hold = UILongPressGestureRecognizer(
+            target: self, action: #selector(styleCycleHoldFired(_:)))
+        hold.minimumPressDuration = StageStyleCycleBag.holdDuration
+        hold.allowableMovement = StageStyleCycleBag.pressMoveTolerance
+        hold.cancelsTouchesInView = false
+        rendererContainer.addGestureRecognizer(hold)
+        let observer = StageCyclePressObserver()
+        observer.cancelsTouchesInView = false
+        observer.onPressBegan = { [weak self] point in
+            self?.styleCyclePressBegan(at: point)
+        }
+        observer.onPressMoved = { [weak self] point in
+            self?.styleCyclePressMoved(to: point)
+        }
+        observer.onPressEnded = { [weak self] in
+            self?.styleCyclePressEnded()
+        }
+        rendererContainer.addGestureRecognizer(observer)
+    }
+
+    private func styleCyclePressBegan(at point: CGPoint) {
+        guard view.window != nil, presentedViewController == nil else { return }
+        styleCyclePressActive = true
+        styleCycleFired = false
+        styleCyclePressPoint = point
+        styleCycleRingWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.styleCyclePressActive, !self.styleCycleFired
+            else { return }
+            self.styleCycleRing?.dismiss(completed: false)
+            let ring = StageCycleProgressRingView()
+            self.styleCycleRing = ring
+            ring.show(at: self.styleCyclePressPoint, in: self.rendererContainer,
+                      duration: StageStyleCycleBag.holdDuration - self.styleCycleRingDelay)
+        }
+        styleCycleRingWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + styleCycleRingDelay, execute: work)
+    }
+
+    private func styleCyclePressMoved(to point: CGPoint) {
+        guard styleCyclePressActive, !styleCycleFired else { return }
+        let drift = hypot(point.x - styleCyclePressPoint.x,
+                          point.y - styleCyclePressPoint.y)
+        if drift > StageStyleCycleBag.pressMoveTolerance {
+            // 漂移超限：触发识别器同步自动失败，这里先撤环，
+            // 本次长按整体作废（抬手时 PressEnded 再兜底清）。
+            styleCyclePressActive = false
+            styleCycleRingWorkItem?.cancel()
+            styleCycleRingWorkItem = nil
+            styleCycleRing?.dismiss(completed: false)
+            styleCycleRing = nil
+        }
+    }
+
+    private func styleCyclePressEnded() {
+        let wasActive = styleCyclePressActive
+        styleCyclePressActive = false
+        styleCycleRingWorkItem?.cancel()
+        styleCycleRingWorkItem = nil
+        if wasActive, !styleCycleFired {
+            // 未满 5 秒松手/系统取消：撤环、无任何副作用。
+            styleCycleRing?.dismiss(completed: false)
+            styleCycleRing = nil
+        }
+    }
+
+    @objc private func styleCycleHoldFired(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, !styleCycleFired else { return }
+        styleCycleFired = true
+        styleCycleRingWorkItem?.cancel()
+        styleCycleRingWorkItem = nil
+        styleCycleRing?.dismiss(completed: true)
+        styleCycleRing = nil
+        cycleToNextStyle()
+    }
+
+    /// 长按轮换落点：向洗牌袋取下一只并经统一选样式通路
+    /// 落地（持久化写在本方法、与选择器点选时的写点一致）；
+    /// 触发瞬间中档触觉 + 样式名标签短暂浮现（自动消失、
+    /// 不留常驻 UI），让用户知道切到了哪一只。落网页兜底
+    /// 样式时与选择器点选未迁样式完全同路（跳网页舞台），
+    /// 标签会被网页宿主盖住，切换事实以面包屑为准。
+    private func cycleToNextStyle() {
+        let from = activeStyleId
+        guard let draw = StageStyleCycleBag.shared.next(currentStyleId: from) else {
+            Breadcrumbs.log("style.cycle.skip from=\(from) reason=single-selectable")
+            return
+        }
+        guard let info = LyricStageRegistry.info(for: draw.styleId) else { return }
+        StageStyleStore.currentStyleId = draw.styleId
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        showStyleCycleToast(name: info.displayName)
+        Breadcrumbs.log("style.cycle.switch from=\(from) to=\(draw.styleId)"
+            + " round=\(draw.round) remaining=\(draw.remaining)")
+        if info.isNativeAvailable {
+            applyNativeStyleSelection(draw.styleId)
+        } else {
+            applyWebStyleSelection(info, reason: "cycle web style \(draw.styleId)")
+        }
+    }
+
+    private func showStyleCycleToast(name: String) {
+        styleCycleToastWorkItem?.cancel()
+        styleCycleToastWorkItem = nil
+        styleCycleToast?.removeFromSuperview()
+        let label = UILabel()
+        label.text = name
+        label.font = .systemFont(ofSize: 15, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        label.textAlignment = .center
+        label.layer.cornerRadius = 16
+        label.clipsToBounds = true
+        label.alpha = 0
+        label.isUserInteractionEnabled = false
+        view.addSubview(label)
+        styleCycleToast = label
+        label.sizeToFit()
+        let width = label.bounds.width + 32
+        label.frame = CGRect(
+            x: (view.bounds.width - width) / 2,
+            y: view.bounds.height * 0.32,
+            width: width, height: 32)
+        UIView.animate(withDuration: 0.3, delay: 0,
+                       usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState]) {
+            label.alpha = 1
+        }
+        let work = DispatchWorkItem { [weak label] in
+            UIView.animate(withDuration: 0.35,
+                           options: [.beginFromCurrentState]) {
+                label?.alpha = 0
+            } completion: { _ in
+                label?.removeFromSuperview()
+            }
+        }
+        styleCycleToastWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    /// 选样式统一落点·原生（样式选择器手选与长按轮换共用，
+    /// 结果完全一致）：袋子对账 + 藏未迁提示条 + 换装。
+    /// 换装经 swapRenderer → 旧渲染器 unmount / 新渲染器
+    /// mount+setLifecycle，汪汪队样式的宠物迁移
+    /// （PetConcertRelocation begin/end）由渲染器生命周期
+    /// 自动触发；style-guard pending 由 mountRenderer 武装。
+    /// 持久化（StageStyleStore.currentStyleId）由各调用方在
+    /// 进本落点前写好（选择器点选时点、轮换触发时点）。
+    private func applyNativeStyleSelection(_ styleId: String) {
+        StageStyleCycleBag.shared.noteExternalSelection(styleId)
+        noticeBar.isHidden = true
+        view.setNeedsLayout()
+        swapRenderer(to: styleId)
+    }
+
+    /// 选样式统一落点·网页兜底（同上共用）：袋子对账 + 跳
+    /// 网页舞台（reason 标明入口，与既有面包屑口径一致）。
+    private func applyWebStyleSelection(_ info: LyricStageStyleInfo, reason: String) {
+        StageStyleCycleBag.shared.noteExternalSelection(info.id)
+        jumpToWebStage(reason: reason)
+    }
+
     // MARK: 生命周期
 
     deinit {
@@ -270,6 +473,8 @@ final class StageViewController: UIViewController {
         // 氛围层；播放由 viewWillAppear/Disappear 钩子管。
         refreshCustomBackground()
         installStageHeaderAutoHideRecognizers()
+        // 样式长按轮换（3.7 (54) 工作流 R）：5 秒长按切特效。
+        installStyleCycleRecognizers()
         context = LyricStageContext(
             sendCommand: { [weak self] command in self?.handleCommand(command) },
             currentAnchor: { [weak self] in
@@ -392,6 +597,16 @@ final class StageViewController: UIViewController {
     private func teardown() {
         guard !tornDown else { return }
         tornDown = true
+        // 长按轮换收尾（3.7 (54) 工作流 R）：进度环与样式名
+        // 标签不跨台残留（袋子轮次状态是进程级、保留不动）。
+        styleCycleRingWorkItem?.cancel()
+        styleCycleRingWorkItem = nil
+        styleCycleRing?.dismiss(completed: false)
+        styleCycleRing = nil
+        styleCycleToastWorkItem?.cancel()
+        styleCycleToastWorkItem = nil
+        styleCycleToast?.removeFromSuperview()
+        styleCycleToast = nil
         // 守卫证明·teardown 路（3.7 (45) R-4）：本台只在正常
         // dismiss 时走 teardown——开过又正常关掉即该样式活
         // 过，清 pending，免健康样式下次启动遭误报回退。
@@ -513,7 +728,7 @@ final class StageViewController: UIViewController {
         // 帧。歌词容器底边到台顶上 4pt。
         stageBarWidthConstraint?.constant =
             min(bounds.width, bounds.height) - 24
-        let barHeight: CGFloat = stageBarCollapsed ? 16 : 70
+        let barHeight: CGFloat = stageBarCollapsed ? 16 : 118
         let controlsTop = bounds.height - safe.bottom - 10 - barHeight
         rendererContainer.frame = CGRect(
             x: 0, y: contentTop, width: bounds.width,
@@ -529,6 +744,9 @@ final class StageViewController: UIViewController {
         let recorded = StageStyleStore.currentStyleId
         activeStyleId = StageStyleStore.effectiveStyleId()
         mountRenderer(styleId: activeStyleId)
+        // 长按轮换对账（3.7 (54) 工作流 R）：开台初始样式即
+        // 当前样式，从洗牌袋本轮余量剔除（轮次跨开台保留）。
+        StageStyleCycleBag.shared.noteExternalSelection(activeStyleId)
         if !StageStyleStore.currentStyleIsNative && !noticeDismissed {
             let recordedName = LyricStageRegistry.info(for: recorded)?.displayName ?? recorded
             let effectiveName = LyricStageRegistry.info(for: activeStyleId)?.displayName ?? activeStyleId
@@ -1057,17 +1275,15 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             StageStyleStore.currentStyleId = styleId
             self.dismiss(animated: true) { [weak self] in
-                guard let self else { return }
-                self.noticeBar.isHidden = true
-                self.view.setNeedsLayout()
-                self.swapRenderer(to: styleId)
+                self?.applyNativeStyleSelection(styleId)
             }
         }
         picker.onPickWeb = { [weak self] info in
             guard let self else { return }
             StageStyleStore.currentStyleId = info.id
             self.dismiss(animated: true) { [weak self] in
-                self?.jumpToWebStage(reason: "picker web style \(info.id)")
+                self?.applyWebStyleSelection(
+                    info, reason: "picker web style \(info.id)")
             }
         }
         picker.onOpenWebStage = { [weak self] in
@@ -1099,6 +1315,9 @@ final class StageViewController: UIViewController {
     }
 
     @objc private func noticeWebTapped() {
+        // 回网页版看的正是当前记录样式：长按轮换袋子同步对
+        // 账（该样式本轮不再被递出，见工作流 R 对账规则）。
+        StageStyleCycleBag.shared.noteExternalSelection(StageStyleStore.currentStyleId)
         jumpToWebStage(reason: "notice web jump style=\(StageStyleStore.currentStyleId)")
     }
 
@@ -1175,6 +1394,27 @@ final class StageViewController: UIViewController {
         bar.addSubview(glassTint)
         stageGlassTint = glassTint
 
+        // 点播台上排（3.7 (54) 工作流 H）：网页整排接入——上排
+        // 44pt 贴台顶（喜欢/打乱/模式/睡眠＋右端设置），主排
+        // 整体下移、台高 70→118。功能走 MiniBarQuickRowView
+        // 唯一实现（与两面墙台同件）；点按先行回调重置无操作
+        // 计时；喜欢态变化回调刷新顶栏红心（同一 LikesStore
+        // 真源两处回显不许打架）；设置走组件缺省呈现（顶层
+        // VC＝本舞台，overFullScreen 同墙口径）。
+        let quickRow = MiniBarQuickRowView()
+        quickRow.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(quickRow)
+        stageQuickRow = quickRow
+        quickRow.onUserInteraction = { [weak self] in self?.resetStageIdleTimer() }
+        quickRow.onLikeStateChanged = { [weak self] in self?.refreshLikeButton() }
+        NSLayoutConstraint.activate([
+            quickRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
+            quickRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            quickRow.topAnchor.constraint(equalTo: bar.topAnchor, constant: 3),
+            quickRow.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        Breadcrumbs.log("minibar.webrow stage attached h=118")
+
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
         progressTrack.layer.cornerRadius = 2
@@ -1246,7 +1486,7 @@ final class StageViewController: UIViewController {
 
         stageBarWidthConstraint = bar.widthAnchor.constraint(
             equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
-        stageBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 70)
+        stageBarHeightConstraint = bar.heightAnchor.constraint(equalToConstant: 118)
         stageBarWidthConstraint?.isActive = true
         stageBarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
@@ -1287,22 +1527,17 @@ final class StageViewController: UIViewController {
             knob.heightAnchor.constraint(equalToConstant: 9),
 
             currentTimeLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
-            currentTimeLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             currentTimeLabel.widthAnchor.constraint(equalToConstant: 44),
             totalTimeLabel.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
-            totalTimeLabel.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             totalTimeLabel.widthAnchor.constraint(equalToConstant: 44),
 
             playButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            playButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             playButton.widthAnchor.constraint(equalToConstant: 40),
             playButton.heightAnchor.constraint(equalToConstant: 40),
             prevButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -2),
-            prevButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             prevButton.widthAnchor.constraint(equalToConstant: 34),
             prevButton.heightAnchor.constraint(equalToConstant: 40),
             nextButton.leadingAnchor.constraint(equalTo: playButton.trailingAnchor, constant: 2),
-            nextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             nextButton.widthAnchor.constraint(equalToConstant: 34),
             nextButton.heightAnchor.constraint(equalToConstant: 40),
             seekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
@@ -1316,6 +1551,15 @@ final class StageViewController: UIViewController {
         stageTrackBottomConstraint = progressTrack.bottomAnchor.constraint(
             equalTo: bar.bottomAnchor, constant: -7)
         stageTrackBottomConstraint?.isActive = true
+        // 主排纵向位置（3.7 (54) H）：展开 118 台里主排中心在
+        // 上排（3..47）与 seek 命中带（98..118）之间，相对台
+        // 中心 +13；收起态回 −5（内容已淡出、仅动画观感）。
+        // 形态切换在 setStageBarForm 里统一改这组常量。
+        stageMainCenterY = [currentTimeLabel, totalTimeLabel,
+                            playButton, prevButton, nextButton].map {
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 13)
+        }
+        NSLayoutConstraint.activate(stageMainCenterY)
 
         let longPress = UILongPressGestureRecognizer(
             target: self, action: #selector(stageBarLongPressed(_:)))
@@ -1431,6 +1675,8 @@ final class StageViewController: UIViewController {
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
             || nextButton.frame.contains(point) { return }
+        // 上排（(54) H）长按不切主题：与按键区同口径豁免。
+        if let quickRow = stageQuickRow, quickRow.frame.contains(point) { return }
         stageTheme = stageTheme.next
         MiniPlayerTheme.stored = stageTheme
         applyStageTheme()
@@ -1452,6 +1698,8 @@ final class StageViewController: UIViewController {
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
             || nextButton.frame.contains(point) { return }
+        // 上排（(54) H）：键各自处理、排内空隙不落台身分发。
+        if let quickRow = stageQuickRow, quickRow.frame.contains(point) { return }
         if let seekHit = stageSeekHit, seekHit.frame.contains(point) {
             guard let track = stageProgressTrack?.frame, track.width > 0,
                   engine.duration > 0 else { return }
@@ -1569,7 +1817,8 @@ final class StageViewController: UIViewController {
     }
 
     private func setStageBarForm(collapsed: Bool) {
-        stageBarHeightConstraint?.constant = collapsed ? 16 : 70
+        stageBarHeightConstraint?.constant = collapsed ? 16 : 118
+        for constraint in stageMainCenterY { constraint.constant = collapsed ? -5 : 13 }
         stageTrackBottomConstraint?.constant = collapsed ? -6 : -7
         let radius: CGFloat = collapsed ? 8 : 35
         stageBar.layer.cornerRadius = radius
@@ -1584,16 +1833,20 @@ final class StageViewController: UIViewController {
 
     private func setStageBarContentsAlpha(_ alpha: CGFloat) {
         // 圆点不淡出（收起态保留主题圆点随进度步进，同墙）。
+        // (54) H：上排整排同入淡出名单（收起细条上只留轨道）。
         for view in [currentTimeLabel, totalTimeLabel,
                      playButton, prevButton, nextButton] as [UIView] {
             view.alpha = alpha
         }
+        stageQuickRow?.alpha = alpha
     }
 
     private func setStageBarContentsInteractive(_ interactive: Bool) {
         for button in [playButton, prevButton, nextButton] {
             button.isUserInteractionEnabled = interactive
         }
+        // (54) H：上排以整件开关交互（收起态不许点到隐形键）。
+        stageQuickRow?.isUserInteractionEnabled = interactive
     }
 
     /// 在场边沿的形态无动画复位：收起态不跨呈现周期残留。

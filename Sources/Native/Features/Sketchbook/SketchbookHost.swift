@@ -13,6 +13,18 @@ import UIKit
 // 层级内活动；工作流 G 的宠物岛在 window.layer 直属子层
 // （zPosition 高位、独立于任何 VC 的 view 层级），两者不在
 // 同一层级树，互不遮挡、互不抢命中。
+//
+// 与书库侧栏共存（(54) 工作流 N，照网页版 is-covered）：
+// 本宿主装在工作台宿主之后（墙面最上层），侧栏打开时把手会
+// 浮压侧栏——须由 HomeWall 在侧栏可见性变化时把抽屉整层藏
+// 起来。接法（HomeWallViewController 合流时补两处）：
+//   1. 安装处保留返回值：
+//      sketchbookDrawer = SketchbookHost.install(into: view)
+//      （把现有的 `_ =` 换成持有到 VC 属性上）
+//   2. workbench.onSidebarVisibilityChanged 的闭包里加一行：
+//      self?.sketchbookDrawer?.setExternallyCovered(open)
+//      （open=true 时整层隐藏，false 时原样恢复；抽屉侧 API
+//      已备好：SketchbookDrawerView.setExternallyCovered(_:)）
 
 enum SketchbookHost {
 

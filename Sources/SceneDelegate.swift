@@ -81,6 +81,16 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 正当退出落定 / 守卫期重入 / giveup 三路回调进本状态机。
         wireRouteGateCallbacks()
 
+        // 入场播放器预热（3.7 (54) 工作流 O）：建窗阶段先把
+        // 入场 player/item 建好并异步加载至可播（EntryPlayer
+        // Preheat.warmUp），入场呈现时 VC 接管同一实例直接
+        // play，消除「呈现后才装配/加载」的海报静帧停留。
+        // 全程异步、不阻塞建窗；失败静默降级回 VC 现装配路
+        // 径。本调用为旁新增，不动上方 LocalServer.start()、
+        // QueueManager 触达、PetIslandLayer.install 三处既有
+        // 调用及其顺序。
+        EntryPlayerPreheat.warmUp()
+
         // 2.5) 入场视频（3.7 (17) 挪位、(51) 随墙作根自然生效）：
         //     冷启直达原生墙，v5 油画视频由主页墙进入页触发（见
         //     HomeWallViewController 的入场槽位：进墙首露面播、

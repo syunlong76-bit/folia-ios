@@ -1819,6 +1819,14 @@ enum NativePlaybackFailureToast {
     private static weak var currentPill: UIView?
 
     static func show(trackTitle: String) {
+        show(message: "《\(trackTitle)》暂时无法播放，可能需要 VIP 或受版权限制")
+    }
+
+    /// 通用文案入口（3.7 (54) 工作流 L）：曲目墙定位瞬时提示
+    /// （不在本歌单/定位失败）随行动胶囊撤除改走本 toast——
+    /// 窗口级、自动消失、不在墙面留任何常驻条/胶囊；与点播
+    /// 失败 toast 同一实现（弹簧入场、3.2 秒淡出、只留最新）。
+    static func show(message: String) {
         DispatchQueue.main.async {
             guard let window = keyWindow() else { return }
             currentPill?.removeFromSuperview()
@@ -1832,7 +1840,7 @@ enum NativePlaybackFailureToast {
             pill.translatesAutoresizingMaskIntoConstraints = false
 
             let label = UILabel()
-            label.text = "《\(trackTitle)》暂时无法播放，可能需要 VIP 或受版权限制"
+            label.text = message
             label.textColor = .white
             label.font = .systemFont(ofSize: 13, weight: .medium)
             label.numberOfLines = 2

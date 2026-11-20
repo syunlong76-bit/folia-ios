@@ -21,14 +21,23 @@ enum PetConcertConst {
     static let refW: CGFloat = 1080
     static let refH: CGFloat = 1920
 
-    // MARK: 队形（v3 layout：7 列 × 8 行，队长 front-center）
+    // MARK: 队形（(54) Q 纵深重排：7 列 × 8 行，队长 front-center）
     static let gridCols = 7
     static let gridRows = 8
-    /// 列 x = 540 + (c−3)×132；行 y = 640 + r×116（参考 px）。
+    /// 列 x = 540 + (c−3)×132（参考 px）。
     static let gridX0: CGFloat = 540
     static let gridDX: CGFloat = 132
-    static let gridY0: CGFloat = 640
+    /// 行 y 改透视表（(54) Q）：行距自后排 88 递增到前排 136，
+    /// 队形整体后移到舞台后 2/3（首行 588、末行 1372），中央
+    /// 前方留给独唱区。gridDY 仅作旧口径留存，站位以表为准。
+    static let gridY0: CGFloat = 588
     static let gridDY: CGFloat = 116
+    static let gridRowY: [CGFloat] = [588, 676, 772, 876, 988, 1108, 1236, 1372]
+    /// 透视行缩放：后排（row 0）0.70 → 前排（row 7）1.00 线性。
+    static func formationScale(row: Int) -> CGFloat {
+        let r = min(max(row, 0), gridRows - 1)
+        return 0.70 + 0.30 * CGFloat(r) / CGFloat(gridRows - 1)
+    }
     /// 空槽（v3 EMPTY）：后排三处留空透气。
     static let emptySlots: Set<Int> = [0 * 7 + 0, 0 * 7 + 3, 0 * 7 + 6]
     /// 队长槽（行 7、列 3，前排正中）。
@@ -38,13 +47,15 @@ enum PetConcertConst {
     static let petBase: CGFloat = 124
     static let captainScale: CGFloat = 1.6
 
-    // MARK: 独唱跑位（v2/v3 定版）
-    /// 独唱位（参考 px），渲染方按舞台尺寸等比换算。
+    // MARK: 独唱跑位（(54) Q：独唱区前移留大）
+    /// 独唱位（参考 px），渲染方按舞台尺寸等比换算。前排底
+    /// 1434（队长底 1471）与独唱顶 1508 之间留 ≥37 空隙，
+    /// 独唱底 1724 在脚灯行之上， footprint 与队形零重叠。
     static let soloX: CGFloat = 540
-    static let soloY: CGFloat = 1560
-    static let soloScale: CGFloat = 1.9
-    /// 贝塞尔控制点 = 起终点中点 + y −120（参考 px，向上拱）。
-    static let bezierLift: CGFloat = 120
+    static let soloY: CGFloat = 1616
+    static let soloScale: CGFloat = 1.75
+    /// 贝塞尔控制点 = 起终点中点 + y −150（参考 px，向上拱）。
+    static let bezierLift: CGFloat = 150
     /// 出发提前量与跑程：常速行 lead 0.28 / 跑 0.50；快行
     /// lead 0.10 / 跑 0.25（v3 TRIPS 口径，到达点因此落在行
     /// 首后 0.22 / 0.15s，与样片一致）。
@@ -73,9 +84,49 @@ enum PetConcertConst {
     /// 间奏全强度上限：空档 > 30s 起分档降强度（30/gap，下限 0.35）。
     static let interludeFullGap: TimeInterval = 30.0
     static let interludeMinIntensity: Double = 0.35
-    /// 告别相位起点 = 末行 end + 0.4（且至少留 1.2s 才成立）。
+    /// 告别相位自然起点 = 末行 end + 0.4。
     static let farewellLead: TimeInterval = 0.4
-    static let farewellMinSpan: TimeInterval = 1.2
+    /// 告别保底可见时长（(54) T 第 3 条，01:38 修正后仍适用：
+    /// 尾段短于此值时起点向前借位补足，借位上限见下）。
+    static let farewellMinSpan: TimeInterval = 2.4
+    /// 告别借位上限：最多侵入末行尾部 1.5s（此时歌词气泡在
+    /// 上方专区、告别气泡在头顶，位置分区不打架；提词条仍
+    /// 显示末行全文）。借位后仍不足保底的极端短尾按实长走。
+    static let farewellMaxBorrow: TimeInterval = 1.5
+
+    // MARK: 开场仪式（(54) T + 01:38 自适应口径）
+    /// 无前奏判定：首行 start < 1.0s 视为一开头就唱，仪式
+    /// 整段省去（intro=none），降落/列队压缩最快就位。
+    static let introNoneThreshold: TimeInterval = 1.0
+    /// 仪式可用时长分档：≥2.4 从容双段；1.2–2.4 按比例压缩
+    /// 双段；0.5–1.2 只保留打招呼；<0.5 整段省去。仪式段
+    /// 总时长恒 ≤ 前奏可用时间，绝不侵占演唱。
+    static let introFullThreshold: TimeInterval = 2.4
+    static let introDualThreshold: TimeInterval = 1.2
+    static let introGreetOnlyThreshold: TimeInterval = 0.5
+    /// 从容档打招呼上限（其余归交头接耳窗，cue 在窗内摊开）。
+    static let greetingNominal: TimeInterval = 1.8
+    /// 单条社交 cue 的最长展示（短窗等分压缩，长窗摊开留白）。
+    static let socialCueMaxDuration: TimeInterval = 1.05
+    static let farewellCueMaxDuration: TimeInterval = 1.2
+    /// 演唱会本地文案（风格对齐 PetLines/PetChat 既有词库；
+    /// 词库文件不在本工作流文件域内，故以本地常量收录）。
+    /// 打招呼：面向观众，与队长对队内的「稍息，立正」分开。
+    static let greetingLines: [String] = [
+        "大家好，我们来啦",
+        "大家好，谢谢你们来看我们",
+        "晚上好，今天唱给大家听",
+        "大家好，准备好了吗",
+    ]
+    /// 告别：面向观众的再见（区别于迷你台个人离开词）。
+    static let farewellLines: [String] = [
+        "谢谢大家，我们下次见",
+        "今天就唱到这里啦，再见",
+        "谢谢你们陪我们唱完",
+        "再见啦，下次还要来听哦",
+    ]
+    /// 极短尾段的融合句（再见＋关心同句，单 cue 承载两义）。
+    static let farewellFusedLine = "再见啦，回去早点休息哦"
 
     // MARK: 降落/列队动画（v3 base_anchor）
     static let dropStaggerMax: Double = 0.85   // 每只随机错峰 0–0.85s
@@ -109,10 +160,18 @@ enum PetConcertConst {
 
     // MARK: 灯光/地板（v3 lights/floor）
     static let footlightCount = 11
-    static let footlightY: CGFloat = 1730       // 参考 px
-    static let floorTopY: CGFloat = 556         // 参考 px
-    /// 独唱位金色脚圈：中心 (540, 1656)、半径 (152, 34)。
-    static let soloRingY: CGFloat = 1656
+    static let footlightY: CGFloat = 1766       // 参考 px
+    /// 木地板地平线（(54) Q）：与后排顶 543 对齐，地板自此
+    /// 向前（向下）透视延伸满屏。
+    static let floorTopY: CGFloat = 540         // 参考 px
+    /// 独唱位金色脚圈（(54) Q 放大）：中心 (540, 1712)、半径 (190, 42)。
+    static let soloRingY: CGFloat = 1712
+    static let soloRingRX: CGFloat = 190
+    static let soloRingRY: CGFloat = 42
+    /// 歌词气泡专区（(54) P+Q，参考 px）：垂幔底 254 之下、
+    /// 队形首排顶 543 之上，布局上与队形零重叠。
+    static let bubbleZoneTop: CGFloat = 268
+    static let bubbleZoneBottom: CGFloat = 540
 
     // MARK: 气泡/提词条（v3 bubbles/teleprompter，参考 px 字号）
     static let bubbleFontCaptain: CGFloat = 46
@@ -186,7 +245,8 @@ func concertHash(_ string: String) -> UInt64 {
 enum ConcertPhase: String {
     case dropping   // 降落散位
     case formation  // 列队 + 队长口令
-    case preludeChat // 前奏闲聊
+    case greeting   // 向观众打招呼（(54) T 新增；无前奏歌不进入）
+    case preludeChat // 前奏交头接耳
     case singing1   // 轮唱一
     case interlude  // 间奏爆发（全曲最大空档）
     case singing2   // 轮唱二
@@ -236,10 +296,23 @@ struct ConcertPlan {
     let breathBlocksByLine: [Int: [(start: TimeInterval, end: TimeInterval, text: String)]]
     let interlude: (start: TimeInterval, end: TimeInterval, intensity: Double)?
     let formAt: TimeInterval
+    /// 列队移动全部落定的时刻（打招呼最早可在此刻开始）。
+    let formationSettledAt: TimeInterval
+    /// 打招呼窗起点；nil = 本曲无仪式段（intro=none）。
+    let greetAt: TimeInterval?
+    /// 打招呼/交头接耳各自的相位窗时长（面包屑对账口径；
+    /// 两者之和恒 ≤ 首行前的可用时间）。
+    let greetingDuration: TimeInterval
+    let whisperDuration: TimeInterval
+    /// 仪式安排结果：none / greeting-only / dual / full。
+    let introKind: String
     let chatAt: TimeInterval
     let firstLineStart: TimeInterval
     let farewellAt: TimeInterval?
+    let greetingCues: [ConcertChatCue]
     let chatCues: [ConcertChatCue]
+    /// 交头接耳配对（asset → 相邻伙伴 asset，槽位相邻成对）。
+    let whisperPartnerOf: [String: String]
     let farewellCues: [ConcertChatCue]
     /// 动图池优先序（按本曲 seed 旋转，准入由渲染方按成本把关）。
     let animPriority: [String]
@@ -254,9 +327,40 @@ struct ConcertPlan {
             if t >= interlude.start { return .interlude }
         }
         if t >= firstLineStart { return .singing1 }
-        if t >= chatAt { return .preludeChat }
+        if whisperDuration > 0, t >= chatAt { return .preludeChat }
+        if let greetAt, t >= greetAt { return .greeting }
         if t >= formAt { return .formation }
         return .dropping
+    }
+
+    /// 相位窗 [start, end)（纯函数推导，供 concert.phase 面包
+    /// 屑记录每段的计划起止/时长；与 phase(at:) 同一边界源）。
+    func phaseSpan(_ phase: ConcertPhase) -> (start: TimeInterval, end: TimeInterval) {
+        let greetStart = greetAt ?? chatAt
+        switch phase {
+        case .dropping: return (0, formAt)
+        case .formation: return (formAt, greetAt ?? firstLineStart)
+        case .greeting:
+            return greetAt == nil ? (firstLineStart, firstLineStart)
+                : (greetStart, greetStart + greetingDuration)
+        case .preludeChat:
+            return whisperDuration > 0 ? (chatAt, firstLineStart)
+                : (firstLineStart, firstLineStart)
+        case .singing1: return (firstLineStart, interlude?.start ?? (farewellAt ?? duration))
+        case .interlude:
+            return interlude.map { ($0.start, $0.end) } ?? (duration, duration)
+        case .singing2:
+            return interlude.map { ($0.end, farewellAt ?? duration) }
+                ?? (duration, duration)
+        case .farewell:
+            return farewellAt.map { ($0, duration) } ?? (duration, duration)
+        case .ended: return (duration, duration)
+        }
+    }
+
+    /// 某时刻正在展示的社交 cue（闲聊/告别/招呼共用查表）。
+    func cue(in cues: [ConcertChatCue], at t: TimeInterval) -> ConcertChatCue? {
+        cues.first(where: { t >= $0.start && t < $0.end })
     }
 
     /// 当前独唱行（t 落在某行 [start, end) 内且该行有独唱者）。
@@ -347,12 +451,49 @@ struct ConcertPlan {
             swayPhaseOf[asset] = rng.next(in: 0...(2 * Double.pi))
         }
 
-        // 相位边界（首行越早、压缩越狠；无歌词时全程降落→列队→告别缺省）。
+        // 相位边界（(54) T 自适应）：首行时刻是硬顶——降落/
+        // 列队/仪式全部排在 [0, firstStart) 内，绝不侵占演唱。
+        // 无前奏（firstStart < 1.0）：列队压缩到最快就位，
+        // 仪式整段省去。无歌词时以 5s 锚点走完整开场缺省。
         let firstStart = lines.first?.start ?? min(duration, 5)
-        let formAt = min(PetConcertConst.dropNominal,
+        let noIntro = !lines.isEmpty && firstStart < PetConcertConst.introNoneThreshold
+        let formAt: TimeInterval
+        if noIntro {
+            formAt = min(0.45, max(0.15, firstStart * 0.5))
+        } else {
+            formAt = min(PetConcertConst.dropNominal,
                          max(0.6, firstStart * 0.30))
-        let chatAt = min(PetConcertConst.formNominal,
-                         max(formAt + 0.3, firstStart * 0.55))
+        }
+        // 列队落定时刻：与渲染方 basePosition 同一缩放口径
+        // （k = max(0.4, formAt/formNominal×1.667)，最晚一只在
+        // formAt + (延迟上限+移动时长)×k 落定）。
+        let formK = max(0.4, formAt / PetConcertConst.formNominal * 1.667)
+        let formationSettledAt = formAt
+            + (PetConcertConst.formDelayMax + PetConcertConst.formMoveDuration) * formK
+        // 仪式分配：可用 = 首行前列队落定后的余量，分档见
+        // PetConcertConst.intro* 注释；greetAt/chatAt 由此定。
+        let introAvail = noIntro ? 0 : max(0, firstStart - formationSettledAt)
+        var greetAt: TimeInterval? = nil
+        var greetingDuration: TimeInterval = 0
+        var whisperDuration: TimeInterval = 0
+        var introKind = "none"
+        if introAvail >= PetConcertConst.introFullThreshold {
+            greetAt = formationSettledAt
+            greetingDuration = min(PetConcertConst.greetingNominal,
+                                   introAvail * 0.45)
+            whisperDuration = introAvail - greetingDuration
+            introKind = "full"
+        } else if introAvail >= PetConcertConst.introDualThreshold {
+            greetAt = formationSettledAt
+            greetingDuration = introAvail * 0.55
+            whisperDuration = introAvail - greetingDuration
+            introKind = "dual"
+        } else if introAvail >= PetConcertConst.introGreetOnlyThreshold {
+            greetAt = formationSettledAt
+            greetingDuration = introAvail
+            introKind = "greeting-only"
+        }
+        let chatAt = greetAt.map { $0 + greetingDuration } ?? firstStart
         // 间奏：全曲最大空档（行间 + 首行前不算、末行后归告别）。
         var gap: (start: TimeInterval, end: TimeInterval, intensity: Double)? = nil
         if lines.count >= 2 {
@@ -373,11 +514,17 @@ struct ConcertPlan {
                 gap = (best.0, best.1, intensity)
             }
         }
+        // 告别起点（(54) T：再短也不缺席）：自然起点末行
+        // end+0.4；尾段不足保底 2.4s 时向前借位补足，借位
+        // 上限 1.5s 且不早于末行中点（见 farewellMaxBorrow）。
         var farewellAt: TimeInterval? = nil
-        if let last = lines.last,
-           duration - (last.end + PetConcertConst.farewellLead)
-               >= PetConcertConst.farewellMinSpan {
-            farewellAt = last.end + PetConcertConst.farewellLead
+        if let last = lines.last, duration > last.end {
+            let natural = last.end + PetConcertConst.farewellLead
+            let guaranteedStart = duration - PetConcertConst.farewellMinSpan
+            let borrowFloor = max(last.start + (last.end - last.start) * 0.5,
+                                  last.end - PetConcertConst.farewellMaxBorrow)
+            farewellAt = min(natural, max(borrowFloor, guaranteedStart))
+            if farewellAt! >= duration { farewellAt = nil }
         }
 
         // 蛇形轮唱序：前排（row 7）起逐排向上，奇偶排交替方向，
@@ -453,46 +600,117 @@ struct ConcertPlan {
             breathBlocksByLine[line.id] = breathBlocks(for: line)
         }
 
-        // 前奏闲聊：两个人格对话（PetChat 拼装，种子句逐字在库
-        // 内），cue 时刻在 [chatAt, firstStart) 内均布；窗口太
-        // 短则只留第一句。
-        var chatCues: [ConcertChatCue] = []
-        let chatWindow = firstStart - chatAt
-        if chatWindow >= 0.8, snake.count >= 2 {
-            let a = snake[Int(seed >> 8) % snake.count]
-            var b = snake[(Int(seed >> 16) + 3) % snake.count]
-            if b == a { b = snake[(snake.firstIndex(of: a)! + 1) % snake.count] }
-            let dialogue = PetChat.generate(
-                a: PetPersonalities.of(a), b: PetPersonalities.of(b))
-            let texts: [(String, String)] = dialogue.lines.map {
-                ($0.speakerIsA ? a : b, $0.text)
-            }
-            let step = chatWindow / Double(texts.count + 1)
-            for (i, cue) in texts.enumerated() {
-                let s = chatAt + step * Double(i + 1) - 0.3
-                chatCues.append(ConcertChatCue(
-                    asset: cue.0, text: cue.1,
-                    start: max(chatAt, s), end: min(firstStart, s + 0.75)))
+        // 交头接耳配对：按槽位序两两成对（同排相邻列优先），
+        // 全员配对表供渲染方做贴近微倾；主对话对 = 前排离
+        // 队长最近的一对（气泡说话人）。
+        var whisperPartnerOf: [String: String] = [:]
+        var whisperPairs: [(String, String)] = []
+        do {
+            let bySlotSorted = slotOf.sorted { $0.value < $1.value }
+            var i = 0
+            while i + 1 < bySlotSorted.count {
+                let (aAsset, aSlot) = (bySlotSorted[i].key, bySlotSorted[i].value)
+                let (bAsset, bSlot) = (bySlotSorted[i + 1].key, bySlotSorted[i + 1].value)
+                if aSlot / PetConcertConst.gridCols == bSlot / PetConcertConst.gridCols,
+                   bSlot - aSlot == 1 {
+                    whisperPairs.append((aAsset, bAsset))
+                    whisperPartnerOf[aAsset] = bAsset
+                    whisperPartnerOf[bAsset] = aAsset
+                    i += 2
+                } else {
+                    i += 1
+                }
             }
         }
 
-        // 告别关心话：时段关心池（PetLines.carePool）取 3 句，
-        // seed 定序，落三只不同宠物，告别窗内均布。
+        // 打招呼 cue：队长先说、前排第一位（snake 首位）接
+        // 一句；窗内顺序排布、互不重叠（排布器见 spreadCues）。
+        var greetingCues: [ConcertChatCue] = []
+        if let greetAt, greetingDuration > 0 {
+            let pool = PetConcertConst.greetingLines
+            let first = pool[Int(seed >> 8) % pool.count]
+            var second = pool[(Int(seed >> 8) + 1) % pool.count]
+            if second == first { second = pool[(Int(seed >> 8) + 2) % pool.count] }
+            var speakers = [captain]
+            var texts = [first]
+            if greetingDuration >= 0.9, let front = snake.first {
+                speakers.append(front)
+                texts.append(second)
+            }
+            greetingCues = Self.spreadCues(
+                speakers: speakers, texts: texts,
+                windowStart: greetAt, windowDuration: greetingDuration,
+                maxDuration: PetConcertConst.socialCueMaxDuration)
+        }
+
+        // 前奏交头接耳：主对话对用 PetChat 既有词库按 seed
+        // 确定性拼装（话题/开场/回应/收尾各按 seed 取位，不
+        // 用随机数，计划可复算）；cue 在耳语窗内顺序摊开、
+        // 互不重叠——旧实现 cue 互相重叠且渲染只取首条，
+        // 第 2/3 句实际不可见，本版消除。
+        var chatCues: [ConcertChatCue] = []
+        if whisperDuration > 0, let mainPair = whisperPairs.last ?? whisperPairs.first {
+            let (a, b) = mainPair
+            let topics = PetChatTopic.allCases
+            let topic = topics[Int(seed >> 6) % topics.count]
+            let persA = PetPersonalities.of(a), persB = PetPersonalities.of(b)
+            var speakers: [String] = []
+            var texts: [String] = []
+            if let pool = PetChat.openers[persA]?[topic], !pool.isEmpty {
+                speakers.append(a)
+                texts.append(pool[Int(seed >> 10) % pool.count])
+            }
+            if let pool = PetChat.responses[persB]?[topic], !pool.isEmpty {
+                speakers.append(b)
+                texts.append(pool[Int(seed >> 14) % pool.count])
+            }
+            if whisperDuration >= 1.4,
+               let pool = PetChat.closers[persA]?[topic], !pool.isEmpty {
+                speakers.append(a)
+                texts.append(pool[Int(seed >> 18) % pool.count])
+            }
+            if whisperDuration < 0.9, texts.count > 1 {
+                speakers = Array(speakers.prefix(1))
+                texts = Array(texts.prefix(1))
+            }
+            chatCues = Self.spreadCues(
+                speakers: speakers, texts: texts,
+                windowStart: chatAt, windowDuration: whisperDuration,
+                maxDuration: PetConcertConst.socialCueMaxDuration)
+        }
+
+        // 告别＋关心 cue（顺序不重叠）：第 1 句队长向观众
+        // 说再见（本地 farewellLines），第 2 句时段关心池
+        // （PetLines.carePool，既有分池规则复用），第 3 句
+        // 另一只说再见；窗 <1.2s 时合并为融合句单 cue，
+        // 再见与关心同句不缺席。
         var farewellCues: [ConcertChatCue] = []
-        if let farewellAt {
+        if let farewellAt, !snake.isEmpty {
             let span = duration - farewellAt
-            let pool = PetLines.carePool(
+            let care = PetLines.carePool(
                 forHour: Calendar.current.component(.hour, from: Date()))
-            if !pool.isEmpty, !snake.isEmpty {
-                let offset = Int(seed >> 24) % pool.count
-                for k in 0..<min(3, pool.count) {
-                    let asset = snake[(Int(seed >> 12) + k * 7) % snake.count]
-                    let s = farewellAt + span * Double(k + 1) / 4.0
-                    farewellCues.append(ConcertChatCue(
-                        asset: asset, text: pool[(offset + k) % pool.count],
-                        start: s, end: min(duration, s + 1.05)))
+            let bye = PetConcertConst.farewellLines
+            var speakers: [String] = []
+            var texts: [String] = []
+            if span < 1.2 {
+                speakers = [captain]
+                texts = [PetConcertConst.farewellFusedLine]
+            } else {
+                speakers.append(captain)
+                texts.append(bye[Int(seed >> 24) % bye.count])
+                if !care.isEmpty {
+                    speakers.append(snake[Int(seed >> 12) % snake.count])
+                    texts.append(care[Int(seed >> 20) % care.count])
+                }
+                if span >= 2.4 {
+                    speakers.append(snake[(Int(seed >> 12) + 7) % snake.count])
+                    texts.append(bye[(Int(seed >> 24) + 1) % bye.count])
                 }
             }
+            farewellCues = Self.spreadCues(
+                speakers: speakers, texts: texts,
+                windowStart: farewellAt, windowDuration: span,
+                maxDuration: PetConcertConst.farewellCueMaxDuration)
         }
 
         // 动图池优先序按本曲 seed 旋转（跨曲轮换，准入按成本）。
@@ -507,17 +725,56 @@ struct ConcertPlan {
             swayPhaseOf: swayPhaseOf, singerByLine: singerByLine,
             chorusLines: chorusLines, tripsByLine: tripsByLine,
             breathBlocksByLine: breathBlocksByLine, interlude: gap,
-            formAt: formAt, chatAt: chatAt, firstLineStart: firstStart,
-            farewellAt: farewellAt, chatCues: chatCues,
+            formAt: formAt, formationSettledAt: formationSettledAt,
+            greetAt: greetAt, greetingDuration: greetingDuration,
+            whisperDuration: whisperDuration, introKind: introKind,
+            chatAt: chatAt, firstLineStart: firstStart,
+            farewellAt: farewellAt, greetingCues: greetingCues,
+            chatCues: chatCues, whisperPartnerOf: whisperPartnerOf,
             farewellCues: farewellCues, animPriority: animPriority)
     }
 
+    /// 社交 cue 排布器：窗够长时每条 maxDuration、等距摊开
+    /// （留白是停顿）；窗短时等分压缩。恒顺序、恒不重叠、
+    /// 恒落在窗内——任何一条都不会被同窗其他 cue 挡住。
+    private static func spreadCues(speakers: [String], texts: [String],
+                                   windowStart: TimeInterval,
+                                   windowDuration: TimeInterval,
+                                   maxDuration: TimeInterval) -> [ConcertChatCue] {
+        let n = min(speakers.count, texts.count)
+        guard n > 0, windowDuration > 0 else { return [] }
+        var cues: [ConcertChatCue] = []
+        if Double(n) * maxDuration >= windowDuration {
+            let each = windowDuration / Double(n)
+            for i in 0..<n {
+                cues.append(ConcertChatCue(
+                    asset: speakers[i], text: texts[i],
+                    start: windowStart + each * Double(i),
+                    end: windowStart + each * Double(i + 1)))
+            }
+        } else if n == 1 {
+            cues.append(ConcertChatCue(
+                asset: speakers[0], text: texts[0],
+                start: windowStart, end: windowStart + maxDuration))
+        } else {
+            let span = windowDuration - maxDuration
+            for i in 0..<n {
+                let s = windowStart + span * Double(i) / Double(n - 1)
+                cues.append(ConcertChatCue(
+                    asset: speakers[i], text: texts[i],
+                    start: s, end: s + maxDuration))
+            }
+        }
+        return cues
+    }
+
     static func slotPoint(_ slot: Int) -> CGPoint {
-        let row = slot / PetConcertConst.gridCols
+        let row = min(max(slot / PetConcertConst.gridCols, 0),
+                      PetConcertConst.gridRows - 1)
         let col = slot % PetConcertConst.gridCols
         return CGPoint(
             x: PetConcertConst.gridX0 + CGFloat(col - 3) * PetConcertConst.gridDX,
-            y: PetConcertConst.gridY0 + CGFloat(row) * PetConcertConst.gridDY)
+            y: PetConcertConst.gridRowY[row])
     }
 
     private static func breathBlocks(
