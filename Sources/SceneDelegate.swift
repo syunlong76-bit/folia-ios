@@ -8,6 +8,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                willConnectTo session: UISceneSession,
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
+        Breadcrumbs.log("scene.connect")
 
         // 1) 准备 Web 根目录：首次拷贝内置版本；如有已下载待生效的新版本且目录完整，切换生效
         WebRootManager.shared.prepare()
@@ -25,7 +26,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
         // 灵动岛宠物承载层（3.7 (32)）：独立穿透窗挂根级，
         // 导航不消失；宠物由墙台告别分流送达（PetIslandLayer）。
-        PetIslandLayer.install(in: windowScene)
+        // 3.7 (35) 二分：岛窗整层短路不装（FoliaBisect），判
+        // 读后再恢复。
+        if FoliaBisect.islandWindowDisabled {
+            Breadcrumbs.log("island.install skipped=bisect35")
+        } else {
+            PetIslandLayer.install(in: windowScene)
+        }
 
         // 2.5) 入场视频不在冷启动挂（3.7 (17) 挪位）：冷启直落
         //     Web 主界面；v5 油画视频改由主页墙进入页触发（见

@@ -383,6 +383,8 @@ final class MiniBarPetStage: UIView {
     private var lastTimestamp: TimeInterval = 0
     /// pet.tick.heartbeat 节流锚（3.7 (29)）。
     private var lastHeartbeatAt: TimeInterval = 0
+    /// 首帧 tick 落痕（3.7 (35) 二分定位）：一次性。
+    private var didLogFirstTick = false
     /// 墙钟：恒前进（批次/告别/关心过期用）。
     private var clockTime: TimeInterval = 0
     /// 编排时钟：只在播放中前进（走动/编排/轮换/关心触发用）。
@@ -1462,6 +1464,11 @@ final class MiniBarPetStage: UIView {
 
     @objc private func tick(_ link: CADisplayLink) {
         guard barPresented, window != nil else { return }
+        if !didLogFirstTick {
+            didLogFirstTick = true
+            Breadcrumbs.log("pet.tick.first role=\(role == .wall ? "wall" : "stage")"
+                + " collapsed=\(collapsed)")
+        }
         syncFrame()
         let now = link.timestamp
         let dt = lastTimestamp == 0 ? 0.016 : min(0.05, now - lastTimestamp)
@@ -1528,7 +1535,10 @@ final class MiniBarPetStage: UIView {
         if let pending = pendingForm, clockTime >= pending.at {
             pendingForm = nil
             if pending.collapsed {
-                prepareFarewellDestinations(allActors)
+                // 3.7 (35) 二分门：告别分流旁路（不打标，回池口径）。
+                if !FoliaBisect.pet32SubsystemsBypassed {
+                    prepareFarewellDestinations(allActors)
+                }
                 startFarewell(of: allActors) { [weak self] in
                     self?.spawnBatch()
                 }
@@ -1553,17 +1563,23 @@ final class MiniBarPetStage: UIView {
         if batchActive, pendingSpawns.isEmpty, !farewellActive,
            clockTime >= batchEndsAt, !allActors.isEmpty {
             batchActive = false
-            prepareFarewellDestinations(allActors)
+            // 3.7 (35) 二分门：告别分流旁路（不打标，回池口径）。
+            if !FoliaBisect.pet32SubsystemsBypassed {
+                prepareFarewellDestinations(allActors)
+            }
             startFarewell(of: allActors) { [weak self] in
                 self?.spawnBatch()
             }
         }
 
         // 停靠过期（细修 4）：定格满 5 秒无互动 → 淡出回池。
-        for actor in allActors where actor.placed && actor.mode != .dragged
-            && clockTime - actor.parkedClock >= 5 {
-            Breadcrumbs.log("pet.park.expire asset=\(actor.asset)")
-            removeActor(actor, animated: true, sendToPool: true)
+        // 3.7 (35) 二分门：旁路时不设过期（退回 (27)/(30) 安置语义）。
+        if !FoliaBisect.pet32SubsystemsBypassed {
+            for actor in allActors where actor.placed && actor.mode != .dragged
+                && clockTime - actor.parkedClock >= 5 {
+                Breadcrumbs.log("pet.park.expire asset=\(actor.asset)")
+                removeActor(actor, animated: true, sendToPool: true)
+            }
         }
 
         updateCare()
@@ -1588,7 +1604,8 @@ final class MiniBarPetStage: UIView {
             }
         }
         maybeStartCare()
-        advanceChat()
+        // 3.7 (35) 二分门：人格停聊整体旁路（细修 5）。
+        if !FoliaBisect.pet32SubsystemsBypassed { advanceChat() }
         for actor in allActors { advance(actor, dt: dt) }
     }
 

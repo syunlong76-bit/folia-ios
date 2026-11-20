@@ -239,6 +239,7 @@ final class HomeWallViewController: UIViewController,
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        Breadcrumbs.log("wall.appear kind=home")
         Breadcrumbs.log("home appear")
         Breadcrumbs.samplerStart()
         progressDriver.start()

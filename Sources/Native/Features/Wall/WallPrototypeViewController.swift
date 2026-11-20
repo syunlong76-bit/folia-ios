@@ -1347,6 +1347,7 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        Breadcrumbs.log("wall.appear kind=playlist")
         Breadcrumbs.log("tracks appear playlist=\(playlistId)")
         Breadcrumbs.samplerStart()
         refreshMiniBar()

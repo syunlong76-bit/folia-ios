@@ -46,7 +46,10 @@ final class PetHomeRegistry {
     }
 
     /// 变更去向（幂等：同值不记）。from/to 都落面包屑。
+    /// 3.7 (35) 二分门：旁路时登记表整体冻结（写入不生效、
+    /// home 恒 .pool、各名单恒空），取人退回 (30) 口径。
     func setHome(_ asset: String, _ newHome: PetHome) {
+        if FoliaBisect.pet32SubsystemsBypassed { return }
         let old = home(of: asset)
         guard old != newHome else { return }
         homes[asset] = newHome
@@ -70,6 +73,7 @@ final class PetHomeRegistry {
     // MARK: 在场互斥登记
 
     func noteLiveAssets(stage: MiniBarPetStage, assets: Set<String>) {
+        if FoliaBisect.pet32SubsystemsBypassed { return }
         liveByStage[ObjectIdentifier(stage)] = assets
     }
 
@@ -85,6 +89,7 @@ final class PetHomeRegistry {
     // MARK: 最前层登记（岛上宠物回台落点）
 
     func noteFrontmost(stage: MiniBarPetStage, presented: Bool) {
+        if FoliaBisect.pet32SubsystemsBypassed { return }
         switch stage.role {
         case .stage:
             if presented { frontStageRoleStage = stage }
