@@ -258,7 +258,7 @@ final class ParticleTransitionView: MTKView {
                     delay: rand(0...0.18),
                     duration: Float(duration) * Float(rand(0.5...0.66)),
                     seed: rand(0...1), size: rand(2.4...4.6), kind: 0,
-                    arc: big ? rand(-46...-14) : rand(-16...10)))
+                    arc: big ? rand(-46 ... -14) : rand(-16 ... 10)))
             }
         }
         if let incoming {
@@ -277,7 +277,7 @@ final class ParticleTransitionView: MTKView {
                     delay: rand(0.04...0.34),
                     duration: Float(duration) * Float(rand(0.62...0.8)),
                     seed: rand(0...1), size: rand(2.4...4.6), kind: 1,
-                    arc: rand(-26...-6)))
+                    arc: rand(-26 ... -6)))
             }
         }
         guard !particles.isEmpty,
