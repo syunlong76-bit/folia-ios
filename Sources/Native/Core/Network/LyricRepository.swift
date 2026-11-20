@@ -115,6 +115,7 @@ final class LyricRepository {
         var source = "none"
         var flip = "lrc"
         var lrcText = ""
+        var mergeStats = LyricParsing.MergeStats()
         if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: songId) {
             lrcText = bundle.lrc
             let merged = LyricParsing.mergeLyricLines(
@@ -123,6 +124,7 @@ final class LyricRepository {
             parsed = merged.lines
             source = merged.source
             flip = merged.flip
+            mergeStats = merged.stats
         } else if let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: songId) {
             lrcText = text
             parsed = LyricParsing.parseLRC(text)
@@ -157,12 +159,22 @@ final class LyricRepository {
         // 占全表（span×r 修复面）；withWords≈lines 仍慢 →
         // 转查 rebase 平移/动画层，勿动均分。
         let withWords = parsed.filter { $0.words != nil }.count
+        // wordSrc（3.7 (50)，DS YRC50 评审）：真机一轮判死真戳
+        // 是否生效——yrc=全行带真戳 / mixed=部分行 / uniform=
+        // 全行均分（无 YRC 或全未配上）。yrcLines/yrcMatched/
+        // yrcAmbiguous 为合并诊断（见 MergeStats）。
+        let wordSrc = withWords == 0 ? "uniform"
+            : (withWords == parsed.count ? "yrc" : "mixed")
         Breadcrumbs.log("lrc source track=\(songId)"
             + " lines=\(parsed.count) withWords=\(withWords)"
             + " yrc=\(source.contains("yrc") ? "yes" : "no")"
             + " src=\(source) flip=\(flip)"
             + " r=\(String(format: "%.3f", ratio))"
-            + " rSource=\(rSource) pool=\(SingingRatioPool.count)")
+            + " rSource=\(rSource) pool=\(SingingRatioPool.count)"
+            + " yrcLines=\(mergeStats.yrcLineCount)"
+            + " yrcMatched=\(mergeStats.yrcMatched)"
+            + " yrcAmbiguous=\(mergeStats.yrcAmbiguous)"
+            + " wordSrc=\(wordSrc)")
         return Entry(lines: parsed, lrcText: lrcText, source: source,
                      flip: flip, singingRatio: ratio,
                      isNegative: parsed.isEmpty,
@@ -245,6 +257,15 @@ final class LyricRepository {
 /// 台形状）是另一套输出形状，不在此合并。
 enum LyricParsing {
 
+    /// 合并诊断（3.7 (50)，DS YRC50 评审对账）：供仓库面包屑
+    /// 判读匹配覆盖——yrcMatched=精确+折叠两级共匹配上的行
+    /// 数；yrcAmbiguous=折叠级因候选不唯一被跳过的行数。
+    struct MergeStats {
+        var yrcLineCount: Int = 0
+        var yrcMatched: Int = 0
+        var yrcAmbiguous: Int = 0
+    }
+
     /// 双表合并（3.7 (20)，DS R45 对账 + onset 实测拍板）：
     /// 翻行时刻源由 LyricTiming.flipSource 决定（默认 LRC）；
     /// YRC 逐字戳只做行内扫光。flip=lrc 且双表齐时逐行按文本
@@ -253,19 +274,33 @@ enum LyricParsing {
     /// words=nil（行级扫光）。只有单表时该表即翻行源（flip
     /// 随之）；双表皆空返回空。flip=yrc 时恢复 (19) 口径
     /// （YRC 行时刻 + 原戳，不重标定）。
+    ///
+    /// 匹配两级（3.7 (50)，DS YRC50 评审定案「精确优先、折叠
+    /// 兜底、歧义不配」）：一级沿用去空白精确键（行为不变）；
+    /// 二级只对一级未配上的行，用折叠键（全角 ASCII→半角、
+    /// 拉丁 A-Z→a-z，逐字 1:1 折叠，不用 lowercased()/NFKC
+    /// 防字符数变化）在「未消费 YRC 行」中找候选——候选须唯
+    /// 一且落在该行前后已匹配 YRC 下标之间（顺序单调），否
+    /// 则计 yrcAmbiguous 并跳过（该行退均分，不错用他行词分
+    /// 布）。实测动因：《孤勇者》LRC 半角括号 vs YRC 全角括
+    /// 号一行漏配，折叠后该曲 57/57 全配（2026-11-20 真回包
+    /// 复刻验证）。折叠只影响匹配键，显示文本仍用 LRC 原行。
     static func mergeLyricLines(lrcLines: [LyricLineData], yrcLines: [LyricLineData])
-        -> (lines: [LyricLineData], source: String, flip: String) {
+        -> (lines: [LyricLineData], source: String, flip: String, stats: MergeStats) {
+        var stats = MergeStats(yrcLineCount: yrcLines.count)
         if LyricTiming.flipSource == .yrc {
             if !yrcLines.isEmpty {
-                return (yrcLines, lrcLines.isEmpty ? "yrc" : "lrc+yrc", "yrc")
+                stats.yrcMatched = yrcLines.count
+                return (yrcLines, lrcLines.isEmpty ? "yrc" : "lrc+yrc", "yrc", stats)
             }
-            return (lrcLines, lrcLines.isEmpty ? "none" : "lrc", "lrc")
+            return (lrcLines, lrcLines.isEmpty ? "none" : "lrc", "lrc", stats)
         }
         guard !lrcLines.isEmpty else {
-            return (yrcLines, yrcLines.isEmpty ? "none" : "yrc", "yrc")
+            stats.yrcMatched = yrcLines.count
+            return (yrcLines, yrcLines.isEmpty ? "none" : "yrc", "yrc", stats)
         }
         guard !yrcLines.isEmpty else {
-            return (lrcLines, "lrc", "lrc")
+            return (lrcLines, "lrc", "lrc", stats)
         }
         // 匹配键去掉全部空白：YRC 文本是逐字拼接（词间空格形
         // 式与 LRC 原行可能不同），LRC 文本经 trim——去空白后
@@ -273,17 +308,78 @@ enum LyricParsing {
         func matchKey(_ text: String) -> String {
             text.filter { !$0.isWhitespace }
         }
+        // 折叠键：全角 ASCII（FF01–FF5E）→半角、拉丁大写→小
+        // 写，逐标量 1:1 映射（多标量字素原样保留），字符数
+        // 与精确键一致，折叠后同键即全文等价（标点宽度/拉丁
+        // 大小写差异除外）。
+        func foldedKey(_ text: String) -> String {
+            var out = ""
+            out.reserveCapacity(text.count)
+            for ch in text {
+                if ch.isWhitespace { continue }
+                let scalars = ch.unicodeScalars
+                guard scalars.count == 1, let scalar = scalars.first else {
+                    out.append(ch)
+                    continue
+                }
+                let v = scalar.value
+                if v >= 0xFF01 && v <= 0xFF5E,
+                   let half = Unicode.Scalar(v - 0xFEE0) {
+                    out.append(Character(half))
+                } else if v >= 0x41 && v <= 0x5A,
+                          let lower = Unicode.Scalar(v + 0x20) {
+                    out.append(Character(lower))
+                } else {
+                    out.append(ch)
+                }
+            }
+            return out
+        }
         var yrcByText: [String: [Int]] = [:]
         for (i, line) in yrcLines.enumerated() {
             yrcByText[matchKey(line.text), default: []].append(i)
         }
+        // 一级：精确键消费。matchedYrc[i] = 第 i 个 LRC 行配到
+        // 的 YRC 下标（二级单调判定与消费记账共用）。
+        var matchedYrc: [Int?] = Array(repeating: nil, count: lrcLines.count)
+        var consumedYrc = Set<Int>()
+        for (i, lrcLine) in lrcLines.enumerated() {
+            let key = matchKey(lrcLine.text)
+            if var queue = yrcByText[key], !queue.isEmpty {
+                let idx = queue.removeFirst()
+                yrcByText[key] = queue
+                matchedYrc[i] = idx
+                consumedYrc.insert(idx)
+            }
+        }
+        // 二级：折叠键兜底（候选唯一 + 顺序单调才配）。
+        var yrcByFolded: [String: [Int]] = [:]
+        for (i, line) in yrcLines.enumerated() where !consumedYrc.contains(i) {
+            yrcByFolded[foldedKey(line.text), default: []].append(i)
+        }
+        for i in lrcLines.indices where matchedYrc[i] == nil {
+            let candidates = (yrcByFolded[foldedKey(lrcLines[i].text)] ?? [])
+                .filter { !consumedYrc.contains($0) }
+            guard candidates.count == 1, let idx = candidates.first else {
+                if candidates.count > 1 { stats.yrcAmbiguous += 1 }
+                continue
+            }
+            let prev = (0..<i).reversed().compactMap { matchedYrc[$0] }.first ?? -1
+            let next = ((i + 1)..<lrcLines.count).compactMap { matchedYrc[$0] }.first
+                ?? Int.max
+            guard idx > prev && idx < next else {
+                stats.yrcAmbiguous += 1
+                continue
+            }
+            matchedYrc[i] = idx
+            consumedYrc.insert(idx)
+        }
         var out: [LyricLineData] = []
         for (i, lrcLine) in lrcLines.enumerated() {
             var words: [LyricWordStamp]? = nil
-            let key = matchKey(lrcLine.text)
-            if var queue = yrcByText[key], !queue.isEmpty {
-                let yrcLine = yrcLines[queue.removeFirst()]
-                yrcByText[key] = queue
+            if let idx = matchedYrc[i] {
+                stats.yrcMatched += 1
+                let yrcLine = yrcLines[idx]
                 if let yrcWords = yrcLine.words {
                     let boundary = i + 1 < lrcLines.count
                         ? lrcLines[i + 1].time : Double.infinity
@@ -294,7 +390,7 @@ enum LyricParsing {
             }
             out.append(LyricLineData(time: lrcLine.time, text: lrcLine.text, words: words))
         }
-        return (out, "lrc+yrc", "lrc")
+        return (out, "lrc+yrc", "lrc", stats)
     }
 
     /// 逐字戳重标定（DS R45 法，禁全行仿射拉伸）：整行平移

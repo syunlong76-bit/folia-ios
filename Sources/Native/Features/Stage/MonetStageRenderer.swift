@@ -599,6 +599,28 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             relayout(animate: false)
         }
         applyChromeColors(snapshot.palette)
+        applyCustomBackgroundYield()
+    }
+
+    /// 自定义背景让位（3.7 (50)，(47) 挂账①）：自定义背景开启
+    /// 时藏起自带底——bgContainer 内 wash 成图/封面/回退渐变
+    /// 三层与容器外可读性罩（右半 alpha 至 0.82，留着等于没
+    /// 让）——宿主最底层 customBgView 随之透出；关闭恢复。只
+    /// 动容器显隐：wash 成图管线与文字烘焙链一字不碰（闪退
+    /// 未定案面）；bgContainer 内部子视图显隐状态机（切歌复
+    /// 显/成图落地藏图）写的是子层，容器级隐藏恒压过之，恢
+    /// 复时状态自洽。信号直读 CustomBackgroundStore.current；
+    /// 宿主 refreshCustomBackground 在选入/恢复时重推快照，
+    /// 本方法随 applySnapshot 即时生效。
+    private var customBgYieldApplied = false
+    private func applyCustomBackgroundYield() {
+        let yield = CustomBackgroundStore.current != nil
+        bgContainer.isHidden = yield
+        readabilityView.isHidden = yield
+        if yield != customBgYieldApplied {
+            customBgYieldApplied = yield
+            Breadcrumbs.log("monet custombg yield=\(yield ? "on" : "off")")
+        }
     }
 
     func setLifecycle(_ state: LyricStageLifecycleState, active: Bool) {

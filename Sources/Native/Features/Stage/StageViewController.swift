@@ -250,6 +250,10 @@ final class StageViewController: UIViewController {
         // 闸门登记（3.7 (46)）：本台成为 canonical 舞台，领取
         // token；此后一切退出必经 StageExitGate。
         stageToken = StageExitGate.shared.registerStage(self)
+        // 协议留痕（3.7 (50)，DS YRC50 评审）：每台建立打一次，
+        // 真机据此确认实际下发的协议版本与逐字能力位。
+        Breadcrumbs.log("stage protocol v=\(LyricStageProtocolInfo.version)"
+            + " hostWordSync=\(LyricStageProtocolInfo.hostCapabilities.supportsWordSync ? 1 : 0)")
         view.backgroundColor = .black
         buildLayout()
         // 自定义背景（3.7 (47)）：槽位有记录则装配并藏起宿主
@@ -453,6 +457,10 @@ final class StageViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(stageThemeSettingsChanged),
             name: .foliaMiniPlayerThemeChanged, object: nil)
+        // 点播台按钮槽位变更（3.7 (50)，设置页）即时同步。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(stageBarSlotsChanged),
+            name: .foliaMiniBarSlotsChanged, object: nil)
     }
 
     private func layoutStage() {
@@ -708,7 +716,11 @@ final class StageViewController: UIViewController {
             let lines = LyricParser.stageLines(from: entry.lines, trackDuration: duration,
                                                singingRatio: entry.singingRatio)
             self.linesCache[trackId] = lines
-            Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count) source=\(entry.source)")
+            // wordLines（3.7 (50)，DS YRC50 评审）：证明真戳已
+            // 进入舞台行表（与仓库 lrc source 的 withWords 对照，
+            // 两处一致才算管线全通）。
+            let wordLines = lines.filter { $0.words != nil }.count
+            Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count) source=\(entry.source) wordLines=\(wordLines)")
             self.noteStyleProofLyricsApplied()
             self.pushSnapshot()
             // 贴纸层（3.7 (24)，纯新增钩子）：取词落定。
@@ -1270,6 +1282,32 @@ final class StageViewController: UIViewController {
         bar.addGestureRecognizer(tap)
 
         applyStageTheme()
+        applyStageBarSlots()
+    }
+
+    /// 点播台槽位应用（3.7 (50)）：按 MiniBarSlotSettings 显隐
+    /// prev/next/queue 三键；隐藏时宽度约束置 0、链上其余键向
+    /// 中心收拢（时间标签锚在台体两端、不受影响）。宽度约束
+    /// 经按钮自身 constraints 反查，不改构建期约束块。口径与
+    /// 两面墙台一致；收起态 alpha/交互名单含隐藏键无妨，
+    /// isHidden 恒压过 alpha 与命中。
+    private func applyStageBarSlots() {
+        applySlot(prevButton, visible: MiniBarSlotSettings.showPrev, width: 34)
+        applySlot(nextButton, visible: MiniBarSlotSettings.showNext, width: 34)
+        applySlot(queueButton, visible: MiniBarSlotSettings.showQueue, width: 34)
+    }
+
+    private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
+        button.isHidden = !visible
+        if let constraint = button.constraints.first(where: {
+            $0.firstAttribute == .width && $0.secondItem == nil
+        }) {
+            constraint.constant = visible ? width : 0
+        }
+    }
+
+    @objc private func stageBarSlotsChanged() {
+        applyStageBarSlots()
     }
 
     /// 进度填充与圆钮的唯一步进点（与墙 setMiniProgress 同
@@ -1789,6 +1827,12 @@ extension StageViewController: PHPickerViewControllerDelegate {
             backdropBlur.isHidden = false
             backdropTint.isHidden = false
         }
+        // 渲染器让位联动（3.7 (50)，(47) 挂账①）：莫奈/浮名自带
+        // 底靠渲染器在 applySnapshot 时直读 Store 让位——台开着
+        // 选入/清除背景只走本函数，不重推快照则要等下一次切歌
+        // 才生效。renderer 未装配（viewDidLoad 路径）时跳过，
+        // 装配后的首次快照自会读到当前 Store 状态。
+        if renderer != nil { pushSnapshot() }
     }
 
     func presentCustomBackgroundPicker() {

@@ -340,6 +340,21 @@ final class FumeBlockView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// 标签当前栅格化倍率（清晰度补偿记账，见渲染方
+    /// applyFocalTextBoost）：初值 = 屏幕倍率（UILabel 缺省）。
+    private(set) var appliedTextScaleFactor: CGFloat = UIScreen.main.scale
+
+    /// 设标签栅格化倍率：contentScaleFactor 只改位图分辨率、
+    /// 不改布局/字号；同值重复设零开销（自守卫）。
+    func setTextScaleFactor(_ factor: CGFloat) {
+        guard factor != appliedTextScaleFactor else { return }
+        appliedTextScaleFactor = factor
+        for label in labels {
+            label.contentScaleFactor = factor
+            label.setNeedsDisplay()
+        }
+    }
+
     /// 静态样式（等待/读过）：单色 + 可选辉光阴影（网页快照等价）。
     /// 重设 text 以清除 live 期写过的富文本逐字颜色。
     func applyStatic(textColor: UIColor, shadowColor: UIColor?, shadowRadius: CGFloat) {
@@ -416,7 +431,12 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
         self.snapshot = snapshot
         tuning = FumeTuningValues.from(ext: snapshot.ext)
-        rootView.backgroundColor = snapshot.palette.background
+        // 自定义背景让位（3.7 (50)，(47) 挂账①）：浮名唯一全屏
+        // 不透明底就是根视图实色；自定义背景开启时改透明，让
+        // 宿主最底层 customBgView 透出，关闭时恢复调色板底。
+        // 默认（未开启自定义背景）行为与此前逐字一致。
+        rootView.backgroundColor = CustomBackgroundStore.current != nil
+            ? .clear : snapshot.palette.background
         rebuildIfNeeded()
     }
 
@@ -458,10 +478,38 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
 
         updateBackground(camera: camera, viewport: viewport, position: position)
         syncWindow(article: article, camera: camera, viewport: viewport)
+        applyFocalTextBoost(article: article, lineIndex: lineIndex, scale: scale)
         for (blockIndex, blockView) in blockViews {
             updateBlockView(blockView, blockIndex: blockIndex,
                             article: article, time: position, snapshot: snapshot)
         }
+    }
+
+    /// 焦点块清晰度补偿（3.7 (50)，(47) 挂账②）：浮名文字是活
+    /// 标签、按世界字号栅格化，相机变换上屏放大（fumeCamera
+    /// Scale 上限约 2.2）即发软——无烘焙纹理可抬倍率，软在祖
+    /// 先变换对层位图的整体放大。补偿只对焦点块（当前行所在
+    /// 块，用户实际在读的那块）：标签 contentScaleFactor 设为
+    /// 屏幕倍率 × 量化档（档 = ceil(scale×2)/2、封顶 2.5），
+    /// 上屏净放大 ≤1；量化兼作滞回，相机飞行途中最多跨 3 档。
+    /// 焦点迁移时旧块复位屏幕倍率；块被窗口化重建后 applied
+    /// 记账回初值、下帧自动补档。不动版面求解/相机/变换。
+    /// 内存账：只有焦点一块的标签位图按档² 增长（档 2.5 时单
+    /// 行约 2–3MB 级），全块升档会破舞台纹理预算，不做。
+    private var focalBoostBlockIndex: Int? = nil
+    private func applyFocalTextBoost(article: FumeArticleData,
+                                     lineIndex: Int, scale: CGFloat) {
+        let screenScale = UIScreen.main.scale
+        let focal = lineIndex >= 0
+            ? article.blockIndexBySourceLine[lineIndex] : nil
+        if let old = focalBoostBlockIndex, old != focal {
+            blockViews[old]?.setTextScaleFactor(screenScale)
+            focalBoostBlockIndex = nil
+        }
+        guard let focal, let blockView = blockViews[focal] else { return }
+        focalBoostBlockIndex = focal
+        let tier: CGFloat = scale <= 1.05 ? 1 : min(ceil(scale * 2) / 2, 2.5)
+        blockView.setTextScaleFactor(screenScale * tier)
     }
 
     func unmount() {

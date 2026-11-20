@@ -491,6 +491,69 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    /// 批量移除（3.7 (50) 队列面板多选）：一次结算——降序删除
+    /// 免下标漂移；含当前曲时只装载一次（落到删除后该位置的
+    /// 下一首、越界回落最后一首，与单行 removeFromQueue 同口
+    /// 径）；全删停播。落盘与命令可用性只结算一次，不逐行调
+    /// 单行接口（逐行调会每删一次当前曲就重装载一次）。
+    func removeFromQueue(atIndices indices: IndexSet) {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            let valid = indices.filter { self.queue.indices.contains($0) }
+            guard !valid.isEmpty else { return }
+            let removedCurrent = valid.contains(self.currentIndex)
+            let removedBefore = valid.filter { $0 < self.currentIndex }.count
+            for index in valid.sorted(by: >) { self.queue.remove(at: index) }
+            if self.queue.isEmpty {
+                self.currentIndex = 0
+                self.consecutiveFailures = 0
+                self.updateCommandAvailability()
+                self.persistQueueSnapshot()
+                self.engine.stop()
+                Breadcrumbs.log("queue.batchRemove n=\(valid.count) cur=none")
+                return
+            }
+            if removedCurrent {
+                self.currentIndex = min(self.currentIndex - removedBefore,
+                                        self.queue.count - 1)
+                self.consecutiveFailures = 0
+                self.loadIsManual = false
+                self.updateCommandAvailability()
+                self.persistQueueSnapshot()
+                self.loadTrackAtCurrentIndex()
+            } else {
+                self.currentIndex -= removedBefore
+                self.updateCommandAvailability()
+                self.persistQueueSnapshot()
+            }
+            Breadcrumbs.log("queue.batchRemove n=\(valid.count) cur=\(self.currentIndex)")
+        }
+    }
+
+    /// 批量移到末尾（3.7 (50) 队列面板多选）：所选保持相对顺
+    /// 序整体挪尾、未选相对顺序不变；当前下标按当前曲 id 在
+    /// 新队中重定位（与 shuffleQueue 同法）。
+    func moveToEnd(atIndices indices: IndexSet) {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            let valid = indices.filter { self.queue.indices.contains($0) }
+            guard !valid.isEmpty, valid.count < self.queue.count else { return }
+            let currentId = self.queue[self.currentIndex].id
+            var picked: [FoliaTrack] = []
+            var rest: [FoliaTrack] = []
+            for (i, track) in self.queue.enumerated() {
+                if valid.contains(i) { picked.append(track) } else { rest.append(track) }
+            }
+            self.queue = rest + picked
+            if let newIndex = self.queue.firstIndex(where: { $0.id == currentId }) {
+                self.currentIndex = newIndex
+            }
+            self.updateCommandAvailability()
+            self.persistQueueSnapshot()
+            Breadcrumbs.log("queue.batchMoveEnd n=\(valid.count) cur=\(self.currentIndex)")
+        }
+    }
+
     /// 打乱队列（网页 shuffleQueue）：整队洗牌，当前曲跟随到新位置，
     /// 已装载的播放不打断。
     func shuffleQueue() {

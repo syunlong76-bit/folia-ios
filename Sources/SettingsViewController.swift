@@ -33,6 +33,10 @@ final class SettingsViewController: UIViewController {
     // 歌词特效增强（3.7 (49)）：逐词强调 / 粒子换行两开关。
     private let emphasisSwitch = UISwitch()
     private let particleFlipSwitch = UISwitch()
+    // 点播台按钮槽位（3.7 (50)）：上一首 / 下一首 / 播放列表。
+    private let slotPrevSwitch = UISwitch()
+    private let slotNextSwitch = UISwitch()
+    private let slotQueueSwitch = UISwitch()
     private let checkButton = UIButton(type: .system)
     private let applyButton = UIButton(type: .system)
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -312,6 +316,39 @@ final class SettingsViewController: UIViewController {
         fxGroup.addArrangedSubview(fxHintWrap)
         cardStack.addArrangedSubview(fxGroup)
 
+        // 点播台按钮分组卡（3.7 (50)）：三键显隐，默认全开 =
+        // 现状；关掉的键在三台同步隐藏并收拢让位。主页墙台本
+        // 无播放列表键，该开关只影响曲目墙台与舞台台。
+        let slotGroup = makeGroupCard()
+        slotPrevSwitch.isOn = MiniBarSlotSettings.showPrev
+        slotGroup.addArrangedSubview(fxRow(
+            "上一首按钮", slotPrevSwitch, #selector(slotPrevSwitchChanged)))
+        slotGroup.addArrangedSubview(makeHairline())
+        slotNextSwitch.isOn = MiniBarSlotSettings.showNext
+        slotGroup.addArrangedSubview(fxRow(
+            "下一首按钮", slotNextSwitch, #selector(slotNextSwitchChanged)))
+        slotGroup.addArrangedSubview(makeHairline())
+        slotQueueSwitch.isOn = MiniBarSlotSettings.showQueue
+        slotGroup.addArrangedSubview(fxRow(
+            "播放列表按钮", slotQueueSwitch, #selector(slotQueueSwitchChanged)))
+        slotGroup.addArrangedSubview(makeHairline())
+        let slotHint = UILabel()
+        slotHint.text = "控制点播台上的按钮显隐，三台同步生效；播放按钮恒显。隐藏的按钮会收拢让位，不留空槽。"
+        slotHint.font = .systemFont(ofSize: 12)
+        slotHint.textColor = FoliaUI.secondary
+        slotHint.numberOfLines = 0
+        let slotHintWrap = UIView()
+        slotHintWrap.addSubview(slotHint)
+        slotHint.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            slotHint.topAnchor.constraint(equalTo: slotHintWrap.topAnchor, constant: 10),
+            slotHint.bottomAnchor.constraint(equalTo: slotHintWrap.bottomAnchor, constant: -12),
+            slotHint.leadingAnchor.constraint(equalTo: slotHintWrap.leadingAnchor, constant: 14),
+            slotHint.trailingAnchor.constraint(equalTo: slotHintWrap.trailingAnchor, constant: -14)
+        ])
+        slotGroup.addArrangedSubview(slotHintWrap)
+        cardStack.addArrangedSubview(slotGroup)
+
         // 贴纸伙伴分组卡（3.7 (24)）：门面猫（cat-01，点按换
         // cat-15 播一次再换回）+ 门面狗（dog-17，白 tile 承
         // 载）+ 迷你台小宠物开关。贴纸均为 APNG 原素材真帧。
@@ -573,6 +610,21 @@ final class SettingsViewController: UIViewController {
 
     @objc private func particleFlipSwitchChanged() {
         StageEffectSettings.particleFlipEnabled = particleFlipSwitch.isOn
+    }
+
+    @objc private func slotPrevSwitchChanged() {
+        MiniBarSlotSettings.showPrev = slotPrevSwitch.isOn
+        NotificationCenter.default.post(name: .foliaMiniBarSlotsChanged, object: nil)
+    }
+
+    @objc private func slotNextSwitchChanged() {
+        MiniBarSlotSettings.showNext = slotNextSwitch.isOn
+        NotificationCenter.default.post(name: .foliaMiniBarSlotsChanged, object: nil)
+    }
+
+    @objc private func slotQueueSwitchChanged() {
+        MiniBarSlotSettings.showQueue = slotQueueSwitch.isOn
+        NotificationCenter.default.post(name: .foliaMiniBarSlotsChanged, object: nil)
     }
 
     @objc private func checkTapped() {

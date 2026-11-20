@@ -5,7 +5,8 @@ import Foundation
 // .parseLRC）：只认行首 [mm:ss.xx] 首个时间戳、丢空行、按时间
 // 升序、丢弃正文开始前的制作名单行。差异仅在输出形状：补 end
 // （下一行 start，末行为曲目时长或 start+5 兜底）与稳定行 id。
-// 逐字数据无来源，words 恒 nil（协议扩展位）。
+// 本函数（parse）只解析 LRC 故 words 恒 nil；舞台现行取数走
+// 下方 stageLines(from:) 派生仓库合并表，words 随 YRC 逐行带入。
 enum LyricParser {
 
     static func parse(_ raw: String, trackDuration: TimeInterval) -> [LyricLine] {

@@ -36,11 +36,19 @@ final class QueuePanelViewController: UIViewController {
     private var dragInFlight = false
     private var didScrollToCurrent = false
     private var countdownTimer: Timer?
+    /// 本机歌单镜像（3.7 (50)）：LocalPlaylistStore.$playlists 订阅回填。
+    private var localPlaylists: [LocalPlaylistStore.LocalPlaylist] = []
 
     // MARK: - 视图
 
     private let titleLabel = UILabel()
     private let countLabel = UILabel()
+    private let editButton = UIButton(type: .system)
+    /// 批量操作条（3.7 (50) 多选）：编辑态才显，浮在列表底部。
+    private let batchBar = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+    private let batchCountLabel = UILabel()
+    private let batchRemoveButton = UIButton(type: .system)
+    private let batchMoveEndButton = UIButton(type: .system)
     private let modeChipsStack = UIStackView()
     private let sleepChipsStack = UIStackView()
     private let sleepStateLabel = UILabel()
@@ -64,7 +72,7 @@ final class QueuePanelViewController: UIViewController {
         if !didScrollToCurrent, !tracks.isEmpty {
             didScrollToCurrent = true
             let row = min(max(currentIndex, 0), tracks.count - 1)
-            tableView.scrollToRow(at: IndexPath(row: row, section: 0),
+            tableView.scrollToRow(at: IndexPath(row: row, section: 1),
                                   at: .middle, animated: false)
         }
         startCountdown()
@@ -109,6 +117,13 @@ final class QueuePanelViewController: UIViewController {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         view.addSubview(closeButton)
+        // 编辑（多选）入口（3.7 (50)）：标题行、关闭键左侧。
+        editButton.setTitle("编辑", for: .normal)
+        editButton.titleLabel?.font = .systemFont(ofSize: 15)
+        editButton.tintColor = UIColor.white.withAlphaComponent(0.85)
+        editButton.translatesAutoresizingMaskIntoConstraints = false
+        editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
+        view.addSubview(editButton)
 
         // 管理卡
         let card = UIView()
@@ -167,6 +182,10 @@ final class QueuePanelViewController: UIViewController {
                                  color: UIColor(red: 1, green: 0.42, blue: 0.42, alpha: 1),
                                  action: #selector(clearTapped))
         card.addSubview(clearRow)
+        // 保存为本机歌单（3.7 (50)，(48) 挂账②）：整队命名存本机。
+        let saveRow = actionRow(icon: "square.and.arrow.down", title: "保存为歌单",
+                                color: .white, action: #selector(savePlaylistTapped))
+        card.addSubview(saveRow)
 
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
@@ -177,6 +196,10 @@ final class QueuePanelViewController: UIViewController {
             closeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 36),
             closeButton.heightAnchor.constraint(equalToConstant: 36),
+            editButton.trailingAnchor.constraint(equalTo: closeButton.leadingAnchor, constant: -6),
+            editButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+            editButton.widthAnchor.constraint(equalToConstant: 48),
+            editButton.heightAnchor.constraint(equalToConstant: 36),
 
             card.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
             card.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
@@ -216,10 +239,14 @@ final class QueuePanelViewController: UIViewController {
             clearRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             clearRow.topAnchor.constraint(equalTo: shuffleRow.bottomAnchor),
             clearRow.heightAnchor.constraint(equalToConstant: 42),
-            clearRow.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -4),
+            saveRow.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            saveRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            saveRow.topAnchor.constraint(equalTo: clearRow.bottomAnchor),
+            saveRow.heightAnchor.constraint(equalToConstant: 42),
+            saveRow.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -4),
         ])
 
-        // 队列表
+        // 队列表（section 0 = 本机歌单，section 1 = 当前队列）
         tableView.backgroundColor = .clear
         tableView.separatorStyle = .none
         tableView.rowHeight = 60
@@ -228,8 +255,11 @@ final class QueuePanelViewController: UIViewController {
         tableView.dragDelegate = self
         tableView.dropDelegate = self
         tableView.dragInteractionEnabled = true
+        tableView.allowsMultipleSelectionDuringEditing = true
         tableView.register(QueueTrackCell.self,
                            forCellReuseIdentifier: QueueTrackCell.reuseId)
+        tableView.register(QueuePlaylistCell.self,
+                           forCellReuseIdentifier: QueuePlaylistCell.reuseId)
         tableView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tableView)
 
@@ -248,6 +278,49 @@ final class QueuePanelViewController: UIViewController {
             emptyLabel.centerXAnchor.constraint(equalTo: tableView.centerXAnchor),
             emptyLabel.topAnchor.constraint(equalTo: card.bottomAnchor, constant: 48),
         ])
+
+        // 批量操作条（3.7 (50)）：编辑态浮显于底部；非编辑态隐藏。
+        batchBar.isHidden = true
+        batchBar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(batchBar)
+        batchCountLabel.font = .systemFont(ofSize: 13.5)
+        batchCountLabel.textColor = UIColor.white.withAlphaComponent(0.65)
+        batchCountLabel.translatesAutoresizingMaskIntoConstraints = false
+        batchBar.contentView.addSubview(batchCountLabel)
+        batchRemoveButton.setTitle("移除所选", for: .normal)
+        batchRemoveButton.titleLabel?.font = .systemFont(ofSize: 14.5, weight: .medium)
+        batchRemoveButton.setTitleColor(
+            UIColor(red: 1, green: 0.42, blue: 0.42, alpha: 1), for: .normal)
+        batchRemoveButton.translatesAutoresizingMaskIntoConstraints = false
+        batchRemoveButton.addTarget(self, action: #selector(batchRemoveTapped),
+                                    for: .touchUpInside)
+        batchBar.contentView.addSubview(batchRemoveButton)
+        batchMoveEndButton.setTitle("移到末尾", for: .normal)
+        batchMoveEndButton.titleLabel?.font = .systemFont(ofSize: 14.5, weight: .medium)
+        batchMoveEndButton.setTitleColor(.white, for: .normal)
+        batchMoveEndButton.translatesAutoresizingMaskIntoConstraints = false
+        batchMoveEndButton.addTarget(self, action: #selector(batchMoveEndTapped),
+                                     for: .touchUpInside)
+        batchBar.contentView.addSubview(batchMoveEndButton)
+        NSLayoutConstraint.activate([
+            batchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            batchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            batchBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            batchBar.heightAnchor.constraint(equalToConstant: 78),
+            batchCountLabel.leadingAnchor.constraint(
+                equalTo: batchBar.contentView.leadingAnchor, constant: 20),
+            batchCountLabel.topAnchor.constraint(
+                equalTo: batchBar.contentView.topAnchor, constant: 14),
+            batchMoveEndButton.trailingAnchor.constraint(
+                equalTo: batchBar.contentView.trailingAnchor, constant: -20),
+            batchMoveEndButton.centerYAnchor.constraint(
+                equalTo: batchCountLabel.centerYAnchor),
+            batchRemoveButton.trailingAnchor.constraint(
+                equalTo: batchMoveEndButton.leadingAnchor, constant: -22),
+            batchRemoveButton.centerYAnchor.constraint(
+                equalTo: batchCountLabel.centerYAnchor),
+        ])
+        updateBatchBar()
     }
 
     private func sectionLabel(_ text: String) -> UILabel {
@@ -331,6 +404,17 @@ final class QueuePanelViewController: UIViewController {
                 self.currentIndex = index
                 self.countLabel.text = queue.isEmpty ? "" : "\(queue.count) 首"
                 self.emptyLabel.isHidden = !queue.isEmpty
+                if queue.isEmpty, self.isEditing {
+                    self.setEditing(false, animated: false)
+                }
+                if !self.dragInFlight { self.tableView.reloadData() }
+            }
+            .store(in: &cancellables)
+        LocalPlaylistStore.shared.$playlists
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] playlists in
+                guard let self else { return }
+                self.localPlaylists = playlists
                 if !self.dragInFlight { self.tableView.reloadData() }
             }
             .store(in: &cancellables)
@@ -401,18 +485,148 @@ final class QueuePanelViewController: UIViewController {
         })
         present(alert, animated: true)
     }
+
+    // MARK: - 多选与本机歌单（3.7 (50)）
+
+    override func setEditing(_ editing: Bool, animated: Bool) {
+        super.setEditing(editing, animated: animated)
+        tableView.setEditing(editing, animated: animated)
+        // 编辑态关长按拖拽：与多选手势同占 tableView，不关互抢。
+        tableView.dragInteractionEnabled = !editing
+        batchBar.isHidden = !editing
+        tableView.contentInset.bottom = editing ? 84 : 0
+        editButton.setTitle(editing ? "完成" : "编辑", for: .normal)
+        updateBatchBar()
+    }
+
+    @objc private func editTapped() {
+        guard !tracks.isEmpty else { return }
+        setEditing(!isEditing, animated: true)
+    }
+
+    /// 当前多选集合（只认队列 section 的行号）。
+    private func selectedQueueIndices() -> IndexSet {
+        var set = IndexSet()
+        for path in tableView.indexPathsForSelectedRows ?? []
+        where path.section == 1 {
+            set.insert(path.row)
+        }
+        return set
+    }
+
+    private func updateBatchBar() {
+        let count = selectedQueueIndices().count
+        batchCountLabel.text = "已选 \(count) 首"
+        let enabled = count > 0
+        batchRemoveButton.alpha = enabled ? 1 : 0.35
+        batchMoveEndButton.alpha = enabled ? 1 : 0.35
+        batchRemoveButton.isEnabled = enabled
+        batchMoveEndButton.isEnabled = enabled
+    }
+
+    @objc private func batchRemoveTapped() {
+        let indices = selectedQueueIndices()
+        guard !indices.isEmpty else { return }
+        setEditing(false, animated: true)
+        queueManager.removeFromQueue(atIndices: indices)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    @objc private func batchMoveEndTapped() {
+        let indices = selectedQueueIndices()
+        guard !indices.isEmpty else { return }
+        setEditing(false, animated: true)
+        queueManager.moveToEnd(atIndices: indices)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+
+    @objc private func savePlaylistTapped() {
+        guard !tracks.isEmpty else { return }
+        let alert = UIAlertController(
+            title: "保存为歌单",
+            message: "把当前队列的 \(tracks.count) 首歌存为本机歌单，之后可在本面板整队载入。",
+            preferredStyle: .alert)
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M月d日"
+        alert.addTextField { field in
+            field.placeholder = "歌单名称"
+            field.text = "我的队列 · \(formatter.string(from: Date()))"
+            field.clearButtonMode = .whileEditing
+        }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "保存", style: .default) {
+            [weak self, weak alert] _ in
+            guard let self,
+                  let name = alert?.textFields?.first?.text else { return }
+            if LocalPlaylistStore.shared.saveQueue(
+                named: name, tracks: self.tracks) != nil {
+                UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                Breadcrumbs.log("queue.panel.savePlaylist n=\(self.tracks.count)")
+            }
+        })
+        present(alert, animated: true)
+    }
+
+    /// 歌单行点按：整队载入 / 追加 / 删除。
+    private func presentPlaylistActions(at row: Int) {
+        guard localPlaylists.indices.contains(row) else { return }
+        let playlist = localPlaylists[row]
+        let sheet = UIAlertController(
+            title: playlist.name,
+            message: "\(playlist.tracks.count) 首 · 存于本机",
+            preferredStyle: .actionSheet)
+        sheet.addAction(UIAlertAction(title: "整队载入并播放", style: .default) {
+            [weak self] _ in
+            self?.queueManager.setQueue(playlist.tracks, startingAt: 0,
+                                        source: "local-playlist")
+            self?.dismiss(animated: true)
+        })
+        sheet.addAction(UIAlertAction(title: "追加到队列末尾", style: .default) {
+            [weak self] _ in
+            self?.queueManager.appendToQueue(playlist.tracks)
+        })
+        sheet.addAction(UIAlertAction(title: "删除歌单", style: .destructive) {
+            _ in
+            LocalPlaylistStore.shared.delete(id: playlist.id)
+        })
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        present(sheet, animated: true)
+    }
 }
 
 // MARK: - 队列表
 
 extension QueuePanelViewController: UITableViewDataSource, UITableViewDelegate {
 
+    func numberOfSections(in tableView: UITableView) -> Int { 2 }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        tracks.count
+        section == 0 ? localPlaylists.count : tracks.count
+    }
+
+    func tableView(_ tableView: UITableView,
+                   titleForHeaderInSection section: Int) -> String? {
+        if section == 0 { return localPlaylists.isEmpty ? nil : "我的歌单" }
+        return tracks.isEmpty ? nil : "当前队列"
+    }
+
+    func tableView(_ tableView: UITableView,
+                   willDisplayHeaderView view: UIView, forSection section: Int) {
+        guard let header = view as? UITableViewHeaderFooterView else { return }
+        header.contentView.backgroundColor = .clear
+        header.textLabel?.textColor = UIColor.white.withAlphaComponent(0.55)
+        header.textLabel?.font = .systemFont(ofSize: 13, weight: .medium)
     }
 
     func tableView(_ tableView: UITableView,
                    cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if indexPath.section == 0 {
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: QueuePlaylistCell.reuseId,
+                for: indexPath) as! QueuePlaylistCell
+            cell.configure(playlist: localPlaylists[indexPath.row])
+            return cell
+        }
         let cell = tableView.dequeueReusableCell(
             withIdentifier: QueueTrackCell.reuseId, for: indexPath) as! QueueTrackCell
         cell.configure(track: tracks[indexPath.row],
@@ -422,14 +636,39 @@ extension QueuePanelViewController: UITableViewDataSource, UITableViewDelegate {
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        // 编辑态：点选只维护多选集合（系统勾选呈现），不跳播。
+        if tableView.isEditing {
+            updateBatchBar()
+            return
+        }
         tableView.deselectRow(at: indexPath, animated: true)
+        if indexPath.section == 0 {
+            presentPlaylistActions(at: indexPath.row)
+            return
+        }
         guard indexPath.row != currentIndex else { return }
         queueManager.playAtIndex(indexPath.row)
+    }
+
+    func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
+        if tableView.isEditing { updateBatchBar() }
     }
 
     func tableView(_ tableView: UITableView,
                    trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
         -> UISwipeActionsConfiguration? {
+        if indexPath.section == 0 {
+            let playlist = localPlaylists[indexPath.row]
+            let delete = UIContextualAction(style: .destructive, title: "删除") {
+                _, _, done in
+                LocalPlaylistStore.shared.delete(id: playlist.id)
+                done(true)
+            }
+            delete.image = UIImage(systemName: "trash")
+            let config = UISwipeActionsConfiguration(actions: [delete])
+            config.performsFirstActionWithFullSwipe = false
+            return config
+        }
         let row = indexPath.row
         let remove = UIContextualAction(style: .destructive, title: "移除") {
             [weak self] _, _, done in
@@ -471,6 +710,8 @@ extension QueuePanelViewController: UITableViewDragDelegate, UITableViewDropDele
     func tableView(_ tableView: UITableView,
                    itemsForBeginning session: UIDragSession,
                    at indexPath: IndexPath) -> [UIDragItem] {
+        // 拖拽排序只对队列 section 开放（歌单 section 不可拖）。
+        guard indexPath.section == 1 else { return [] }
         let item = UIDragItem(itemProvider: NSItemProvider())
         item.localObject = indexPath.row
         return [item]
@@ -501,8 +742,9 @@ extension QueuePanelViewController: UITableViewDragDelegate, UITableViewDropDele
                    performDropWith coordinator: UITableViewDropCoordinator) {
         guard let item = coordinator.items.first,
               let source = item.dragItem.localObject as? Int,
-              let destination = coordinator.destinationIndexPath?.row else { return }
-        queueManager.moveQueueItem(from: source, to: destination)
+              let destinationPath = coordinator.destinationIndexPath,
+              destinationPath.section == 1 else { return }
+        queueManager.moveQueueItem(from: source, to: destinationPath.row)
     }
 }
 
@@ -607,5 +849,60 @@ final class QueueTrackCell: UITableViewCell {
             guard let self, self.trackId == id, let image else { return }
             self.coverView.image = image
         }
+    }
+}
+
+// MARK: - 本机歌单行（3.7 (50)）
+
+final class QueuePlaylistCell: UITableViewCell {
+
+    static let reuseId = "QueuePlaylistCell"
+
+    private let iconView = UIImageView()
+    private let nameLabel = UILabel()
+    private let metaLabel = UILabel()
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = .clear
+        selectionStyle = .none
+
+        iconView.image = UIImage(systemName: "music.note.list")
+        iconView.tintColor = UIColor.white.withAlphaComponent(0.75)
+        iconView.contentMode = .scaleAspectFit
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(iconView)
+        nameLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        nameLabel.textColor = UIColor.white.withAlphaComponent(0.92)
+        nameLabel.lineBreakMode = .byTruncatingTail
+        nameLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(nameLabel)
+        metaLabel.font = .systemFont(ofSize: 12.5)
+        metaLabel.textColor = UIColor.white.withAlphaComponent(0.45)
+        metaLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(metaLabel)
+
+        NSLayoutConstraint.activate([
+            iconView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 18),
+            iconView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            iconView.widthAnchor.constraint(equalToConstant: 22),
+            iconView.heightAnchor.constraint(equalToConstant: 22),
+            nameLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 14),
+            nameLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            nameLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 11),
+            metaLabel.leadingAnchor.constraint(equalTo: nameLabel.leadingAnchor),
+            metaLabel.trailingAnchor.constraint(equalTo: nameLabel.trailingAnchor),
+            metaLabel.topAnchor.constraint(equalTo: nameLabel.bottomAnchor, constant: 2),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    func configure(playlist: LocalPlaylistStore.LocalPlaylist) {
+        nameLabel.text = playlist.name
+        let formatter = DateFormatter()
+        formatter.dateFormat = "M月d日"
+        metaLabel.text = "\(playlist.tracks.count) 首 · "
+            + formatter.string(from: Date(timeIntervalSince1970: playlist.createdAt))
     }
 }

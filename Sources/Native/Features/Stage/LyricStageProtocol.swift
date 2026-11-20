@@ -13,14 +13,26 @@ import QuartzCore
 //    频谱 FFT 只留 capability/扩展位，本期不冻结数据形状。
 //  - 语义继承自桥协议已验证的时间模型：anchor+rate 本地插值，禁止
 //    逐帧跨界取时间；rate 定义域 [0, 2]，现引擎只有 0/1 两态。
+//
+// 协议变更记录（版本评审留痕，冻结纪律要求）：
+//  - v1（3.7 (14)）：初版冻结面。hostCapabilities.supportsWordSync
+//    = false（当时口径：逐字无数据源、words 恒 nil）。
+//  - v2（3.7 (50)，DS YRC50 评审对账）：supportsWordSync 改 true。
+//    语义 = 宿主可提供逐字数据（来源 /lyric/new 的 YRC，经
+//    LyricRepository 合并 rebase 后逐行下发），但逐行可选：有
+//    YRC 覆盖的行带真戳、无覆盖行 words=nil，消费方必须按既
+//    有均分口径降级，不得假设整首全行有戳。不增删任何字段、
+//    不改任何结构；全仓无代码读 host 侧该能力位（仅声明处），
+//    Web 桥与网页源码亦无该键消费者（2026-11-20 grep 实查）。
 
 /// 协议版本与全局能力声明。
 enum LyricStageProtocolInfo {
-    static let version = 1
-    /// 宿主当前能提供的数据能力：逐行歌词有（lines），逐字无数据源
-    /// （words 恒 nil）、频谱无数据源（spectrum 恒不提供）。
+    static let version = 2
+    /// 宿主当前能提供的数据能力：逐行歌词有（lines）；逐字数据
+    /// 可提供（v2 起，YRC 逐行可选，无戳行 words=nil）；频谱无
+    /// 数据源（spectrum 恒不提供）。
     static let hostCapabilities = LyricStageCapabilities(
-        supportsWordSync: false,
+        supportsWordSync: true,
         requiresSpectrum: false,
         supportsLineSeek: true)
 }
@@ -40,8 +52,9 @@ struct PlaybackAnchor: Equatable {
     }
 }
 
-/// 逐字时间戳（扩展位：本期数据源缺失，恒为 nil；形状先定，防日后
-/// 逐字样式接入时改 LyricLine 本体）。
+/// 逐字时间戳（形状自 v1 冻结；数据源自 (19)/(20) 接通 /lyric/new
+/// 的 YRC、经仓库合并 rebase 到 LRC 行界内，逐行可选——无 YRC 覆
+/// 盖的行 LyricLine.words 为 nil，见 v2 变更记录）。
 struct LyricWord: Equatable {
     var start: TimeInterval
     var end: TimeInterval

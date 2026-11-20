@@ -150,6 +150,10 @@ final class HomeWallViewController: UIViewController,
         NotificationCenter.default.addObserver(
             self, selector: #selector(miniPlayerThemeSettingsChanged),
             name: .foliaMiniPlayerThemeChanged, object: nil)
+        // 点播台按钮槽位变更（3.7 (50)，设置页）即时同步。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(miniBarSlotsChanged),
+            name: .foliaMiniBarSlotsChanged, object: nil)
         // 确定性不可播被自动跳过（3.7 (28)）：闪现提示贴纸。
         NotificationCenter.default.addObserver(
             self, selector: #selector(stickerTrackSkippedUnplayable),
@@ -859,6 +863,30 @@ final class HomeWallViewController: UIViewController,
         bar.addGestureRecognizer(tap)
 
         applyMiniTheme()
+        applyMiniBarSlots()
+    }
+
+    /// 点播台槽位应用（3.7 (50)）：按 MiniBarSlotSettings 显隐
+    /// prev/next 两键（本台无列表键）；隐藏时宽度约束置 0、
+    /// 其余键自动收拢补位。宽度约束经按钮自身 constraints
+    /// 反查，不改构建期约束块。口径与曲目墙/舞台台一致。
+    private func applyMiniBarSlots() {
+        guard let prev = miniPrevButton, let next = miniNextButton else { return }
+        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 34)
+        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 34)
+    }
+
+    private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
+        button.isHidden = !visible
+        if let constraint = button.constraints.first(where: {
+            $0.firstAttribute == .width && $0.secondItem == nil
+        }) {
+            constraint.constant = visible ? width : 0
+        }
+    }
+
+    @objc private func miniBarSlotsChanged() {
+        applyMiniBarSlots()
     }
 
     /// 进度填充与发光圆钮的唯一步进点（与曲目墙同构）：主题
