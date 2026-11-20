@@ -25,12 +25,19 @@ import UIKit
 // 宠物（状态保留，回竖屏恢复）。
 //
 // 几何（iPhone 14 Pro 竖屏，窗口坐标）：岛黑框约宽 126、
-// 高 37、顶距屏幕上沿约 11pt。宠物 46pt，脚底落在 y≈45
-// （岛下沿内侧），头顶探出岛上沿之上；双宠时分坐岛心左右
-// ±40pt。落座后常驻闲晃（小幅位移）、偶尔冒「到家库」气
-// 泡；住满 2 只时按人格停聊（细修 5，轮流冒泡）。点岛上
-// 宠物 → 蹦回当前最前点播台（舞台优先，其次墙台）；被墙
-// 台召回时经 PetHomeRegistry.onIslandDeparture 通知撤下。
+// 高 37、顶距屏幕上沿约 11pt。
+// 3.7 (43) 路1 几何翻案（Miller 拍板「改垂在岛下」）：原
+// 「坐岛顶、上半身探出上沿」在几何上无解——岛上沿距屏顶
+// 只有 11pt，任何落座值从上方探出的可见量上限就是 11pt
+// （(41) 真机只露头顶约 24%，审计 folia43 路1 定案）。
+// 改下沿出岛：宠物 50pt、脚底 y=93，帧 y∈[43,93]——头顶
+// 5pt 藏于胶囊下沿（48）之后、45pt≈90% 身体垂在岛下可见，
+// 读作「从岛里探出身子」。落座站位：单只居中、双只 ±40、
+// 三只 [−54, 0, +54]（身体在岛下，x 不再受胶囊 126 宽约
+// 束）。落座后常驻闲晃（小幅位移）、偶尔冒「到家库」气
+// 泡；居民 ≥2 只时按人格停聊（随机抽对，轮流冒泡）。点
+// 岛上宠物 → 蹦回当前最前点播台（舞台优先，其次墙台）；
+// 被墙台召回时经 PetHomeRegistry.onIslandDeparture 撤下。
 //
 // 已知边界：岛被系统事件（来电/Face ID 等）展开时无公开
 // 信号可测，宠物落点会短暂错位，事件结束岛恢复原尺寸后
@@ -75,10 +82,12 @@ final class PetIslandLayer: UIView {
 
     static let shared = PetIslandLayer()
 
-    private static let petSize: CGFloat = 46
-    /// 岛下沿内侧（脚底线）：岛顶 11 + 岛高 37 ≈ 48，脚底
-    /// 压在 45 使下半身落在岛框内被遮、上半身探出。
-    private static let seatFeetY: CGFloat = 45
+    private static let petSize: CGFloat = 50
+    /// 脚底线（3.7 (43) 路1 下沿出岛）：岛下沿 ≈48，脚底压
+    /// 在 93——帧 y∈[43,93]，头顶 5pt tuck 在胶囊下沿后，
+    /// 45pt≈90% 身体垂在岛下可见。旧值 45（46pt 帧 [−1,45]）
+    /// 只有头顶 11pt 露在岛上沿之上，已翻案，勿按旧口径调。
+    private static let seatFeetY: CGFloat = 93
 
     private var pets: [IslandPetView] = []
     private var tickTimer: Timer?
@@ -262,8 +271,17 @@ final class PetIslandLayer: UIView {
     private func reseatAll(animated: Bool) {
         guard isPortrait else { return }
         let cx = bounds.width / 2
+        // 站位表（3.7 (43) 路1）：旧三元式在第 3 只时与第 2 只
+        // 同得 +40、完全重叠；改按只数查表——1 只 [0]、2 只
+        // [−40,+40]、3 只 [−54,0,+54]。
+        let offsets: [CGFloat]
+        switch pets.count {
+        case 1: offsets = [0]
+        case 2: offsets = [-40, 40]
+        default: offsets = [-54, 0, 54]
+        }
         for (index, pet) in pets.enumerated() {
-            let offset: CGFloat = pets.count == 1 ? 0 : (index == 0 ? -40 : 40)
+            let offset: CGFloat = index < offsets.count ? offsets[index] : 0
             pet.seatFeet = CGPoint(x: cx + offset, y: Self.seatFeetY)
             let target = CGPoint(x: pet.seatFeet.x,
                                  y: pet.seatFeet.y - Self.petSize / 2)
@@ -361,7 +379,7 @@ final class PetIslandLayer: UIView {
         if bubbleLabel != nil, now >= bubbleUntil, chatLineIndex < 0 {
             hideBubble()
         }
-        // 停聊推进（住满 2 只）：轮流冒泡，一句约 1.4s。
+        // 停聊推进（居民 ≥2 只）：轮流冒泡，一句约 1.4s。
         if chatLineIndex >= 0 {
             if now >= chatLineUntil {
                 chatLineIndex += 1
@@ -380,7 +398,7 @@ final class PetIslandLayer: UIView {
                 pet.center = target
             }
         }
-        // 双宠停聊触发。
+        // 居民停聊触发（≥2 只）。
         if pets.count >= 2, now >= nextChatAt {
             startChat()
             return
@@ -395,7 +413,10 @@ final class PetIslandLayer: UIView {
 
     private func startChat() {
         guard pets.count >= 2 else { return }
-        let a = pets[0], b = pets[1]
+        // 随机抽对（3.7 (43) 路1）：旧实现固定取 pets[0]/[1]，
+        // 容量升到 3 后第 3 只永不参与停聊；改每次随机抽 2 只。
+        let pair = pets.shuffled()
+        let a = pair[0], b = pair[1]
         let dialogue = PetChat.generate(a: a.personality, b: b.personality)
         chatLines = dialogue.lines.map {
             (pet: $0.speakerIsA ? a : b, text: $0.text)

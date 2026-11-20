@@ -56,6 +56,11 @@ struct LyricLine: Equatable {
     var end: TimeInterval
     var text: String
     var words: [LyricWord]? = nil
+    /// 演唱跨度压缩比（3.7 (43) 路3，只增不删的默认字段）：
+    /// words=nil 行的逐字均分 span 乘此值（行尾气口不摊进
+    /// 每个字）；来源 = LyricRepository 标定（同曲有戳行中
+    /// 位），缺省 1 = 不压缩（旧口径）。翻行不读此值。
+    var singingRatio: Double = 1
 }
 
 /// 曲目元数据（渲染面需要的最小集；封面只给 URL，位图由宿主经

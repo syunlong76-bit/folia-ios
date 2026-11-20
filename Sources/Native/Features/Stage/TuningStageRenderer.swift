@@ -78,7 +78,10 @@ final class TuningLineView: UIView {
             cursor = start + unitGraphemes.count
         }
         if !matched {
-            let span = max(line.end - line.start, 0.1)
+            // 均分兜底同乘演唱跨度压缩比（3.7 (43) 路3，与
+            // StageLyricUnits 无戳行同一口径）。
+            let ratio = min(max(line.singingRatio, 0.3), 1)
+            let span = max((line.end - line.start) * ratio, 0.1)
             let total = max(graphemes.count, 1)
             for i in graphemes.indices {
                 times[i] = (line.start + span * Double(i) / Double(total),

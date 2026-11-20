@@ -34,6 +34,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             PetIslandLayer.install(in: windowScene)
         }
 
+        // 宠物全屏停靠层（3.7 (43) 路4）：岛层之后安装，z-order
+        // 岛层 > 停靠层 > 呈现内容；同为单窗子视图，不建窗。
+        PetDockLayer.install(in: windowScene)
+
         // 2.5) 入场视频不在冷启动挂（3.7 (17) 挪位）：冷启直落
         //     Web 主界面；v5 油画视频改由主页墙进入页触发（见
         //     HomeWallViewController 的入场槽位），替换原电影长卷。
@@ -97,32 +101,44 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     /// 冷启/scene 重连点卡进入（3.7 (41) 组2，审计 B1；落点
     /// Miller 2026-11-20 18:01 拍板「冷启点卡：有队列就直达
-    /// 播放页」）：首次激活未武装时，若队列存在（currentTrack
-    /// 非 nil），视同后台点入走同一条链判定 route，面包屑记
-    /// via=cold-start。但须等入场流程走完：呈现链里有
-    /// EntryIntroViewController 时逐 0.5s 重试（上限 20 次
-    /// ≈10s，覆盖入场视频全长），入场散场后再 route；无队
-    /// 列则 skip 留痕。
+    /// 播放页」）：首次激活未武装时，若队列存在，视同后台点
+    /// 入走同一条链判定 route，面包屑记 via=cold-start。
+    ///
+    /// 3.7 (43) 路2（审计 folia43 路2 F1/F2/F3 定案）：(41)
+    /// 版第一关读 engine.currentTrack——冷启时队列从未落盘
+    /// 恢复、engine 恒空，guard 100% 判死，修复结构上不可
+    /// 能生效。本版：①判定改读 QueueManager.currentTrack
+    /// （含启动回填的恢复态，见 QueueManager 队列快照）；
+    /// ②队列未就绪与「呈现链含 EntryIntro」同进重试循环
+    /// （(41) 版 no-queue 在 attempt 0 一次判死，异步恢复永
+    /// 无机会）；③重试预算 20→120 次 ≈ 60s，与入场「数据
+    /// 未就绪则循环播」规格同量级。route 派发成功后调
+    /// resumeRestoredQueue 装载恢复队列（默认保持暂停）。
     private func routeColdStartToStageIfNeeded(attempt: Int) {
-        guard PlaybackEngine.shared.currentTrack != nil else {
-            Breadcrumbs.log("nowplaying.route action=skip reason=not-armed-no-queue via=cold-start")
-            return
-        }
+        let queueReady = QueueManager.shared.currentTrack != nil
         guard let root = window?.rootViewController else {
-            Breadcrumbs.log("nowplaying.route fromBackground=no hasQueue=yes action=skip reason=no-root via=cold-start")
+            Breadcrumbs.log("nowplaying.route fromBackground=no hasQueue=\(queueReady) action=skip reason=no-root via=cold-start")
             return
         }
         var chain: [UIViewController] = [root]
         while let presented = chain.last?.presentedViewController {
             chain.append(presented)
         }
-        if chain.contains(where: { $0 is EntryIntroViewController }), attempt < 20 {
+        let entryPresent = chain.contains { $0 is EntryIntroViewController }
+        if (!queueReady || entryPresent), attempt < 120 {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.routeColdStartToStageIfNeeded(attempt: attempt + 1)
             }
             return
         }
-        performRoute(coldStart: true)
+        guard queueReady else {
+            Breadcrumbs.log("nowplaying.route action=skip reason=not-armed-no-queue via=cold-start")
+            return
+        }
+        if performRoute(coldStart: true) {
+            // 落点已派发：恢复态队列现换地址装载（默认暂停）。
+            QueueManager.shared.resumeRestoredQueue()
+        }
     }
 
     /// 定版规则：从后台回到前台时，若有活跃队列（正在播或暂停着一首
@@ -151,16 +167,21 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// （组2取证：开台后 3 秒内 dismiss 落 stage-exit-quick，
     /// 供下轮定性 Miller 实测的「开台约 1 秒舞台消失」是手动
     /// 关还是自动退；探针只记日志、不改任何呈现逻辑）。
-    private func performRoute(coldStart: Bool) {
+    /// 返回 true = 已派发落点（present/restore），false = skip。
+    @discardableResult
+    private func performRoute(coldStart: Bool) -> Bool {
         let fromBg = coldStart ? "no" : "yes"
         let srcSuffix = coldStart ? " via=cold-start" : ""
         func via(_ branch: String) -> String {
             coldStart ? "cold-start branch=\(branch)" : branch
         }
-        let hasQueue = PlaybackEngine.shared.currentTrack != nil
+        // hasQueue 改读 QueueManager（3.7 (43) 路2）：含冷启
+        // 恢复态——engine.currentTrack 在恢复态下恒 nil，两
+        // 处判定必须同源（审计 F1 附带语义问题）。
+        let hasQueue = QueueManager.shared.currentTrack != nil
         guard let root = window?.rootViewController else {
             Breadcrumbs.log("nowplaying.route fromBackground=\(fromBg) hasQueue=\(hasQueue) action=skip reason=no-root\(srcSuffix)")
-            return
+            return false
         }
         // 展开呈现链：root → presented → … → 顶层。先展开再判
         // hasQueue，让 no-queue 的跳过面包屑也带链构成（纯读、无副作用，
@@ -173,7 +194,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let topName = chain.last.map { String(describing: type(of: $0)) } ?? "none"
         guard hasQueue else {
             Breadcrumbs.log("nowplaying.route fromBackground=\(fromBg) hasQueue=no action=skip reason=no-queue chain=\(chainNames) top=\(topName)\(srcSuffix)")
-            return
+            return false
         }
         if let stageIndex = chain.firstIndex(where: { $0 is StageViewController }),
            let stage = chain[stageIndex] as? StageViewController {
@@ -184,7 +205,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                 || aboveStage.allSatisfy { $0 is StageStylePickerViewController }
             if stageIsVisibleTop {
                 Breadcrumbs.log("nowplaying.route fromBackground=\(fromBg) hasQueue=yes action=skip reason=already-on-stage chain=\(chainNames) top=\(topName)\(srcSuffix)")
-                return
+                // 冷启重连且舞台已在顶层：落点本就在播放页，
+                // 恢复态装载仍应发生（调用方据 true 触发）。
+                return coldStart
             }
             // 舞台在链但被其它内容盖住：归位分支。对舞台 dismiss
             // 会解掉它呈现的整摞（盖层及其转呈层），舞台回到顶层；
@@ -192,17 +215,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             Breadcrumbs.log("nowplaying.route fromBackground=\(fromBg) hasQueue=yes action=restore-stage reason=stage-covered chain=\(chainNames) top=\(topName)\(srcSuffix)")
             StageViewController.routeExitProbeArmedAt = Date()
             stage.dismiss(animated: true)
-            return
+            return true
         }
         let topmost = chain.last
         if let wall = topmost as? WallPrototypeViewController {
             Breadcrumbs.log("nowplaying.route fromBackground=\(fromBg) hasQueue=yes action=present-stage via=\(via("playlist-wall")) chain=\(chainNames) top=\(topName)")
             StageViewController.routeExitProbeArmedAt = Date()
             wall.openNativeStageForBackgroundReturn()
+            return true
         } else if let home = topmost as? HomeWallViewController {
             Breadcrumbs.log("nowplaying.route fromBackground=\(fromBg) hasQueue=yes action=present-stage via=\(via("home-wall")) chain=\(chainNames) top=\(topName)")
             StageViewController.routeExitProbeArmedAt = Date()
             home.openNativeStageForBackgroundReturn()
+            return true
         } else if topmost === root {
             // 无墙在场（停在 Web 主界面）：舞台本体自包含（关闭即
             // dismiss、跳网页舞台时 onRequestWebStage 为 nil 走
@@ -212,9 +237,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             let stage = StageViewController()
             stage.modalPresentationStyle = .fullScreen
             root.present(stage, animated: true)
+            return true
         } else {
             // 墙上有模态（设置页等）或顶层是其它页面：跳过本次。
             Breadcrumbs.log("nowplaying.route fromBackground=\(fromBg) hasQueue=yes action=skip reason=modal-presented top=\(type(of: topmost!)) chain=\(chainNames)\(srcSuffix)")
+            return false
         }
     }
 }

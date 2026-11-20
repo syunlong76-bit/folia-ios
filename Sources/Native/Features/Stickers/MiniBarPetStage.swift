@@ -56,6 +56,11 @@ private final class MiniPetActor: UIView {
     var isCat: Bool { asset.hasPrefix("cat") }
     /// 安置中（长按拖动落位）：不参加漫游与互动编排。
     var placed = false
+    /// 视图宿主已迁到窗口级停靠层（3.7 (43) 路4）：placed
+    /// 的全屏形态——演员仍在本台班底数组里（归属不变），
+    /// 只有父视图在 PetDockLayer、center 为窗口坐标。拖动
+    /// 坐标换算、切歌撤销、消亡扫尾都按此标志分支。
+    var dockHosted = false
     /// 停靠计时锚（3.7 (32) 细修 4）：落位时刻的层墙钟；与
     /// 它互动（点/双击/再拖）刷新，满 5 秒无互动淡出回池。
     var parkedClock: TimeInterval = 0
@@ -452,6 +457,11 @@ final class MiniBarPetStage: UIView {
     deinit {
         displayLink?.invalidate()
         dialogTimer?.invalidate()
+        // 停靠扫尾（3.7 (43) 路4）：本层消亡时把仍挂在窗口停
+        // 靠层里的自家演员视图摘掉，防孤儿视图残留全屏。
+        for actor in allActors where actor.dockHosted {
+            actor.removeFromSuperview()
+        }
     }
 
     override func didMoveToSuperview() {
@@ -564,9 +574,17 @@ final class MiniBarPetStage: UIView {
         // 切歌解除停靠（(32) 规格内口径）：逐个落 revoke 面
         // 包屑（3.7 (41) 组4），解停靠从此可判读；形态/告别
         // 两条旧解停靠路径已由本版 ②③ 堵掉，不再发生。
+        // 停靠层演员例外（3.7 (43) 路4）：只清 placed 标志
+        // 会让下一帧地面吸附把台层坐标的 feetY 写进停靠层
+        // 视图（坐标系错位、瞬移乱跳）——改为整只回收回池。
         for actor in allActors where actor.placed {
-            actor.placed = false
-            Breadcrumbs.log("pet.park.revoke asset=\(actor.asset) reason=track")
+            if actor.dockHosted {
+                Breadcrumbs.log("pet.park.revoke asset=\(actor.asset) reason=track host=dock")
+                removeActor(actor, animated: true, sendToPool: true)
+            } else {
+                actor.placed = false
+                Breadcrumbs.log("pet.park.revoke asset=\(actor.asset) reason=track")
+            }
         }
         if PlaybackEngine.shared.isPlaying {
             for actor in allActors where actor.mode != .dragged {
@@ -877,6 +895,10 @@ final class MiniBarPetStage: UIView {
         // 台面撤场时的去向收口：墙台宠物回幕后；详情页台的
         // 宠物保留 stageBar 登记（关台后仍在详情页台等候，
         // 下次开台原班底回来）。
+        // 停靠者（3.7 (43) 路4「台隐藏即回收」）：视图在窗口
+        // 停靠层里，同样被下方 removeFromSuperview 摘除、班
+        // 底清空——台不在屏时不留全屏浮宠；去向登记沿本函
+        // 数既有分工（墙台回池、舞台台保留等候登记）。
         if role == .wall {
             for actor in allActors
             where PetHomeRegistry.shared.home(of: actor.asset) == .wallBar {
@@ -993,7 +1015,13 @@ final class MiniBarPetStage: UIView {
     }
 
     fileprivate func petDragChanged(_ actor: MiniPetActor, to point: CGPoint) {
-        actor.center = point
+        // 停靠中的演员已在窗口级停靠层：手势点是本层坐标，
+        // 须先换算到停靠层坐标再设 center（3.7 (43) 路4）。
+        if actor.dockHosted {
+            actor.center = convert(point, to: PetDockLayer.shared)
+        } else {
+            actor.center = point
+        }
     }
 
     fileprivate func petDragEnded(_ actor: MiniPetActor, at point: CGPoint) {
@@ -1007,35 +1035,75 @@ final class MiniBarPetStage: UIView {
     }
 
     /// 松手（3.7 (41) 组4 修订落位语义，Miller 2026-11-20
-    /// 拍板「二维定格：放哪停哪」）：落点 x/y 都保真——只夹
-    /// 进本层可视范围（整只不出界、保证还能再被抓到），不
-    /// 再夹回 walkRange、不再把 y 钉回地面；主循环的地面吸
-    /// 附对 placed 同步豁免（几何豁免与行为豁免对齐），停
-    /// 靠态这才在结构上成立（(40) 前 dropActor 无条件销毁
-    /// 落点 y + tick 每帧吸附兜底，拖到哪都当帧弹回台沿——
-    /// 审计 pet-dock 候选 1 定案）。定格后不被队形/轮换/批
-    /// 次/告别拽走；停靠后 5 秒内无任何与它的互动（点/双
-    /// 击/再拖，互动刷新计时）→ 淡出消失回池。停靠仅会话
-    /// 内有效；切歌仍按 (32) 口径解除停靠。
+    /// 拍板「二维定格：放哪停哪」）：落点 x/y 都保真，不夹
+    /// 回 walkRange、不把 y 钉回地面；主循环的地面吸附对
+    /// placed 同步豁免（几何豁免与行为豁免对齐）。定格后
+    /// 不被队形/轮换/批次/告别拽走；停靠后 5 秒内无任何与
+    /// 它的互动（点/双击/再拖，互动刷新计时）→ 淡出消失
+    /// 回池。停靠仅会话内有效；切歌仍按 (32) 口径解除。
+    ///
+    /// 3.7 (43) 路4 全屏化：(41) 版只夹进本层（恒高 246 的
+    /// 台层）——Miller 实测拖到屏幕上半全被夹回（日志
+    /// drop=(266,−323) → parked=(266,24)）。本版只在落定
+    /// 瞬间迁移宿主：落点换窗口坐标、夹窗口 bounds，演员
+    /// 视图迁入窗口级 PetDockLayer（先算坐标再换父视图、
+    /// 同 runloop 完成，无可见跳变；演员 transform 在
+    /// petDragEnded 已先归 identity）。拖动全程不换父视图
+    /// ——手势中途 reparent 有被取消的风险，且 (41) 实测
+    /// 拖动跟手在现结构下成立。归属/登记/过期路径不变：
+    /// 演员仍在本台班底数组里，停靠层纯视图宿主。停靠层
+    /// 未安装（异常路径）时退回 (41) 台层内夹取。
     private func dropActor(_ actor: MiniPetActor, at point: CGPoint, src: String) {
         let half = actor.bounds.width / 2
-        let cx = min(max(point.x, half), max(half, bounds.width - half))
-        let cy = min(max(point.y, half), max(half, bounds.height - half))
+        let dock = PetDockLayer.shared
+        guard dock.superview != nil else {
+            let cx = min(max(point.x, half), max(half, bounds.width - half))
+            let cy = min(max(point.y, half), max(half, bounds.height - half))
+            actor.center = CGPoint(x: cx, y: cy)
+            actor.placed = true
+            actor.parkedClock = clockTime
+            actor.mode = .idle
+            actor.until = activeTime + 2
+            actor.hopStart = activeTime
+            Breadcrumbs.log("pet.drag.end asset=\(actor.asset) src=\(src)"
+                + " drop=(\(Int(point.x)),\(Int(point.y)))"
+                + " parked=(\(Int(actor.center.x)),\(Int(actor.center.y))) host=stage-fallback")
+            Breadcrumbs.log("pet.park asset=\(actor.asset)"
+                + " x=\(Int(actor.center.x)) y=\(Int(actor.center.y))"
+                + " form=\(collapsed ? "collapsed" : "expanded") host=stage-fallback")
+            return
+        }
+        let windowPoint = convert(point, to: dock)
+        let cx = min(max(windowPoint.x, half), max(half, dock.bounds.width - half))
+        let cy = min(max(windowPoint.y, half), max(half, dock.bounds.height - half))
+        if actor.superview !== dock {
+            dock.addSubview(actor)
+        }
         actor.center = CGPoint(x: cx, y: cy)
+        actor.dockHosted = true
+        dock.refrontIfNeeded()
         actor.placed = true
         actor.parkedClock = clockTime
         actor.mode = .idle
         actor.until = activeTime + 2
         actor.hopStart = activeTime
         Breadcrumbs.log("pet.drag.end asset=\(actor.asset) src=\(src)"
-            + " drop=(\(Int(point.x)),\(Int(point.y)))"
-            + " parked=(\(Int(actor.center.x)),\(Int(actor.center.y)))")
+            + " drop=(\(Int(windowPoint.x)),\(Int(windowPoint.y)))"
+            + " parked=(\(Int(actor.center.x)),\(Int(actor.center.y))) host=dock")
         Breadcrumbs.log("pet.park asset=\(actor.asset)"
             + " x=\(Int(actor.center.x)) y=\(Int(actor.center.y))"
-            + " form=\(collapsed ? "collapsed" : "expanded")")
+            + " form=\(collapsed ? "collapsed" : "expanded") host=dock")
     }
 
     // MARK: 反应小贴纸（点头顶；关心回应时按映射指定素材）
+
+    /// 演员在本层坐标系里的帧（3.7 (43) 路4）：停靠者的父
+    /// 视图是窗口停靠层、frame 为窗口坐标，对话框/反应贴
+    /// 纸都加在本层，定位必须换算；未停靠者换算结果与
+    /// actor.frame 恒等。
+    private func stageFrame(of actor: MiniPetActor) -> CGRect {
+        convert(actor.bounds, from: actor)
+    }
 
     private func showReaction(above actor: MiniPetActor, asset specified: String? = nil) {
         let key = ObjectIdentifier(actor)
@@ -1044,11 +1112,12 @@ final class MiniBarPetStage: UIView {
         view.crumbScene = "minibar-reaction"
         let asset = specified ?? Self.reactionPool.randomElement() ?? "dog-11"
         let size: CGFloat = 40
-        var x = actor.frame.midX - size / 2
+        let actorFrame = stageFrame(of: actor)
+        var x = actorFrame.midX - size / 2
             + CGFloat.random(in: -6...6)
         x = min(max(4, x), bounds.width - size - 4)
-        var y = actor.frame.minY - size - 6
-        if y < 4 { y = actor.frame.maxY + 6 }
+        var y = actorFrame.minY - size - 6
+        if y < 4 { y = actorFrame.maxY + 6 }
         view.frame = CGRect(x: x, y: y, width: size, height: size)
         // 轮廓柔光（3.7 (28)）：反应贴纸若是 dog-11（亲亲回话
         // 指定素材/反应池成员），深色墙面上保轮廓可辨。
@@ -1115,9 +1184,10 @@ final class MiniBarPetStage: UIView {
         panel.addSubview(label)
         // 落点：宠物正上方（台面之上是墙面空区，不压台上控件）。
         let width: CGFloat = 222, height: CGFloat = 84
-        let x = min(max(4, actor.center.x - width / 2),
+        let actorFrame = stageFrame(of: actor)
+        let x = min(max(4, actorFrame.midX - width / 2),
                     max(4, bounds.width - width - 4))
-        var y = actor.frame.minY - height - 6
+        var y = actorFrame.minY - height - 6
         if y < 4 { y = 4 }
         panel.frame = CGRect(x: x, y: y, width: width, height: height)
         panel.addGestureRecognizer(UITapGestureRecognizer(
@@ -1170,9 +1240,10 @@ final class MiniBarPetStage: UIView {
         label.sizeToFit()
         let w = min(label.bounds.width + 12, 190)
         let h: CGFloat = 26
-        let x = min(max(4, actor.frame.midX - w / 2), bounds.width - w - 4)
-        var y = actor.frame.minY - h - 4
-        if y < 4 { y = actor.frame.maxY + 4 }
+        let actorFrame = stageFrame(of: actor)
+        let x = min(max(4, actorFrame.midX - w / 2), bounds.width - w - 4)
+        var y = actorFrame.minY - h - 4
+        if y < 4 { y = actorFrame.maxY + 4 }
         label.frame = CGRect(x: x, y: y, width: w, height: h)
         addSubview(label)
         transientBubbles.append(label)
@@ -1226,21 +1297,70 @@ final class MiniBarPetStage: UIView {
     }
 
     /// 告别分流决策（3.7 (32) 三地流转，仅墙台）：说完离开
-    /// 词后不再直接回池——约 1/3（按在场数取整）蹦去灵动
-    /// 岛落座（岛上限 2 只，满员不再送），其余去详情页点
-    /// 播台等候。此处只打标，去向登记在离场瞬间写（见
-    /// stepFarewell），流被取消时标记随 cancelFlow 清除。
+    /// 词后不再直接回池——一部分蹦去灵动岛落座，其余去详
+    /// 情页点播台等候。此处只打标，去向登记在离场瞬间写
+    /// （见 stepFarewell），流被取消时标记随 cancelFlow 清除。
+    ///
+    /// 3.7 (43) 路1 居民新规格（Miller 定版）：岛容量 3、目
+    /// 标构成恒向 {猫 2, 狗 1} 收敛、活泼优先。旧实现按数
+    /// 组序取前 round(n/3) 只——常驻恒为轮换狗，居民结构性
+    /// 偏狗且与猫狗配比/人格全无关（(41) 日志双狗双可爱即
+    /// 其必然产物）。本版：先读现有居民构成算缺口，缺口内
+    /// 按活泼序挑选（人格 .mischievous 调皮优先、.joker 爱
+    /// 开玩笑次之——「活泼」在代码里的唯一现存分类，Miller
+    /// 已认此口径）；islandCount 不再吃 round 取整，slots
+    /// 本身即上限；缺口外不送。兜底（已定开）：岛空置且本
+    /// 批无任何缺口匹配者时，送最佳可用 1 只（猫优先、活
+    /// 泼优先），不让岛长期空着。
     private func prepareFarewellDestinations(_ actors: [MiniPetActor]) {
         guard role == .wall else { return }
-        let slots = max(0, PetHomeRegistry.islandCapacity
-            - PetHomeRegistry.shared.islandResidents.count)
-        let islandCount = min(slots, Int((Double(actors.count) / 3.0).rounded()))
-        for (index, actor) in actors.enumerated() {
-            if index < islandCount {
+        let registry = PetHomeRegistry.shared
+        let residents = registry.islandResidents
+        let slots = max(0, PetHomeRegistry.islandCapacity - residents.count)
+        guard slots > 0 else {
+            for actor in actors { actor.divertToStageBar = true }
+            return
+        }
+        var needCats = max(0, 2 - residents.filter { $0.hasPrefix("cat") }.count)
+        var needDogs = max(0, 1 - residents.filter { $0.hasPrefix("dog") }.count)
+        func liveliness(_ actor: MiniPetActor) -> Int {
+            switch PetPersonalities.of(actor.asset) {
+            case .mischievous: return 0
+            case .joker: return 1
+            default: return 2
+            }
+        }
+        // sorted(by:) 稳定：同档内保持原数组序。
+        let cats = actors.filter { $0.isCat }
+            .sorted { liveliness($0) < liveliness($1) }
+        let dogs = actors.filter { !$0.isCat }
+            .sorted { liveliness($0) < liveliness($1) }
+        var islandBound: [MiniPetActor] = []
+        for cat in cats where islandBound.count < slots && needCats > 0 {
+            islandBound.append(cat)
+            needCats -= 1
+        }
+        for dog in dogs where islandBound.count < slots && needDogs > 0 {
+            islandBound.append(dog)
+            needDogs -= 1
+        }
+        if islandBound.isEmpty, residents.isEmpty {
+            // 兜底：猫优先、活泼优先的最佳可用 1 只。
+            let best = (cats + dogs)
+                .sorted { liveliness($0) < liveliness($1) }.first
+            if let best { islandBound = [best] }
+        }
+        let islandIds = Set(islandBound.map { ObjectIdentifier($0) })
+        for actor in actors {
+            if islandIds.contains(ObjectIdentifier(actor)) {
                 actor.divertToIsland = true
             } else {
                 actor.divertToStageBar = true
             }
+        }
+        if !islandBound.isEmpty {
+            Breadcrumbs.log("pet.farewell.dest slots=\(slots)"
+                + " island=\(islandBound.map { $0.asset }.joined(separator: ","))")
         }
     }
 
@@ -1378,14 +1498,15 @@ final class MiniBarPetStage: UIView {
         guard let pet = carePet, let bubble = careBubbleView else { return }
         let optionsH: CGFloat = careOptionsShown ? 34 : 0
         let totalH = bubble.bounds.height + optionsH + 10
-        let x = min(max(4, pet.center.x - bubble.bounds.width / 2),
+        let petFrame = stageFrame(of: pet)
+        let x = min(max(4, petFrame.midX - bubble.bounds.width / 2),
                     max(4, bounds.width - bubble.bounds.width - 4))
-        var y = pet.frame.minY - totalH - 4
+        var y = petFrame.minY - totalH - 4
         if y < 4 { y = 4 }
         bubble.frame.origin = CGPoint(x: x, y: y)
         if let options = careOptionsView {
             options.frame = CGRect(
-                x: min(max(4, pet.center.x - options.bounds.width / 2),
+                x: min(max(4, petFrame.midX - options.bounds.width / 2),
                        max(4, bounds.width - options.bounds.width - 4)),
                 y: y + bubble.bounds.height + 5,
                 width: options.bounds.width, height: 30)

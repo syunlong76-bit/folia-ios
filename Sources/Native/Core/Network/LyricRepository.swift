@@ -33,6 +33,11 @@ final class LyricRepository {
         let source: String
         /// 实际翻行源标记：lrc / yrc。
         let flip: String
+        /// 演唱跨度压缩比 r（3.7 (43) 路3）：无逐字戳行的逐字
+        /// 时刻表按 span×r 排（行尾气口不再摊进每个字）；由
+        /// 本曲有戳行标定（中位），全曲无戳时缺省 0.8。墙面
+        /// lineDuration 与舞台均分共用此值（同一 r 源）。
+        let singingRatio: Double
         /// 负结果（无歌词/取数失败）：lines 为空、短 TTL。
         let isNegative: Bool
         let fetchedAt: Date
@@ -86,7 +91,7 @@ final class LyricRepository {
         let task = Task<Entry, Never> { [weak self] in
             guard let self else {
                 return Entry(lines: [], lrcText: "", source: "none",
-                             flip: "lrc", isNegative: true,
+                             flip: "lrc", singingRatio: 0.8, isNegative: true,
                              fetchedAt: Date(), estimatedBytes: 0)
             }
             let fetched = await self.fetch(songId: songId)
@@ -123,9 +128,47 @@ final class LyricRepository {
             flip = "lrc"
         }
         let bytes = Self.estimateBytes(lines: parsed, lrcText: lrcText)
+        let ratio = Self.singingRatio(for: parsed)
+        // 逐字覆盖率面包屑（3.7 (43) 路3 埋点先行）：此前仓库
+        // 零面包屑，一首歌有无 YRC 逐字戳无从判读、均分定案
+        // 与否全靠猜。此行落盘后：withWords≈0 → 无戳均分行
+        // 占全表（span×r 修复面）；withWords≈lines 仍慢 →
+        // 转查 rebase 平移/动画层，勿动均分。
+        let withWords = parsed.filter { $0.words != nil }.count
+        Breadcrumbs.log("lrc source track=\(songId)"
+            + " lines=\(parsed.count) withWords=\(withWords)"
+            + " yrc=\(source.contains("yrc") ? "yes" : "no")"
+            + " src=\(source) flip=\(flip)"
+            + " r=\(String(format: "%.3f", ratio))")
         return Entry(lines: parsed, lrcText: lrcText, source: source,
-                     flip: flip, isNegative: parsed.isEmpty,
+                     flip: flip, singingRatio: ratio,
+                     isNegative: parsed.isEmpty,
                      fetchedAt: Date(), estimatedBytes: bytes)
+    }
+
+    /// 演唱跨度压缩比标定（3.7 (43) 路3）：人声唱完一行通常
+    /// 早于下一行 start（行尾气口 G 常见 0.3–2.0s），无戳行
+    /// 若按 [行 start, 下行 start] 全跨度均分逐字时刻，G 被
+    /// 摊进每个字、扫光恒慢（lag(f)=f·G、行尾最重——审计
+    /// folia43 路3 定案）。有戳行给出真演唱跨度：r 样本 =
+    /// (末字 end − 行 start) / (下行 start − 行 start)，取全
+    /// 曲中位；全曲无戳回缺省 0.8。结果夹 [0.3, 1]：防个别
+    /// 行戳异常（rebase 边界夹取可把末字 end 顶到行界、样本
+    /// =1，中位对此不敏感）把 r 标定失真。
+    static func singingRatio(for lines: [LyricLineData]) -> Double {
+        var samples: [Double] = []
+        for i in lines.indices {
+            guard let words = lines[i].words, let last = words.last,
+                  i + 1 < lines.count else { continue }
+            let span = lines[i + 1].time - lines[i].time
+            let sung = last.start + last.duration - lines[i].time
+            guard span > 0.3, sung > 0 else { continue }
+            samples.append(min(max(sung / span, 0.3), 1))
+        }
+        guard !samples.isEmpty else { return 0.8 }
+        let sorted = samples.sorted()
+        let median = sorted[sorted.count / 2]
+        return min(max(median, 0.3), 1)
     }
 
     private static func estimateBytes(lines: [LyricLineData], lrcText: String) -> Int {

@@ -496,7 +496,8 @@ final class StageViewController: UIViewController {
         }
         if let hit = LyricRepository.shared.cachedEntry(for: track.id) {
             linesCache[track.id] = LyricParser.stageLines(
-                from: hit.lines, trackDuration: track.duration)
+                from: hit.lines, trackDuration: track.duration,
+                singingRatio: hit.singingRatio)
             pushSnapshot()
             // 贴纸层（3.7 (24)，纯新增钩子）：仓库命中即已落定。
             stickerLyricsResolved(lines: linesCache[track.id] ?? [])
@@ -510,7 +511,8 @@ final class StageViewController: UIViewController {
         lyricsTask = Task { [weak self] in
             let entry = await LyricRepository.shared.entry(for: trackId)
             guard let self, !Task.isCancelled, self.currentTrackId == trackId else { return }
-            let lines = LyricParser.stageLines(from: entry.lines, trackDuration: duration)
+            let lines = LyricParser.stageLines(from: entry.lines, trackDuration: duration,
+                                               singingRatio: entry.singingRatio)
             self.linesCache[trackId] = lines
             Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count) source=\(entry.source)")
             self.pushSnapshot()

@@ -49,7 +49,8 @@ enum LyricParser {
     /// 时长或 +5 兜底）；逐字戳一并映射（此前舞台 words 恒
     /// nil，现与墙面同源）。
     static func stageLines(from data: [LyricLineData],
-                           trackDuration: TimeInterval) -> [LyricLine] {
+                           trackDuration: TimeInterval,
+                           singingRatio: Double = 1) -> [LyricLine] {
         var lines: [LyricLine] = []
         lines.reserveCapacity(data.count)
         for (index, row) in data.enumerated() {
@@ -65,7 +66,8 @@ enum LyricParser {
                 LyricWord(start: $0.start, end: $0.start + $0.duration, text: $0.text)
             }
             lines.append(LyricLine(id: index, start: row.time, end: end,
-                                   text: row.text, words: words))
+                                   text: row.text, words: words,
+                                   singingRatio: singingRatio))
         }
         return lines
     }

@@ -2063,11 +2063,18 @@ final class WallPrototypeViewController: UIViewController,
             }
         }
         // 当前行时长：有下一行按行距夹取，末行按字数估（DS27 定版）。
+        // 3.7 (43) 路3：再乘演唱跨度压缩比 r（仓库标定，与舞
+        // 台均分共用同一 r 源）——lineDuration 只喂扫光的行级
+        // 回落路径（有逐字戳时 sweepTick 走真戳、不读它），
+        // 乘 r 即把行尾气口从扫光跨度里摘掉，翻行判定不读
+        // 此值、零触碰。
         let duration: Double
         if idx + 1 < lines.count {
             duration = min(max(lines[idx + 1].time - lines[idx].time, 0.8), 10)
+                * entry.singingRatio
         } else {
             duration = min(max(Double(lines[idx].text.count) * 0.4, 2.5), 8)
+                * entry.singingRatio
         }
         // 6 行窗口：当前行居中（行 2），行 5 是滑入预备行。
         let texts = (-2...3).map { offset -> String in

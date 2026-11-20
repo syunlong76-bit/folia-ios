@@ -11,8 +11,9 @@ import Foundation
 // 1. 在场互斥：各 MiniBarPetStage 把自己当前在场名单登记在
 //    live 表里，取人时排除「在别处在场」的宠物，杜绝同一只
 //    同时出现在两个台面上。
-// 2. 岛上限与顺序：islandOrder 保持落座顺序，上限 2 只由
-//    分流决策方（墙台告别流）查 islandResidents 后决定。
+// 2. 岛上限与顺序：islandOrder 保持落座顺序，上限 3 只由
+//    分流决策方（墙台告别流）查 islandResidents 后决定
+//    （3.7 (43) 路1：容量 2→3，目标构成 {猫2, 狗1}）。
 
 enum PetHome: String {
     case wallBar, island, stageBar, pool
@@ -27,7 +28,7 @@ final class PetHomeRegistry {
     private var homes: [String: PetHome] = [:]
     /// 灵动岛落座顺序（先到先坐，点岛回台/被召回时移除）。
     private(set) var islandOrder: [String] = []
-    static let islandCapacity = 2
+    static let islandCapacity = 3
 
     /// 各宠物层当前在场名单（key = 层实例标识）。
     private var liveByStage: [ObjectIdentifier: Set<String>] = [:]

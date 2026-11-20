@@ -137,6 +137,129 @@ final class QueueManager: ObservableObject {
     /// 切歌代际令牌：快速连续切歌时，过期 Task 的 load 结果直接丢弃。
     private var loadGeneration = 0
 
+    // MARK: - 队列快照落盘与冷启恢复（3.7 (43) 路2）
+
+    /// 快照键。审计 folia43 路2 定案：队列此前纯内存、无落
+    /// 盘无回填，进程死亡后冷启 currentTrack 恒 nil——(41)
+    /// 冷启点卡 guard 第一关 100% 判死。本版：队列变更边沿
+    /// 写轻量快照，启动回填为「恢复态」（只回填 queue /
+    /// currentIndex，不装载、不发声），点卡 route 成功后经
+    /// resumeRestoredQueue 现换地址装载、默认保持暂停。
+    private static let snapshotKey = "folia.queue.snapshot"
+    /// 快照有效期：与在线播放地址有效期同量级（1200s）。
+    private static let snapshotTTL: TimeInterval = 1200
+    /// 快照条数上限（防超大队列把 UserDefaults 撑爆）。
+    private static let snapshotMaxTracks = 500
+
+    /// 快照形状：曲目轻量字段（复用桥 mapPair 的字典口径）。
+    /// **playableURL 禁止落盘**——FoliaTrack 本就不含播放地
+    /// 址字段，恢复后一律按 id 现换。
+    private struct QueueSnapshot: Codable {
+        struct TrackDTO: Codable {
+            let id: String
+            let sourceType: String
+            let title: String
+            let artist: String
+            let album: String
+            let duration: TimeInterval
+            let artworkURL: String?
+            let fee: Int?
+        }
+        let tracks: [TrackDTO]
+        let currentIndex: Int
+        let savedAt: TimeInterval
+    }
+
+    /// 当前队列处于「冷启恢复态」（已回填、未装载）。
+    private(set) var hasRestoredQueue = false
+
+    /// 队列变更边沿调用：写快照；空队列清键。
+    private func persistQueueSnapshot() {
+        let defaults = UserDefaults.standard
+        guard !queue.isEmpty else {
+            defaults.removeObject(forKey: Self.snapshotKey)
+            return
+        }
+        let snapshot = QueueSnapshot(
+            tracks: queue.prefix(Self.snapshotMaxTracks).map {
+                QueueSnapshot.TrackDTO(
+                    id: $0.id, sourceType: $0.sourceType.rawValue,
+                    title: $0.title, artist: $0.artist, album: $0.album,
+                    duration: $0.duration,
+                    artworkURL: $0.artworkURL?.absoluteString, fee: $0.fee)
+            },
+            currentIndex: currentIndex,
+            savedAt: Date().timeIntervalSince1970)
+        if let data = try? JSONEncoder().encode(snapshot) {
+            defaults.set(data, forKey: Self.snapshotKey)
+        }
+    }
+
+    /// 启动回填（init 内、首激活判定之前）：快照未过期才恢
+    /// 复；只回填队列与下标，不调 engine.load、不发声。
+    private func restoreQueueSnapshotIfNeeded() {
+        guard let data = UserDefaults.standard.data(forKey: Self.snapshotKey),
+              let snapshot = try? JSONDecoder().decode(QueueSnapshot.self, from: data)
+        else { return }
+        guard Date().timeIntervalSince1970 - snapshot.savedAt < Self.snapshotTTL,
+              !snapshot.tracks.isEmpty else {
+            UserDefaults.standard.removeObject(forKey: Self.snapshotKey)
+            return
+        }
+        queue = snapshot.tracks.compactMap { dto in
+            guard let source = AudioSourceType(rawValue: dto.sourceType)
+            else { return nil }
+            return FoliaTrack(
+                id: dto.id, sourceType: source, title: dto.title,
+                artist: dto.artist, album: dto.album,
+                duration: dto.duration,
+                artworkURL: dto.artworkURL.flatMap { URL(string: $0) },
+                fee: dto.fee)
+        }
+        guard !queue.isEmpty else { return }
+        currentIndex = min(max(snapshot.currentIndex, 0), queue.count - 1)
+        hasRestoredQueue = true
+        updateCommandAvailability()
+        Breadcrumbs.log("queue.restore snapshot n=\(queue.count) at=\(currentIndex)")
+    }
+
+    /// 冷启恢复态装载（route 成功落到播放页后由 SceneDelegate
+    /// 调用）：走唯一改曲路径现换地址装载当前曲；装载落地
+    /// 后立即暂停——**默认保持暂停（已定）**：进程死亡前的
+    /// 播/停状态不可知，点卡意图是「打开播放页」，自动出声
+    /// 不可逆、更冒犯。非恢复态调用为无操作。
+    func resumeRestoredQueue() {
+        runOnMain { [weak self] in
+            guard let self, self.hasRestoredQueue else { return }
+            self.hasRestoredQueue = false
+            guard let target = self.currentTrack else { return }
+            self.loadIsManual = true
+            self.manualSelectionPending = true
+            self.loadTrackAtCurrentIndex()
+            // engine.load 在装载 Task 落地时内部起播，暂停须
+            // 等落地：轮询本曲成为 engine 当前曲后 pause 一
+            // 次；代际被新装载顶替（用户已自行操作/自动顺
+            // 跳）即放弃，不与用户抢。
+            let generation = self.loadGeneration
+            var attempts = 0
+            func pauseWhenLoaded() {
+                attempts += 1
+                guard generation == self.loadGeneration else { return }
+                if self.engine.currentTrack?.id == target.id {
+                    self.engine.pause()
+                    Breadcrumbs.log("queue.restore resumed-paused track=\(target.id)")
+                    return
+                }
+                if attempts < 40 {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) {
+                        pauseWhenLoaded()
+                    }
+                }
+            }
+            pauseWhenLoaded()
+        }
+    }
+
     private init() {
         engine.onTrackEnded = { [weak self] in
             guard let self else { return }
@@ -167,6 +290,9 @@ final class QueueManager: ObservableObject {
         NowPlayingController.shared.onPreviousTrack = { [weak self] in
             self?.playPrevious()
         }
+        // 冷启队列回填（3.7 (43) 路2）：单例首次被触达即恢复，
+        // 保证 SceneDelegate 首激活的 hasQueue 判定读到恢复态。
+        restoreQueueSnapshotIfNeeded()
     }
 
     /// 主线程兜底：已在主线程直接执行，否则异步跳主线程再执行。
@@ -213,12 +339,15 @@ final class QueueManager: ObservableObject {
                 level: "info", module: "queue",
                 message: "setQueue source=\(source) count=\(tracks.count) start=\(index)")
             Breadcrumbs.log("setQueue n=\(tracks.count) at=\(index) src=\(source)")
+            // 真实点播接管：恢复态作废（本入口自会装载）。
+            self.hasRestoredQueue = false
             self.queue = tracks
             self.currentIndex = tracks.isEmpty ? 0 : (index % tracks.count)
             self.consecutiveFailures = 0
             self.loadIsManual = true
             self.manualSelectionPending = true
             self.updateCommandAvailability()
+            self.persistQueueSnapshot()
             self.loadTrackAtCurrentIndex()
         }
     }
@@ -237,6 +366,7 @@ final class QueueManager: ObservableObject {
                 self.queue = []
                 self.currentIndex = 0
                 self.updateCommandAvailability()
+                self.persistQueueSnapshot()
                 return
             }
             let clamped = min(max(index, 0), tracks.count - 1)
@@ -244,6 +374,7 @@ final class QueueManager: ObservableObject {
             self.queue = tracks
             self.currentIndex = clamped
             self.updateCommandAvailability()
+            self.persistQueueSnapshot()
             if let currentId, tracks[clamped].id != currentId {
                 self.loadIsManual = true
                 self.manualSelectionPending = true
@@ -256,11 +387,13 @@ final class QueueManager: ObservableObject {
     func playAtIndex(_ index: Int) {
         runOnMain { [weak self] in
             guard let self, self.queue.indices.contains(index) else { return }
+            self.hasRestoredQueue = false
             self.currentIndex = index
             self.consecutiveFailures = 0
             self.loadIsManual = true
             self.manualSelectionPending = true
             self.updateCommandAvailability()
+            self.persistQueueSnapshot()
             self.loadTrackAtCurrentIndex()
         }
     }
@@ -277,20 +410,24 @@ final class QueueManager: ObservableObject {
                 self.currentIndex = 0
                 self.consecutiveFailures = 0
                 self.updateCommandAvailability()
+                self.persistQueueSnapshot()
                 self.engine.stop()
                 return
             }
             if index < self.currentIndex {
                 self.currentIndex -= 1
                 self.updateCommandAvailability()
+                self.persistQueueSnapshot()
             } else if wasCurrent {
                 self.currentIndex = min(self.currentIndex, self.queue.count - 1)
                 self.consecutiveFailures = 0
                 self.loadIsManual = false
                 self.updateCommandAvailability()
+                self.persistQueueSnapshot()
                 self.loadTrackAtCurrentIndex()
             } else {
                 self.updateCommandAvailability()
+                self.persistQueueSnapshot()
             }
         }
     }
@@ -309,6 +446,7 @@ final class QueueManager: ObservableObject {
             }
             self.loadIsManual = false
             self.updateCommandAvailability()
+            self.persistQueueSnapshot()
             self.loadTrackAtCurrentIndex()
         }
     }
@@ -324,6 +462,7 @@ final class QueueManager: ObservableObject {
             self.currentIndex = (self.currentIndex - 1 + self.queue.count) % self.queue.count
             self.loadIsManual = false
             self.updateCommandAvailability()
+            self.persistQueueSnapshot()
             self.loadTrackAtCurrentIndex()
         }
     }
@@ -337,6 +476,7 @@ final class QueueManager: ObservableObject {
             guard !fresh.isEmpty else { return }
             self.queue.append(contentsOf: fresh)
             self.updateCommandAvailability()
+            self.persistQueueSnapshot()
         }
     }
 
@@ -345,6 +485,7 @@ final class QueueManager: ObservableObject {
     func insertAndPlay(_ track: FoliaTrack) {
         runOnMain { [weak self] in
             guard let self else { return }
+            self.hasRestoredQueue = false
             if let idx = self.queue.firstIndex(where: { $0.id == track.id }) {
                 self.currentIndex = idx
             } else if self.queue.isEmpty {
@@ -359,6 +500,7 @@ final class QueueManager: ObservableObject {
             self.loadIsManual = true
             self.manualSelectionPending = true
             self.updateCommandAvailability()
+            self.persistQueueSnapshot()
             self.loadTrackAtCurrentIndex()
         }
     }

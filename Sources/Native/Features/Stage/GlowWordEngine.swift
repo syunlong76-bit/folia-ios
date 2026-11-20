@@ -63,7 +63,14 @@ enum StageLyricUnits {
         // 时间份额按整行字素数（含空白）均分，与网页 even
         // grapheme timing 的分母一致。
         let totalGraphemes = max(line.text.count, 1)
-        let span = max(line.end - line.start, 0.1)
+        // 演唱跨度压缩（3.7 (43) 路3）：均分跨度乘 r——人声
+        // 唱完早于下行 start，行尾气口若摊进每个字，逐字亮
+        // 起恒慢（lag 随行内分位线性增长、行尾最重）。压缩
+        // 后逐字时刻落在行首起算的演唱窗内，窗尾留白段不再
+        // 点亮任何字（扫光停在全亮，正确）。r 由仓库按同曲
+        // 有戳行标定、随行下发（line.singingRatio）。
+        let ratio = min(max(line.singingRatio, 0.3), 1)
+        let span = max((line.end - line.start) * ratio, 0.1)
         return tokens.map { token in
             let start = line.start + span * Double(token.offset) / Double(totalGraphemes)
             let end = line.start + span * Double(token.offset + token.count) / Double(totalGraphemes)
