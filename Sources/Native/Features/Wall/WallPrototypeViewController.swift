@@ -196,6 +196,7 @@ final class WallPrototypeViewController: UIViewController,
     private var miniPlayButton: UIButton!
     private var miniPrevButton: UIButton!
     private var miniNextButton: UIButton!
+    private var miniQueueButton: UIButton!
     private var miniSeekHit: UIView!
     private var miniProgressFill: UIView!
     /// 进度拖动中：心跳不覆盖填充，松手 seek 后恢复。
@@ -542,7 +543,7 @@ final class WallPrototypeViewController: UIViewController,
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
-        miniPrevButton.setImage(UIImage(systemName: "backward.fill",
+        miniPrevButton.setImage(UIImage(systemName: "backward.end.fill",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
         miniPrevButton.translatesAutoresizingMaskIntoConstraints = false
         miniPrevButton.addTarget(self, action: #selector(miniPrevTapped), for: .touchUpInside)
@@ -550,11 +551,22 @@ final class WallPrototypeViewController: UIViewController,
 
         miniNextButton = UIButton(type: .system)
         miniNextButton.tintColor = .white
-        miniNextButton.setImage(UIImage(systemName: "forward.fill",
+        miniNextButton.setImage(UIImage(systemName: "forward.end.fill",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
         miniNextButton.translatesAutoresizingMaskIntoConstraints = false
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
+
+        // 播放列表入口（3.7 (48)）：台面最右新增一键，开原生队列
+        // 面板（管理面全在面板内，台面骨架不动）。键位链随既有
+        // prev/play/next 相对约束自动左移，标题尾随 prev 不受影响。
+        miniQueueButton = UIButton(type: .system)
+        miniQueueButton.tintColor = .white
+        miniQueueButton.setImage(UIImage(systemName: "music.note.list",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+        miniQueueButton.translatesAutoresizingMaskIntoConstraints = false
+        miniQueueButton.addTarget(self, action: #selector(miniQueueTapped), for: .touchUpInside)
+        bar.addSubview(miniQueueButton)
 
         // 进度拖动手柄区：盖住底部进度条并向上放宽到 20pt 好按。
         let seekHit = UIView()
@@ -605,10 +617,15 @@ final class WallPrototypeViewController: UIViewController,
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniNextButton.trailingAnchor.constraint(equalTo: miniQueueButton.leadingAnchor, constant: -2),
             miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniQueueButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+            miniQueueButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
+            miniQueueButton.widthAnchor.constraint(equalToConstant: 34),
+            miniQueueButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
             miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
@@ -745,7 +762,8 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point)
+            || miniQueueButton.frame.contains(point) { return }
         miniTheme = miniTheme.next
         MiniPlayerTheme.stored = miniTheme
         applyMiniTheme()
@@ -771,6 +789,15 @@ final class WallPrototypeViewController: UIViewController,
         QueueManager.shared.playNext(manual: true)
     }
 
+    /// 播放列表面板（3.7 (48)）：面板存续期间台面被 sheet 覆盖，
+    /// 关闭后重置无操作计时，避免一关面板台面已收起。
+    @objc private func miniQueueTapped() {
+        resetMiniIdleTimer()
+        QueuePanelViewController.present(from: self) { [weak self] in
+            self?.resetMiniIdleTimer()
+        }
+    }
+
     /// 台面点按分发（13.1 定版、13.3 进度带改点按跳点）：按键各自
     /// 处理；封面 = 定位；底部进度带 = 跳到点按位置；其余台身 =
     /// 进播放详情页。封面判定仍先于进度带（两者仅在封面下缘约
@@ -788,7 +815,8 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point)
+            || miniQueueButton.frame.contains(point) { return }
         if miniCover.frame.contains(point) {
             locateCurrentTrack()
             return
@@ -838,7 +866,8 @@ final class WallPrototypeViewController: UIViewController,
             if miniCover.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
-                || miniNextButton.frame.contains(barPoint) { return }
+                || miniNextButton.frame.contains(barPoint)
+                || miniQueueButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
             // 拖动期间挂起无操作计时（3.7 (21)），松手后重置。
@@ -1050,14 +1079,14 @@ final class WallPrototypeViewController: UIViewController,
         // 圆点不在淡出名单（3.7 (22)）：收起态保留发光圆点
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton]
+                                miniPrevButton, miniNextButton, miniQueueButton]
         for view in views {
             view?.alpha = alpha
         }
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniQueueButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }

@@ -438,6 +438,92 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    // MARK: - 队列管理（3.7 (48) 点播台管理搬入：网页版 createQueueMutations 对应面）
+
+    /// 队列内移动一首到新位置（播放列表面板拖拽排序用）。`to` 为移动后
+    /// 的最终下标。只改顺序与当前下标，不打断已装载的播放；快照随写。
+    func moveQueueItem(from: Int, to: Int) {
+        runOnMain { [weak self] in
+            guard let self,
+                  self.queue.indices.contains(from),
+                  self.queue.indices.contains(to),
+                  from != to else { return }
+            let item = self.queue.remove(at: from)
+            self.queue.insert(item, at: to)
+            if from == self.currentIndex {
+                self.currentIndex = to
+            } else if from < self.currentIndex, to >= self.currentIndex {
+                self.currentIndex -= 1
+            } else if from > self.currentIndex, to <= self.currentIndex {
+                self.currentIndex += 1
+            }
+            self.updateCommandAvailability()
+            self.persistQueueSnapshot()
+            Breadcrumbs.log("queue.move from=\(from) to=\(to) cur=\(self.currentIndex)")
+        }
+    }
+
+    /// 设为下一首播放（把队列内某首移到当前曲之后；网页行菜单 playNext）。
+    /// 已是当前曲或紧随当前曲时无操作。
+    func moveToNext(at index: Int) {
+        runOnMain { [weak self] in
+            guard let self,
+                  self.queue.indices.contains(index),
+                  index != self.currentIndex,
+                  index != self.currentIndex + 1 else { return }
+            let dest = index < self.currentIndex
+                ? self.currentIndex
+                : self.currentIndex + 1
+            let item = self.queue.remove(at: index)
+            self.queue.insert(item, at: dest)
+            if index < self.currentIndex { self.currentIndex -= 1 }
+            self.updateCommandAvailability()
+            self.persistQueueSnapshot()
+            Breadcrumbs.log("queue.moveNext at=\(index) dest=\(dest) cur=\(self.currentIndex)")
+        }
+    }
+
+    /// 移到队列末尾（网页行菜单 moveToEnd）。
+    func moveToEnd(at index: Int) {
+        runOnMain { [weak self] in
+            guard let self, self.queue.indices.contains(index) else { return }
+            self.moveQueueItem(from: index, to: self.queue.count - 1)
+        }
+    }
+
+    /// 打乱队列（网页 shuffleQueue）：整队洗牌，当前曲跟随到新位置，
+    /// 已装载的播放不打断。
+    func shuffleQueue() {
+        runOnMain { [weak self] in
+            guard let self, self.queue.count > 1 else { return }
+            let currentId = self.queue[self.currentIndex].id
+            self.queue.shuffle()
+            if let newIndex = self.queue.firstIndex(where: { $0.id == currentId }) {
+                self.currentIndex = newIndex
+            }
+            self.updateCommandAvailability()
+            self.persistQueueSnapshot()
+            Breadcrumbs.log("queue.shuffle n=\(self.queue.count) cur=\(self.currentIndex)")
+        }
+    }
+
+    /// 清空队列（网页 clearQueue）：停播、清队列、清快照与恢复标志。
+    func clearQueue() {
+        runOnMain { [weak self] in
+            guard let self else { return }
+            self.queue = []
+            self.currentIndex = 0
+            self.hasRestoredQueue = false
+            self.consecutiveFailures = 0
+            self.loadIsManual = false
+            self.manualSelectionPending = false
+            self.updateCommandAvailability()
+            self.persistQueueSnapshot()
+            self.engine.stop()
+            Breadcrumbs.log("queue.clear")
+        }
+    }
+
     func playNext(manual: Bool) {
         runOnMain { [weak self] in
             guard let self, !self.queue.isEmpty else { return }
