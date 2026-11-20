@@ -418,7 +418,7 @@ final class StageViewController: UIViewController {
             label.alpha = 1
         }
         let work = DispatchWorkItem { [weak label] in
-            UIView.animate(withDuration: 0.35,
+            UIView.animate(withDuration: 0.35, delay: 0,
                            options: [.beginFromCurrentState]) {
                 label?.alpha = 0
             } completion: { _ in

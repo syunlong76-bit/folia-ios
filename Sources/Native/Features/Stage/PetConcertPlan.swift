@@ -173,6 +173,54 @@ enum PetConcertConst {
     static let bubbleZoneTop: CGFloat = 268
     static let bubbleZoneBottom: CGFloat = 540
 
+    // MARK: 横屏几何（(54) U 独立推导，覆盖 Q 的横屏等比口径）
+    // 朝向判定：舞台容器 bounds 宽 ≥ 高判横屏（正方形归横屏，
+    // 无状态滞回——判定是 bounds 的纯函数，旋转重排可复算）。
+    // 横屏参考画布 1920×1080（与竖屏 1080×1920 分开两套表，
+    // 竖屏数值一律不动）。推导约束（iPhone 14 Pro 横屏
+    // 852×393pt，sxL=852/1920=0.444、syL=393/1080=0.364）：
+    // 队形改 11 列 × 5 行用满横向；单只边长下限口径——
+    // petBaseL×formationScaleL(0)=108×0.78=84.2 参考 px
+    // ×0.444 = 37.4pt，不低于竖屏最小只 31.6pt（124×0.70
+    // ×393/1080），且列距 150×0.444=66.6pt > 前排边长
+    // 108×0.444=48.0pt，横向零重叠。
+    static let refWL: CGFloat = 1920
+    static let refHL: CGFloat = 1080
+    static func isLandscape(_ size: CGSize) -> Bool { size.width >= size.height }
+    static let gridColsL = 11
+    static let gridRowsL = 5
+    static let gridX0L: CGFloat = 960
+    static let gridDXL: CGFloat = 150
+    static let gridRowYL: [CGFloat] = [330, 440, 550, 660, 770]
+    static func formationScaleL(row: Int) -> CGFloat {
+        let r = min(max(row, 0), gridRowsL - 1)
+        return 0.78 + 0.22 * CGFloat(r) / CGFloat(gridRowsL - 1)
+    }
+    /// 横屏空槽：后排两角（55 槽 − 2 空 = 53 只正好满员）。
+    static let emptySlotsL: Set<Int> = [0, 10]
+    static let captainSlotRowL = 4
+    static let captainSlotColL = 5
+    static let petBaseL: CGFloat = 108
+    /// 横屏单只边长归一化下限（占舞台宽）：84.2/1920 = 0.0439。
+    static let petMinEdgeNormL: CGFloat = 0.0439
+    static let soloXL: CGFloat = 960
+    static let soloYL: CGFloat = 885
+    static let soloScaleL: CGFloat = 1.35
+    static let soloRingYL: CGFloat = 950
+    static let soloRingRXL: CGFloat = 150
+    static let soloRingRYL: CGFloat = 30
+    static let floorTopYL: CGFloat = 300
+    static let bubbleZoneTopL: CGFloat = 145
+    static let bubbleZoneBottomL: CGFloat = 315
+    static let valanceSwagsL = 11
+    static let valanceBaseYL: CGFloat = 105
+    static let valanceDepthL: CGFloat = 28
+    static let curtainClosedXL: CGFloat = 1020
+    static let curtainOpenXL: CGFloat = 140
+    static let curtainBottomYL: CGFloat = 1020
+    static let footlightYL: CGFloat = 1005
+    static let teleBarYL: CGFloat = 975
+
     // MARK: 气泡/提词条（v3 bubbles/teleprompter，参考 px 字号）
     static let bubbleFontCaptain: CGFloat = 46
     static let bubbleFontChat: CGFloat = 36
@@ -280,6 +328,12 @@ struct ConcertPlan {
     let captain: String
     /// asset → 槽位序号（row×7+col，row 0 = 后排）。
     let slotOf: [String: Int]
+    /// 横屏槽位/散位/玩耍位（(54) U：11×5 网格、1920×1080
+    /// 参考系，与竖屏表独立；轮唱蛇形序仍以竖屏 slotOf 为
+    /// 准——换朝向不换演唱顺序，旋转不许打乱轮唱进度）。
+    let slotOfLandscape: [String: Int]
+    let scatterOfLandscape: [String: CGPoint]
+    let playOfLandscape: [String: CGPoint]
     /// asset → 散位（归一化到参考画布 1080×1920 的点）。
     let scatterOf: [String: CGPoint]
     /// asset → 间奏玩耍位（参考画布点）。
@@ -449,6 +503,46 @@ struct ConcertPlan {
             staggerOf[asset] = rng.next(in: 0...PetConcertConst.dropStaggerMax)
             formDelayOf[asset] = rng.next(in: 0...PetConcertConst.formDelayMax)
             swayPhaseOf[asset] = rng.next(in: 0...(2 * Double.pi))
+        }
+
+        // 横屏班底（(54) U）：同算法在 11×5 网格重演（空槽
+        // L/队长槽 L），散位/玩耍位用独立 seed 的 rngL 在横屏
+        // 参考系内生成，与竖屏表互不影响。
+        var slotsL: [Int] = []
+        for row in stride(from: PetConcertConst.gridRowsL - 1, through: 0, by: -1) {
+            for col in 0..<PetConcertConst.gridColsL {
+                let s = row * PetConcertConst.gridColsL + col
+                if PetConcertConst.emptySlotsL.contains(s) { continue }
+                if row == PetConcertConst.captainSlotRowL
+                    && col == PetConcertConst.captainSlotColL { continue }
+                slotsL.append(s)
+            }
+        }
+        var slotOfLandscape: [String: Int] = [
+            captain: PetConcertConst.captainSlotRowL * PetConcertConst.gridColsL
+                + PetConcertConst.captainSlotColL,
+        ]
+        for (asset, slot) in zip(fillOrder, slotsL) { slotOfLandscape[asset] = slot }
+        var rngL = ConcertRNG(seed: seed ^ 0x5EED_1A2B3C4D)
+        var scatterOfLandscape: [String: CGPoint] = [:]
+        var playOfLandscape: [String: CGPoint] = [:]
+        let playSlotsL = rngL.shuffled(slotsL)
+        var playIndexL: [String: Int] = [:]
+        for (i, asset) in fillOrder.enumerated() { playIndexL[asset] = i }
+        for asset in assets {
+            scatterOfLandscape[asset] = CGPoint(
+                x: CGFloat(rngL.next(in: 240...1680)),
+                y: CGFloat(rngL.next(in: 330...760)))
+            if asset == captain {
+                playOfLandscape[asset] = Self.slotPointLandscape(slotOfLandscape[asset]!)
+            } else if let idx = playIndexL[asset], idx < playSlotsL.count {
+                let base = Self.slotPointLandscape(playSlotsL[idx])
+                playOfLandscape[asset] = CGPoint(
+                    x: base.x + CGFloat(rngL.next(in: -55...55)),
+                    y: base.y + CGFloat(rngL.next(in: -35...35)))
+            } else {
+                playOfLandscape[asset] = Self.slotPointLandscape(slotOfLandscape[asset]!)
+            }
         }
 
         // 相位边界（(54) T 自适应）：首行时刻是硬顶——降落/
@@ -720,7 +814,11 @@ struct ConcertPlan {
 
         return ConcertPlan(
             trackId: trackId, duration: duration, lines: lines,
-            captain: captain, slotOf: slotOf, scatterOf: scatterOf,
+            captain: captain, slotOf: slotOf,
+            slotOfLandscape: slotOfLandscape,
+            scatterOfLandscape: scatterOfLandscape,
+            playOfLandscape: playOfLandscape,
+            scatterOf: scatterOf,
             playOf: playOf, staggerOf: staggerOf, formDelayOf: formDelayOf,
             swayPhaseOf: swayPhaseOf, singerByLine: singerByLine,
             chorusLines: chorusLines, tripsByLine: tripsByLine,
@@ -775,6 +873,21 @@ struct ConcertPlan {
         return CGPoint(
             x: PetConcertConst.gridX0 + CGFloat(col - 3) * PetConcertConst.gridDX,
             y: PetConcertConst.gridRowY[row])
+    }
+
+    /// 横屏槽位点（1920×1080 参考系，11×5 网格）。
+    static func slotPointLandscape(_ slot: Int) -> CGPoint {
+        let row = min(max(slot / PetConcertConst.gridColsL, 0),
+                      PetConcertConst.gridRowsL - 1)
+        let col = slot % PetConcertConst.gridColsL
+        return CGPoint(
+            x: PetConcertConst.gridX0L + CGFloat(col - 5) * PetConcertConst.gridDXL,
+            y: PetConcertConst.gridRowYL[row])
+    }
+
+    /// 朝向分发（渲染方按容器 bounds 判定后调用）。
+    static func slotPoint(_ slot: Int, landscape: Bool) -> CGPoint {
+        landscape ? slotPointLandscape(slot) : slotPoint(slot)
     }
 
     private static func breathBlocks(

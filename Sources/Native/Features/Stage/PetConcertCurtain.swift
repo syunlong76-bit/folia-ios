@@ -63,7 +63,10 @@ final class PetConcertBackdropView: UIView {
     override func draw(_ rect: CGRect) {
         guard let ctx = UIGraphicsGetCurrentContext() else { return }
         let w = bounds.width, h = bounds.height
-        let sx = w / PetConcertConst.refW, sy = h / PetConcertConst.refH
+        // (54) U：横屏按 1920×1080 参考系独立换算。
+        let land = PetConcertConst.isLandscape(bounds.size)
+        let sx = w / (land ? PetConcertConst.refWL : PetConcertConst.refW)
+        let sy = h / (land ? PetConcertConst.refHL : PetConcertConst.refH)
         // 深紫竖向渐变。
         let grad = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
@@ -73,7 +76,7 @@ final class PetConcertBackdropView: UIView {
         ctx.drawLinearGradient(grad, start: .zero,
                                end: CGPoint(x: 0, y: h), options: [])
         // 中央柔光（径向，白紫低 alpha）；(54) Q 对准新队形中心。
-        let glowCenter = CGPoint(x: w / 2, y: 980 * sy)
+        let glowCenter = CGPoint(x: w / 2, y: (land ? 560 : 980) * sy)
         let glow = CGGradient(
             colorsSpace: CGColorSpaceCreateDeviceRGB(),
             colors: [UIColor(red: 120/255, green: 100/255, blue: 170/255,
@@ -87,8 +90,8 @@ final class PetConcertBackdropView: UIView {
         var rng = ConcertRNG(seed: 7)
         UIColor(red: 235/255, green: 228/255, blue: 255/255, alpha: 1).setFill()
         for _ in 0..<110 {
-            let x = CGFloat(rng.next(in: 0...Double(PetConcertConst.refW))) * sx
-            let y = CGFloat(rng.next(in: 0...1500)) * sy
+            let x = CGFloat(rng.next(in: 0...Double(land ? PetConcertConst.refWL : PetConcertConst.refW))) * sx
+            let y = CGFloat(rng.next(in: 0...(land ? 840 : 1500))) * sy
             let r = CGFloat(rng.next(in: 1.5...4)) * sx
             let a = rng.next(in: 0.14...0.39)
             UIColor(red: 235/255, green: 228/255, blue: 255/255,
@@ -100,7 +103,10 @@ final class PetConcertBackdropView: UIView {
         // 屏延伸。9 带横板（y 边按 (i/9)^1.35 透视收分，越靠
         // 前带越宽）+ 自灭点 (w/2, y0) 放射的纵向板缝 + 每带
         // 错位短横缝，拼出木板纵深；整幅 0…w × y0…h 无露底。
-        let y0 = PetConcertConst.floorTopY * sy, y1 = h
+        // 横屏地板（(54) U）：地平线按 L 表（300/1080=0.278），
+        // 板带仍 9 带 ^1.35 收分——横屏高矮，带高自动变浅，
+        // 成宽而浅的透视；纵缝灭点/错位缝算法不变、全幅无露底。
+        let y0 = (land ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY) * sy, y1 = h
         var edges: [CGFloat] = []
         for i in 0...9 {
             edges.append(y0 + (y1 - y0) * pow(CGFloat(i) / 9, 1.35))
@@ -130,13 +136,17 @@ final class PetConcertBackdropView: UIView {
         seams.lineWidth = max(1, 2.5 * sx)
         seams.stroke()
         ctx.restoreGState()
-        // 独唱位金色脚圈（双圈，(54) Q 放大至 190×42 参考 px）。
-        let ringCenter = CGPoint(x: PetConcertConst.soloX * sx,
-                                 y: PetConcertConst.soloRingY * sy)
-        let ringRect = CGRect(x: ringCenter.x - PetConcertConst.soloRingRX * sx,
-                              y: ringCenter.y - PetConcertConst.soloRingRY * sy,
-                              width: PetConcertConst.soloRingRX * 2 * sx,
-                              height: PetConcertConst.soloRingRY * 2 * sy)
+        // 独唱位金色脚圈（双圈，(54) Q 放大至 190×42 参考 px；
+        // (54) U 横屏走 L 表 150×30@1920 参考系）。
+        let ringCX = land ? PetConcertConst.soloXL : PetConcertConst.soloX
+        let ringCY = land ? PetConcertConst.soloRingYL : PetConcertConst.soloRingY
+        let ringRX = land ? PetConcertConst.soloRingRXL : PetConcertConst.soloRingRX
+        let ringRY = land ? PetConcertConst.soloRingRYL : PetConcertConst.soloRingRY
+        let ringCenter = CGPoint(x: ringCX * sx, y: ringCY * sy)
+        let ringRect = CGRect(x: ringCenter.x - ringRX * sx,
+                              y: ringCenter.y - ringRY * sy,
+                              width: ringRX * 2 * sx,
+                              height: ringRY * 2 * sy)
         let ring = UIBezierPath(ovalIn: ringRect)
         ring.lineWidth = 11 * sx
         UIColor(red: 240/255, green: 203/255, blue: 120/255, alpha: 1).setStroke()
@@ -243,6 +253,10 @@ final class PetConcertCurtainView: UIView {
     }
     private var decos: [DecoSpec] = []
     private var lastPathUpdate: TimeInterval = -1
+    /// (54) U：当前帧朝向（update 入口按 bounds 判定，路径
+    /// 函数共用）；参考系/幕布/垂幔/脚灯常数按此分发。
+    private var isLand = false
+    private var refWNow: CGFloat { isLand ? PetConcertConst.refWL : PetConcertConst.refW }
     private var confetti: [(layer: CALayer, x0: CGFloat, y0: CGFloat,
                             vy: CGFloat, phase: Double, size: CGFloat,
                             rotV: Double)] = []
@@ -414,7 +428,9 @@ final class PetConcertCurtainView: UIView {
                 interludeIntensity: Double) {
         let w = bounds.width, h = bounds.height
         guard w > 0 else { return }
-        let sx = w / PetConcertConst.refW, sy = h / PetConcertConst.refH
+        isLand = PetConcertConst.isLandscape(bounds.size)
+        let sx = w / refWNow
+        let sy = h / (isLand ? PetConcertConst.refHL : PetConcertConst.refH)
 
         // 洗光（逐帧，仅颜色赋值）。
         washView.frame = bounds
@@ -428,10 +444,12 @@ final class PetConcertCurtainView: UIView {
         if let singerPos {
             target = singerPos
         } else {
-            target = CGPoint(x: (540 + 180 * sin(0.5 * t)) * sx, y: 980 * sy)
+            target = CGPoint(x: ((isLand ? 960 : 540) + 180 * sin(0.5 * t)) * sx,
+                             y: (isLand ? 560 : 980) * sy)
         }
         coneLayer.path = nil
-        let feetY = singerFeetY ?? (1724 * sy)
+        // 横屏默认脚底 = L 独唱位脚下（885+108×1.35/2 ≈ 958）。
+        let feetY = singerFeetY ?? ((isLand ? 958 : 1724) * sy)
         // 光池随 (54) Q 放大的独唱圈同步放大（地板面，不染本体）。
         poolView.frame = CGRect(x: target.x - 170 * sx, y: feetY - 34 * sy,
                                 width: 340 * sx, height: 68 * sy)
@@ -477,8 +495,9 @@ final class PetConcertCurtainView: UIView {
                         params: (amp: Double, freq: Double,
                                  twinkleFreq: Double, twinkleAmp: Double),
                         openU: CGFloat) -> CGFloat {
-        let xin = PetConcertConst.curtainClosedX
-            + (PetConcertConst.curtainOpenX - PetConcertConst.curtainClosedX) * openU
+        let closedX = isLand ? PetConcertConst.curtainClosedXL : PetConcertConst.curtainClosedX
+        let openX = isLand ? PetConcertConst.curtainOpenXL : PetConcertConst.curtainOpenX
+        let xin = closedX + (openX - closedX) * openU
         let wave = PetConcertConst.swayAmpA
             * sin(y * 0.010 + CGFloat(1.1 * t * params.freq))
             + PetConcertConst.swayAmpB
@@ -496,12 +515,15 @@ final class PetConcertCurtainView: UIView {
         let outer: CGFloat = -60
         // (54) Q 全屏化：侧幕自画布顶 (y=0) 一直落到 1740，
         // 顶/两侧不留暗带；内缘开口 126 仍在队形左缘 144 之外。
+        // (54) U 横屏：落点走 L 表 1020@1080（=371pt/393pt，
+        // 近全高），采样步长按参考高同比（70×1080/1920≈40）。
+        let bottomY = isLand ? PetConcertConst.curtainBottomYL : 1740
         var ys: [CGFloat] = []
         var y: CGFloat = 0
-        while y <= 1740 { ys.append(y); y += 70 }
+        while y <= bottomY { ys.append(y); y += isLand ? 40 : 70 }
 
         for side in 0..<2 { // 0 = 左，1 = 右（镜像）
-            let mirror: (CGFloat) -> CGFloat = { side == 0 ? $0 : PetConcertConst.refW - $0 }
+            let mirror: (CGFloat) -> CGFloat = { side == 0 ? $0 : refWNow - $0 }
             let edge: [CGPoint] = ys.map {
                 CGPoint(x: mirror(innerX(y: $0, t: t, params: params, openU: openU)),
                         y: $0)
@@ -509,14 +531,14 @@ final class PetConcertCurtainView: UIView {
             // 底边 scallop 回到外缘。
             var poly: [CGPoint] = [CGPoint(x: mirror(outer), y: -20)]
             poly += edge
-            let bx0 = innerX(y: 1740, t: t, params: params, openU: openU)
+            let bx0 = innerX(y: bottomY, t: t, params: params, openU: openU)
             for i in 1...12 {
                 let u = CGFloat(i) / 12
                 let bx = bx0 + (outer - bx0) * u
-                let by = 1740 + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
+                let by = bottomY + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
                 poly.append(CGPoint(x: mirror(bx), y: by))
             }
-            poly.append(CGPoint(x: mirror(outer), y: 1800))
+            poly.append(CGPoint(x: mirror(outer), y: bottomY + 60))
             let path = UIBezierPath()
             for (i, p) in poly.enumerated() {
                 let pt = CGPoint(x: p.x * sx, y: p.y * sy)
@@ -525,8 +547,9 @@ final class PetConcertCurtainView: UIView {
             path.close()
             sideFill[side].path = path.cgPath
             // 褶皱条纹（跟随波形、按开合压缩）。
-            let xin = PetConcertConst.curtainClosedX
-                + (PetConcertConst.curtainOpenX - PetConcertConst.curtainClosedX) * openU
+            let xin = (isLand ? PetConcertConst.curtainClosedXL : PetConcertConst.curtainClosedX)
+                + ((isLand ? PetConcertConst.curtainOpenXL : PetConcertConst.curtainOpenX)
+                    - (isLand ? PetConcertConst.curtainClosedXL : PetConcertConst.curtainClosedX)) * openU
             for (f, frac) in [0.22, 0.45, 0.68].enumerated() {
                 let line = UIBezierPath()
                 for (i, yy) in ys.enumerated() {
@@ -551,7 +574,7 @@ final class PetConcertCurtainView: UIView {
             for i in 1...12 {
                 let u = CGFloat(i) / 12
                 let bx = bx0 + (outer - bx0) * u
-                let by = 1740 + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
+                let by = bottomY + 26 * sin(u * .pi * 3) * (1 - u * 0.3)
                 edgeLine.addLine(to: CGPoint(x: mirror(bx) * sx, y: by * sy))
             }
             sideHem[side].path = hem.cgPath
@@ -560,11 +583,12 @@ final class PetConcertCurtainView: UIView {
             sideEdge[side].lineWidth = 6 * sx
         }
 
-        // 垂幔：7 扇 scallop。
-        let n = PetConcertConst.valanceSwags
-        let sw = PetConcertConst.refW / CGFloat(n)
-        let base = PetConcertConst.valanceBaseY
-        let depth = PetConcertConst.valanceDepth
+        // 垂幔：竖屏 7 扇 scallop；(54) U 横屏 11 扇（扇宽
+        // 1920/11≈175 参考 px ≈ 竖屏 154 同量级）、基线/垂深走 L 表。
+        let n = isLand ? PetConcertConst.valanceSwagsL : PetConcertConst.valanceSwags
+        let sw = refWNow / CGFloat(n)
+        let base = isLand ? PetConcertConst.valanceBaseYL : PetConcertConst.valanceBaseY
+        let depth = isLand ? PetConcertConst.valanceDepthL : PetConcertConst.valanceDepth
         func scallopEdge(offsetY: CGFloat) -> [CGPoint] {
             var pts: [CGPoint] = []
             let steps = 8
@@ -583,7 +607,7 @@ final class PetConcertCurtainView: UIView {
         func bandPath(offsetY: CGFloat) -> UIBezierPath {
             let path = UIBezierPath()
             path.move(to: CGPoint(x: -20 * sx, y: -10 * sy))
-            path.addLine(to: CGPoint(x: (PetConcertConst.refW + 20) * sx, y: -10 * sy))
+            path.addLine(to: CGPoint(x: (refWNow + 20) * sx, y: -10 * sy))
             for p in scallopEdge(offsetY: offsetY).reversed() {
                 path.addLine(to: CGPoint(x: p.x * sx, y: p.y * sy))
             }
@@ -621,17 +645,23 @@ final class PetConcertCurtainView: UIView {
             let size = spec.size * scale
             let center: CGPoint
             if spec.onValance {
-                center = CGPoint(x: spec.x * sx, y: spec.y * sy)
+                // (54) U 横屏：点缀 x 按参考宽比铺满全宽（原表
+                // 只到 1006/1080，横屏不缩放只盖左半——截图症状）。
+                let dx = isLand ? spec.x * PetConcertConst.refWL / PetConcertConst.refW : spec.x
+                center = CGPoint(x: dx * sx, y: spec.y * sy)
             } else {
                 // 侧幕点缀：横向分数落在当前幕布宽度内，左右各一份
                 // 用同一图层画两侧（path 内含两形）。
-                let xin = PetConcertConst.curtainClosedX
-                    + (PetConcertConst.curtainOpenX - PetConcertConst.curtainClosedX) * openU
+                let xin = (isLand ? PetConcertConst.curtainClosedXL : PetConcertConst.curtainClosedX)
+                    + ((isLand ? PetConcertConst.curtainOpenXL : PetConcertConst.curtainOpenX)
+                        - (isLand ? PetConcertConst.curtainClosedXL : PetConcertConst.curtainClosedX)) * openU
                 let lx = outer + (xin - outer) * spec.x
                     + CGFloat(params.amp) * 4
                     * sin(spec.y * 0.010 + CGFloat(1.1 * t * params.freq)) * spec.x
-                let left = CGPoint(x: lx * sx, y: spec.y * sy)
-                let right = CGPoint(x: (PetConcertConst.refW - lx) * sx, y: spec.y * sy)
+                // (54) U 横屏：侧幕点缀 y 按参考高比压缩进幕高。
+                let dy = isLand ? spec.y * PetConcertConst.refHL / PetConcertConst.refH : spec.y
+                let left = CGPoint(x: lx * sx, y: dy * sy)
+                let right = CGPoint(x: (refWNow - lx) * sx, y: dy * sy)
                 let combined = UIBezierPath()
                 combined.append(PetConcertDeco.path(
                     kind: spec.kind, center: left, size: size * sx,
@@ -666,15 +696,15 @@ final class PetConcertCurtainView: UIView {
         ]
         for (i, beam) in beamLayers.enumerated() {
             guard active else { beam.path = nil; continue }
-            let ox: CGFloat = [180, 540, 900][i]
+            let ox: CGFloat = isLand ? [320, 960, 1600][i] : [180, 540, 900][i]
             let tx = ox + 250 * sin(CGFloat(0.35 * t * params.freq) + CGFloat(i) * 2.1)
             let alpha: CGFloat = phase == .interlude ? 0.24 : 0.18
             beam.fillColor = colors[i].withAlphaComponent(alpha).cgColor
             let path = UIBezierPath()
             path.move(to: CGPoint(x: (ox - 13) * sx, y: 45 * sy))
             path.addLine(to: CGPoint(x: (ox + 13) * sx, y: 45 * sy))
-            path.addLine(to: CGPoint(x: (tx + 100) * sx, y: 1600 * sy))
-            path.addLine(to: CGPoint(x: (tx - 100) * sx, y: 1600 * sy))
+            path.addLine(to: CGPoint(x: (tx + 100) * sx, y: (isLand ? 900 : 1600) * sy))
+            path.addLine(to: CGPoint(x: (tx - 100) * sx, y: (isLand ? 900 : 1600) * sy))
             path.close()
             beam.path = path.cgPath
         }
@@ -683,8 +713,10 @@ final class PetConcertCurtainView: UIView {
     private func updateFootlights(t: TimeInterval, sx: CGFloat, sy: CGFloat) {
         let cores = UIBezierPath()
         for i in 0..<PetConcertConst.footlightCount {
-            let x = (90 + CGFloat(i) * 90) * sx
-            let y = PetConcertConst.footlightY * sy
+            // (54) U 横屏：11 盏均分全宽（原 90 间距只铺左半）。
+            let x = isLand ? (CGFloat(i) + 0.5) * refWNow / CGFloat(PetConcertConst.footlightCount) * sx
+                : (90 + CGFloat(i) * 90) * sx
+            let y = (isLand ? PetConcertConst.footlightYL : PetConcertConst.footlightY) * sy
             cores.append(UIBezierPath(ovalIn: CGRect(
                 x: x - 13 * sx, y: y - 13 * sy, width: 26 * sx, height: 26 * sy)))
             let pulse = 0.75 + 0.25 * sin(2 * t + Double(i) * 0.8)
@@ -704,7 +736,8 @@ final class PetConcertCurtainView: UIView {
             let dt = t - burst
             guard dt >= 0, dt <= 1.8 else { piece.layer.isHidden = true; continue }
             piece.layer.isHidden = false
-            let x = (piece.x0 + 26 * sin(3 * CGFloat(dt) + CGFloat(piece.phase))) * sx
+            let x0 = isLand ? piece.x0 * PetConcertConst.refWL / PetConcertConst.refW : piece.x0
+            let x = (x0 + 26 * sin(3 * CGFloat(dt) + CGFloat(piece.phase))) * sx
             let y = (piece.y0 + piece.vy * CGFloat(dt)) * sy
             let fade = dt > 1.2 ? 1 - (dt - 1.2) / 0.6 : 1
             piece.layer.opacity = Float(max(0, fade))

@@ -68,6 +68,20 @@ final class PetConcertBubbleView: UIView {
     static let lyricNormalMaxTextRefW: CGFloat = 600
     /// 通用气泡（口令/闲聊）字号下限。
     static let genericMinFontRef: CGFloat = 28
+    /// 横屏常规最大文本宽（(54) U，1920 参考系）：横屏可用
+    /// 宽大，常规档即放宽到 1050 参考 px（852pt 舞台上
+    /// 466pt），整行全显更容易达成；字号下限/最多 3 行规则
+    /// 与竖屏不变。
+    static let lyricNormalMaxTextRefWL: CGFloat = 1050
+
+    /// 朝向换算（(54) U）：按容器宽高比选参考系。
+    private func scales(_ stageSize: CGSize)
+        -> (sx: CGFloat, sy: CGFloat, landscape: Bool) {
+        let land = PetConcertConst.isLandscape(stageSize)
+        let rw = land ? PetConcertConst.refWL : PetConcertConst.refW
+        let rh = land ? PetConcertConst.refHL : PetConcertConst.refH
+        return (stageSize.width / rw, stageSize.height / rh, land)
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -118,7 +132,7 @@ final class PetConcertBubbleView: UIView {
                                 size: CGSize, lines: Int),
                        center: CGPoint, anchorX: CGFloat,
                        stageSize: CGSize) {
-        let sx = stageSize.width / PetConcertConst.refW
+        let sx = scales(stageSize).sx
         let padX: CGFloat = 26 * sx, padY: CGFloat = 15 * sx
         let tail: CGFloat = 18 * sx
         label.font = solved.font
@@ -167,9 +181,10 @@ final class PetConcertBubbleView: UIView {
     /// - tip: 气泡尾尖应指向的点（舞台坐标）。
     func show(key: String, text: String, fontRefPx: CGFloat,
               tip: CGPoint, stageSize: CGSize) {
-        let sx = stageSize.width / PetConcertConst.refW
+        let sc = scales(stageSize)
+        let sx = sc.sx
         let padX: CGFloat = 26 * sx
-        let maxTextW = min(600 * sx,
+        let maxTextW = min((sc.landscape ? Self.lyricNormalMaxTextRefWL : 600) * sx,
                            stageSize.width - 24 * sx - padX * 2 - 8)
         let solved = solve(text: text, baseFontRef: fontRefPx,
                            minFontRef: Self.genericMinFontRef,
@@ -199,10 +214,11 @@ final class PetConcertBubbleView: UIView {
     /// 去重，只在切换时记一次）。
     func showInZone(key: String, text: String, fontRefPx: CGFloat,
                     stageSize: CGSize, anchorX: CGFloat) {
-        let sx = stageSize.width / PetConcertConst.refW
-        let sy = stageSize.height / PetConcertConst.refH
+        let sc = scales(stageSize)
+        let sx = sc.sx, sy = sc.sy
         let padX: CGFloat = 26 * sx
-        let normalMax = min(Self.lyricNormalMaxTextRefW * sx,
+        let normalMax = min((sc.landscape ? Self.lyricNormalMaxTextRefWL
+                                : Self.lyricNormalMaxTextRefW) * sx,
                             stageSize.width - 24 * sx - padX * 2 - 8)
         var solved = solve(text: text, baseFontRef: fontRefPx,
                            minFontRef: Self.lyricMinFontRef,
@@ -224,8 +240,10 @@ final class PetConcertBubbleView: UIView {
         let tail: CGFloat = 18 * sx
         let bw = ceil(solved.size.width) + padX * 2 + 8
         let totalH = ceil(solved.size.height) + 15 * sx * 2 + tail + 4
-        let zoneTop = PetConcertConst.bubbleZoneTop * sy
-        let zoneBottom = PetConcertConst.bubbleZoneBottom * sy
+        let zoneTop = (sc.landscape ? PetConcertConst.bubbleZoneTopL
+                          : PetConcertConst.bubbleZoneTop) * sy
+        let zoneBottom = (sc.landscape ? PetConcertConst.bubbleZoneBottomL
+                             : PetConcertConst.bubbleZoneBottom) * sy
         let cx = min(max(anchorX, bw / 2 + 12 * sx),
                      stageSize.width - bw / 2 - 12 * sx)
         var cy = (zoneTop + zoneBottom) / 2
@@ -470,12 +488,15 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         var singerFeetY: CGFloat? = nil
         var singerActor: PetConcertActorView? = nil
         var singerScale: CGFloat = 1
+        let landscape = PetConcertConst.isLandscape(size)
         for asset in actorOrder {
             guard let actor = actors[asset] else { continue }
-            let state = actorState(asset: asset, at: position, plan: plan)
-            let center = refToStage(state.center, size: size)
+            let state = actorState(asset: asset, at: position, plan: plan,
+                                   landscape: landscape)
+            let center = refToStage(state.center, size: size, landscape: landscape)
             actor.center = center
-            let base = PetConcertConst.petBase * (size.width / PetConcertConst.refW)
+            let base = (landscape ? PetConcertConst.petBaseL : PetConcertConst.petBase)
+                * (size.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW))
             actor.bounds = CGRect(x: 0, y: 0, width: base, height: base)
             actor.transform = CGAffineTransform(scaleX: state.scale, y: state.scale)
             if asset == singerAsset {
@@ -830,8 +851,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             singerGlowView.image = glowImage(
                 for: singerAsset, source: singerActor.imageView.image)
         }
-        let sx = size.width / PetConcertConst.refW
-        let base = PetConcertConst.petBase * sx
+        let landscape = PetConcertConst.isLandscape(size)
+        let sx = size.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW)
+        let base = (landscape ? PetConcertConst.petBaseL : PetConcertConst.petBase) * sx
         let w = base * singerScale * 1.5
         singerGlowView.bounds = CGRect(x: 0, y: 0, width: w, height: w)
         singerGlowView.center = singerCenter
@@ -879,10 +901,14 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     }
 
     /// 基础锚点（无跑位）：降落/散位/列队/队形/间奏玩耍位。
+    /// (54) U：横屏走横屏槽位/散位/玩耍位表（独立参考系）。
     private func basePosition(asset: String, at t: TimeInterval,
-                              plan: ConcertPlan) -> CGPoint {
-        let slot = ConcertPlan.slotPoint(plan.slotOf[asset] ?? 0)
-        guard let scatter = plan.scatterOf[asset] else { return slot }
+                              plan: ConcertPlan, landscape: Bool = false) -> CGPoint {
+        let slot = landscape
+            ? ConcertPlan.slotPointLandscape(plan.slotOfLandscape[asset] ?? 0)
+            : ConcertPlan.slotPoint(plan.slotOf[asset] ?? 0)
+        guard let scatter = (landscape ? plan.scatterOfLandscape[asset]
+                                : plan.scatterOf[asset]) else { return slot }
         let k = max(0.4, plan.formAt / PetConcertConst.formNominal * 1.667) // ≈ formAt/1.5
         let stagger = (plan.staggerOf[asset] ?? 0) * k
         let fall = PetConcertConst.dropFallDuration * k
@@ -913,7 +939,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             return concertLerp(pos, slot, u)
         }
         // 间奏玩耍位（出入各一段平滑过渡）。
-        if let gap = plan.interlude, let play = plan.playOf[asset] {
+        if let gap = plan.interlude,
+           let play = (landscape ? plan.playOfLandscape[asset] : plan.playOf[asset]) {
             let inDur = 0.45, outDur = 0.55
             if t >= gap.start && t < gap.start + inDur {
                 return concertLerp(slot, play, concertEaseInOut((t - gap.start) / inDur))
@@ -929,11 +956,21 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func actorState(asset: String, at t: TimeInterval,
-                            plan: ConcertPlan) -> (center: CGPoint, scale: CGFloat) {
-        let base = basePosition(asset: asset, at: t, plan: plan)
+                            plan: ConcertPlan, landscape: Bool = false)
+        -> (center: CGPoint, scale: CGFloat) {
+        let base = basePosition(asset: asset, at: t, plan: plan, landscape: landscape)
         // (54) Q 透视：行缩放（后排 0.70 → 前排 1.00）；队长再乘 captainScale。
-        let slotRow = (plan.slotOf[asset] ?? 0) / PetConcertConst.gridCols
-        let formScale = PetConcertConst.formationScale(row: slotRow)
+        // (54) U 横屏：行缩放走 L 表（0.78 → 1.00，5 行）。
+        let slotRow = landscape
+            ? (plan.slotOfLandscape[asset] ?? 0) / PetConcertConst.gridColsL
+            : (plan.slotOf[asset] ?? 0) / PetConcertConst.gridCols
+        let formScale = landscape ? PetConcertConst.formationScaleL(row: slotRow)
+            : PetConcertConst.formationScale(row: slotRow)
+        let soloPoint = landscape
+            ? CGPoint(x: PetConcertConst.soloXL, y: PetConcertConst.soloYL)
+            : CGPoint(x: PetConcertConst.soloX, y: PetConcertConst.soloY)
+        let soloScaleValue = landscape ? PetConcertConst.soloScaleL
+            : PetConcertConst.soloScale
         var scale: CGFloat = formScale
             * (asset == plan.captain ? PetConcertConst.captainScale : 1)
         let phase = plan.phase(at: t)
@@ -946,26 +983,26 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             .sorted { $0.lineIndex < $1.lineIndex }
             .first
         if let trip {
-            let solo = CGPoint(x: PetConcertConst.soloX, y: PetConcertConst.soloY)
+            let solo = soloPoint
             // 连唱：下一行同为本只且其 depart 已到 → 停在独唱位。
             let nextTrip = plan.tripsByLine[trip.lineIndex + 1]
             if t >= trip.returnStart, let next = nextTrip,
                next.singer == asset, t >= next.depart {
-                return (solo, PetConcertConst.soloScale)
+                return (solo, soloScaleValue)
             }
             if t < trip.arrive {
                 let u = concertEaseInOut((t - trip.depart) / (trip.arrive - trip.depart))
-                let from = basePosition(asset: asset, at: trip.depart, plan: plan)
+                let from = basePosition(asset: asset, at: trip.depart, plan: plan, landscape: landscape)
                 return (concertBezier(from, solo, lift: PetConcertConst.bezierLift, u),
-                        concertLerp(formScale, PetConcertConst.soloScale, u))
+                        concertLerp(formScale, soloScaleValue, u))
             }
             if t < trip.returnStart {
-                return (solo, PetConcertConst.soloScale)
+                return (solo, soloScaleValue)
             }
             let u = concertEaseInOut((t - trip.returnStart) / (trip.returnEnd - trip.returnStart))
-            let to = basePosition(asset: asset, at: trip.returnEnd, plan: plan)
+            let to = basePosition(asset: asset, at: trip.returnEnd, plan: plan, landscape: landscape)
             return (concertBezier(solo, to, lift: PetConcertConst.bezierLift, u),
-                    concertLerp(PetConcertConst.soloScale, formScale, u))
+                    concertLerp(soloScaleValue, formScale, u))
         }
 
         // 队形内动态（闲晃/律动/间奏跳/告别鞠躬）。
@@ -1003,8 +1040,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         // 贴近（位移向伙伴槽位、封顶 16 参考 px）并微微下
         // 倾（y +3），呈现成对倾身；无配对者保持闲晃。
         if phase == .preludeChat, let partner = plan.whisperPartnerOf[asset],
-           let partnerSlot = plan.slotOf[partner] {
-            let target = ConcertPlan.slotPoint(partnerSlot)
+           let partnerSlot = (landscape ? plan.slotOfLandscape[partner]
+                                  : plan.slotOf[partner]) {
+            let target = ConcertPlan.slotPoint(partnerSlot, landscape: landscape)
             var dx = target.x - base.x, dy = target.y - base.y
             let len = max(1, hypot(dx, dy))
             let step = min(16, len * 0.22)
@@ -1025,8 +1063,11 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         // 群唱行：前排两排齐蹦。
         if let lineId = currentLine(at: t, plan: plan),
            plan.chorusLines.contains(lineId) {
-            let row = (plan.slotOf[asset] ?? 0) / PetConcertConst.gridCols
-            if row >= 6 {
+            let row = landscape
+                ? (plan.slotOfLandscape[asset] ?? 0) / PetConcertConst.gridColsL
+                : (plan.slotOf[asset] ?? 0) / PetConcertConst.gridCols
+            if row >= (landscape ? PetConcertConst.gridRowsL - 2
+                          : PetConcertConst.gridRows - 2) {
                 center.y -= abs(CGFloat(sin(6 * t + swayPhase))) * 10
             }
         }
@@ -1040,9 +1081,12 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         return (center, scale)
     }
 
-    private func refToStage(_ point: CGPoint, size: CGSize) -> CGPoint {
-        CGPoint(x: point.x * size.width / PetConcertConst.refW,
-                y: point.y * size.height / PetConcertConst.refH)
+    private func refToStage(_ point: CGPoint, size: CGSize,
+                            landscape: Bool = false) -> CGPoint {
+        let rw = landscape ? PetConcertConst.refWL : PetConcertConst.refW
+        let rh = landscape ? PetConcertConst.refHL : PetConcertConst.refH
+        return CGPoint(x: point.x * size.width / rw,
+                       y: point.y * size.height / rh)
     }
 
     // MARK: 气泡与提词条
@@ -1050,8 +1094,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     private func updateBubble(position: TimeInterval, phase: ConcertPhase,
                               plan: ConcertPlan, singerAsset: String?,
                               soloLine: Int?, size: CGSize) {
-        let sx = size.width / PetConcertConst.refW
-        let base = PetConcertConst.petBase * sx
+        let landscape = PetConcertConst.isLandscape(size)
+        let sx = size.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW)
+        let base = (landscape ? PetConcertConst.petBaseL : PetConcertConst.petBase) * sx
         // 队长口令（列队相位，逐字原样）。口令指向队长本人，
         // 现有追光不指向队长，故队长不发光（(54) S 一致处理）。
         if phase == .formation {
@@ -1119,8 +1164,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
            plan.chorusLines.contains(lineId),
            let line = plan.lines.first(where: { $0.id == lineId }) {
             let soloStage = refToStage(
-                CGPoint(x: PetConcertConst.soloX, y: PetConcertConst.soloY),
-                size: size)
+                landscape ? CGPoint(x: PetConcertConst.soloXL, y: PetConcertConst.soloYL)
+                    : CGPoint(x: PetConcertConst.soloX, y: PetConcertConst.soloY),
+                size: size, landscape: landscape)
             bubbleView.showInZone(
                 key: "chorus-\(lineId)", text: line.text,
                 fontRefPx: PetConcertConst.bubbleFontLyric,
@@ -1129,7 +1175,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                 updateGuide(from: tailTip,
                             to: CGPoint(x: soloStage.x,
                                         y: soloStage.y - base
-                                            * PetConcertConst.soloScale / 2))
+                                            * (landscape ? PetConcertConst.soloScaleL
+                                                  : PetConcertConst.soloScale) / 2))
             } else {
                 hideGuide()
             }
@@ -1165,7 +1212,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             teleLabel.text = line.text
             // 字号：40 起、缩到 28 止（v3 口径）；仍放不下则
             // 两行（提词条加高），任何情况下不截断、不省略。
-            let sx = size.width / PetConcertConst.refW
+            let sx = size.width / (PetConcertConst.isLandscape(size)
+                                      ? PetConcertConst.refWL : PetConcertConst.refW)
             let maxW = size.width - 48 * sx
             var fontSize = PetConcertConst.teleFontMax * sx
             let minSize = PetConcertConst.teleFontMin * sx
@@ -1188,6 +1236,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
 
     // MARK: 布局
 
+    /// 上次落面包屑的布局尺寸（旋转检测：尺寸变即重排+记录）。
+    private var lastLayoutLoggedSize: CGSize = .zero
+
     private func performLayout() {
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
@@ -1197,15 +1248,46 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         petField.frame = bounds
         guideView.frame = bounds
         guideLayer.frame = bounds
-        let sx = bounds.width / PetConcertConst.refW
-        let sy = bounds.height / PetConcertConst.refH
+        // (54) U 旋转重排：容器尺寸一变，全部站位在下一帧
+        // frameTick 按新朝向参考系重算（plan + position 纯函
+        // 数，无运行期累积位置）；提词字号须按新 sx 重解，
+        // 故清 lastTeleLineId 强制下一帧重算字号/行数。
+        if bounds.size != lastLayoutLoggedSize {
+            let first = lastLayoutLoggedSize == .zero
+            lastLayoutLoggedSize = bounds.size
+            lastTeleLineId = nil
+            if !first || plan != nil {
+                let land = PetConcertConst.isLandscape(bounds.size)
+                let f: String, so: String, bz: String
+                if land {
+                    f = "(0.109,0.306)-(0.891,0.713)"
+                    so = "(0.500,0.819)"
+                    bz = "0.134-0.292"
+                } else {
+                    f = "(0.133,0.306)-(0.867,0.715)"
+                    so = "(0.500,0.842)"
+                    bz = "0.140-0.281"
+                }
+                Breadcrumbs.log("concert.layout orient=\(land ? "landscape" : "portrait")"
+                    + " size=\(Int(bounds.width))x\(Int(bounds.height))"
+                    + " formation=\(f) solo=\(so) bubbleY=\(bz)")
+            }
+        }
+        let landscape = PetConcertConst.isLandscape(bounds.size)
+        let sx = bounds.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW)
+        let sy = bounds.height / (landscape ? PetConcertConst.refHL : PetConcertConst.refH)
         guideLayer.lineWidth = max(1.5, 2.5 * sx)
         guideLayer.lineDashPattern = [NSNumber(value: Double(7 * sx)),
                                       NSNumber(value: Double(5 * sx))]
         let twoLines = teleLabel.numberOfLines == 2
-        let barH = PetConcertConst.teleBarH * sy * (twoLines ? 1.5 : 1)
+        // (54) U：提词字号按 sx 换算，横屏 sxL(0.444)>syL(0.364)，
+        // 条高若仍按 sy 定会挤压字号行高（17.8pt 字行高 ≈21pt
+        // > 27.7−8pt）——横屏条高改按 sx 换算（76×0.444=33.7pt，
+        // 条底 354.8+33.7=388.5pt 仍在 393pt 内）。
+        let barH = PetConcertConst.teleBarH * (landscape ? sx : sy) * (twoLines ? 1.5 : 1)
         teleBar.frame = CGRect(
-            x: 24 * sx, y: PetConcertConst.teleBarY * sy,
+            x: 24 * sx,
+            y: (landscape ? PetConcertConst.teleBarYL : PetConcertConst.teleBarY) * sy,
             width: bounds.width - 48 * sx, height: barH)
         teleBar.layer.cornerRadius = 20 * sx
         teleLabel.frame = teleBar.bounds.insetBy(dx: 12 * sx, dy: 4)

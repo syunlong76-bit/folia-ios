@@ -275,15 +275,21 @@ final class SketchbookDrawerView: UIView {
     override func layoutSubviews() {
         super.layoutSubviews()
         let edgeHeight = self.edgeHeight
+        // 安全区避让（3.7 (54) iOS 适配自查补修）：把手三件套的
+        // 横向锚点取 safeAreaInsets.left——竖屏恒 0、与网页版
+        // 贴左缘口径逐点一致；横屏灵动岛转到左侧时 inset≈59，
+        // 把手整体右移让开岛体，不被压住；岛在右侧时 inset=0
+        // 保持贴边。抽屉本体全幅出血不避（系统面板惯例）。
+        let edgeX = safeAreaInsets.left
         edgeHotButton.frame = CGRect(
-            x: 0, y: Self.edgeTop, width: Self.edgeWidth, height: edgeHeight)
+            x: edgeX, y: Self.edgeTop, width: Self.edgeWidth, height: edgeHeight)
         // 常驻小条在热区内竖直居中（css .scratchpad-edge-rest）。
         restStrip.frame = CGRect(
-            x: 0, y: Self.edgeTop + (edgeHeight - 56) / 2,
+            x: edgeX, y: Self.edgeTop + (edgeHeight - 56) / 2,
             width: 6, height: 56)
         restMark.frame = CGRect(x: 0, y: 0, width: 6, height: 2)
         expandedHandle.frame = CGRect(
-            x: 0, y: Self.edgeTop,
+            x: edgeX, y: Self.edgeTop,
             width: Self.expandedHandleWidth,
             height: Self.expandedHandleHeight)
         expandedTopMark.frame = CGRect(

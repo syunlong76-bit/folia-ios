@@ -189,7 +189,7 @@ final class StageCycleProgressRingView: UIView {
             ringLayer.removeAnimation(forKey: "cycleFill")
             ringLayer.strokeEnd = 1
         }
-        UIView.animate(withDuration: completed ? 0.3 : 0.18,
+        UIView.animate(withDuration: completed ? 0.3 : 0.18, delay: 0,
                        options: [.beginFromCurrentState]) {
             self.alpha = 0
         } completion: { _ in
