@@ -104,6 +104,8 @@ final class PetIslandLayer: UIView {
             passthrough.view.addSubview(layer)
             win.isHidden = false
             layer.overlayWindow = win
+            Breadcrumbs.log("island.install level=\(Int(win.windowLevel.rawValue))"
+                + " residents=\(PetHomeRegistry.shared.islandResidents.count)")
             PetHomeRegistry.shared.onIslandDeparture = { [weak layer] asset in
                 layer?.releasePet(asset: asset)
             }
@@ -414,5 +416,23 @@ final class PetIslandLayer: UIView {
     }
 }
 
+/// 穿透型根视图（3.7 (34) 热修）：UIView 默认 hitTest 在没
+/// 有子视图认领触摸时返回它自己——岛层自己穿透了也没用，
+/// 根视图会把全屏触摸兜底认领，overlay 窗口（level 高于
+/// App 窗口）遂吃掉全部事件，App 渲染正常但全面点不动
+/// （(32) 真机实锤：冷启动必现）。根视图必须把「命中自己」
+/// 翻译成 nil，事件才穿透到下层窗口；命中宠物/气泡等子
+/// 视图时原样返回，岛上交互不受影响。
+private final class PassthroughRootView: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        return hit === self ? nil : hit
+    }
+}
+
 /// 穿透型根控制器：只承载岛层，不参与任何页面逻辑。
-private final class PassthroughViewController: UIViewController {}
+private final class PassthroughViewController: UIViewController {
+    override func loadView() {
+        view = PassthroughRootView()
+    }
+}

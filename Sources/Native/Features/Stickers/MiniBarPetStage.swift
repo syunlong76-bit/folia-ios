@@ -720,6 +720,8 @@ final class MiniBarPetStage: UIView {
     private func ensureExpandedCast() {
         if !barPresented { noteGuardBlock("ensure.barNotPresented"); return }
         if bounds.width <= 40 { noteGuardBlock("ensure.stageTooNarrow"); return }
+        Breadcrumbs.log("pet.spawn.begin role=\(role == .wall ? "wall" : "stage")"
+            + " cast=\(allActors.count) width=\(Int(bounds.width))")
         let castBefore = allActors.map { $0.asset }
         if resident == nil {
             // 详情页台的常驻同样走取人（等在此处者优先），不
@@ -769,6 +771,7 @@ final class MiniBarPetStage: UIView {
             Breadcrumbs.log("pet.cast.generate kind=expanded"
                 + " assets=\(castAfter.joined(separator: ","))")
         }
+        Breadcrumbs.log("pet.spawn.end cast=\(allActors.count)")
     }
 
     /// 嘉宾入场：从一端走进来（弹簧淡入 + 落位）。
