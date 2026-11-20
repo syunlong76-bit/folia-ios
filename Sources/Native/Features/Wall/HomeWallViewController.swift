@@ -193,6 +193,27 @@ final class HomeWallViewController: UIViewController,
             close.heightAnchor.constraint(equalToConstant: 26)
         ])
 
+        // 墙内设置齿轮（3.7 (36)）：固定左上角（顶部带右上角是
+        // 关闭键、正中是状态条，左上角不挡拼贴操作），样式与主
+        // 界面边缘齿轮一致（34×34、半透明），点按打开同一个设
+        // 置页；边缘老齿轮保留不动。
+        let settingsGear = UIButton(type: .system)
+        settingsGear.setImage(UIImage(systemName: "gearshape.fill"), for: .normal)
+        settingsGear.tintColor = .white
+        settingsGear.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        settingsGear.layer.cornerRadius = 17
+        settingsGear.alpha = 0.5
+        settingsGear.accessibilityLabel = "设置"
+        settingsGear.translatesAutoresizingMaskIntoConstraints = false
+        settingsGear.addTarget(self, action: #selector(wallSettingsTapped), for: .touchUpInside)
+        view.addSubview(settingsGear)
+        NSLayoutConstraint.activate([
+            settingsGear.widthAnchor.constraint(equalToConstant: 34),
+            settingsGear.heightAnchor.constraint(equalToConstant: 34),
+            settingsGear.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            settingsGear.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
+        ])
+
         // 播放态同步：切歌/播停时刷新台面内容（与曲目墙同构）。
         PlaybackEngine.shared.$currentTrack
             .receive(on: DispatchQueue.main)
@@ -226,6 +247,14 @@ final class HomeWallViewController: UIViewController,
 
     @objc private func closeTapped() {
         dismiss(animated: true)
+    }
+
+    /// 墙内齿轮打开设置页：与主界面边缘齿轮同一呈现方式
+    /// （overFullScreen 浮层、animated: false）。
+    @objc private func wallSettingsTapped() {
+        let settings = SettingsViewController()
+        settings.modalPresentationStyle = .overFullScreen
+        present(settings, animated: false)
     }
 
     /// 失败态点按状态胶囊：重置计数重新加载（3.7 (13) #3）。

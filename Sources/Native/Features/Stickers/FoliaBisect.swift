@@ -20,6 +20,6 @@ import Foundation
 /// 两开关均为编译期常量：下一轮按判读逐个改 false 恢复，
 /// 定位到具体子系统后再拆细。
 enum FoliaBisect {
-    static let islandWindowDisabled = true
+    static let islandWindowDisabled = false
     static let pet32SubsystemsBypassed = true
 }
