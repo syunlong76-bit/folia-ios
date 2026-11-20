@@ -52,7 +52,7 @@ final class PetHitProxyView: UIView {
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, isUserInteractionEnabled, alpha > 0.01 else { return nil }
-        return point(inside: point, with: event) ? self : nil
+        return self.point(inside: point, with: event) ? self : nil
     }
 
     @objc private func handleSingleTap(_ recognizer: UITapGestureRecognizer) {

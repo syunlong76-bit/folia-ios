@@ -177,7 +177,10 @@ final class StageViewController: UIViewController {
     private var headerChromeHidden = false
 
     private var stageHeaderViews: [UIView] {
-        [closeButton, titleLabel, artistLabel, likeButton, styleButton]
+        // (53) H 修正：播放列表入口自点播台台面迁入本顶栏隐藏排
+        // （与样式入口同排、随顶栏 5 秒自动隐藏/双击恢复的既有
+        // 语义显隐），台面不再常驻该钮。
+        [closeButton, titleLabel, artistLabel, likeButton, styleButton, queueButton]
     }
 
     private func installStageHeaderAutoHideRecognizers() {
@@ -434,7 +437,7 @@ final class StageViewController: UIViewController {
         styleButton.layer.cornerRadius = 12
         styleButton.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
         styleButton.addTarget(self, action: #selector(styleTapped), for: .touchUpInside)
-        for v in [closeButton, titleLabel, artistLabel, likeButton, styleButton] as [UIView] {
+        for v in [closeButton, titleLabel, artistLabel, likeButton, styleButton, queueButton] as [UIView] {
             view.addSubview(v)
         }
         noticeBar.backgroundColor = UIColor.white.withAlphaComponent(0.12)
@@ -480,6 +483,9 @@ final class StageViewController: UIViewController {
         let headerTop = safe.top + 6
         closeButton.frame = CGRect(x: 12, y: headerTop, width: 38, height: 38)
         likeButton.frame = CGRect(x: bounds.width - 50, y: headerTop, width: 38, height: 38)
+        // 播放列表入口（顶栏排，喜欢钮左侧；图标为网页 ListMusic
+        // 的 SF 等价符号，点按行为仍走 queueTapped 开队列面板）。
+        queueButton.frame = CGRect(x: bounds.width - 94, y: headerTop, width: 38, height: 38)
         let titleWidth = bounds.width - 120
         titleLabel.frame = CGRect(x: 60, y: headerTop, width: titleWidth, height: 22)
         artistLabel.frame = CGRect(x: 60, y: headerTop + 22, width: titleWidth, height: 17)
@@ -1221,13 +1227,14 @@ final class StageViewController: UIViewController {
         prevButton.addTarget(self, action: #selector(prevTapped), for: .touchUpInside)
         nextButton.addTarget(self, action: #selector(nextTapped), for: .touchUpInside)
 
-        // 播放列表入口（3.7 (48)，与墙台同位同图）：next 右侧加一
-        // 键开原生队列面板；台面骨架不动，时间标签在更外侧不受影响。
+        // 播放列表入口（3.7 (48) 落台面、(53) H 修正迁顶栏隐藏排）：
+        // 按钮本体已在顶栏装配段加入 view 并由 layoutStage 按帧
+        // 布局（见 stageHeaderViews），此处只配图标/色/动作；
+        // 图标 music.note.list 为网页 ListMusic 的 SF 等价符号。
         queueButton.setImage(UIImage(systemName: "music.note.list", withConfiguration: sideConfig), for: .normal)
         queueButton.tintColor = .white
-        queueButton.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(queueButton)
         queueButton.addTarget(self, action: #selector(queueTapped), for: .touchUpInside)
+        Breadcrumbs.log("minibar.queue stage moved=header-row")
 
         let seekHit = UIView()
         seekHit.backgroundColor = .clear
@@ -1298,11 +1305,6 @@ final class StageViewController: UIViewController {
             nextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             nextButton.widthAnchor.constraint(equalToConstant: 34),
             nextButton.heightAnchor.constraint(equalToConstant: 40),
-            queueButton.leadingAnchor.constraint(equalTo: nextButton.trailingAnchor, constant: 2),
-            queueButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
-            queueButton.widthAnchor.constraint(equalToConstant: 34),
-            queueButton.heightAnchor.constraint(equalToConstant: 40),
-
             seekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             seekHit.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
             seekHit.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
@@ -1328,7 +1330,7 @@ final class StageViewController: UIViewController {
     }
 
     /// 点播台槽位应用（3.7 (50)）：按 MiniBarSlotSettings 显隐
-    /// prev/next/queue 三键；隐藏时宽度约束置 0、链上其余键向
+    /// prev/next 两键（queue 已迁顶栏，见 (53) H 修正）；隐藏时宽度约束置 0、链上其余键向
     /// 中心收拢（时间标签锚在台体两端、不受影响）。宽度约束
     /// 经按钮自身 constraints 反查，不改构建期约束块。口径与
     /// 两面墙台一致；收起态 alpha/交互名单含隐藏键无妨，
@@ -1336,7 +1338,9 @@ final class StageViewController: UIViewController {
     private func applyStageBarSlots() {
         applySlot(prevButton, visible: MiniBarSlotSettings.showPrev, width: 34)
         applySlot(nextButton, visible: MiniBarSlotSettings.showNext, width: 34)
-        applySlot(queueButton, visible: MiniBarSlotSettings.showQueue, width: 34)
+        // queue 键已迁顶栏隐藏排（(53) H 修正），不再受台面槽位
+        // 显隐管辖；MiniBarSlotSettings.showQueue 对墙原型台与
+        // MiniPlayerView 组件仍有效。
     }
 
     private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
@@ -1426,8 +1430,7 @@ final class StageViewController: UIViewController {
         let point = gesture.location(in: stageBar)
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
-            || nextButton.frame.contains(point)
-            || queueButton.frame.contains(point) { return }
+            || nextButton.frame.contains(point) { return }
         stageTheme = stageTheme.next
         MiniPlayerTheme.stored = stageTheme
         applyStageTheme()
@@ -1448,8 +1451,7 @@ final class StageViewController: UIViewController {
         let point = gesture.location(in: stageBar)
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
-            || nextButton.frame.contains(point)
-            || queueButton.frame.contains(point) { return }
+            || nextButton.frame.contains(point) { return }
         if let seekHit = stageSeekHit, seekHit.frame.contains(point) {
             guard let track = stageProgressTrack?.frame, track.width > 0,
                   engine.duration > 0 else { return }
@@ -1478,8 +1480,7 @@ final class StageViewController: UIViewController {
             if stageBarCollapsed { return }
             if playButton.frame.contains(barPoint)
                 || prevButton.frame.contains(barPoint)
-                || nextButton.frame.contains(barPoint)
-                || queueButton.frame.contains(barPoint) { return }
+                || nextButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             stageSeekDragging = true
             cancelStageIdleTimer()
@@ -1584,13 +1585,13 @@ final class StageViewController: UIViewController {
     private func setStageBarContentsAlpha(_ alpha: CGFloat) {
         // 圆点不淡出（收起态保留主题圆点随进度步进，同墙）。
         for view in [currentTimeLabel, totalTimeLabel,
-                     playButton, prevButton, nextButton, queueButton] as [UIView] {
+                     playButton, prevButton, nextButton] as [UIView] {
             view.alpha = alpha
         }
     }
 
     private func setStageBarContentsInteractive(_ interactive: Bool) {
-        for button in [playButton, prevButton, nextButton, queueButton] {
+        for button in [playButton, prevButton, nextButton] {
             button.isUserInteractionEnabled = interactive
         }
     }

@@ -588,16 +588,29 @@ final class WallPrototypeViewController: UIViewController,
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
 
-        // 播放列表入口（3.7 (48)）：台面最右新增一键，开原生队列
-        // 面板（管理面全在面板内，台面骨架不动）。键位链随既有
-        // prev/play/next 相对约束自动左移，标题尾随 prev 不受影响。
+        // 播放列表入口（3.7 (48) 落台面、(53) H 修正迁出）：台面
+        // 不再常驻此钮，改置于顶部 chrome 排、紧挨设置齿轮（本面
+        // 无顶栏自动隐藏排，与设置入口同排即此排；样式同齿轮：
+        // 34×34 半透明圆底）。图标 music.note.list 为网页
+        // ListMusic 的 SF 等价符号；点按行为仍走 miniQueueTapped。
         miniQueueButton = UIButton(type: .system)
         miniQueueButton.tintColor = .white
         miniQueueButton.setImage(UIImage(systemName: "music.note.list",
             withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+        miniQueueButton.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        miniQueueButton.layer.cornerRadius = 17
+        miniQueueButton.alpha = 0.5
+        miniQueueButton.accessibilityLabel = "播放列表"
         miniQueueButton.translatesAutoresizingMaskIntoConstraints = false
         miniQueueButton.addTarget(self, action: #selector(miniQueueTapped), for: .touchUpInside)
-        bar.addSubview(miniQueueButton)
+        view.addSubview(miniQueueButton)
+        NSLayoutConstraint.activate([
+            miniQueueButton.widthAnchor.constraint(equalToConstant: 34),
+            miniQueueButton.heightAnchor.constraint(equalToConstant: 34),
+            miniQueueButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 54),
+            miniQueueButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
+        ])
+        Breadcrumbs.log("minibar.queue wallproto moved=top-chrome")
 
         // 进度拖动手柄区：盖住底部进度条并向上放宽到 20pt 好按。
         let seekHit = UIView()
@@ -648,15 +661,10 @@ final class WallPrototypeViewController: UIViewController,
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: miniQueueButton.leadingAnchor, constant: -2),
+            miniNextButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
             miniNextButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
-
-            miniQueueButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-            miniQueueButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
-            miniQueueButton.widthAnchor.constraint(equalToConstant: 34),
-            miniQueueButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
             miniPlayButton.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
@@ -699,17 +707,17 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     /// 点播台槽位应用（3.7 (50)）：按 MiniBarSlotSettings 显隐
-    /// prev/next/queue 三键；隐藏时把该键宽度约束置 0，相对链
+    /// prev/next 两键（queue 已迁顶部 chrome，见 (53) H 修正）；隐藏时把该键宽度约束置 0，相对链
     /// 上的其余键与标题自动收拢补位（链间距 2pt 残留可忽略）。
     /// 宽度约束经按钮自身 constraints 反查（widthAnchor 常量
     /// 约束归按钮所有），不改构建期的约束块。收起态的 alpha/
     /// 交互名单含隐藏键也无妨：isHidden 恒压过 alpha 与命中。
     private func applyMiniBarSlots() {
-        guard let prev = miniPrevButton, let next = miniNextButton,
-              let queue = miniQueueButton else { return }
+        guard let prev = miniPrevButton, let next = miniNextButton else { return }
         applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 34)
         applySlot(next, visible: MiniBarSlotSettings.showNext, width: 34)
-        applySlot(queue, visible: MiniBarSlotSettings.showQueue, width: 34)
+        // queue 键已迁顶部 chrome 排（(53) H 修正），不再受台面
+        // 槽位显隐管辖。
     }
 
     private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
@@ -821,8 +829,7 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point)
-            || miniQueueButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point) { return }
         miniTheme = miniTheme.next
         MiniPlayerTheme.stored = miniTheme
         applyMiniTheme()
@@ -874,8 +881,7 @@ final class WallPrototypeViewController: UIViewController,
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
-            || miniNextButton.frame.contains(point)
-            || miniQueueButton.frame.contains(point) { return }
+            || miniNextButton.frame.contains(point) { return }
         if miniCover.frame.contains(point) {
             locateCurrentTrack()
             return
@@ -925,8 +931,7 @@ final class WallPrototypeViewController: UIViewController,
             if miniCover.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
-                || miniNextButton.frame.contains(barPoint)
-                || miniQueueButton.frame.contains(barPoint) { return }
+                || miniNextButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
             // 拖动期间挂起无操作计时（3.7 (21)），松手后重置。
@@ -1138,14 +1143,14 @@ final class WallPrototypeViewController: UIViewController,
         // 圆点不在淡出名单（3.7 (22)）：收起态保留发光圆点
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniQueueButton]
+                                miniPrevButton, miniNextButton]
         for view in views {
             view?.alpha = alpha
         }
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniQueueButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }

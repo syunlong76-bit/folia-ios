@@ -15,10 +15,11 @@ import UIKit
 ///   睡眠定时（Timer，槽位动作）/ 齿轮设置入口（SongActions 的
 ///   Settings 键 → 现有 SettingsViewController）。
 /// - 下排（网页 ExpandedView 主排）：封面＋标题区（点按展开，网页
-///   TrackTitleNavigator 位）/ 上一首 / 播放暂停 / 下一首 /
-///   播放列表（网页 ListMusic 图标，原生等价符号 music.note.list，
-///   开现有 QueuePanelViewController）；排下沿一条进度条（网页
-///   ExpandedView 第三行 ProgressBar，点按/拖动 seek）。
+///   TrackTitleNavigator 位）/ 上一首 / 播放暂停 / 下一首；排下沿
+///   一条进度条（网页 ExpandedView 第三行 ProgressBar，点按/
+///   拖动 seek）。播放列表入口不在台面（(53) H 修正）：已迁宿主
+///   上方隐藏排（舞台＝顶栏排、曲目墙＝顶部 chrome 排），本组件
+///   只保留 openQueue() 供宿主接线调用。
 ///
 /// 网页有但原生无真实目标的键不放假按钮（缺项见 (53) H 报告）：
 /// 星标「加入歌单」（AddToPlaylist 本体未迁）、格子「歌词样式选择器」
@@ -37,7 +38,7 @@ import UIKit
 /// 齿轮 wallSettingsTapped 同一呈现方式）。
 ///
 /// 三键槽位自定义（(50) MiniBarSlotSettings）继续生效：下排
-/// prev/next/queue 按 showPrev/showNext/showQueue 显隐，订阅
+/// prev/next 按 showPrev/showNext 显隐（queue 已迁出，见上），订阅
 /// .foliaMiniBarSlotsChanged 即时重读；播放键恒显（与三台既有
 /// 口径一致）。MiniBarSlotSettings.swift 本文件只读不改。
 ///
@@ -191,7 +192,6 @@ struct MiniPlayerView: View {
         _ = slotsVersion
         let showPrev = MiniBarSlotSettings.showPrev
         let showNext = MiniBarSlotSettings.showNext
-        let showQueue = MiniBarSlotSettings.showQueue
         return HStack(spacing: 8) {
             // 封面＋标题区：点按展开播放页（原 onTapExpand 语义收窄
             // 到本区，避免上/下排按钮点按被容器手势连带触发展开；
@@ -266,22 +266,8 @@ struct MiniPlayerView: View {
                 .accessibilityLabel("下一首")
             }
 
-            // 播放列表：网页 slot queue / 命令 queue 的 ListMusic
-            // 图标（线条列表＋音符），SF 等价符号 music.note.list
-            // （与三台既有列表键同符号，(48) 已用）。开现有队列面板。
-            if showQueue {
-                Button {
-                    openQueue()
-                } label: {
-                    Image(systemName: "music.note.list")
-                        .font(.system(size: 19))
-                        .foregroundColor(.white.opacity(0.8))
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel("播放列表")
-            }
+            // 播放列表入口已按 (53) H 修正迁出本台面（宿主上方
+            // 隐藏排），此处不再放钮；openQueue() 保留供宿主调用。
         }
     }
 

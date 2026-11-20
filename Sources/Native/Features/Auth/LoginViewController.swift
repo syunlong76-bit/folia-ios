@@ -283,8 +283,8 @@ final class LoginViewController: UIViewController {
                     displayName: status.nickname, avatarURLString: nil)
             case .qq:
                 guard let cookie = NativeSessionStore.shared.qqCookieString(),
-                      let profile = try? await self.qqClient.fetchLoginStatus(cookie: cookie),
-                      let profile else { return }
+                      let profile = try? await self.qqClient.fetchLoginStatus(cookie: cookie)
+                else { return }
                 NativeSessionStore.shared.saveProfile(
                     provider: .qq, accountId: profile.accountId,
                     displayName: profile.nickname,

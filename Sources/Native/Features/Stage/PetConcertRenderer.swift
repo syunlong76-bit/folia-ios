@@ -476,9 +476,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                     let cost = decoded.memoryCost
                     // 找可换出者（成本 ≥ 新人或预算有余）。
                     let removable = admittedAnimated
-                        .filter { $0 != plan.captain && $0 != lastSingerAsset }
-                        .max { (actors[$0]?.decodedCost ?? 0)
-                            < (actors[$1]?.decodedCost ?? 0) }
+                        .filter { $0 != plan.captain && $0 != self.lastSingerAsset }
+                        .max { (self.actors[$0]?.decodedCost ?? 0)
+                            < (self.actors[$1]?.decodedCost ?? 0) }
                     if admittedCost + cost <= PetConcertConst.animPoolBudgetBytes {
                         actor.attachSticker()
                         actor.decodedCost = cost

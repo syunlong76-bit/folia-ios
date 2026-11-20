@@ -488,11 +488,11 @@ final class PartitaStageRenderer: LyricStageRenderer {
         //   兜底——>40 字素行已有 densityScale 0.8 前置，
         //   0.5 下限内可解，见工作流 K 报告推导）。
         let availW = (rootView.bounds.width > 0
-            ? rootView.bounds.width : snapshot.viewport.width) - 16
+            ? rootView.bounds.width : snapshot.viewport.size.width) - 16
         if availW > 0, !chunks.isEmpty {
             func clampStaggers() {
                 for i in chunks.indices {
-                    let allowed = max(
+                    let allowed: CGFloat = max(
                         0, (availW - (chunks[i].width + 40)) / 2)
                     chunks[i].x = min(max(chunks[i].x, -allowed), allowed)
                 }
