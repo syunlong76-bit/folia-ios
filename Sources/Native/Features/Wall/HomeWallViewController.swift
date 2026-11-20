@@ -411,6 +411,18 @@ final class HomeWallViewController: UIViewController,
         let generation = entryLoadGeneration
         Task { [weak self] in
             guard let self else { return }
+            // 服务器就绪宽限等待（3.7 (52) 热修）：冷启时墙已是
+            // 根、与 LocalServer 异步启动并发；不等就绪就发请求
+            // 必然 serverNotReady，且旧重试只有 0.6s 一轮、赶在
+            // 服务器起来之前耗尽（(51) 真机：两轮失败永久落
+            // 失败页）。在此等 ready（上限 10s，覆盖入场动画的
+            // 数据等待窗口）；等待期间 entryDataState 保持
+            // .loading，入场继续循环掩盖，不走 data-failed。
+            let serverReady = await LocalServer.shared.waitUntilReady(timeout: 10)
+            guard generation == self.entryLoadGeneration else { return }
+            Breadcrumbs.log("home load attempt=\(loadAttempts)"
+                + " serverReady=\(serverReady)"
+                + " port=\(LocalServer.shared.port)")
             do {
                 // 先从 WebView 重读最新会话（用户可能刚扫码登录），
                 // 再探登录态——3.7 (4) 的误判就出在这里。

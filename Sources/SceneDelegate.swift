@@ -20,6 +20,25 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         //    三包不再是冷启路径的前置，prepare() 调用删除；类本体
         //    与 UpdateManager 本体由 (51) C 组删除。
 
+        // 1.5) 本地服务器显式启动（3.7 (52) 热修）：(50) 时代服务
+        //    器由根 MainViewController 触达 WebEffectBridge 时副作
+        //    用启动（bridge init → loadLocalEffectBundle →
+        //    server.start()），墙是后入表面、从不抢跑；(51) 换根
+        //    后无人再触达桥，start() 零调用、服务器永不就绪，主
+        //    页墙冷启两轮 serverNotReady 永久失败（(51) 真机实
+        //    证）。修法：建窗前显式启动；就绪是异步事件，墙侧另
+        //    有 waitUntilReady 宽限等待兜底（见 HomeWall 的
+        //    loadEntries），两路叠加不许再抢跑。
+        LocalServer.shared.start()
+
+        // 队列快照恢复时机对齐 (50)：restoreQueueSnapshotIfNeeded
+        // 在 QueueManager init 内、单例首次被触达时执行；(50) 由
+        // 桥在冷启触达，(51) 后触达时机漂移（本段日志里 crumb
+        // 缺席即因此，快照过期时为静默清除、无回归）。在此显式
+        // 触达，保证首激活 hasQueue 判定读到恢复态（QueueManager
+        // init 注释的既有口径）。
+        _ = QueueManager.shared
+
         // M1 阶段 2：启动登录 Cookie 同步观察（原生数据链的前置）。
         // (51) 保留 start() 的理由：CookieSync 观察的是共享
         // WKWebsiteDataStore 的 Cookie 罐（不依赖根 WebView 存

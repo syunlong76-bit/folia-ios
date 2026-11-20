@@ -30,6 +30,14 @@ final class LocalServer {
     var onReady: ((UInt16) -> Void)?
 
     private var listener: NWListener?
+    /// 启动幂等（3.7 (52) 热修）：start() 的历史唯一调用方是
+    /// WebEffectBridge.loadLocalEffectBundle（(50) 时代经根
+    /// MainViewController 在冷启被触达）；(51) 换根后 SceneDelegate
+    /// 成为显式启动方，桥按需打开网页舞台时仍会再调 start()，
+    /// 故 start 必须可重入——已请求启动后重复调用直接返回。
+    private var startRequested = false
+    /// 本次启动起点（server.start.ready 的 ms 判读用）。
+    private var startBeganAt: Date?
     /// 同端口重试计数（3.7 (13) #3）：监听失败先在原端口重试，
     /// 避免端口漂移后已加载的网页与数据客户端集体失联。
     private var samePortRetries = 0
@@ -42,7 +50,26 @@ final class LocalServer {
     // MARK: - 启动（含端口回退）
 
     func start() {
+        guard !startRequested else { return }
+        startRequested = true
+        startBeganAt = Date()
+        Breadcrumbs.log("server.start.begin")
         attempt(port: LocalServer.preferredPort, retriesLeft: LocalServer.maxPortRetries)
+    }
+
+    /// 等待就绪（3.7 (52) 热修）：NWListener 的 ready 是异步事件，
+    /// 冷启即根的主页墙不得抢跑——调用方以宽限超时等 ready 落
+    /// 定，超时返回 false（由调用方走既有失败/重试路径，不在此
+    /// 静默吞）。已 ready 立即返回 true。
+    func waitUntilReady(timeout: TimeInterval) async -> Bool {
+        if isRunning { return true }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if isRunning { return true }
+            if Task.isCancelled { return isRunning }
+        }
+        return isRunning
     }
 
     private func attempt(port: UInt16, retriesLeft: Int) {
@@ -56,7 +83,13 @@ final class LocalServer {
             listener = try NWListener(using: params, on: nwPort)
         } catch {
             NSLog("[LocalServer] NWListener init failed on \(port): \(error)")
-            if retriesLeft > 0 { attempt(port: port + 1, retriesLeft: retriesLeft - 1) }
+            if retriesLeft > 0 {
+                attempt(port: port + 1, retriesLeft: retriesLeft - 1)
+            } else {
+                // 终局失败复位幂等标志（3.7 (52)，同 .failed 口径）。
+                startRequested = false
+                startBeganAt = nil
+            }
             return
         }
         self.listener = listener
@@ -68,6 +101,11 @@ final class LocalServer {
                 self.port = port
                 self.samePortRetries = 0
                 Breadcrumbs.log("server ready port=\(port)")
+                if let began = self.startBeganAt {
+                    let ms = Int(Date().timeIntervalSince(began) * 1000)
+                    Breadcrumbs.log("server.start.ready port=\(port) ms=\(ms)")
+                    self.startBeganAt = nil
+                }
                 NSLog("[LocalServer] listening on 127.0.0.1:\(port)")
                 FoliaBridgeLogStore.shared.write(
                     level: "info", module: "server",
@@ -87,6 +125,12 @@ final class LocalServer {
                     self.samePortRetries = 0
                     if retriesLeft > 0 {
                         self.attempt(port: port + 1, retriesLeft: retriesLeft - 1)
+                    } else {
+                        // 全部端口耗尽 = 本次启动终局失败：复位幂等
+                        // 标志，允许后续显式 start()（桥人工重试）
+                        // 重新拉起，不许永久锁死（3.7 (52)）。
+                        self.startRequested = false
+                        self.startBeganAt = nil
                     }
                     return
                 }
@@ -102,6 +146,11 @@ final class LocalServer {
                 } else if retriesLeft > 0 {
                     self.samePortRetries = 0
                     self.attempt(port: port + 1, retriesLeft: retriesLeft - 1)
+                } else {
+                    // 同端口重试与端口漂移均耗尽：同上，复位幂等
+                    // 标志留人工恢复口（3.7 (52)）。
+                    self.startRequested = false
+                    self.startBeganAt = nil
                 }
             case .waiting(let error):
                 // waiting 多为瞬态（接口未就绪等），其后通常会转 ready/failed，不要贸然取消；
