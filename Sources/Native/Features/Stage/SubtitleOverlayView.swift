@@ -138,7 +138,7 @@ final class SubtitleOverlayView: UIView {
 
     private func applyChrome() {
         alpha = CGFloat(store.opacity)
-        backgroundGlow.isHidden =!store.hasBackground
+        backgroundGlow.isHidden = !store.hasBackground
     }
 
     // MARK: - 解析（网页 resolveVisualizerSubtitleOverlayContent 移植）
@@ -159,8 +159,8 @@ final class SubtitleOverlayView: UIView {
     /// contentMode 对译文/罗马音行的参与过滤（真消费点）。
     private func contentModeAllows(_ source: SubtitleRowSource) -> Bool {
         switch source {
-            case.translation: return store.contentMode ==.translation || store.contentMode ==.both
-            case.romanization: return store.contentMode ==.romanization || store.contentMode ==.both
+            case.translation: return store.contentMode == .translation || store.contentMode == .both
+            case.romanization: return store.contentMode == .romanization || store.contentMode == .both
             default: return true
         }
     }
@@ -191,7 +191,7 @@ final class SubtitleOverlayView: UIView {
         var nextIndex = 0
         if let line {
             for (rowIndex, source) in store.rows.enumerated() {
-                if source ==.next {
+                if source == .next {
                     if nextIndex < readablePreview.count {
                         rows.append(ResolvedRow(
                         source:.next, text: readablePreview[nextIndex].text,
@@ -201,7 +201,7 @@ final class SubtitleOverlayView: UIView {
                     continue
                 }
                 let text: String?
-                if source ==.current {
+                if source == .current {
                     text = line.text
                 } else if contentModeAllows(source) {
                     text = alternateText(for: line, source: source)
@@ -210,8 +210,8 @@ final class SubtitleOverlayView: UIView {
                 }
                 guard let text, Self.hasReadableText(text) else { continue}
                 // 译文/罗马音与上方行同文时只显一次（网页同规则）。
-                if source!=.current,
-                rows.contains(where: { $0.source!=.next && $0.text == text}) {
+                if source!= .current,
+                rows.contains(where: { $0.source!= .next && $0.text == text}) {
                     continue
                 }
                 rows.append(ResolvedRow(
@@ -219,7 +219,7 @@ final class SubtitleOverlayView: UIView {
             }
         }
         // 只有 next 行成立 → 整组作废（网页同规则）。
-        if!rows.isEmpty, rows.allSatisfy({ $0.source ==.next}) {
+        if !rows.isEmpty, rows.allSatisfy({ $0.source == .next}) {
             rows = []
         }
         var upcoming: [String] = []
@@ -228,10 +228,10 @@ final class SubtitleOverlayView: UIView {
         }
         render(rows: rows, upcoming: upcoming)
         // 面包屑去重：签名（行号＋行表构成＋预览数）变化才落盘。
-        let signature = "\(idx?? -1)|\(rows.map { $0.source.rawValue}.joined(separator: ","))|\(upcoming.count)|\(store.layout)"
+        let signature = "\(idx ?? -1)|\(rows.map { $0.source.rawValue}.joined(separator: ","))|\(upcoming.count)|\(store.layout)"
         if signature!= lastSignature {
             lastSignature = signature
-            Breadcrumbs.log("stage.subtitle.show idx=\(idx?? -1)"
+            Breadcrumbs.log("stage.subtitle.show idx=\(idx ?? -1)"
             + " rows=\(rows.count) upcoming=\(upcoming.count)"
             + " layout=\(store.layout)")
         }
@@ -241,7 +241,7 @@ final class SubtitleOverlayView: UIView {
 
     private func render(rows: [ResolvedRow], upcoming: [String]) {
         let texts: [(text: String, isSecondary: Bool, isUpcoming: Bool)] =
-        rows.map { ($0.text, $0.isSecondary, $0.source ==.next)}
+        rows.map { ($0.text, $0.isSecondary, $0.source == .next)}
         + upcoming.map { ($0, false, true)}
         let signature = texts.map { "\($0.text)|\($0.isSecondary)|\($0.isUpcoming)"}
         .joined(separator: "\u{1}") + "|\(store.fontScale)|\(store.blurUpcoming)"
@@ -253,9 +253,9 @@ final class SubtitleOverlayView: UIView {
         for item in texts {
             let label = UILabel()
             label.text = item.text
-            label.textAlignment =.center
+            label.textAlignment = .center
             label.numberOfLines = item.isUpcoming? 1: 2
-            label.lineBreakMode = item.isUpcoming?.byTruncatingTail:.byWordWrapping
+            label.lineBreakMode = item.isUpcoming? .byTruncatingTail :.byWordWrapping
             // 字号对网页 subtitleFontSizes：主行 clamp(1.125rem, 2.6vw,
             // 1.25rem) ≈ 19pt、预览行 clamp(0.875rem, 2vw, 1rem) ≈ 15pt，
             // 均乘字幕缩放；副行再乘 SECONDARY_TRACK_SIZE_FACTOR 0.88
@@ -265,8 +265,8 @@ final class SubtitleOverlayView: UIView {
             let base: CGFloat = item.isUpcoming? 15: 19
             var size = base * CGFloat(store.fontScale)
             if item.isSecondary { size *= 0.88}
-            label.font =.systemFont(ofSize: max(12, size),
-            weight: item.isSecondary?.regular:.medium)
+            label.font = .systemFont(ofSize: max(12, size),
+            weight: item.isSecondary? .regular :.medium)
             label.textColor = UIColor.white.withAlphaComponent(
             item.isSecondary? 0.82: 0.92)
             if item.isUpcoming {
@@ -278,9 +278,9 @@ final class SubtitleOverlayView: UIView {
             stack.addArrangedSubview(label)
             rowLabels.append(label)
         }
-        let shouldShow =!texts.isEmpty
+        let shouldShow = !texts.isEmpty
         if isHidden == shouldShow {
-            isHidden =!shouldShow
+            isHidden = !shouldShow
             if shouldShow {
                 Breadcrumbs.log("stage.subtitle.visible rows=\(texts.count)")
             }
@@ -296,7 +296,7 @@ final class SubtitleOverlayView: UIView {
         if store.blurUpcoming {
             label.alpha = 0.55
             label.shadowColor = UIColor.white.withAlphaComponent(0.35)
-            label.shadowOffset =.zero
+            label.shadowOffset = .zero
         } else {
             label.alpha = 1
             label.shadowColor = UIColor.black.withAlphaComponent(0.45)

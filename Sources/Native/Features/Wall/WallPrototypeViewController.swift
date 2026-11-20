@@ -462,7 +462,7 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     @objc private func miniBarPanelPanel() {
-        presentMiniBarPanel(PlaybackPanelViewController(), kind: "panel")
+        presentMiniBarPanel(PlaybackPanelViewController(initialTab: .cover), kind: "panel")
     }
 
     @objc private func miniBarPanelCommand() {

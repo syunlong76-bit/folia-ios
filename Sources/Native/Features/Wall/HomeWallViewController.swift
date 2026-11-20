@@ -2508,7 +2508,7 @@ extension HomeWallViewController {
     }
 
     @objc func miniBarPanelPanel() {
-        seamPresentPanel(PlaybackPanelViewController(), kind: "panel")
+        seamPresentPanel(PlaybackPanelViewController(initialTab: .cover), kind: "panel")
     }
 
     @objc func miniBarPanelCommand() {
