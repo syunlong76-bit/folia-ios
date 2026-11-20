@@ -104,14 +104,31 @@ final class StageViewController: UIViewController {
     /// `nowplaying.route stage-exit-quick dt=` 面包屑，供下轮
     /// 定性「开台约 1 秒舞台消失」是手动关还是自动退。
     static var routeExitProbeArmedAt: Date?
-    /// 防卡死守卫证明状态（3.7 (44)）：mountRenderer 装配样式
-    /// 时武装 pending 并重置此处计数；frameStep 逐帧推进，
-    /// 满 60 帧或存活 2 秒即清 pending（该样式自此视为已证
-    /// 明存活）。进程未及证明就消亡时，pending 留给下次启动
-    /// 的 runLaunchStyleGuard 回退 classic。
+    /// 舞台 gate 事件序号（3.7 (45) R-3）：gate enter（
+    /// viewWillAppear）与 gate exit（dismiss 时
+    /// viewWillDisappear）各 +1。SceneDelegate 热 route 重
+    /// 试环武装时记下序号，本代际内序号变化 = 用户已自主
+    /// 开/关过台，重试环据此自弃，不再迟发作地把用户刚关
+    /// 掉的舞台重新打开。
+    static var gateEventSeq = 0
+    /// 防卡死守卫证明状态（3.7 (44) 建，(45) R-4 补口径）：
+    /// mountRenderer 装配样式时武装 pending 并重置此处状态。
+    /// (44) 口径只看帧存活（满 60 帧或 2 秒），两个缺口
+    /// （审计候选 4）：①开台后立刻被切后台/正常关台的健康
+    /// 样式 pending 未清，下次启动遭误报回退；②帧能跑只证
+    /// 明 frameTick 存活，成图落地、歌词到货等异步完成点若
+    /// 崩在证明之后，守卫不会回退、死循环可复现。(45) 证
+    /// 明条件改为三路任一：帧条件（60 帧/2s）与「歌词首次
+    /// applied」两者皆达（via=frames+lyrics）；或开台存活
+    /// 满 5 秒兜底（via=window，覆盖无歌词/纯器乐等歌词永
+    /// 不到货的场面）；或舞台正常 teardown（via=teardown，
+    /// 开过又正常关掉 = 活过）。进程未及任一证明就消亡时，
+    /// pending 留给下次启动的 runLaunchStyleGuard 回退。
     private var styleProofStyleId: String?
     private var styleProofFrames = 0
     private var styleProofArmedAt: CFTimeInterval = 0
+    private var styleProofFramesOK = false
+    private var styleProofLyricsApplied = false
     /// settle 稳态重锚（3.7 (41) 组3，移植墙面 LyricClockDriver
     /// (20) 定案纪律）：瞬态锚（开台/切歌/播停翻转）在 +0.35s
     /// 做一次无条件稳态重锚，纠正起播瞬态锚的亚阈值恒定相位
@@ -173,6 +190,7 @@ final class StageViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         Breadcrumbs.samplerStart()
+        Self.gateEventSeq += 1
         Breadcrumbs.log("stage gate enter style=\(activeStyleId)")
         progressDriver.onFraction = { [weak self] fraction in
             self?.setStageProgress(fraction)
@@ -222,6 +240,7 @@ final class StageViewController: UIViewController {
                     Breadcrumbs.log("nowplaying.route stage-exit-quick dt=\(String(format: "%.2f", dt))")
                 }
             }
+            Self.gateEventSeq += 1
             Breadcrumbs.log("stage gate exit frames \(frameStatsText())")
             teardown()
         }
@@ -239,6 +258,10 @@ final class StageViewController: UIViewController {
     private func teardown() {
         guard !tornDown else { return }
         tornDown = true
+        // 守卫证明·teardown 路（3.7 (45) R-4）：本台只在正常
+        // dismiss 时走 teardown——开过又正常关掉即该样式活
+        // 过，清 pending，免健康样式下次启动遭误报回退。
+        finishStyleProof(via: "teardown")
         settleTimer?.invalidate()
         settleTimer = nil
         settleReanchorAt = nil
@@ -395,11 +418,33 @@ final class StageViewController: UIViewController {
         next.setLifecycle(engine.isPlaying ? .playing : .paused, active: isViewLoaded && view.window != nil)
         StageStyleStore.lastNativeStyleId = styleId
         // 防卡死守卫武装（3.7 (44)）：样式装配即落 pending，
-        // 待 frameStep 证明存活后清除（见 styleProof* 状态）。
+        // 待证明存活后清除（见 styleProof* 状态）。(45) R-4：
+        // 歌词里程碑的初值取当前曲是否已在 linesCache——切
+        // 样式时歌词早已到货，不必等下一首歌才算达标。
         StageStyleStore.armStylePending(styleId)
         styleProofStyleId = styleId
         styleProofFrames = 0
         styleProofArmedAt = CACurrentMediaTime()
+        styleProofFramesOK = false
+        styleProofLyricsApplied =
+            currentTrackId.flatMap { linesCache[$0] } != nil
+    }
+
+    /// 防卡死守卫证明结算（3.7 (45) R-4）：三路证明共用此
+    /// 出口——清 pending 并落 proven 面包屑（via 标明路径）。
+    /// 未武装/已证明时为空操作。
+    private func finishStyleProof(via: String) {
+        guard let proofStyle = styleProofStyleId else { return }
+        styleProofStyleId = nil
+        StageStyleStore.clearStylePending()
+        Breadcrumbs.log("stage style-guard proven style=\(proofStyle) via=\(via)")
+    }
+
+    /// 歌词 applied 里程碑（3.7 (45) R-4）：loadLyrics 三条
+    /// 落定路径（实例缓存命中/仓库命中/网络解析完成）各调
+    /// 一次。只置标志，证明结算仍在 frameStep/teardown。
+    private func noteStyleProofLyricsApplied() {
+        styleProofLyricsApplied = true
     }
 
     private func swapRenderer(to styleId: String) {
@@ -511,6 +556,7 @@ final class StageViewController: UIViewController {
     private func loadLyrics(for track: FoliaTrack) {
         if linesCache[track.id] != nil {
             pushSnapshot()
+            noteStyleProofLyricsApplied()
             // 贴纸层（3.7 (24)，纯新增钩子）：缓存命中即已落定。
             stickerLyricsResolved(lines: linesCache[track.id] ?? [])
             return
@@ -520,6 +566,7 @@ final class StageViewController: UIViewController {
                 from: hit.lines, trackDuration: track.duration,
                 singingRatio: hit.singingRatio)
             pushSnapshot()
+            noteStyleProofLyricsApplied()
             // 贴纸层（3.7 (24)，纯新增钩子）：仓库命中即已落定。
             stickerLyricsResolved(lines: linesCache[track.id] ?? [])
             return
@@ -536,6 +583,7 @@ final class StageViewController: UIViewController {
                                                singingRatio: entry.singingRatio)
             self.linesCache[trackId] = lines
             Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count) source=\(entry.source)")
+            self.noteStyleProofLyricsApplied()
             self.pushSnapshot()
             // 贴纸层（3.7 (24)，纯新增钩子）：取词落定。
             self.stickerLyricsResolved(lines: lines)
@@ -1329,15 +1377,20 @@ final class StageViewController: UIViewController {
         let position = positionNow()
         logStageLineIfChanged(position: position)
         renderer?.frameTick(position: position)
-        // 防卡死守卫证明（3.7 (44)）：帧连续推进即该样式渲染
-        // 存活；满 60 帧或存活满 2 秒清 pending 并留痕。
-        if let proofStyle = styleProofStyleId {
+        // 防卡死守卫证明（3.7 (44) 建，(45) R-4 补口径）：
+        // 帧条件（满 60 帧或存活满 2 秒）只置 framesOK，还须
+        // 歌词首次 applied 才结算（via=frames+lyrics），覆
+        // 盖异步落地盲区；存活满 5 秒兜底结算（via=window）。
+        if styleProofStyleId != nil {
             styleProofFrames += 1
-            if styleProofFrames >= 60
-                || CACurrentMediaTime() - styleProofArmedAt >= 2 {
-                styleProofStyleId = nil
-                StageStyleStore.clearStylePending()
-                Breadcrumbs.log("stage style-guard proven style=\(proofStyle)")
+            let proofElapsed = CACurrentMediaTime() - styleProofArmedAt
+            if styleProofFrames >= 60 || proofElapsed >= 2 {
+                styleProofFramesOK = true
+            }
+            if styleProofFramesOK && styleProofLyricsApplied {
+                finishStyleProof(via: "frames+lyrics")
+            } else if proofElapsed >= 5 {
+                finishStyleProof(via: "window")
             }
         }
         let second = Int(position)

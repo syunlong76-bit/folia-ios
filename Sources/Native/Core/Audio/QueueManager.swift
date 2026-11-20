@@ -373,6 +373,12 @@ final class QueueManager: ObservableObject {
             let currentId = self.engine.currentTrack?.id
             self.queue = tracks
             self.currentIndex = clamped
+            // 恢复标志同步清除（3.7 (45) R-2，审计候选 2 残
+            // 余问题）：队列已被网页侧全量替换，冷启恢复态
+            // 即告终结；不清则首次开台时 resume 会按新队列
+            // 的 currentTrack 错装一首用户没点过的歌并停在
+            // 暂停态。与 setQueue :343 同口径。
+            self.hasRestoredQueue = false
             self.updateCommandAvailability()
             self.persistQueueSnapshot()
             if let currentId, tracks[clamped].id != currentId {

@@ -1023,16 +1023,30 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pendingBakeKeys.remove(cacheKey)
+                // 落地面包屑（3.7 (45) R-5）：成图链此前零埋
+                // 点，崩在落地块时日志无从定案；applied /
+                // skipped＋原因各落一行。
                 guard self.bakeGeneration == generation,
-                      self.trackID == track, let image else { return }
+                      self.trackID == track else {
+                    Breadcrumbs.log("monet bake skipped kind=static reason=stale key=\(key)")
+                    return
+                }
+                guard let image else {
+                    Breadcrumbs.log("monet bake skipped kind=static reason=no-image key=\(key)")
+                    return
+                }
                 self.staticBakeCache.removeAll { $0.key == cacheKey }
                 self.staticBakeCache.append((key: cacheKey, image: image))
                 if self.staticBakeCache.count > 24 {
                     self.staticBakeCache.removeFirst()
                 }
                 guard let lineView = self.lineViews[index],
-                      lineView.contentKey == key else { return }
+                      lineView.contentKey == key else {
+                    Breadcrumbs.log("monet bake skipped kind=static reason=key-mismatch key=\(key)")
+                    return
+                }
                 lineView.applyBakedStaticImage(image)
+                Breadcrumbs.log("monet bake applied kind=static key=\(key)")
             }
         }
     }
@@ -1055,15 +1069,22 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pendingBakeKeys.remove(cacheKey)
+                // 落地面包屑（3.7 (45) R-5）：同 static bake。
                 guard self.bakeGeneration == generation,
-                      self.trackID == track else { return }
+                      self.trackID == track else {
+                    Breadcrumbs.log("monet bake skipped kind=sweep reason=stale key=\(key)")
+                    return
+                }
                 self.sweepBakeCache.removeAll { $0.key == cacheKey }
                 self.sweepBakeCache.append((key: cacheKey, images: prepared))
                 if self.sweepBakeCache.count > 8 {
                     self.sweepBakeCache.removeFirst()
                 }
                 guard let lineView = self.lineViews[index],
-                      lineView.contentKey == key else { return }
+                      lineView.contentKey == key else {
+                    Breadcrumbs.log("monet bake skipped kind=sweep reason=key-mismatch key=\(key)")
+                    return
+                }
                 let sweep = StageSweepLineView()
                 sweep.configure(
                     tokens: tokens, font: font, glowColor: glowColor,
@@ -1073,6 +1094,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                                    boxHeight: boxHeight, key: key)
                 lineView.updateSweep(position: self.lastPosition,
                                      lineEnd: lineEnd)
+                Breadcrumbs.log("monet bake applied kind=sweep key=\(key)")
             }
         }
     }

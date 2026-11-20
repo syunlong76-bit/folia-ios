@@ -101,9 +101,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             // 等一拍让激活流程与视图层级落定，再进重试环做呈
             // 现决策（3.7 (44)：一拍定不了的进环重试，不丢弃）。
             let generation = routeGeneration
+            let gateSeq = StageViewController.gateEventSeq
             DispatchQueue.main.async { [weak self] in
                 self?.routeFromBackground(attempt: 0, generation: generation,
-                                          armedVia: "background")
+                                          armedVia: "background",
+                                          gateSeqAtArm: gateSeq)
             }
             return
         }
@@ -126,9 +128,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             if processAge >= 5 {
                 Breadcrumbs.log("nowplaying.route armed src=scene-reconnect")
                 let generation = routeGeneration
+                let gateSeq = StageViewController.gateEventSeq
                 DispatchQueue.main.async { [weak self] in
                     self?.routeFromBackground(attempt: 0, generation: generation,
-                                              armedVia: "scene-reconnect")
+                                              armedVia: "scene-reconnect",
+                                              gateSeqAtArm: gateSeq)
                 }
             } else {
                 Breadcrumbs.log("nowplaying.route fromBackground=no action=skip reason=cold-start-route-removed")
@@ -149,13 +153,27 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// 卡激活的那一拍，视图层级可能未就绪（入场未散、模态在
     /// 退、链在变）——旧实现一拍判定、skip 即丢弃，点卡石沉
     /// 大海。本版：可重试原因（no-root/modal-presented）进
-    /// 0.5s×120（≈60s，与原冷路径重试同量级）重试环，每次
-    /// 重试留痕；presented/alreadyOnStage 即停；terminal
-    /// （no-queue）与超限/代际被顶替时落 giveup 及原因。
+    /// 0.5s 重试环，每次重试留痕；presented/alreadyOnStage
+    /// 即停；terminal（no-queue / paper-queue-only）与超限/
+    /// 代际被顶替时落 giveup 及原因。
+    ///
+    /// 3.7 (45) R-3 收敛（审计候选 3）：(44) 上限 120 次
+    /// （≈60s）太长——代际只被「再次进后台」顶替，用户在前
+    /// 台自主开台又关台后，迟发的重试环会把刚关掉的舞台再
+    /// 打开。本版：上限收至 20 次（≈10s）；且武装时记下舞
+    /// 台 gate 事件序号（StageViewController.gateEventSeq，
+    /// gate enter/exit 各 +1），本代际内序号变化 = 用户已
+    /// 自主开/关过台，重试环自弃（giveup
+    /// reason=superseded-by-user）。route 自己呈现成功即出
+    /// 环（.presented），不会被自己的 gate enter 误杀。
     private func routeFromBackground(attempt: Int, generation: Int,
-                                     armedVia: String) {
+                                     armedVia: String, gateSeqAtArm: Int) {
         guard generation == routeGeneration else {
             Breadcrumbs.log("nowplaying.route action=giveup reason=superseded armedVia=\(armedVia)")
+            return
+        }
+        guard StageViewController.gateEventSeq == gateSeqAtArm else {
+            Breadcrumbs.log("nowplaying.route action=giveup reason=superseded-by-user armedVia=\(armedVia)")
             return
         }
         switch routeAttempt() {
@@ -164,7 +182,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         case .terminal(let reason):
             Breadcrumbs.log("nowplaying.route action=giveup reason=\(reason) armedVia=\(armedVia)")
         case .retryable(let reason):
-            guard attempt < 120 else {
+            guard attempt < 20 else {
                 Breadcrumbs.log("nowplaying.route action=giveup attempts=\(attempt) reason=\(reason) armedVia=\(armedVia)")
                 return
             }
@@ -172,7 +190,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
                 self?.routeFromBackground(attempt: attempt + 1,
                                           generation: generation,
-                                          armedVia: armedVia)
+                                          armedVia: armedVia,
+                                          gateSeqAtArm: gateSeqAtArm)
             }
         }
     }
@@ -211,10 +230,19 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     /// 志、不改任何呈现逻辑）。结果以 RouteOutcome 返回供重
     /// 试环分流，不再以 Bool 混同「已在台上」与「被跳过」。
     private func routeAttempt() -> RouteOutcome {
-        // hasQueue 读 QueueManager（3.7 (43) 路2）：含冷启恢
-        // 复态——engine.currentTrack 在恢复态下恒 nil，判定
-        // 必须同源（审计 F1 附带语义问题）。
-        let hasQueue = QueueManager.shared.currentTrack != nil
+        // hasQueue 改读引擎真装载（3.7 (45) R-1，审计
+        // folia44-crash-audit §一设备实测缺陷）：(43)/(44) 读
+        // QueueManager.currentTrack 是纸面队列——冷启快照回
+        // 填后恒非 nil，引擎里根本没装歌时 route 也一路绿
+        // 灯，点回 App 落到「暂无播放」空舞台，违反 Miller
+        // 规则前提（点卡直达的条件是「有歌在播/暂停」）。
+        // PlaybackEngine.currentTrack 仅 load() 置位、stop()
+        // 清除，非 nil ⟺ 引擎真有一首已装载的曲，恰合规则。
+        // 纸面队列只用于终局原因细分（paper-queue-only），
+        // 不再作放行条件；冷/热/reconnect 三路同汇于此，一
+        // 并生效。
+        let hasQueue = PlaybackEngine.shared.currentTrack != nil
+        let paperQueue = QueueManager.shared.currentTrack != nil
         guard let root = window?.rootViewController else {
             Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=\(hasQueue) action=skip reason=no-root")
             return .retryable("no-root")
@@ -229,8 +257,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         let chainNames = chain.map { String(describing: type(of: $0)) }.joined(separator: ">")
         let topName = chain.last.map { String(describing: type(of: $0)) } ?? "none"
         guard hasQueue else {
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=no action=skip reason=no-queue chain=\(chainNames) top=\(topName)")
-            return .terminal("no-queue")
+            // 终局原因细分（3.7 (45) R-1）：引擎空但纸面非空
+            // = 只有恢复队列没真装载（paper-queue-only）；两
+            // 者皆空维持 no-queue。前置不成立 = terminal：等
+            // 再久引擎也不会自己装上歌，不进重试环、不开台。
+            let reason = paperQueue ? "paper-queue-only" : "no-queue"
+            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=no action=skip reason=\(reason) chain=\(chainNames) top=\(topName)")
+            return .terminal(reason)
         }
         if let stageIndex = chain.firstIndex(where: { $0 is StageViewController }),
            let stage = chain[stageIndex] as? StageViewController {
