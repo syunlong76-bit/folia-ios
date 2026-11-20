@@ -229,9 +229,15 @@ final class TuningLineView: UIView {
                        options: [.beginFromCurrentState]) {
             label.transform = .identity
         }
-        UIView.transition(with: label, duration: 0.2, delay: 0.06,
-                          options: .transitionCrossDissolve) {
-            label.textColor = self.palette.primary
+        // 色闪回落：UIView.transition 无 delay 参数，以 0 时长
+        // 动画的 completion 作 60ms 定时，再交叉淡化回 primary
+        // （色闪全程 200ms 走完，规格不变）。
+        UIView.animate(withDuration: 0, delay: 0.06, options: []) {
+        } completion: { _ in
+            UIView.transition(with: label, duration: 0.2,
+                              options: .transitionCrossDissolve) {
+                label.textColor = self.palette.primary
+            }
         }
     }
 
