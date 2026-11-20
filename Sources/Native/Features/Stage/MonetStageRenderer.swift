@@ -495,12 +495,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
 
     // MARK: 协议面
 
-    func mount(in container: UIView, context: LyricStageContext) {
+    func mount(context: LyricStageContext) {
         self.context = context
-        container.addSubview(rootView)
-        rootView.frame = container.bounds
-        rootView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        performLayout()
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
@@ -511,7 +507,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             lines = snapshot.lines
             coverImage = nil
             washKey = nil
-            lastPosition = snapshot.anchor.position
+            lastPosition = snapshot.anchor.position(atWallTime: CACurrentMediaTime())
             for washView in washViews { washView.removeFromSuperview() }
             washViews = []
             tempCoverView.image = nil
@@ -520,7 +516,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             for (_, lineView) in lineViews { lineView.removeFromSuperview() }
             lineViews = [:]
             manualFocus = nil
-            let resolved = resolveAnchor(snapshot.anchor.position)
+            let resolved = resolveAnchor(snapshot.anchor.position(atWallTime: CACurrentMediaTime()))
             activeIndex = resolved.active
             focusIndex = resolved.anchor
             loadCoverAndWash(snapshot)
@@ -534,7 +530,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                 lines = snapshot.lines
                 for (_, lineView) in lineViews { lineView.removeFromSuperview() }
                 lineViews = [:]
-                let resolved = resolveAnchor(snapshot.anchor.position)
+                let resolved = resolveAnchor(snapshot.anchor.position(atWallTime: CACurrentMediaTime()))
                 activeIndex = resolved.active
                 focusIndex = manualFocus ?? resolved.anchor
             }
@@ -545,10 +541,10 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         applyChromeColors(snapshot.palette)
     }
 
-    func setLifecycle(active: Bool) {
-        isActive = active
-        bgContainer.layer.speed = active ? 1 : 0
-        if active { installDriftIfNeeded() }
+    func setLifecycle(_ state: LyricStageLifecycleState, active: Bool) {
+        isActive = active && state != .destroyed
+        bgContainer.layer.speed = isActive ? 1 : 0
+        if isActive { installDriftIfNeeded() }
     }
 
     func frameTick(position: TimeInterval) {
@@ -901,7 +897,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                     clipped = baked.wrapped.clipped
                     lineHeight = baked.wrapped.lineHeight
                     if tone.blur > 0.05, let sharp = image {
-                        image = blurred(sharp, radius: tone.blur)
+                        image = blurred(sharp, radiusPt: tone.blur)
                     }
                 }
                 let textHeight = CGFloat(rows) * lineHeight
@@ -917,7 +913,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func blurred(_ image: UIImage, radiusPt: CGFloat) -> UIImage {
-        let ci = CIImage(image: image)
+        guard let ci = CIImage(image: image) else { return image }
         let blurred = ci.clampedToExtent().applyingFilter(
             "CIGaussianBlur",
             parameters: [kCIInputRadiusKey: radiusPt * image.scale])
@@ -1101,7 +1097,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
             return
         }
         let urlString = NativeCoverLoader.shared.proxiedURLString(raw, tier: 1024) ?? raw
-        if let temp = NativeCoverLoader.shared.cachedImageAnyTier(urlString) {
+        if let temp = NativeCoverLoader.shared.cachedImageAnyTier(raw: raw, excludingTier: 1024) {
             tempCoverView.image = temp
             tempCoverView.isHidden = false
         }
