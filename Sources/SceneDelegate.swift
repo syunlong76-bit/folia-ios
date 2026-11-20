@@ -193,7 +193,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         routeLastRetryReason = ""
         installRouteTouchObserver()
         let engine = PlaybackEngine.shared
-        Breadcrumbs.log("nowplaying.route begin gen=\(routeGeneration) armedVia=\(routeArmedVia) origin=\(chainDescription()) bgTop=\(routeBgTopName) bgStageToken=\(routeBgStageToken) bgEngineTrack=\(routeBgEngineTrackId ?? "nil") engineTrack=\(engine.currentTrack?.id ?? "nil") playState=\(engine.playState.rawValue)")
+        Breadcrumbs.log("nowplaying.route begin gen=\(routeGeneration) armedVia=\(routeArmedVia) origin=\(chainDescription()) bgTop=\(routeBgTopName) bgStageToken=\(routeBgStageToken) bgEngineTrack=\(routeBgEngineTrackId ?? "nil") engineTrack=\(engine.currentTrack?.id ?? "nil") playState=\(engine.playbackState)")
         DispatchQueue.main.async { [weak self] in self?.routeStep() }
     }
 
