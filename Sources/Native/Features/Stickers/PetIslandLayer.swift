@@ -99,6 +99,9 @@ final class PetIslandLayer: UIView {
     /// 置顶守护（3.7 (41) 组1）：0.5s 一拍核对本层是否仍是
     /// 主窗最顶子视图，不是则重新置顶并落 island.refront。
     private var refrontTimer: Timer?
+    /// 层序面包屑去重签名（3.7 (46)）：island.layer.state 只在
+    /// 序位/上方邻居变化时落盘，防 0.5s 守护拍刷屏。
+    private var lastLayerStateSignature = ""
     private var nextBubbleAt: TimeInterval = 0
     private var nextChatAt: TimeInterval = 0
     private var chatLines: [(pet: IslandPetView, text: String)] = []
@@ -137,9 +140,20 @@ final class PetIslandLayer: UIView {
             layer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             window.addSubview(layer)
             window.bringSubviewToFront(layer)
+            // 渲染层序硬保证（3.7 (46) 层级复查）：同父子视图的
+            // 绘制序由 subviews 顺序决定（zPosition 相等时）——
+            // 呈现容器在 present 时被加到本层之上、守护拍回收前
+            // 的间隙里宠物会被盖住（Miller (45) 报「依然在底
+            // 层」的机制候选）。给本层 CALayer 设 zPosition=
+            // 1000（停靠层 999）：绘制序从此与 subviews 顺序脱
+            // 钩、恒在本窗一切内容之上；hitTest 仍按 subviews
+            // 序走、由守护维持，宠物点按不受影响（两层都只认
+            // 领自家宠物、其余穿透）。
+            layer.layer.zPosition = 1000
             layer.hostWindow = window
             Breadcrumbs.log("island.install host=window"
                 + " residents=\(PetHomeRegistry.shared.islandResidents.count)")
+            layer.logLayerState(reason: "install")
             PetHomeRegistry.shared.onIslandDeparture = { [weak layer] asset in
                 layer?.releasePet(asset: asset)
             }
@@ -178,6 +192,28 @@ final class PetIslandLayer: UIView {
         guard window.subviews.last !== self else { return }
         window.bringSubviewToFront(self)
         if logged { Breadcrumbs.log("island.refront") }
+        logLayerState(reason: "refront")
+    }
+
+    /// 层序判读面包屑（3.7 (46)）：宿主、本层在窗口 subviews
+    /// 中的序位、本层正上方邻居类名、zPosition、显隐——真机
+    /// 再报「宠物在底层」时凭此一行定位是谁压在本层之上（序
+    /// 位靠后却仍被压 = 对方也设了 zPosition 或不在同一父级）。
+    /// 签名（序位+邻居）变化才落盘。
+    func logLayerState(reason: String) {
+        guard let window = hostWindow ?? superview as? UIWindow else { return }
+        let subs = window.subviews
+        let index = subs.firstIndex(of: self) ?? -1
+        let above = (index >= 0 && index + 1 < subs.count)
+            ? String(describing: type(of: subs[index + 1])) : "none"
+        let signature = "\(index)/\(subs.count)/\(above)"
+        guard reason == "install" || reason == "seat"
+                || signature != lastLayerStateSignature else { return }
+        lastLayerStateSignature = signature
+        Breadcrumbs.log("island.layer.state reason=\(reason) host=window"
+            + " idx=\(index)/\(subs.count) above=\(above)"
+            + " z=\(layer.zPosition) hidden=\(isHidden) alpha=\(alpha)"
+            + " pets=\(pets.count)")
     }
 
     // MARK: 触摸穿透（只认领宠物本体）
@@ -249,6 +285,7 @@ final class PetIslandLayer: UIView {
         startTimerIfNeeded()
         if nextBubbleAt == 0 { nextBubbleAt = clockNow + 9 }
         if nextChatAt == 0 { nextChatAt = clockNow + 22 }
+        logLayerState(reason: "seat")
     }
 
     /// 撤下（被召回/点按回台）：小跳一下淡出。回台的「到场」

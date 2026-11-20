@@ -135,6 +135,13 @@ final class HomeWallViewController: UIViewController,
     private var miniRimLight: UIView?
     private var miniGlassTint: UIView?
 
+    /// dismiss 统一拦截（3.7 (46)）：同 WallPrototype——带下
+    /// canonical 舞台的未登记 dismiss 在 RouteGuard 期内 veto。
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        if StageExitGate.shared.shouldVetoDismiss(from: self) { return }
+        super.dismiss(animated: flag, completion: completion)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black

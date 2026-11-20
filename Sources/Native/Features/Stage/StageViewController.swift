@@ -104,13 +104,11 @@ final class StageViewController: UIViewController {
     /// `nowplaying.route stage-exit-quick dt=` 面包屑，供下轮
     /// 定性「开台约 1 秒舞台消失」是手动关还是自动退。
     static var routeExitProbeArmedAt: Date?
-    /// 舞台 gate 事件序号（3.7 (45) R-3）：gate enter（
-    /// viewWillAppear）与 gate exit（dismiss 时
-    /// viewWillDisappear）各 +1。SceneDelegate 热 route 重
-    /// 试环武装时记下序号，本代际内序号变化 = 用户已自主
-    /// 开/关过台，重试环据此自弃，不再迟发作地把用户刚关
-    /// 掉的舞台重新打开。
-    static var gateEventSeq = 0
+    /// 本台在 StageExitGate 的登记 token（3.7 (46)）：viewDidLoad
+    /// 时向闸门登记 canonical 实例并领取，route 成功校验与全部
+    /// 退出面包屑按它对齐实例。(45) 的 gateEventSeq 推断式自弃
+    /// 已随 DS 定案废除——用户意图只认显式信号。
+    private(set) var stageToken = "-"
     /// 防卡死守卫证明状态（3.7 (44) 建，(45) R-4 补口径）：
     /// mountRenderer 装配样式时武装 pending 并重置此处状态。
     /// (44) 口径只看帧存活（满 60 帧或 2 秒），两个缺口
@@ -152,16 +150,102 @@ final class StageViewController: UIViewController {
     private var webJumpFired = false
     private var noticeDismissed = false
 
+    // MARK: 顶栏自动隐藏（3.7 (46)，Miller 规格）
+    //
+    // 顶栏整条（歌名/歌手/喜欢/样式胶囊/关闭）开台或恢复后 5 秒
+    // 无操作淡出隐藏；双击舞台恢复并重新计时；单击不触发恢复
+    // （仅在顶栏可见时顺延隐藏计时）；淡入淡出走 iOS 系统弹簧/
+    // 自然减速；全样式通用（页眉在本控制器层、与渲染器无关）；
+    // 底部播放条不动。隐藏只是 alpha/显隐，与 StageExitGate 的
+    // 退出守卫无关（隐藏≠退出）。
+
+    private var headerHideWorkItem: DispatchWorkItem?
+    private var headerChromeHidden = false
+
+    private var stageHeaderViews: [UIView] {
+        [closeButton, titleLabel, artistLabel, likeButton, styleButton]
+    }
+
+    private func installStageHeaderAutoHideRecognizers() {
+        let doubleTap = UITapGestureRecognizer(
+            target: self, action: #selector(stageHeaderDoubleTapped))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.cancelsTouchesInView = false
+        view.addGestureRecognizer(doubleTap)
+        let tapObserver = UITapGestureRecognizer(
+            target: self, action: #selector(stageHeaderAnyTapped))
+        tapObserver.cancelsTouchesInView = false
+        view.addGestureRecognizer(tapObserver)
+    }
+
+    private func scheduleStageHeaderHide() {
+        headerHideWorkItem?.cancel()
+        headerHideWorkItem = nil
+        guard !headerChromeHidden else { return }
+        let work = DispatchWorkItem { [weak self] in self?.hideStageHeader() }
+        headerHideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5, execute: work)
+    }
+
+    private func hideStageHeader() {
+        guard !headerChromeHidden, view.window != nil else { return }
+        headerChromeHidden = true
+        for v in stageHeaderViews { v.isUserInteractionEnabled = false }
+        UIView.animate(withDuration: 0.3, delay: 0,
+                       options: [.curveEaseInOut, .beginFromCurrentState]) {
+            for v in self.stageHeaderViews { v.alpha = 0 }
+        } completion: { _ in
+            if self.headerChromeHidden {
+                for v in self.stageHeaderViews { v.isHidden = true }
+            }
+        }
+        Breadcrumbs.log("stage header auto-hide")
+    }
+
+    private func showStageHeader(source: String) {
+        let wasHidden = headerChromeHidden
+        headerChromeHidden = false
+        for v in stageHeaderViews {
+            v.isHidden = false
+            v.isUserInteractionEnabled = true
+        }
+        if wasHidden {
+            UIView.animate(withDuration: 0.35, delay: 0,
+                           usingSpringWithDamping: 0.9,
+                           initialSpringVelocity: 0,
+                           options: [.beginFromCurrentState]) {
+                for v in self.stageHeaderViews { v.alpha = 1 }
+            }
+            Breadcrumbs.log("stage header restore src=\(source)")
+        }
+        scheduleStageHeaderHide()
+    }
+
+    @objc private func stageHeaderDoubleTapped() {
+        showStageHeader(source: "double-tap")
+    }
+
+    /// 单击观察（不消费触摸）：顶栏可见时任一单击 = 有操作，
+    /// 顺延隐藏计时；顶栏已隐藏时单击不恢复（规格：单击不触发）。
+    @objc private func stageHeaderAnyTapped() {
+        if !headerChromeHidden { scheduleStageHeaderHide() }
+    }
+
     // MARK: 生命周期
 
     deinit {
         NotificationCenter.default.removeObserver(self)
+        StageExitGate.shared.unregisterStage(self)
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // 闸门登记（3.7 (46)）：本台成为 canonical 舞台，领取
+        // token；此后一切退出必经 StageExitGate。
+        stageToken = StageExitGate.shared.registerStage(self)
         view.backgroundColor = .black
         buildLayout()
+        installStageHeaderAutoHideRecognizers()
         context = LyricStageContext(
             sendCommand: { [weak self] command in self?.handleCommand(command) },
             currentAnchor: { [weak self] in
@@ -190,8 +274,7 @@ final class StageViewController: UIViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         Breadcrumbs.samplerStart()
-        Self.gateEventSeq += 1
-        Breadcrumbs.log("stage gate enter style=\(activeStyleId)")
+        Breadcrumbs.log("stage gate enter style=\(activeStyleId) token=\(stageToken)")
         progressDriver.onFraction = { [weak self] fraction in
             self?.setStageProgress(fraction)
         }
@@ -205,6 +288,9 @@ final class StageViewController: UIViewController {
         if stageBarCollapsed { resetStageBarFormInstant() }
         stagePetStage?.barPresentationChanged(true)
         resetStageIdleTimer()
+        // 顶栏自动隐藏计时（3.7 (46)）：开台/恢复即起 5 秒。
+        if headerChromeHidden { showStageHeader(source: "appear") }
+        else { scheduleStageHeaderHide() }
         driftTimer = Timer.scheduledTimer(withTimeInterval: 0.3, repeats: true) { [weak self] _ in
             self?.checkDrift()
         }
@@ -215,11 +301,28 @@ final class StageViewController: UIViewController {
         renderer?.setLifecycle(engine.isPlaying ? .playing : .paused, active: true)
     }
 
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        // RouteGuard presented 模式（3.7 (46)）：守卫窗顺延到
+        // appear+3s（DS 成功标准以 viewDidAppear 为锚）。
+        StageExitGate.shared.noteStageAppeared(token: stageToken)
+    }
+
+    /// dismiss 统一拦截（3.7 (46)）：未登记来源、会带下本台且
+    /// RouteGuard 在期的 dismiss 在此 veto（不调 super）；只解
+    /// 本台之上盖层（样式选择器等）的 dismiss 由闸门放行。
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        if StageExitGate.shared.shouldVetoDismiss(from: self) { return }
+        super.dismiss(animated: flag, completion: completion)
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         progressDriver.stop()
         stageBarPresented = false
         cancelStageIdleTimer()
+        headerHideWorkItem?.cancel()
+        headerHideWorkItem = nil
         stageThemeLayer?.setHostVisible(false)
         stageThemeLayer?.setBarVisible(false)
         stagePetStage?.barPresentationChanged(false)
@@ -240,8 +343,11 @@ final class StageViewController: UIViewController {
                     Breadcrumbs.log("nowplaying.route stage-exit-quick dt=\(String(format: "%.2f", dt))")
                 }
             }
-            Self.gateEventSeq += 1
-            Breadcrumbs.log("stage gate exit frames \(frameStatsText())")
+            Breadcrumbs.log("stage gate exit token=\(stageToken) frames \(frameStatsText())")
+            // 闸门旁路检测（3.7 (46)）：本次 dismiss 若无放行凭
+            // 据且 RouteGuard 在期 = 未知路径带下舞台，闸门落
+            // exit.bypass 并按配额触发同代际 reenter / giveup。
+            StageExitGate.shared.noteStageDismissed(self)
             teardown()
         }
     }
@@ -518,6 +624,10 @@ final class StageViewController: UIViewController {
         // 构）：宠物切歌钩子 + 收起态先展开、否则重置计时。
         stagePetStage?.setTrack(id: track.id)
         if stageBarCollapsed { expandStageBar() } else { resetStageIdleTimer() }
+        // 顶栏（3.7 (46)）：切歌时顶栏已隐藏则短暂恢复亮出新
+        // 歌名，5 秒后照常自动隐藏；可见时只重置计时。
+        if headerChromeHidden { showStageHeader(source: "track-change") }
+        else { scheduleStageHeaderHide() }
     }
 
     private func refreshHeader() {
@@ -808,6 +918,11 @@ final class StageViewController: UIViewController {
     }
 
     private func closeStage() {
+        // 统一退出闸门（3.7 (46)）：用户关台先登记来源再
+        // dismiss；守卫期内用户退出立即放行并 settle route。
+        guard StageExitGate.shared.requestExit(
+            source: .userCloseTap, userInitiated: true, stage: self,
+            caller: "closeStage") else { return }
         dismiss(animated: true)
     }
 
@@ -815,6 +930,10 @@ final class StageViewController: UIViewController {
         guard !webJumpFired else { return }
         webJumpFired = true
         Breadcrumbs.log("stage fallback to web: \(reason)")
+        // 跳网页舞台 = 程序化正当转移（3.7 (46)）：目的地仍是
+        // 舞台，闸门放行并 settle route，不走守卫 veto；墙侧
+        // host.dismiss 由同一次放行凭据覆盖。
+        StageExitGate.shared.approveProgrammaticExit(stage: self, reason: reason)
         if let onRequestWebStage {
             onRequestWebStage()
         } else {
@@ -827,17 +946,21 @@ final class StageViewController: UIViewController {
     @objc private func closeTapped() { closeStage() }
     @objc private func playTapped() {
         resetStageIdleTimer()
+        scheduleStageHeaderHide()
         handleCommand(LyricStageCommand(kind: .toggle, source: "stage.controls"))
     }
     @objc private func prevTapped() {
         resetStageIdleTimer()
+        scheduleStageHeaderHide()
         handleCommand(LyricStageCommand(kind: .prev, source: "stage.controls"))
     }
     @objc private func nextTapped() {
         resetStageIdleTimer()
+        scheduleStageHeaderHide()
         handleCommand(LyricStageCommand(kind: .next, source: "stage.controls"))
     }
     @objc private func likeTapped() {
+        scheduleStageHeaderHide()
         handleCommand(LyricStageCommand(kind: .like, source: "stage.controls"))
     }
 

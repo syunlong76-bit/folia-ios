@@ -23,12 +23,20 @@ final class LyricStageRootView: UIView {
 /// 逐词字重恒 700（resolveThemeFontWeight(theme, 700)）。
 enum StageFonts {
     static func bold(size: CGFloat) -> UIFont {
-        UIFont(name: "STSongti-SC-Bold", size: size)
+        let font = UIFont(name: "STSongti-SC-Bold", size: size)
             ?? .systemFont(ofSize: size, weight: .bold)
+        StageFontBreadcrumb.note(slot: "bold",
+                                 requested: "STSongti-SC-Bold",
+                                 resolved: font)
+        return font
     }
     static func light(size: CGFloat) -> UIFont {
-        UIFont(name: "STSongti-SC-Light", size: size)
+        let font = UIFont(name: "STSongti-SC-Light", size: size)
             ?? .systemFont(ofSize: size, weight: .light)
+        StageFontBreadcrumb.note(slot: "light",
+                                 requested: "STSongti-SC-Light",
+                                 resolved: font)
+        return font
     }
 }
 

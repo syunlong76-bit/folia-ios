@@ -63,6 +63,12 @@ enum MonetWashPipeline {
     static let washAmount = 0.34
     static let overlayAmount = 0.74
 
+    /// 共享 CIContext（3.7 (46)，DS 清单）：CIContext 创建昂贵
+    /// 且线程安全，逐次 build 新建既浪费又多一份不确定性；与
+    /// 渲染器侧 blurredImage 的 sharedCIContext 同口径收敛为
+    /// 进程级单例。
+    private static let sharedCIContext = CIContext(options: nil)
+
     /// 1920×1080 一次成图：主题实色垫底 → 封面 cover 裁切
     /// → 模糊 → 逐像素后处理 → overlay 烘焙。逐像素段与
     /// 网页 worker 逐行同序（灰度混合 → 饱和（亮度重算）
@@ -92,8 +98,7 @@ enum MonetWashPipeline {
         let ci = CIImage(cgImage: composed)
         let blurred = ci.clampedToExtent().applyingFilter(
             "CIGaussianBlur", parameters: [kCIInputRadiusKey: blurRadius])
-        let ciContext = CIContext(options: nil)
-        guard let blurredCG = ciContext.createCGImage(
+        guard let blurredCG = sharedCIContext.createCGImage(
             blurred, from: CGRect(x: 0, y: 0, width: W, height: H))
         else { return nil }
 
@@ -975,6 +980,18 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         }
     }
 
+    /// 图的像素字节估算（bake 面包屑与 LRU 字节上限共用）：
+    /// CGImage 的 bytesPerRow × height，无 CGImage 时按点尺寸
+    /// ×scale² ×4 兜底。
+    private static func imageBytes(_ image: UIImage?) -> Int {
+        guard let image else { return 0 }
+        if let cg = image.cgImage {
+            return cg.bytesPerRow * cg.height
+        }
+        let scale = image.scale
+        return Int(image.size.width * scale) * Int(image.size.height * scale) * 4
+    }
+
     /// 高斯模糊（后台专用，3.7 (44)）：共享 CIContext，不再
     /// 逐行新建；只从 bakeQueue 调用。
     private static func blurredImage(_ image: UIImage, radiusPt: CGFloat) -> UIImage {
@@ -1014,12 +1031,24 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         let generation = bakeGeneration
         let track = trackID
         bakeQueue.async { [weak self] in
-            var image = StageTextKit.rasterize(
-                text: text, font: font, color: color, maxWidth: maxWidth,
-                maxLines: maxLines, fontPx: fontPx, scale: 2)?.image
-            if blur > 0.05, let sharp = image {
-                image = MonetStageRenderer.blurredImage(sharp, radiusPt: blur)
+            // bake 生命周期面包屑（3.7 (46)，DS 取证清单）：此前
+            // 只有落地痕、没有入队/开工/完工痕，崩在栅格化中途
+            // 时日志断在半路无从判死。本版 start/done 成对落盘
+            // （done 带字节数与耗时），下次闪退一轮对账判死。
+            Breadcrumbs.log("monet bake start kind=static gen=\(generation) key=\(key)")
+            let startedAt = CACurrentMediaTime()
+            var image: UIImage?
+            autoreleasepool {
+                image = StageTextKit.rasterize(
+                    text: text, font: font, color: color, maxWidth: maxWidth,
+                    maxLines: maxLines, fontPx: fontPx, scale: 2)?.image
+                if blur > 0.05, let sharp = image {
+                    image = MonetStageRenderer.blurredImage(sharp, radiusPt: blur)
+                }
             }
+            let bakeBytes = Self.imageBytes(image)
+            let bakeMs = Int((CACurrentMediaTime() - startedAt) * 1000)
+            Breadcrumbs.log("monet bake done kind=static gen=\(generation) key=\(key) bytes=\(bakeBytes) ms=\(bakeMs)")
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pendingBakeKeys.remove(cacheKey)
@@ -1037,8 +1066,16 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                 }
                 self.staticBakeCache.removeAll { $0.key == cacheKey }
                 self.staticBakeCache.append((key: cacheKey, image: image))
-                if self.staticBakeCache.count > 24 {
-                    self.staticBakeCache.removeFirst()
+                // LRU 双上限（3.7 (46)，DS 清单）：张数 24 之外
+                // 再加字节上限 64MB——@2x 大行图单张可达数 MB，
+                // 只按张数封顶时缓存字节可失控（内存硬线：舞台
+                // 纹理 ≤200–250MB）。刚入缓存者不淘汰。
+                var cacheBytes = self.staticBakeCache.reduce(0) {
+                    $0 + Self.imageBytes($1.image)
+                }
+                while (self.staticBakeCache.count > 24 || cacheBytes > 64 * 1024 * 1024),
+                      self.staticBakeCache.count > 1 {
+                    cacheBytes -= Self.imageBytes(self.staticBakeCache.removeFirst().image)
                 }
                 guard let lineView = self.lineViews[index],
                       lineView.contentKey == key else {
@@ -1062,10 +1099,22 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         let generation = bakeGeneration
         let track = trackID
         bakeQueue.async { [weak self] in
-            let prepared = StageTextKit.prepareSweepImages(
-                tokens: tokens, font: font, baseColor: baseColor,
-                fillColor: fillColor, glowColor: glowColor,
-                lineHeight: lineHeight, rtl: false)
+            // bake 生命周期面包屑（3.7 (46)）：同 static bake。
+            Breadcrumbs.log("monet bake start kind=sweep gen=\(generation) key=\(key)")
+            let startedAt = CACurrentMediaTime()
+            var prepared: [Int: StageSweepWordImages] = [:]
+            autoreleasepool {
+                prepared = StageTextKit.prepareSweepImages(
+                    tokens: tokens, font: font, baseColor: baseColor,
+                    fillColor: fillColor, glowColor: glowColor,
+                    lineHeight: lineHeight, rtl: false)
+            }
+            let bakeBytes = prepared.values.reduce(0) { sum, word in
+                sum + Self.imageBytes(word.glow) + Self.imageBytes(word.base)
+                    + Self.imageBytes(word.fill)
+            }
+            let bakeMs = Int((CACurrentMediaTime() - startedAt) * 1000)
+            Breadcrumbs.log("monet bake done kind=sweep gen=\(generation) key=\(key) bytes=\(bakeBytes) ms=\(bakeMs)")
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.pendingBakeKeys.remove(cacheKey)
@@ -1077,8 +1126,18 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                 }
                 self.sweepBakeCache.removeAll { $0.key == cacheKey }
                 self.sweepBakeCache.append((key: cacheKey, images: prepared))
-                if self.sweepBakeCache.count > 8 {
-                    self.sweepBakeCache.removeFirst()
+                // LRU 双上限（3.7 (46)）：张数 8 之外加字节上限
+                // 32MB（扫字三图/词，单条可达数 MB）；刚入者不淘汰。
+                func entryBytes(_ entry: (key: String, images: [Int: StageSweepWordImages])) -> Int {
+                    entry.images.values.reduce(0) { sum, word in
+                        sum + Self.imageBytes(word.glow) + Self.imageBytes(word.base)
+                            + Self.imageBytes(word.fill)
+                    }
+                }
+                var cacheBytes = self.sweepBakeCache.reduce(0) { $0 + entryBytes($1) }
+                while (self.sweepBakeCache.count > 8 || cacheBytes > 32 * 1024 * 1024),
+                      self.sweepBakeCache.count > 1 {
+                    cacheBytes -= entryBytes(self.sweepBakeCache.removeFirst())
                 }
                 guard let lineView = self.lineViews[index],
                       lineView.contentKey == key else {

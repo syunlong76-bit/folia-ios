@@ -220,6 +220,14 @@ final class WallPrototypeViewController: UIViewController,
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
+    /// dismiss 统一拦截（3.7 (46)）：本墙 dismiss 若会带下其上
+    /// 呈现的 canonical 舞台且无 StageExitGate 放行凭据、守卫
+    /// 在期 → veto；只解墙自身之上盖层时闸门自动放行。
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        if StageExitGate.shared.shouldVetoDismiss(from: self) { return }
+        super.dismiss(animated: flag, completion: completion)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black

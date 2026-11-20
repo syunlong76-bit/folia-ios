@@ -246,18 +246,18 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
         return max(36, min(6 * vmin / 100, 72))
     }
 
-    /// 长句优先压字号：一行放进可用宽（屏宽 − 64），下限 18。
+    /// 长句优先压字号（适配策略，3.7 (46)）：整行文本宽实测后
+    /// 按比例缩字号，下限 12（旧下限 18 时长行必溢出——Miller
+    /// 实证大字超出屏幕左右）；可用宽先除槽位最大缩放 1.06 与
+    /// 呼吸 1.015 的乘积留余量。缩到下限仍超宽的极端行由
+    /// buildLive 的 fitScale（活字）与 bakeSnapshot 的横向压
+    /// 印（快照）兜底，任何行不溢出为硬线。
     private func fontSize(for line: LyricLine) -> CGFloat {
         let avail = max(rootView.bounds.width - 64, 0)
-        var size = baseFontSize()
-        guard avail > 0 else { return size }
-        while size > 18 {
-            let font = StageFonts.bold(size: size)
-            let width = (line.text as NSString).size(withAttributes: [.font: font]).width
-            if width <= avail { break }
-            size -= 2
-        }
-        return size
+        guard avail > 0 else { return baseFontSize() }
+        return StageTextKit.fittedBoldSize(
+            text: line.text, base: baseFontSize(),
+            availWidth: avail / 1.08, floor: 12)
     }
 
     private func contentSize(for line: LyricLine) -> CGSize {
@@ -282,11 +282,20 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
         let format = UIGraphicsImageRendererFormat()
         format.scale = 2
         let renderer = UIGraphicsImageRenderer(size: size, format: format)
-        let plain = renderer.image { _ in
+        let plain = renderer.image { context in
             let attributes: [NSAttributedString.Key: Any] = [
                 .font: font, .foregroundColor: color,
             ]
             let textSize = (line.text as NSString).size(withAttributes: attributes)
+            // 横向压印兜底（3.7 (46)）：字号缩到下限仍宽于画布
+            // 的极端行，绘制时绕画布中心横向压回画布内——宁可
+            // 字形略挤，绝不溢出裁切。
+            if textSize.width > size.width {
+                let cg = context.cgContext
+                cg.translateBy(x: size.width / 2, y: 0)
+                cg.scaleBy(x: size.width / textSize.width, y: 1)
+                cg.translateBy(x: -size.width / 2, y: 0)
+            }
             let rect = CGRect(x: (size.width - textSize.width) / 2,
                               y: (size.height - textSize.height) / 2,
                               width: textSize.width, height: textSize.height)
@@ -345,22 +354,38 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
         guard let snapshot else { return }
         for sub in content.liveContainer.subviews { sub.removeFromSuperview() }
         content.wordViews = []
-        let size = fontSize(for: line)
-        let font = StageFonts.bold(size: size)
         let profile = StageLineProfile(wordLookahead: 0.15, glowRadius: 8)
         let units = StageLyricUnits.units(for: line)
-        var words: [GlowWordView] = []
-        var widths: [CGFloat] = []
-        for unit in units {
-            let word = GlowWordView(
-                unit: unit, pose: StageWordPose(),
-                font: font, baseColor: snapshot.palette.primary,
-                activeColor: snapshot.palette.accent, profile: profile)
-            words.append(word)
-            widths.append(word.bounds.width)
-        }
         let spacing: CGFloat = 4
-        let total = widths.reduce(0, +) + spacing * CGFloat(max(words.count - 1, 0))
+        // 两遍构建（3.7 (46)）：词宽含辉光垫、纯文本测量估不
+        // 到——先按 fontSize 建一遍实测合计宽，超行宽则按比例
+        // 缩字号重建一遍（下限 8），保证起始 x 不为负、词不溢
+        // 出行框。不动任何 transform（GlowWordView 与槽位几何
+        // 各自占用），字号是唯一收敛旋钮。
+        func makeWords(fontSize: CGFloat) -> (words: [GlowWordView], widths: [CGFloat], total: CGFloat) {
+            let font = StageFonts.bold(size: fontSize)
+            var built: [GlowWordView] = []
+            var sizes: [CGFloat] = []
+            for unit in units {
+                let word = GlowWordView(
+                    unit: unit, pose: StageWordPose(),
+                    font: font, baseColor: snapshot.palette.primary,
+                    activeColor: snapshot.palette.accent, profile: profile)
+                built.append(word)
+                sizes.append(word.bounds.width)
+            }
+            let total = sizes.reduce(0, +) + spacing * CGFloat(max(built.count - 1, 0))
+            return (built, sizes, total)
+        }
+        var size = fontSize(for: line)
+        var (words, widths, total) = makeWords(fontSize: size)
+        if total > content.bounds.width, total > 0 {
+            let scaled = max(8, size * content.bounds.width / total)
+            if scaled < size {
+                size = scaled
+                (words, widths, total) = makeWords(fontSize: size)
+            }
+        }
         var x = (content.bounds.width - total) / 2
         for (i, word) in words.enumerated() {
             word.frame.origin = CGPoint(

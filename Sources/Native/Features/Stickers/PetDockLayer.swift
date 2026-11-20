@@ -56,6 +56,10 @@ final class PetDockLayer: UIView {
             layer.frame = window.bounds
             layer.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             window.addSubview(layer)
+            // 渲染层序（3.7 (46)）：与岛层同口径设 zPosition，
+            // 停靠层 999 恒在岛层（1000）之下、一切呈现内容
+            // 之上，绘制序不再受 subviews 顺序竞态影响。
+            layer.layer.zPosition = 999
             layer.hostWindow = window
             layer.refrontIfNeeded(logged: false)
             Breadcrumbs.log("dock.install host=window docked=\(layer.subviews.count)")

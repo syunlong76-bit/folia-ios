@@ -44,6 +44,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 岛层 > 停靠层 > 呈现内容；同为单窗子视图，不建窗。
         PetDockLayer.install(in: windowScene)
 
+        // 点卡 route 闸门回调接线（3.7 (46)）：StageExitGate 的
+        // 正当退出落定 / 守卫期重入 / giveup 三路回调进本状态机。
+        wireRouteGateCallbacks()
+
         // 2.5) 入场视频不在冷启动挂（3.7 (17) 挪位）：冷启直落
         //     Web 主界面；v5 油画视频改由主页墙进入页触发（见
         //     HomeWallViewController 的入场槽位），替换原电影长卷。
@@ -58,259 +62,393 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     func sceneDidDisconnect(_ scene: UIScene) {}
     func sceneWillResignActive(_ scene: UIScene) {}
-    func sceneWillEnterForeground(_ scene: UIScene) {}
 
-    // MARK: - 后台点入直达播放详情页（3.7 (31)）
+    func sceneWillEnterForeground(_ scene: UIScene) {
+        // 状态机 armed → foregroundPending：呈现决策等
+        // didBecomeActive 后场景稳定再做（DS 定案时机）。
+        guard routeState == .armed else { return }
+        routeState = .foregroundPending
+        Breadcrumbs.log("nowplaying.route pending gen=\(routeGeneration) armedVia=\(routeArmedVia)")
+        installRouteTouchObserver()
+    }
 
-    /// 是否经历过真正的后台驻留。只在 sceneDidEnterBackground 置位，
-    /// 冷启动、控制中心下拉、来电打断等「未进后台」的激活不触发直达。
-    private var enteredBackground = false
+    // MARK: - 后台点入直达播放详情页（3.7 (31) → (46) 状态机）
 
-    /// 本 delegate 实例是否已处理过首次激活（3.7 (41) 组2）：
-    /// 冷启动与 scene 重连都是新实例，首次激活时 enteredBackground
-    /// 恒未武装——(40) 前 sceneDidBecomeActive 在此处静默 return，
-    /// 点锁屏卡/灵动岛冷启进入全程无日志、无落点（审计
-    /// folia40-failures B1 定案：必坏）。(41)/(43) 曾在此走冷
-    /// 启自动 route，(44) 已取消；首次激活改按进程年龄分岔
-    /// （见 sceneDidBecomeActive）：进程新生绝不 route，活进
-    /// 程 scene 重连按后台点入处理。
+    /// 本 delegate 实例是否已处理过首次激活：冷启动与 scene
+    /// 重连都是新实例、首次激活时 route 未武装，靠进程年龄分岔
+    /// （见 sceneDidBecomeActive）：进程新生绝不 route（(43)
+    /// 冷启劫持定案），活进程 scene 重连按后台点入合成武装。
     private var didHandleFirstActivation = false
 
-    /// route 重试代际（3.7 (44)）：每次进后台 +1；重试环携带
-    /// 武装时的代际，代际已被新一次进后台顶替则自弃（防陈
-    /// 旧重试环在用户正常回前台后迟到触发）。
+    /// 点卡 route 代际（3.7 (46)）：每次进后台 +1、重连合成武装
+    /// 也 +1；一切 route 异步步骤与闸门回调都按它对齐，防上一
+    /// 轮的步骤在新一轮里误触发。
     private var routeGeneration = 0
 
+    // MARK: 点卡 route 状态机（3.7 (46)，DS route-final 定案）
+    //
+    // disarmed →（进后台/重连武装）armed →（willEnterForeground）
+    // foregroundPending →（didBecomeActive）routing →（呈现校验
+    // 通过）stageVisible →（3 秒守卫到期舞台仍在）settled；终局
+    // 失败 → giveup。呈现时机 = 场景稳定（foregroundActive、根
+    // 已 attached、链上无进行中转场）后短重试（0.12s × ≤10，
+    // 废除 (45) 的 10s 长重试）。用户意图只认显式信号：
+    // pending/routing 期间窗口内任一 touch 即 cancel route；
+    // (45) 的 gateEventSeq 推断式自弃已废除。舞台退出全经
+    // StageExitGate，route 成功后由其 RouteGuard 守 3 秒。
+
+    private enum RouteState {
+        case disarmed, armed, foregroundPending, routing, stageVisible, settled, giveup
+    }
+    private var routeState: RouteState = .disarmed
+    /// 武装来源与武装时刻现场快照（route.begin 落痕用，DS 2.4）。
+    private var routeArmedVia = "-"
+    private var routeBgTopName = "-"
+    private var routeBgStageToken = "-"
+    private var routeBgEngineTrackId: String?
+    private var routeAttempts = 0
+    private var routeLastRetryReason = ""
+    private var routeTouchObserver: TouchDownObserverRecognizer?
+
     func sceneDidEnterBackground(_ scene: UIScene) {
-        enteredBackground = true
+        // 武装新一轮 route（3.7 (46) 状态机）：代际 +1、快照
+        // 武装现场（当时链顶/stageToken/引擎装载），回前台时
+        // route.begin 带出对账。锁屏场景的武装时机在此覆盖两
+        // 路——前台时锁屏走 willResignActive→本回调；已在后台
+        // 时锁屏无新事件，但武装早在本次进后台时已置位，锁屏
+        // 期间不消费，点卡激活时仍有效。
         routeGeneration += 1
-        // 武装留痕（3.7 (44)）：锁屏场景的武装时机在此覆盖
-        // 两路——前台时锁屏走 willResignActive→本回调；已在
-        // 后台时锁屏无新事件，但武装早在本次进后台时已置位，
-        // 锁屏期间不消费，点卡激活时仍有效。
-        Breadcrumbs.log("nowplaying.route armed src=didEnterBackground")
+        recordRouteArmament(via: "background")
+        // 进后台即解除上一轮 RouteGuard：后台期间不存在需要
+        // 守的呈现，防守卫跨周期误 veto 正当 dismiss。
+        StageExitGate.shared.disarmGuard(reason: "scenePhase-background")
+        removeRouteTouchObserver()
+    }
+
+    /// 武装快照：当前呈现链顶类名、canonical 舞台 token、引擎
+    /// 真装载 track id（纸面队列不算，(45) R-1 口径延续）。
+    private func recordRouteArmament(via: String) {
+        routeArmedVia = via
+        if let root = window?.rootViewController {
+            var top = root
+            while let presented = top.presentedViewController { top = presented }
+            routeBgTopName = String(describing: type(of: top))
+        } else {
+            routeBgTopName = "no-root"
+        }
+        routeBgStageToken = StageExitGate.shared.canonicalStageToken
+        routeBgEngineTrackId = PlaybackEngine.shared.currentTrack?.id
+        routeState = .armed
+        Breadcrumbs.log("nowplaying.route armed gen=\(routeGeneration) via=\(via) top=\(routeBgTopName) stageToken=\(routeBgStageToken) engineTrack=\(routeBgEngineTrackId ?? "nil")")
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
         // 岛层即时置顶（3.7 (41) 组1）：回前台先把岛层送回
         // 主窗最顶，不等 0.5s 守护拍；未安装时为空操作。
         PetIslandLayer.shared.refrontIfNeeded()
-        if enteredBackground {
-            enteredBackground = false
+        if routeState == .armed || routeState == .foregroundPending {
             didHandleFirstActivation = true
-            // 等一拍让激活流程与视图层级落定，再进重试环做呈
-            // 现决策（3.7 (44)：一拍定不了的进环重试，不丢弃）。
-            let generation = routeGeneration
-            let gateSeq = StageViewController.gateEventSeq
-            DispatchQueue.main.async { [weak self] in
-                self?.routeFromBackground(attempt: 0, generation: generation,
-                                          armedVia: "background",
-                                          gateSeqAtArm: gateSeq)
-            }
+            beginRoute()
             return
         }
         if !didHandleFirstActivation {
             didHandleFirstActivation = true
-            // 首次激活分岔（3.7 (44)，Miller 定案口径）：
-            // ①进程新生（距 AppProcessMark 启动标记 <5s）= 真
-            //   冷启：(43) 日志实锤冷启 route 在普通图标启动
-            //   时也触发、绕过入场与墙直落舞台，是「进不去软
-            //   件」死循环主犯——绝不 route，走正常入场→墙；
-            //   恢复队列留在迷你台，用户开台时由 StageView-
-            //   Controller 触发 resumeRestoredQueue 装载。
-            // ②进程已存活而 scene 是新实例 = scene 在后台被
-            //   断开后点卡/点图标重连：与点卡在系统层不可区
-            //   分，按后台点入处理（armed src=scene-reconnect
-            //   ＋同一重试环）。进程年龄是唯一可靠区分（二者
-            //   都是新 delegate、首次激活未武装，外观一致）。
+            // 首次激活分岔（Miller 定案口径）：①进程新生（距
+            // AppProcessMark 启动标记 <5s）= 真冷启：(43) 日志
+            // 实锤冷启 route 在普通图标启动时也触发、绕过入场
+            // 与墙直落舞台，是「进不去软件」死循环主犯——绝不
+            // route，走正常入场→墙；恢复队列留在迷你台，用户
+            // 开台时由 StageViewController 触发装载。②进程已
+            // 存活而 scene 是新实例 = scene 在后台被断开后点
+            // 卡/点图标重连：与点卡在系统层不可区分，按后台点
+            // 入合成武装后 route。进程年龄是唯一可靠区分（二
+            // 者都是新 delegate、首次激活未武装，外观一致）。
             let processAge = ProcessInfo.processInfo.systemUptime
                 - AppProcessMark.launchUptime
             if processAge >= 5 {
-                Breadcrumbs.log("nowplaying.route armed src=scene-reconnect")
-                let generation = routeGeneration
-                let gateSeq = StageViewController.gateEventSeq
-                DispatchQueue.main.async { [weak self] in
-                    self?.routeFromBackground(attempt: 0, generation: generation,
-                                              armedVia: "scene-reconnect",
-                                              gateSeqAtArm: gateSeq)
-                }
+                routeGeneration += 1
+                recordRouteArmament(via: "scene-reconnect")
+                beginRoute()
             } else {
-                Breadcrumbs.log("nowplaying.route fromBackground=no action=skip reason=cold-start-route-removed")
+                Breadcrumbs.log("nowplaying.route action=skip reason=cold-start-route-removed")
             }
             return
         }
         // 未武装的普通激活（控制中心下拉、来电打断恢复等）：
         // 不直达，但从此留痕（3.7 (41) 组2，消灭静默 return）。
-        Breadcrumbs.log("nowplaying.route action=skip reason=not-armed")
+        Breadcrumbs.log("nowplaying.route action=skip reason=not-armed state=\(routeState)")
     }
 
-    // 冷启自动 route 已于 3.7 (44) 整体取消（原
-    // routeColdStartToStageIfNeeded）：理由见 sceneDidBecomeActive
-    // 首次激活分支。原 performRoute 的 coldStart 分支随之删除，
-    // 链判定收敛为 routeAttempt（热路径专用）。
+    // 冷启自动 route 已于 3.7 (44) 整体取消：理由见
+    // sceneDidBecomeActive 首次激活分支，本状态机只有热路径
+    // （background / scene-reconnect 两路武装同汇）。
 
-    /// 后台点入重试环（3.7 (44) 热路径可靠性复审）：从锁屏点
-    /// 卡激活的那一拍，视图层级可能未就绪（入场未散、模态在
-    /// 退、链在变）——旧实现一拍判定、skip 即丢弃，点卡石沉
-    /// 大海。本版：可重试原因（no-root/modal-presented）进
-    /// 0.5s 重试环，每次重试留痕；presented/alreadyOnStage
-    /// 即停；terminal（no-queue / paper-queue-only）与超限/
-    /// 代际被顶替时落 giveup 及原因。
-    ///
-    /// 3.7 (45) R-3 收敛（审计候选 3）：(44) 上限 120 次
-    /// （≈60s）太长——代际只被「再次进后台」顶替，用户在前
-    /// 台自主开台又关台后，迟发的重试环会把刚关掉的舞台再
-    /// 打开。本版：上限收至 20 次（≈10s）；且武装时记下舞
-    /// 台 gate 事件序号（StageViewController.gateEventSeq，
-    /// gate enter/exit 各 +1），本代际内序号变化 = 用户已
-    /// 自主开/关过台，重试环自弃（giveup
-    /// reason=superseded-by-user）。route 自己呈现成功即出
-    /// 环（.presented），不会被自己的 gate enter 误杀。
-    private func routeFromBackground(attempt: Int, generation: Int,
-                                     armedVia: String, gateSeqAtArm: Int) {
-        guard generation == routeGeneration else {
-            Breadcrumbs.log("nowplaying.route action=giveup reason=superseded armedVia=\(armedVia)")
+    // MARK: route 状态机本体（3.7 (46)）
+
+    /// routing 入口：落 route.begin（带 origin 链快照与武装现
+    /// 场，DS 2.4），下一拍进 routeStep 等场景稳定。
+    private func beginRoute() {
+        routeState = .routing
+        routeAttempts = 0
+        routeLastRetryReason = ""
+        installRouteTouchObserver()
+        let engine = PlaybackEngine.shared
+        Breadcrumbs.log("nowplaying.route begin gen=\(routeGeneration) armedVia=\(routeArmedVia) origin=\(chainDescription()) bgTop=\(routeBgTopName) bgStageToken=\(routeBgStageToken) bgEngineTrack=\(routeBgEngineTrackId ?? "nil") engineTrack=\(engine.currentTrack?.id ?? "nil") playState=\(engine.playState.rawValue)")
+        DispatchQueue.main.async { [weak self] in self?.routeStep() }
+    }
+
+    /// 呈现决策一步：场景未稳定/引擎未装载/模态占顶 → 短重试；
+    /// 链判定与 (44)/(45) 同口径（already-on-stage 收紧判定、
+    /// restore-stage 只解盖层、墙面出发走既有门禁 enter、根直
+    /// 接 present），成功后一律过 verifyPresentedStage /
+    /// routeSucceed 校验并开 RouteGuard。
+    private func routeStep() {
+        guard routeState == .routing else { return }
+        let generation = routeGeneration
+        routeAttempts += 1
+        guard let window, let root = window.rootViewController else {
+            routeRetryOrGiveUp(generation: generation, reason: "no-window")
             return
         }
-        guard StageViewController.gateEventSeq == gateSeqAtArm else {
-            Breadcrumbs.log("nowplaying.route action=giveup reason=superseded-by-user armedVia=\(armedVia)")
+        if let unstable = sceneInstabilityReason(root: root) {
+            routeRetryOrGiveUp(generation: generation, reason: unstable)
             return
         }
-        switch routeAttempt() {
-        case .presented, .alreadyOnStage:
-            return
-        case .terminal(let reason):
-            Breadcrumbs.log("nowplaying.route action=giveup reason=\(reason) armedVia=\(armedVia)")
-        case .retryable(let reason):
-            guard attempt < 20 else {
-                Breadcrumbs.log("nowplaying.route action=giveup attempts=\(attempt) reason=\(reason) armedVia=\(armedVia)")
-                return
+        // 前置 = 引擎真装载（(45) R-1 口径）：短重试窗内等装载
+        // 落地，窗尽仍空按纸面队列细分终局原因，不开空舞台。
+        guard PlaybackEngine.shared.currentTrack != nil else {
+            if routeAttempts < 10 {
+                routeRetryOrGiveUp(generation: generation, reason: "no-current-track")
+            } else {
+                let paper = QueueManager.shared.currentTrack != nil
+                routeGiveUp(generation: generation,
+                            reason: paper ? "paper-queue-only" : "no-queue")
             }
-            Breadcrumbs.log("nowplaying.route retry attempt=\(attempt + 1) reason=\(reason) armedVia=\(armedVia)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.routeFromBackground(attempt: attempt + 1,
-                                          generation: generation,
-                                          armedVia: armedVia,
-                                          gateSeqAtArm: gateSeqAtArm)
-            }
+            return
         }
-    }
-
-    /// routeAttempt 的结果：presented/alreadyOnStage 为成功
-    /// 终态；retryable 携带可重试原因进重试环；terminal 携
-    /// 带放弃原因直接终结。
-    private enum RouteOutcome {
-        case presented
-        case alreadyOnStage
-        case retryable(String)
-        case terminal(String)
-    }
-
-    /// 定版规则：从后台回到前台时，若有活跃队列（正在播或暂停着一首
-    /// 歌）→ 直接呈现播放详情页（原生舞台）。护栏：已在舞台不重复
-    /// 呈现；顶层被其它模态（设置页等）占着时不粗暴打断、进重
-    /// 试环等其散场（3.7 (44)，旧版为一拍跳过）。每次决策记
-    /// nowplaying.route 面包屑。
-    ///
-    /// 3.7 (40) 项6（审计 nowplaying-audit-2026-11-20 失败一）：原跳过
-    /// 条件只看「舞台在呈现链中」，舞台被其它内容盖住时也误判
-    /// already-on-stage、点锁屏卡/灵动岛毫无落点。本版收紧：仅当
-    /// 舞台处于可见顶层（topmost 是舞台本人，或其上只盖着舞台自有
-    /// 浮层 StageStylePickerViewController）才 skip；舞台在链但被
-    /// 其它内容盖住时走归位分支——对舞台调 dismiss 解掉其上整摞
-    /// 呈现（呈现链是线性的，舞台之上的层都由舞台转呈），舞台即
-    /// 回到可见顶层。面包屑补记 chain 逐层类名与 top 类名，下次
-    /// 再现凭链构成一击定案。enteredBackground 的武装/消费语义
-    /// 不变；不引入任何「舞台开过」布尔缓存，判定只读活链。
-
-    /// 链判定本体（热路径专用，3.7 (44) 自 performRoute 收
-    /// 敛）：面包屑保持 fromBackground=yes 口径。present-stage
-    /// / restore-stage 派发时武装舞台速退探针（(41) 组2取证：
-    /// 开台后 3 秒内 dismiss 落 stage-exit-quick；探针只记日
-    /// 志、不改任何呈现逻辑）。结果以 RouteOutcome 返回供重
-    /// 试环分流，不再以 Bool 混同「已在台上」与「被跳过」。
-    private func routeAttempt() -> RouteOutcome {
-        // hasQueue 改读引擎真装载（3.7 (45) R-1，审计
-        // folia44-crash-audit §一设备实测缺陷）：(43)/(44) 读
-        // QueueManager.currentTrack 是纸面队列——冷启快照回
-        // 填后恒非 nil，引擎里根本没装歌时 route 也一路绿
-        // 灯，点回 App 落到「暂无播放」空舞台，违反 Miller
-        // 规则前提（点卡直达的条件是「有歌在播/暂停」）。
-        // PlaybackEngine.currentTrack 仅 load() 置位、stop()
-        // 清除，非 nil ⟺ 引擎真有一首已装载的曲，恰合规则。
-        // 纸面队列只用于终局原因细分（paper-queue-only），
-        // 不再作放行条件；冷/热/reconnect 三路同汇于此，一
-        // 并生效。
-        let hasQueue = PlaybackEngine.shared.currentTrack != nil
-        let paperQueue = QueueManager.shared.currentTrack != nil
-        guard let root = window?.rootViewController else {
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=\(hasQueue) action=skip reason=no-root")
-            return .retryable("no-root")
-        }
-        // 展开呈现链：root → presented → … → 顶层。先展开再判
-        // hasQueue，让 no-queue 的跳过面包屑也带链构成（纯读、无副作用，
-        // 不改变原有判定顺序的语义）。
-        var chain: [UIViewController] = [root]
-        while let presented = chain.last?.presentedViewController {
-            chain.append(presented)
-        }
-        let chainNames = chain.map { String(describing: type(of: $0)) }.joined(separator: ">")
-        let topName = chain.last.map { String(describing: type(of: $0)) } ?? "none"
-        guard hasQueue else {
-            // 终局原因细分（3.7 (45) R-1）：引擎空但纸面非空
-            // = 只有恢复队列没真装载（paper-queue-only）；两
-            // 者皆空维持 no-queue。前置不成立 = terminal：等
-            // 再久引擎也不会自己装上歌，不进重试环、不开台。
-            let reason = paperQueue ? "paper-queue-only" : "no-queue"
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=no action=skip reason=\(reason) chain=\(chainNames) top=\(topName)")
-            return .terminal(reason)
-        }
-        if let stageIndex = chain.firstIndex(where: { $0 is StageViewController }),
-           let stage = chain[stageIndex] as? StageViewController {
+        let chain = presentedChain(from: root)
+        let top = chain.last ?? root
+        // 舞台已在链：可见顶层 → alreadyOnStage 成功；被盖住 →
+        // restore（只对舞台 dismiss 解其上盖层，不带下舞台本
+        // 体——StageExitGate 对「舞台上有盖层」的 dismiss 放行）。
+        if let stage = chain.first(where: { $0 is StageViewController }) as? StageViewController {
+            let stageIndex = chain.firstIndex(where: { $0 === stage }) ?? 0
             let aboveStage = chain[(stageIndex + 1)...]
-            // 可见顶层判定：舞台之上为空，或只盖着舞台自有浮层
-            // （样式选择器由舞台 present、关掉即回舞台本人）。
             let stageIsVisibleTop = aboveStage.isEmpty
                 || aboveStage.allSatisfy { $0 is StageStylePickerViewController }
             if stageIsVisibleTop {
-                Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=skip reason=already-on-stage chain=\(chainNames) top=\(topName)")
-                // 落点本就在播放页：成功终态，不进重试环。
-                return .alreadyOnStage
+                routeSucceed(generation: generation, stage: stage, alreadyOnStage: true)
+            } else {
+                Breadcrumbs.log("nowplaying.route action=restore-stage gen=\(generation) coveredBy=\(type(of: top)) chain=\(chainDescription())")
+                StageViewController.routeExitProbeArmedAt = Date()
+                stage.dismiss(animated: true) { [weak self] in
+                    guard let self, self.routeState == .routing,
+                          self.routeGeneration == generation,
+                          let root = self.window?.rootViewController else { return }
+                    let chainNow = self.presentedChain(from: root)
+                    if let stageNow = chainNow.first(where: { $0 is StageViewController }) as? StageViewController,
+                       chainNow.last === stageNow {
+                        self.routeSucceed(generation: generation, stage: stageNow,
+                                          alreadyOnStage: true)
+                    } else {
+                        self.routeGiveUp(generation: generation, reason: "restore-unverified")
+                    }
+                }
             }
-            // 舞台在链但被其它内容盖住：归位分支。对舞台 dismiss
-            // 会解掉它呈现的整摞（盖层及其转呈层），舞台回到顶层；
-            // 不重新 present，避免另起一只舞台实例。
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=restore-stage reason=stage-covered chain=\(chainNames) top=\(topName)")
-            StageViewController.routeExitProbeArmedAt = Date()
-            stage.dismiss(animated: true)
-            return .presented
+            return
         }
-        let topmost = chain.last
-        if let wall = topmost as? WallPrototypeViewController {
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=present-stage via=playlist-wall chain=\(chainNames) top=\(topName)")
+        // 墙面出发：走既有 WallPrototype→Stage 门禁 enter（墙内
+        // 部 openNativeStage），route 不另造呈现路径。
+        if let wall = top as? WallPrototypeViewController {
+            Breadcrumbs.log("nowplaying.route action=present-stage gen=\(generation) via=playlist-wall chain=\(chainDescription())")
             StageViewController.routeExitProbeArmedAt = Date()
             wall.openNativeStageForBackgroundReturn()
-            return .presented
-        } else if let home = topmost as? HomeWallViewController {
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=present-stage via=home-wall chain=\(chainNames) top=\(topName)")
+            verifyPresentedStage(generation: generation)
+            return
+        }
+        if let home = top as? HomeWallViewController {
+            Breadcrumbs.log("nowplaying.route action=present-stage gen=\(generation) via=home-wall chain=\(chainDescription())")
             StageViewController.routeExitProbeArmedAt = Date()
             home.openNativeStageForBackgroundReturn()
-            return .presented
-        } else if topmost === root {
-            // 无墙在场（停在 Web 主界面）：舞台本体自包含（关闭即
-            // dismiss、跳网页舞台时 onRequestWebStage 为 nil 走
-            // dismiss 兜底），直接由根呈现，不另造舞台内部逻辑。
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=present-stage via=main chain=\(chainNames) top=\(topName)")
+            verifyPresentedStage(generation: generation)
+            return
+        }
+        if top === root {
+            Breadcrumbs.log("nowplaying.route action=present-stage gen=\(generation) via=main chain=\(chainDescription())")
             StageViewController.routeExitProbeArmedAt = Date()
             let stage = StageViewController()
             stage.modalPresentationStyle = .fullScreen
             root.present(stage, animated: true)
-            return .presented
-        } else {
-            // 墙上有模态（设置页等）或顶层是其它页面：不粗暴打
-            // 断，进重试环等层级就绪（3.7 (44)；旧版一拍跳过）。
-            Breadcrumbs.log("nowplaying.route fromBackground=yes hasQueue=yes action=skip reason=modal-presented top=\(type(of: topmost!)) chain=\(chainNames)")
-            return .retryable("modal-presented")
+            verifyPresentedStage(generation: generation)
+            return
         }
+        // 顶层被其它模态（设置页等）占着：不粗暴打断，短重试
+        // 等其散场，窗尽 giveup（modal-presented）。
+        routeRetryOrGiveUp(generation: generation, reason: "modal-presented")
+    }
+
+    /// 场景稳定判据（DS 定案）：foregroundActive、根已挂窗、
+    /// 链上无进行中的 present/dismiss/转场。不稳只短重试。
+    private func sceneInstabilityReason(root: UIViewController) -> String? {
+        if (window?.windowScene?.activationState ?? .foregroundActive) != .foregroundActive {
+            return "scene-not-active"
+        }
+        if root.view.window == nil { return "root-detached" }
+        var cursor: UIViewController? = root
+        while let vc = cursor {
+            if vc.isBeingPresented || vc.isBeingDismissed { return "chain-transition" }
+            if vc.transitionCoordinator != nil { return "chain-transition" }
+            cursor = vc.presentedViewController
+        }
+        return nil
+    }
+
+    /// 短重试：0.12s 一拍、上限 10 拍（≈1.2s + 决策耗时），同
+    /// 原因只落一行 retry 痕防刷屏；窗尽 giveup。
+    private func routeRetryOrGiveUp(generation: Int, reason: String) {
+        guard routeState == .routing, generation == routeGeneration else { return }
+        if routeAttempts >= 10 {
+            routeGiveUp(generation: generation, reason: "unstable-\(reason)")
+            return
+        }
+        if reason != routeLastRetryReason {
+            routeLastRetryReason = reason
+            Breadcrumbs.log("nowplaying.route retry gen=\(generation) reason=\(reason) attempt=\(routeAttempts)")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+            guard let self, self.routeState == .routing,
+                  self.routeGeneration == generation else { return }
+            self.routeStep()
+        }
+    }
+
+    /// 呈现成功校验（DS 成功标准）：present 动画后链顶必须是
+    /// canonical 登记的同一舞台实例（同 token）、view.window
+    /// 非 nil；不过 → giveup present-unverified（不再盲目重试
+    /// 叠台）。
+    private func verifyPresentedStage(generation: Int) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+            guard let self, self.routeState == .routing,
+                  self.routeGeneration == generation,
+                  let root = self.window?.rootViewController else { return }
+            let chain = self.presentedChain(from: root)
+            guard let stage = chain.last as? StageViewController,
+                  StageExitGate.shared.canonicalStage === stage,
+                  stage.view.window != nil else {
+                self.routeGiveUp(generation: generation, reason: "present-unverified")
+                return
+            }
+            self.routeSucceed(generation: generation, stage: stage, alreadyOnStage: false)
+        }
+    }
+
+    /// route 成功终点：落 presented/alreadyOnStage（带舞台侧快
+    /// 照）、开 3 秒 RouteGuard、守卫到期舞台仍在则 settle。
+    private func routeSucceed(generation: Int, stage: StageViewController,
+                              alreadyOnStage: Bool) {
+        routeState = .stageVisible
+        removeRouteTouchObserver()
+        Breadcrumbs.log("nowplaying.route \(alreadyOnStage ? "alreadyOnStage" : "presented") gen=\(generation) token=\(stage.stageToken) window=\(stage.view.window != nil ? "yes" : "nil") alpha=\(stage.view.alpha) hidden=\(stage.view.isHidden) frame=\(stage.view.frame)")
+        StageExitGate.shared.armRouteGuard(generation: generation,
+                                           stageToken: stage.stageToken,
+                                           alreadyOnStage: alreadyOnStage)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.6) { [weak self] in
+            guard let self, self.routeState == .stageVisible,
+                  self.routeGeneration == generation else { return }
+            self.routeState = .settled
+            Breadcrumbs.log("nowplaying.route settle gen=\(generation) reason=guard-expired stage-kept")
+        }
+    }
+
+    private func routeGiveUp(generation: Int, reason: String) {
+        routeState = .giveup
+        removeRouteTouchObserver()
+        Breadcrumbs.log("nowplaying.route giveup gen=\(generation) reason=\(reason) attempts=\(routeAttempts)")
+    }
+
+    // MARK: route 闸门回调与用户接管
+
+    /// StageExitGate 回调接线（willConnectTo 调一次）：用户/程
+    /// 序化正当退出 → route 落定 settled；守卫期内被未知路径
+    /// 带下 → 同代际 reenter 一次（状态回 routing 重走决策）。
+    fileprivate func wireRouteGateCallbacks() {
+        let gate = StageExitGate.shared
+        gate.onRouteResolvedByExit = { [weak self] in
+            guard let self else { return }
+            if self.routeState == .stageVisible || self.routeState == .routing {
+                self.routeState = .settled
+                self.removeRouteTouchObserver()
+                Breadcrumbs.log("nowplaying.route settle gen=\(self.routeGeneration) reason=stage-exit-approved")
+            }
+        }
+        gate.onGuardReenter = { [weak self] generation in
+            guard let self, self.routeGeneration == generation,
+                  self.routeState == .stageVisible else { return }
+            self.routeState = .routing
+            self.routeAttempts = 0
+            self.routeLastRetryReason = ""
+            Breadcrumbs.log("nowplaying.route begin gen=\(generation) reason=guard-reenter")
+            DispatchQueue.main.async { [weak self] in self?.routeStep() }
+        }
+        gate.onRouteGaveUp = { [weak self] generation in
+            guard let self, self.routeGeneration == generation else { return }
+            self.routeState = .giveup
+            self.removeRouteTouchObserver()
+        }
+    }
+
+    /// route pending/routing 期间的用户接管观察：窗口内任一
+    /// touch down = 用户已拿回控制权，route 当即 cancel 落
+    /// reason（DS：用户意图只认显式信号）。点卡本身的触摸发
+    /// 生在锁屏（系统进程），不会进本窗，不误杀。
+    private func installRouteTouchObserver() {
+        guard routeTouchObserver == nil, let window else { return }
+        let recognizer = TouchDownObserverRecognizer()
+        recognizer.cancelsTouchesInView = false
+        recognizer.onTouchDown = { [weak self] in
+            guard let self else { return }
+            guard self.routeState == .foregroundPending
+                    || self.routeState == .routing else { return }
+            self.routeState = .settled
+            self.removeRouteTouchObserver()
+            Breadcrumbs.log("nowplaying.route settle gen=\(self.routeGeneration) reason=user-interaction-cancel")
+        }
+        window.addGestureRecognizer(recognizer)
+        routeTouchObserver = recognizer
+    }
+
+    private func removeRouteTouchObserver() {
+        if let recognizer = routeTouchObserver {
+            recognizer.view?.removeGestureRecognizer(recognizer)
+            routeTouchObserver = nil
+        }
+    }
+
+    // MARK: 呈现链小工具
+
+    private func presentedChain(from root: UIViewController) -> [UIViewController] {
+        var chain: [UIViewController] = [root]
+        while let presented = chain.last?.presentedViewController {
+            chain.append(presented)
+        }
+        return chain
+    }
+
+    private func chainDescription() -> String {
+        guard let root = window?.rootViewController else { return "no-root" }
+        return presentedChain(from: root)
+            .map { String(describing: type(of: $0)) }
+            .joined(separator: ">")
+    }
+}
+
+/// 窗口级 touch down 观察器（route 用户接管判据专用）：不消费
+/// 触摸、不阻断任何手势，只在 touchesBegan 时回调一次/每触。
+final class TouchDownObserverRecognizer: UIGestureRecognizer {
+    var onTouchDown: (() -> Void)?
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent) {
+        super.touchesBegan(touches, with: event)
+        onTouchDown?()
     }
 }

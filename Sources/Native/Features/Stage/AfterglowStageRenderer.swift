@@ -78,6 +78,10 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
         sweepContainer.layer.addSublayer(sweepGradient)
         nextLabel.textAlignment = .center
         nextLabel.isUserInteractionEnabled = false
+        // 下一行预览的溢出兜底（3.7 (46)）：定宽框内自适应缩
+        // 字（最低 0.6 倍），长行不截断溢出。
+        nextLabel.adjustsFontSizeToFitWidth = true
+        nextLabel.minimumScaleFactor = 0.6
         // 层序：残影（后）→ 当前行（中）→ 余辉/擦光（前）。
         rootView.addSubview(ghostLayer)
         rootView.addSubview(currentContainer)
@@ -201,16 +205,15 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
         return max(36, min(6 * vmin / 100, 72))
     }
 
+    /// 逐行适配（3.7 (46)）：与深廊同口径——整行实测宽按比例
+    /// 缩字号、下限 12（旧下限 18 长行溢出）；词宽含辉光垫的
+    /// 残余超宽由 buildCurrentLine 的两遍重建收尾。
     private func fontSize(for line: LyricLine) -> CGFloat {
         let avail = max(rootView.bounds.width - 64, 0)
-        var size = baseFontSize()
-        guard avail > 0 else { return size }
-        while size > 18 {
-            let font = StageFonts.bold(size: size)
-            if (line.text as NSString).size(withAttributes: [.font: font]).width <= avail { break }
-            size -= 2
-        }
-        return size
+        guard avail > 0 else { return baseFontSize() }
+        return StageTextKit.fittedBoldSize(
+            text: line.text, base: baseFontSize(),
+            availWidth: avail, floor: 12)
     }
 
     private func clearCurrentLine() {
@@ -252,21 +255,37 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
         }
         let line = snapshot.lines[idx]
         let palette = snapshot.palette
-        let size = fontSize(for: line)
-        let font = StageFonts.bold(size: size)
+        var size = fontSize(for: line)
+        var font = StageFonts.bold(size: size)
         let profile = StageLineProfile.profile(for: line)
         let units = StageLyricUnits.units(for: line)
 
         // 活字行：GlowWordView 单行居中排布（长句已压字号）。
-        var words: [GlowWordView] = []
-        var total: CGFloat = 0
-        for unit in units {
-            let word = GlowWordView(
-                unit: unit, pose: StageWordPose(), font: font,
-                baseColor: palette.primary, activeColor: palette.accent,
-                profile: profile)
-            words.append(word)
-            total += word.bounds.width
+        func makeWords(_ wordFont: UIFont) -> ([GlowWordView], CGFloat) {
+            var built: [GlowWordView] = []
+            var sum: CGFloat = 0
+            for unit in units {
+                let word = GlowWordView(
+                    unit: unit, pose: StageWordPose(), font: wordFont,
+                    baseColor: palette.primary, activeColor: palette.accent,
+                    profile: profile)
+                built.append(word)
+                sum += word.bounds.width
+            }
+            return (built, sum)
+        }
+        var (words, total) = makeWords(font)
+        // 两遍适配（3.7 (46)）：词宽含辉光垫、纯文本测量估不
+        // 到，合计超可用宽时按比例缩字号重建一遍（下限 8）；
+        // 其后字素布局与扫光 mask 都用重建后的 font，几何一致。
+        let availW = max(rootView.bounds.width - 64, 0)
+        if total > availW, total > 0 {
+            let scaled = max(8, size * availW / total)
+            if scaled < size {
+                size = scaled
+                font = StageFonts.bold(size: size)
+                (words, total) = makeWords(font)
+            }
         }
         let bounds = rootView.bounds
         let lineHeight = size * 1.5

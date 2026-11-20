@@ -33,6 +33,14 @@ final class MainViewController: UIViewController, UIGestureRecognizerDelegate {
     override var prefersHomeIndicatorAutoHidden: Bool { true }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
+    /// dismiss 统一拦截（3.7 (46)）：根控制器 dismiss 会带下整
+    /// 条呈现链（含 canonical 舞台）——未登记且 RouteGuard 在
+    /// 期时由 StageExitGate veto。
+    override func dismiss(animated flag: Bool, completion: (() -> Void)? = nil) {
+        if StageExitGate.shared.shouldVetoDismiss(from: self) { return }
+        super.dismiss(animated: flag, completion: completion)
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         // 回程票（3.7 (13) #6）：前端 stageClosed 过桥后按票恢复墙。

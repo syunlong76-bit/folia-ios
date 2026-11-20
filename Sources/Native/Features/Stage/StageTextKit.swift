@@ -25,8 +25,30 @@ extension StageFonts {
     /// 之一；主题字重解析缺省 600 时用不到，留给副字幕等
     /// 400/500 档场景）。
     static func serifRegular(size: CGFloat) -> UIFont {
-        UIFont(name: "STSongti-SC-Regular", size: size)
+        let font = UIFont(name: "STSongti-SC-Regular", size: size)
             ?? .systemFont(ofSize: size, weight: .regular)
+        StageFontBreadcrumb.note(slot: "serifRegular",
+                                 requested: "STSongti-SC-Regular",
+                                 resolved: font)
+        return font
+    }
+}
+
+/// 字体落点面包屑（3.7 (46)，DS 莫奈 H4 取证）：每个字体槽位
+/// 只落一次——请求名、实际解析到的字体名、是否走了系统回退。
+/// Songti SC 在个别系统版本/语言环境下缺字重时，回退是静默的；
+/// 下次莫奈出问题凭此一行先判死字体线。
+enum StageFontBreadcrumb {
+    private static var noted = Set<String>()
+    private static let lock = NSLock()
+
+    static func note(slot: String, requested: String, resolved: UIFont) {
+        lock.lock()
+        let first = !noted.contains(slot)
+        if first { noted.insert(slot) }
+        lock.unlock()
+        guard first else { return }
+        Breadcrumbs.log("stage.font slot=\(slot) requested=\(requested) resolved=\(resolved.fontName) fallback=\(resolved.fontName != requested)")
     }
 }
 
@@ -187,7 +209,55 @@ enum StageTextKit {
             rows: rows, lineHeight: height, clipped: ctLines.count > maxLines)
     }
 
+    // MARK: 大字适配（原创样式共用，3.7 (46)）
+
+    /// 逐行字号自适应收缩：以 base 字号实测整行文本宽，超出
+    /// availWidth 时按比例缩字号（下限 floor），保证任何行不
+    /// 溢出可用宽度。原创三样式（深廊/调频/残光）的字体溢出
+    /// 修复共用此口径：先缩字号保大字感，缩到下限仍超宽的极
+    /// 端行再由各样式自己的容器级兜底（fitScale/压印）收尾，
+    /// 「不溢出」为硬线。测量字体与三样式实际用字同为
+    /// StageFonts.bold（Songti SC Bold）。
+    static func fittedBoldSize(text: String, base: CGFloat,
+                               availWidth: CGFloat,
+                               floor: CGFloat = 12) -> CGFloat {
+        guard base > floor, availWidth > 0, !text.isEmpty else {
+            return max(base, floor)
+        }
+        let width = (text as NSString)
+            .size(withAttributes: [.font: StageFonts.bold(size: base)]).width
+        guard width > availWidth else { return base }
+        return max(floor, base * availWidth / width)
+    }
+
     // MARK: CoreText 栅格
+
+    /// 显式位图上下文栅格（3.7 (46)，DS 莫奈 H2 定案）：替代
+    /// UIGraphicsImageRenderer——后者在后台 bake 队列里创建
+    /// UIKit 图形上下文属未定义行为面（线程安全/上下文隔离
+    /// 无保证，是莫奈闪退的嫌疑路径之一）。改走纯
+    /// CGBitmapContext（DeviceRGB/premultipliedLast）：初始
+    /// CTM 按 UIGraphics 口径复刻（scale ∘ y 翻转、原点左
+    /// 上），三个栅格函数的绘制代码与原渲染器闭包逐字一致，
+    /// 输出 UIImage 的 scale 语义不变；主/后台线程均可安全
+    /// 调用，保真不降（同字号、同 scale、同 CT 绘制）。
+    private static func bitmapImage(size: CGSize, scale: CGFloat,
+                                    draw: (CGContext) -> Void) -> UIImage? {
+        let widthPx = max(1, Int(ceil(size.width * scale)))
+        let heightPx = max(1, Int(ceil(size.height * scale)))
+        guard let cg = CGContext(
+            data: nil, width: widthPx, height: heightPx,
+            bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        cg.scaleBy(x: scale, y: scale)
+        cg.translateBy(x: 0, y: size.height)
+        cg.scaleBy(x: 1, y: -1)
+        draw(cg)
+        guard let cgImage = cg.makeImage() else { return nil }
+        return UIImage(cgImage: cgImage, scale: scale, orientation: .up)
+    }
 
     /// 整段文本栅格（CTFrameDraw）：按 maxWidth 折行、最多
     /// maxLines 行，返回图与折行信息。图尺寸 = maxWidth ×
@@ -200,15 +270,10 @@ enum StageTextKit {
                            maxLines: maxLines, fontPx: fontPx)
         guard !wrapped.rows.isEmpty else { return nil }
         let size = CGSize(width: maxWidth, height: wrapped.totalHeight)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = scale
-        format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let attr = NSAttributedString(string: text, attributes: [
             .font: font, .foregroundColor: color,
         ])
-        let image = renderer.image { context in
-            let cg = context.cgContext
+        guard let image = bitmapImage(size: size, scale: scale, draw: { cg in
             let framesetter = CTFramesetterCreateWithAttributedString(attr)
             let path = CGPath(rect: CGRect(origin: .zero, size: size), transform: nil)
             let frame = CTFramesetterCreateFrame(
@@ -217,7 +282,7 @@ enum StageTextKit {
             cg.scaleBy(x: 1, y: -1)
             cg.textMatrix = .identity
             CTFrameDraw(frame, cg)
-        }
+        }) else { return nil }
         return (image, wrapped)
     }
 
@@ -229,16 +294,11 @@ enum StageTextKit {
         -> UIImage? {
         guard width > 0, boxHeight > 0 else { return nil }
         let size = CGSize(width: width, height: boxHeight)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = scale
-        format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let attr = NSAttributedString(string: text, attributes: [
             .font: font, .foregroundColor: color,
         ])
         let ctLine = CTLineCreateWithAttributedString(attr)
-        return renderer.image { context in
-            let cg = context.cgContext
+        return bitmapImage(size: size, scale: scale) { cg in
             cg.translateBy(x: 0, y: size.height)
             cg.scaleBy(x: 1, y: -1)
             cg.textMatrix = .identity
@@ -256,16 +316,11 @@ enum StageTextKit {
                                   rtl: Bool) -> UIImage? {
         guard width > 0, boxHeight > 0 else { return nil }
         let size = CGSize(width: width, height: boxHeight)
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = scale
-        format.opaque = false
-        let renderer = UIGraphicsImageRenderer(size: size, format: format)
         let attr = NSAttributedString(string: text, attributes: [
             .font: font, .foregroundColor: color,
         ])
         let ctLine = CTLineCreateWithAttributedString(attr)
-        return renderer.image { context in
-            let cg = context.cgContext
+        return bitmapImage(size: size, scale: scale) { cg in
             cg.saveGState()
             cg.translateBy(x: 0, y: size.height)
             cg.scaleBy(x: 1, y: -1)

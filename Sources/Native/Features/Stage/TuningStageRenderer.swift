@@ -30,6 +30,8 @@ final class TuningLineView: UIView {
     let graphemeTimes: [(start: TimeInterval, end: TimeInterval)]
     private let labels: [UILabel]
     private let font: UIFont
+    /// 本行实际字号（逐行适配后）：槽位纵向间距按它算（3.7 (46)）。
+    var fontPointSize: CGFloat { font.pointSize }
     private let palette: PaletteTokens
     let contentWidth: CGFloat
     let contentHeight: CGFloat
@@ -544,11 +546,24 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
         return max(36, min(6 * vmin / 100, 72))
     }
 
+    /// 逐行适配（3.7 (46)）：调频原先完全没有逐行收缩——字号
+    /// 只看视口、行视图宽 = 字素宽求和，长行恒溢出屏幕。本版
+    /// 按行文本宽比例收缩（下限 14，留 4pt 测量余量：整串测
+    /// 宽与字素求和有微差），行宽 ≤ 可用宽后居中不溢出。
+    private func fittedSize(for line: LyricLine) -> CGFloat {
+        let avail = max(rootView.bounds.width - 64, 0)
+        guard avail > 4 else { return fontSize() }
+        return StageTextKit.fittedBoldSize(
+            text: line.text, base: fontSize(),
+            availWidth: avail - 4, floor: 14)
+    }
+
     private func makeLineView(line: LyricLine) -> TuningLineView {
         guard let snapshot else {
             return TuningLineView(line: line, fontSize: 36, palette: .neutralDark)
         }
-        return TuningLineView(line: line, fontSize: fontSize(), palette: snapshot.palette)
+        return TuningLineView(line: line, fontSize: fittedSize(for: line),
+                              palette: snapshot.palette)
     }
 
     /// 当前行槽位：居中于舞台 42% 高处，恒等变换。
@@ -570,12 +585,14 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
     }
 
     /// 下一行槽位：当前行下方，scale 0.55（0.55 倍字号区）。
+    /// 纵向间距按当前行实际字号（逐行适配后）算（3.7 (46)）。
     private func placeNext(_ lineView: TuningLineView) {
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
+        let size = currentView?.fontPointSize ?? fontSize()
         lineView.center = CGPoint(
             x: bounds.width / 2,
-            y: bounds.height * 0.42 + fontSize() * 2.0)
+            y: bounds.height * 0.42 + size * 2.0)
         lineView.transform = CGAffineTransform(scaleX: 0.55, y: 0.55)
     }
 
@@ -586,8 +603,9 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
             if current.transform == .identity { current.center = center }
         }
         if let next = nextView {
+            let size = currentView?.fontPointSize ?? fontSize()
             next.center = CGPoint(x: rootView.bounds.width / 2,
-                                  y: rootView.bounds.height * 0.42 + fontSize() * 2.0)
+                                  y: rootView.bounds.height * 0.42 + size * 2.0)
         }
     }
 }

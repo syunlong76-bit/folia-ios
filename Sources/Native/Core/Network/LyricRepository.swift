@@ -35,8 +35,10 @@ final class LyricRepository {
         let flip: String
         /// 演唱跨度压缩比 r（3.7 (43) 路3）：无逐字戳行的逐字
         /// 时刻表按 span×r 排（行尾气口不再摊进每个字）；由
-        /// 本曲有戳行标定（中位），全曲无戳时缺省 0.8。墙面
-        /// lineDuration 与舞台均分共用此值（同一 r 源）。
+        /// 本曲有戳行标定（中位）。3.7 (46) 跨曲学习：本曲无
+        /// 戳时改取 SingingRatioPool 的跨曲标定中位数（有戳歌
+        /// 逐曲入池），池空才落缺省 0.8。墙面 lineDuration 与
+        /// 舞台均分共用此值（同一 r 源）。
         let singingRatio: Double
         /// 负结果（无歌词/取数失败）：lines 为空、短 TTL。
         let isNegative: Bool
@@ -128,7 +130,27 @@ final class LyricRepository {
             flip = "lrc"
         }
         let bytes = Self.estimateBytes(lines: parsed, lrcText: lrcText)
-        let ratio = Self.singingRatio(for: parsed)
+        // r 三级来源（3.7 (46) 跨曲学习）：本曲有戳 → 同曲标定
+        // 并入池（rSource=track）；本曲无戳 → 池中位数
+        // （rSource=calibrated-pool）；池空 → 缺省 0.8
+        // （rSource=default）。(45) 真机日志定级：全库多为无戳
+        // LRC、r 恒落写死 0.8 是扫光普遍慢的主因之一——单曲
+        // 标定救不了无戳歌，跨曲中位数把有戳歌的演唱跨度分
+        // 布迁移给无戳歌。红线不变：不动 LyricTiming.lead、
+        // 不动翻行链，r 只喂无戳行的逐字均分跨度。
+        let ratio: Double
+        let rSource: String
+        if let calibrated = Self.singingCalibration(for: parsed) {
+            ratio = calibrated
+            rSource = "track"
+            SingingRatioPool.record(songId: songId, ratio: calibrated)
+        } else if let pooled = SingingRatioPool.median() {
+            ratio = pooled
+            rSource = "calibrated-pool"
+        } else {
+            ratio = 0.8
+            rSource = "default"
+        }
         // 逐字覆盖率面包屑（3.7 (43) 路3 埋点先行）：此前仓库
         // 零面包屑，一首歌有无 YRC 逐字戳无从判读、均分定案
         // 与否全靠猜。此行落盘后：withWords≈0 → 无戳均分行
@@ -139,7 +161,8 @@ final class LyricRepository {
             + " lines=\(parsed.count) withWords=\(withWords)"
             + " yrc=\(source.contains("yrc") ? "yes" : "no")"
             + " src=\(source) flip=\(flip)"
-            + " r=\(String(format: "%.3f", ratio))")
+            + " r=\(String(format: "%.3f", ratio))"
+            + " rSource=\(rSource) pool=\(SingingRatioPool.count)")
         return Entry(lines: parsed, lrcText: lrcText, source: source,
                      flip: flip, singingRatio: ratio,
                      isNegative: parsed.isEmpty,
@@ -156,6 +179,13 @@ final class LyricRepository {
     /// 行戳异常（rebase 边界夹取可把末字 end 顶到行界、样本
     /// =1，中位对此不敏感）把 r 标定失真。
     static func singingRatio(for lines: [LyricLineData]) -> Double {
+        singingCalibration(for: lines) ?? 0.8
+    }
+
+    /// 同曲标定本体（3.7 (46) 拆分）：无可用样本返回 nil（与
+    /// 「标定值恰为 0.8」区分——前者要走跨曲池兜底，后者是真
+    /// 标定），供 fetch 决定 rSource 与是否入池。
+    static func singingCalibration(for lines: [LyricLineData]) -> Double? {
         var samples: [Double] = []
         for i in lines.indices {
             guard let words = lines[i].words, let last = words.last,
@@ -165,7 +195,7 @@ final class LyricRepository {
             guard span > 0.3, sung > 0 else { continue }
             samples.append(min(max(sung / span, 0.3), 1))
         }
-        guard !samples.isEmpty else { return 0.8 }
+        guard !samples.isEmpty else { return nil }
         let sorted = samples.sorted()
         let median = sorted[sorted.count / 2]
         return min(max(median, 0.3), 1)
@@ -393,5 +423,74 @@ enum LyricParsing {
         let lower = text.lowercased()
         return lower.hasPrefix("lyrics by") || lower.hasPrefix("composed by")
             || lower.hasPrefix("produced by") || lower.hasPrefix("arranged by")
+    }
+}
+
+/// 扫光 r 跨曲标定样本池（3.7 (46)）：每遇到一首有逐字戳的歌，
+/// 把其同曲标定 r 按 songId 入池持久化（UserDefaults）；无戳歌
+/// 取池中位数作 r。策略：同曲重标定覆盖旧样本（不重复计数）；
+/// 上限 40 首，超限淘汰最旧；样本 90 天过期（读时清理）——r 分
+/// 布随曲库构成缓慢漂移，过期与上限保证中位数反映近期曲库。
+/// 读写经 NSLock 串行（fetch 在并发 Task 里跑）。
+enum SingingRatioPool {
+
+    private static let defaultsKey = "folia.lrc.singingRatioPool.v1"
+    private static let maxSamples = 40
+    private static let maxAge: TimeInterval = 90 * 24 * 3600
+    private static let lock = NSLock()
+
+    private struct Sample {
+        var songId: String
+        var ratio: Double
+        var recordedAt: TimeInterval
+    }
+
+    private static func loadLocked() -> [Sample] {
+        let raw = UserDefaults.standard.array(forKey: defaultsKey) ?? []
+        let now = Date().timeIntervalSince1970
+        return raw.compactMap { item -> Sample? in
+            guard let dict = item as? [String: Any],
+                  let id = dict["id"] as? String,
+                  let r = dict["r"] as? Double,
+                  let t = dict["t"] as? Double,
+                  now - t < maxAge else { return nil }
+            return Sample(songId: id, ratio: r, recordedAt: t)
+        }
+    }
+
+    private static func saveLocked(_ samples: [Sample]) {
+        let raw: [[String: Any]] = samples.map {
+            ["id": $0.songId, "r": $0.ratio, "t": $0.recordedAt]
+        }
+        UserDefaults.standard.set(raw, forKey: defaultsKey)
+    }
+
+    static func record(songId: String, ratio: Double) {
+        lock.lock()
+        defer { lock.unlock() }
+        var samples = loadLocked()
+        samples.removeAll { $0.songId == songId }
+        samples.append(Sample(songId: songId, ratio: ratio,
+                              recordedAt: Date().timeIntervalSince1970))
+        if samples.count > maxSamples {
+            samples.removeFirst(samples.count - maxSamples)
+        }
+        saveLocked(samples)
+    }
+
+    /// 池中位数（夹 [0.3, 1] 与单曲标定同口径）；池空返回 nil。
+    static func median() -> Double? {
+        lock.lock()
+        defer { lock.unlock() }
+        let samples = loadLocked()
+        guard !samples.isEmpty else { return nil }
+        let sorted = samples.map { $0.ratio }.sorted()
+        return min(max(sorted[sorted.count / 2], 0.3), 1)
+    }
+
+    static var count: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return loadLocked().count
     }
 }
