@@ -239,6 +239,12 @@ final class WorkbenchTrackCell: UITableViewCell {
     let titleLabel = UILabel()
     let subtitleLabel = UILabel()
     let durationLabel = UILabel()
+    /// 「已在队列」角标（3.7 (69) P9）：行尾小片，出角标时
+    /// 时长标签左移让位；显隐由 configure 的 inQueue 驱动，
+    /// 宿主列表经 $queue 订阅重配，不许陈旧。
+    let queueBadge = UILabel()
+    private var durationToEdge: NSLayoutConstraint?
+    private var durationToBadge: NSLayoutConstraint?
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
@@ -264,6 +270,22 @@ final class WorkbenchTrackCell: UITableViewCell {
         durationLabel.textColor = WorkbenchTheme.secondary
         durationLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(durationLabel)
+        queueBadge.text = " ✓ 已在队列 "
+        queueBadge.font = .systemFont(ofSize: 10, weight: .medium)
+        queueBadge.textColor = WorkbenchTheme.accent
+        queueBadge.layer.borderWidth = 1
+        queueBadge.layer.borderColor = WorkbenchTheme.accent.cgColor
+        queueBadge.layer.cornerRadius = 7
+        queueBadge.clipsToBounds = true
+        queueBadge.textAlignment = .center
+        queueBadge.isHidden = true
+        queueBadge.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(queueBadge)
+        durationToEdge = durationLabel.trailingAnchor.constraint(
+            equalTo: contentView.trailingAnchor, constant: -16)
+        durationToBadge = durationLabel.trailingAnchor.constraint(
+            equalTo: queueBadge.leadingAnchor, constant: -8)
+        durationToEdge?.isActive = true
         NSLayoutConstraint.activate([
             coverView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
             coverView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
@@ -276,9 +298,19 @@ final class WorkbenchTrackCell: UITableViewCell {
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 3),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
             subtitleLabel.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -12),
-            durationLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            durationLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor)
+            durationLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            queueBadge.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            queueBadge.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            queueBadge.heightAnchor.constraint(equalToConstant: 20)
         ])
+    }
+
+    /// (69) P9 角标显隐统一出口：出角标时时长标签改靠角标
+    /// 左侧，两约束互斥切换，不叠加不冲突。
+    private func setInQueue(_ inQueue: Bool) {
+        queueBadge.isHidden = !inQueue
+        durationToEdge?.isActive = !inQueue
+        durationToBadge?.isActive = inQueue
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -287,14 +319,16 @@ final class WorkbenchTrackCell: UITableViewCell {
         super.prepareForReuse()
         representedId = nil
         coverView.image = nil
+        setInQueue(false)
     }
 
-    func configure(track: FoliaTrack, isCurrent: Bool) {
+    func configure(track: FoliaTrack, isCurrent: Bool, inQueue: Bool = false) {
         representedId = track.id
         titleLabel.text = track.title
         subtitleLabel.text = track.album.isEmpty ? track.artist : "\(track.artist) · \(track.album)"
         durationLabel.text = track.duration > 0 ? Self.formatDuration(track.duration) : ""
         titleLabel.textColor = isCurrent ? WorkbenchTheme.accent : WorkbenchTheme.primary
+        setInQueue(inQueue)
         let id = track.id
         WorkbenchCover.load(raw: track.artworkURL?.absoluteString, into: coverView) { [weak self] in
             self?.representedId == id
@@ -307,6 +341,8 @@ final class WorkbenchTrackCell: UITableViewCell {
         subtitleLabel.text = subtitle
         durationLabel.text = ""
         titleLabel.textColor = WorkbenchTheme.primary
+        // 集合行（歌单/专辑）非曲目行，恒不出队列角标。
+        setInQueue(false)
         let id = representedId
         WorkbenchCover.load(raw: coverRaw, into: coverView) { [weak self] in
             self?.representedId == id

@@ -69,18 +69,24 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         ])
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // 随机池面板/调参面板关回后刷新入口行计数与徽标。
+        tableView.reloadData()
+    }
+
     // MARK: UITableViewDataSource
 
-    func numberOfSections(in tableView: UITableView) -> Int { 3 }
+    func numberOfSections(in tableView: UITableView) -> Int { 4 }
 
     func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        section == 1 ? "背景" : nil
+        section == 2 ? "背景" : nil
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
         case 0: return styles.count
-        case 1: return 3
+        case 2: return 3
         default: return 1
         }
     }
@@ -88,6 +94,30 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
     func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = tableView.dequeueReusableCell(withIdentifier: "style", for: indexPath)
         if indexPath.section == 1 {
+            // 随机池入口（3.7 (69) P3）：计数实时派生自
+            // StageStylePoolStore，未启用过滤时如实标注。
+            var config = UIListContentConfiguration.valueCell()
+            config.text = "随机池"
+            let total = StageStylePoolStore.universe.count
+            let picked = StageStylePoolStore.displaySelection.count
+            if StageStylePoolStore.isFilterActive {
+                config.secondaryText = "已选 \(picked)/\(total) · 每首歌从选中的样式里换一种"
+            } else if picked == 0 {
+                config.secondaryText = "未启用过滤 · 全部 \(total) 只（已全部关闭）"
+            } else {
+                config.secondaryText = "未启用过滤 · 全部 \(total) 只"
+            }
+            config.textProperties.color = .white
+            config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.45)
+            cell.contentConfiguration = config
+            cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+            cell.accessoryType = .disclosureIndicator
+            cell.accessoryView = nil
+            cell.selectionStyle = .default
+            cell.isUserInteractionEnabled = true
+            return cell
+        }
+        if indexPath.section == 2 {
             var config = UIListContentConfiguration.valueCell()
             let current = CustomBackgroundStore.current
             if indexPath.row == 0 {
@@ -146,7 +176,7 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
             }
             return cell
         }
-        if indexPath.section == 2 {
+        if indexPath.section == 3 {
             var config = UIListContentConfiguration.valueCell()
             config.text = "网页版播放页"
             config.secondaryText = "打开网页舞台（样式以网页版当前设置为准）"
@@ -307,15 +337,31 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
 
     // MARK: UITableViewDelegate
 
+    /// 随机池面板呈现（3.7 (69) P3）：与调参面板同形态——
+    /// 导航包裹＋「完成」，关回选择器时 viewWillAppear 刷新
+    /// 入口行计数。
+    private func presentPoolPanel() {
+        let panel = StageStylePoolViewController()
+        let nav = UINavigationController(rootViewController: panel)
+        panel.navigationItem.rightBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .done, target: self,
+            action: #selector(handleTuningDone))
+        present(nav, animated: true)
+    }
+
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         if indexPath.section == 1 {
+            presentPoolPanel()
+            return
+        }
+        if indexPath.section == 2 {
             if indexPath.row == 0 { onPickCustomBackground?() }
             else if indexPath.row == 1 { presentBackdropModePicker62() }
             else { onClearCustomBackground?() }
             return
         }
-        if indexPath.section == 2 {
+        if indexPath.section == 3 {
             onOpenWebStage?()
             return
         }

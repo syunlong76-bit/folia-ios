@@ -49,7 +49,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "68"
+        CFBundleVersion: "69"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），

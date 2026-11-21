@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 
 // WorkbenchTrackListViewController.swift
@@ -13,6 +14,7 @@ final class WorkbenchTrackListViewController: WorkbenchSectionViewController,
     private let tracks: [FoliaTrack]
     private let queueSource: String
     private let tableView = UITableView(frame: .zero, style: .plain)
+    private var queueCancellable: AnyCancellable?
 
     init(title: String, tracks: [FoliaTrack], queueSource: String) {
         self.tracks = tracks
@@ -44,6 +46,11 @@ final class WorkbenchTrackListViewController: WorkbenchSectionViewController,
         } else {
             stateView.hide()
         }
+        // (69) P9：队列变化即整表重配「已在队列」角标（列表
+        // 量级小，整表 reload 成本可忽略），不许陈旧标记。
+        queueCancellable = QueueManager.shared.$queue
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.tableView.reloadData() }
     }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
@@ -55,7 +62,8 @@ final class WorkbenchTrackListViewController: WorkbenchSectionViewController,
             withIdentifier: WorkbenchTrackCell.reuseId, for: indexPath) as! WorkbenchTrackCell
         let track = tracks[indexPath.row]
         cell.configure(track: track,
-                       isCurrent: QueueManager.shared.currentTrack?.id == track.id)
+                       isCurrent: QueueManager.shared.currentTrack?.id == track.id,
+                       inQueue: QueueManager.shared.containsTrack(id: track.id))
         return cell
     }
 

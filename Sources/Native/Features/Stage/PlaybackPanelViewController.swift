@@ -104,6 +104,11 @@ final class PlaybackPanelViewController: UIViewController {
     private let volumeValueLabel = UILabel()
     /// (68) A3：当前主题名回显（ThemeSystem62 同源、变更即时刷新）。
     private let themeNameLabel = UILabel()
+    /// (69) P7：歌词时间轴偏移页内直调（与设置页步进器同键
+    /// 同源 SettingsStore.globalLyricTimelineOffsetMs，步进/
+    /// 范围照设置口径 ±50ms / ±2000ms，不另立第二套数值）。
+    private let lyricOffsetStepper = UIStepper()
+    private let lyricOffsetValueLabel = UILabel()
     private var sleepCountdown: Timer?
 
     // 队列页签（内嵌本体）
@@ -146,6 +151,8 @@ final class PlaybackPanelViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (69) P7：从设置页改偏移返回面板时回读本键对齐。
+        refreshLyricOffsetRow()
         sleepCountdown = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) {
             [weak self] _ in
             guard let self, SleepTimerController.shared.isActive else { return }
@@ -362,6 +369,38 @@ final class PlaybackPanelViewController: UIViewController {
         themeNameLabel.textColor = .white
         stack.addArrangedSubview(themeNameLabel)
         refreshThemeName()
+
+        // (69) P7 歌词偏移页内直调：步进器＋当前值＋归零，
+        // 写 SettingsStore.globalLyricTimelineOffsetMs 本键——
+        // 与设置页步进器、命令面板 ±100 三处同键同源，任一处
+        // 改、其余面重开/回显即同值（消费端 LyricTiming.lead
+        // 与舞台 positionNow 读同一访问器，即时生效）。
+        stack.addArrangedSubview(sectionLabel("歌词偏移"))
+        lyricOffsetStepper.minimumValue = -2000
+        lyricOffsetStepper.maximumValue = 2000
+        lyricOffsetStepper.stepValue = 50
+        lyricOffsetStepper.tintColor = .white
+        lyricOffsetStepper.addTarget(self, action: #selector(lyricOffsetStepperChanged), for: .valueChanged)
+        lyricOffsetValueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        lyricOffsetValueLabel.textColor = UIColor.white.withAlphaComponent(0.75)
+        let offsetResetButton = UIButton(type: .system)
+        offsetResetButton.setTitle("归零", for: .normal)
+        offsetResetButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
+        offsetResetButton.setTitleColor(.white, for: .normal)
+        offsetResetButton.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+        offsetResetButton.layer.cornerRadius = 10
+        offsetResetButton.widthAnchor.constraint(equalToConstant: 52).isActive = true
+        offsetResetButton.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        offsetResetButton.addTarget(self, action: #selector(lyricOffsetResetTapped), for: .touchUpInside)
+        let offsetRow = UIStackView()
+        offsetRow.axis = .horizontal
+        offsetRow.spacing = 10
+        offsetRow.alignment = .center
+        offsetRow.addArrangedSubview(lyricOffsetStepper)
+        offsetRow.addArrangedSubview(lyricOffsetValueLabel)
+        offsetRow.addArrangedSubview(offsetResetButton)
+        stack.addArrangedSubview(offsetRow)
+        refreshLyricOffsetRow()
 
         // 打开设置：既有设置页通路。
         let settingsButton = UIButton(type: .system)
@@ -779,6 +818,27 @@ final class PlaybackPanelViewController: UIViewController {
     /// (68) A3：主题名回显统一出口。
     private func refreshThemeName() {
         themeNameLabel.text = ThemeSystem62.currentDisplayName
+    }
+
+    /// (69) P7：偏移回显统一出口——回读存储本键（不靠构建
+    /// 初值）：构建时、viewDidAppear（从设置页改完返回）都经
+    /// 此对齐，双入口同键同源的实测落点。
+    private func refreshLyricOffsetRow() {
+        let ms = SettingsStore.globalLyricTimelineOffsetMs
+        lyricOffsetStepper.value = Double(ms)
+        lyricOffsetValueLabel.text = ms > 0 ? "+\(ms) ms" : "\(ms) ms"
+    }
+
+    @objc private func lyricOffsetStepperChanged() {
+        let ms = Int(lyricOffsetStepper.value)
+        SettingsStore.globalLyricTimelineOffsetMs = ms
+        refreshLyricOffsetRow()
+        Breadcrumbs.log("panel.offset ms=\(ms)")
+    }
+
+    @objc private func lyricOffsetResetTapped() {
+        lyricOffsetStepper.value = 0
+        lyricOffsetStepperChanged()
     }
 
     @objc private func openSettingsTapped() {

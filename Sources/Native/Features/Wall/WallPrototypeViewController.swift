@@ -442,6 +442,14 @@ final class WallPrototypeViewController: UIViewController,
                 self?.refreshMiniBar()
             }
             .store(in: &playbackCancellables)
+        // (69) P9：队列一变（装载/追加/删减/清空）即重配可见
+        // cell 的「已在队列」角标，不许陈旧标记。
+        QueueManager.shared.$queue
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                self?.refreshVisiblePlaybackUI()
+            }
+            .store(in: &playbackCancellables)
         // 贴纸层（3.7 (24)，纯新增订阅）：切歌缓冲态驱动缓冲
         // 贴纸显隐，只读引擎状态，不回写。
         PlaybackEngine.shared.$playbackState
@@ -2397,7 +2405,8 @@ final class WallPrototypeViewController: UIViewController,
             isPlaying: engine.isPlaying,
             liked: LikesStore.shared.isLiked(entry.id),
             progress: progress,
-            loadState: loadState)
+            loadState: loadState,
+            inQueue: QueueManager.shared.containsTrack(id: entry.id))
         let queueIndex = instance.queueIndex
         cell.onPlayTap = { [weak self] in self?.playTapped(queueIndex: queueIndex) }
         cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
@@ -3257,6 +3266,12 @@ final class WallPosterCell: UICollectionViewCell {
     var onLikeTap: (() -> Void)?
     private let playButton = UIButton(type: .system)
     private let likeButton = UIButton(type: .system)
+    /// 「已在队列」角标（3.7 (69) P9，社区版借鉴 N4）：展开
+    /// 卡控件行中央的覆层小片，不增卡高、不占标题带；显隐
+    /// 由 configurePlayback 的 inQueue 驱动，队列变化经宿主
+    /// $queue 订阅重配可见 cell，不许陈旧。
+    private let queueBadge = UILabel()
+    private var queueBadgeVisible = false
     private let progressTrack = UIView()
     private let progressFill = UIView()
     private let playingBadge = UIButton(type: .system)
@@ -3327,6 +3342,17 @@ final class WallPosterCell: UICollectionViewCell {
         likeButton.isHidden = true
         shadowView.addSubview(likeButton)
 
+        queueBadge.text = "✓ 已在队列"
+        queueBadge.font = .systemFont(ofSize: 11, weight: .medium)
+        queueBadge.textColor = .white
+        queueBadge.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        queueBadge.layer.cornerRadius = 8
+        queueBadge.clipsToBounds = true
+        queueBadge.textAlignment = .center
+        queueBadge.isHidden = true
+        queueBadge.isUserInteractionEnabled = false
+        shadowView.addSubview(queueBadge)
+
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.28)
         progressTrack.isHidden = true
         shadowView.addSubview(progressTrack)
@@ -3372,12 +3398,17 @@ final class WallPosterCell: UICollectionViewCell {
     /// loadState 驱动三态（连接中转圈盖住播放键、失败出文案条）。
     func configurePlayback(expanded: Bool, isCurrent: Bool, isPlaying: Bool,
                            liked: Bool, progress: Double,
-                           loadState: WallPlayLoadState = .idle) {
+                           loadState: WallPlayLoadState = .idle,
+                           inQueue: Bool = false) {
         controlsVisible = expanded
         playButton.isHidden = !expanded
         likeButton.isHidden = !expanded
         progressTrack.isHidden = !expanded
         playingBadge.isHidden = !isCurrent
+        // (69) P9：角标只在展开卡出（未展开卡面维持现行），
+        // 当前曲必然在队列内、同样出角标（与播放角标并存）。
+        queueBadgeVisible = expanded && inQueue
+        queueBadge.isHidden = !queueBadgeVisible
         progressValue = progress
         playButton.setImage(
             UIImage(systemName: isCurrent && isPlaying ? "pause.fill" : "play.fill"),
@@ -3590,6 +3621,14 @@ final class WallPosterCell: UICollectionViewCell {
             progressTrack.frame = CGRect(x: 0, y: bounds.height - 3, width: bounds.width, height: 3)
             layoutProgressFill()
             playSpinner.frame = playButton.frame
+            // (69) P9：角标居控件行中央（播放/红心钮之间），
+            // 固定高 22、宽按文案定尺，不挤标题带、不增卡高。
+            if queueBadgeVisible {
+                let badgeWidth: CGFloat = 76
+                queueBadge.frame = CGRect(
+                    x: (bounds.width - badgeWidth) / 2, y: barTop + 6,
+                    width: badgeWidth, height: 22)
+            }
             errorLabel.frame = CGRect(x: 6, y: barTop - 19,
                                       width: bounds.width - 12, height: 15)
             // 贴纸层穿模治理（3.7 (25)）：失败贴纸 64pt 移到

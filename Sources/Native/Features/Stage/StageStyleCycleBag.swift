@@ -24,7 +24,18 @@ final class StageStyleCycleBag {
     /// 共用此值，手指漂移超限即整次长按作废。
     static let pressMoveTolerance: CGFloat = 12
 
-    private init() {}
+    private var poolObserver: NSObjectProtocol?
+
+    private init() {
+        // 随机池变更（3.7 (69) P3）：只清本轮余量——下一次取
+        // 样式时按新候选集开新轮；当前正在播的样式不跳变
+        // （DS 对账 Q5「池变更重建袋但当前曲不跳变」）。
+        poolObserver = NotificationCenter.default.addObserver(
+            forName: StageStylePoolStore.changedNotification,
+            object: nil, queue: .main) { [weak self] _ in
+            self?.remaining.removeAll()
+        }
+    }
 
     /// 本轮余量（洗牌后的待切队列，队头先出）。不变量：当前
     /// 样式永不在余量内（next 取前对账 + noteExternalSelection
@@ -60,9 +71,12 @@ final class StageStyleCycleBag {
     /// 故新轮第一只必然不是刚切走的那只（强于「首只不同」
     /// 的口径：当前样式整轮不入袋，与不变量一致）。一轮内
     /// 每只至多递出一次。可选全集不足 2 只时返回 nil。
+    /// 候选集经随机池过滤（3.7 (69) P3）：池未启用过滤时即
+    /// 可选全集；启用时只在池内轮换。池内不足 2 只（含单只
+    /// 退化）同样返回 nil，退化态由池面板明示。
     func next(currentStyleId: String)
         -> (styleId: String, round: Int, remaining: Int)? {
-        let selectable = Self.selectableStyleIds
+        let selectable = StageStylePoolStore.effectiveCandidates
         guard selectable.count > 1 else { return nil }
         remaining.removeAll { $0 == currentStyleId || !selectable.contains($0) }
         if remaining.isEmpty {

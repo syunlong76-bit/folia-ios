@@ -71,6 +71,13 @@ final class QueueManager: ObservableObject {
         return queue[currentIndex % queue.count]
     }
 
+    /// 某曲是否已在播放队列中（3.7 (69) P9「已在队列」角标的
+    /// 唯一判定口径）：按 track id 线性查 $queue 当前值，调用
+    /// 方在队列变更后须重查（各面经 $queue 订阅刷新），不缓存。
+    func containsTrack(id: String) -> Bool {
+        queue.contains { $0.id == id }
+    }
+
     /// 整队一轮仍无一可播后停止并回调（由 M2/M3 的 UI 层接错误提示）。
     var onFatalError: ((Error) -> Void)?
     /// 用户点播装载失败回调（3.6 (3)）：桥据此推 playbackError 事件给前端
