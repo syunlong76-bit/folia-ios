@@ -2,8 +2,9 @@
 
 分支 release-67（自 release-66 / 35d8c9f 切出），CFBundleVersion 66 → 67。
 提交链：faca542（C 组花火，先行）→ eaec321（WebEffect 换包）→ a852c26（A 原生 + B 埋点）→ 4dedb7a（D hero）→ 1b94a80（CI 锚点检查退役 + 摘嵌交互复原）→ 审查修复轮（见文末「独立审查与修复」节）。
-CI：run 44900438347 首轮失败于「Check registry patch anchor」（见 §A1 附注，非代码失败）；run 44900516842（待回填结论）。
-IPA：`~/workspace/folia-deploy/Folia-3.7-67-unsigned.ipa`（待回填字节数）。**未上传**，待主聊天验包。
+CI：run 44900438347 首轮失败于「Check registry patch anchor」（见 §A1 附注，非代码失败）；run 44900516842 成功（审查修复前）；审查修复轮 run 44901216271 失败于 Monet flip.up 一处编译错（lineViews 为字典、下标需解包，已修）；run 44901419555 成功（最终包）。
+IPA：`~/workspace/folia-deploy/Folia-3.7-67-unsigned.ipa`（48,465,181 字节）。**未上传**，待主聊天验包。
+主聊天侧独立验包（流式，未全量解压）：build=67、version=3.7、贴纸 Stickers/*.png 53 张、入场母带 entry-v5-faststart.mp4 md5=8aed0fb4a5e9a0f500184f8a7dae45a9（与 (59) 重制母带逐位一致）、WebEffect 新包在内（visual-DNExs-u5.js 即本轮重打的 player-visual 入口 chunk、共 1949 文件）、新面包屑明文字节实存：webfx.cold/webfx.frame/webfx.ackto/bridge.wlines/flip.up/flip.cmt/est.src/wall.hero/styleruntime/sync.setl/sync.per5/sweep.ph。**未确认一项**：sync.snd/sync.snd0/tick.pos 三个字面在出厂二进制中未能以明文字节检出（同文件同批探针均检出、三个宿主函数符号实存，疑为编译器短字面编码差异）——真机判读以桥日志是否实际出现这三行为准，不出现再定级。
 
 ---
 
