@@ -964,12 +964,17 @@ final class StageViewController: UIViewController {
     }
 
     private func swapRenderer(to styleId: String) {
+        // (62) INT-13：样式切换转场接线（WD StyleSwapTransition62
+        // 帮助类）——旧层快照淡出 + 新层首帧淡入（系统弹簧）。
+        let swapTransition = StyleSwapTransition62(container: rendererContainer)
+        swapTransition.begin(oldView: renderer?.view)
         renderer?.setLifecycle(.destroyed, active: false)
         renderer?.unmount()
         renderer?.view.removeFromSuperview()
         renderer = nil
         activeStyleId = styleId
         mountRenderer(styleId: styleId)
+        swapTransition.finish(newView: renderer?.view)
         refreshStyleButton()
         Breadcrumbs.log("stage gate style switch to=\(styleId)")
     }
