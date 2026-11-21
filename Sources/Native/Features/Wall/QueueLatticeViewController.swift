@@ -734,7 +734,7 @@ final class QueueLatticeCell: UICollectionViewCell {
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.shadowColor = UIColor.black.withAlphaComponent(0.6)
         titleLabel.shadowOffset = CGSize(width: 0, height: 1)
-        titleLabel.shadowRadius = 3
+        titleLabel.layer.shadowRadius = 3
         contentView.addSubview(titleLabel)
 
         artistLabel.textColor = UIColor.white.withAlphaComponent(0.78)
