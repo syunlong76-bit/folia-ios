@@ -237,7 +237,7 @@ enum NebbiaTuningStore {
         return picked
     }
 
-    private static func setGroup<T: RawRepresentable & CaseIterable>(
+    private static func setGroup<T: RawRepresentable & CaseIterable & Equatable>(
         _ name: String, _ value: [T], fallback: [T], allowEmpty: Bool)
         where T.RawValue == String, T.AllCases: Collection {
         let ordered = T.allCases.filter { value.contains($0) }

@@ -639,7 +639,7 @@ extension MachiStageRenderer {
 
     private func pole(position: SCNVector3, height: CGFloat, radius: CGFloat,
                       material: SCNMaterial, name: String) -> SCNNode {
-        let geometry = SCNCylinder(topRadius: radius, bottomRadius: radius, height: height)
+        let geometry = SCNCylinder(radius: radius, height: height)
         geometry.materials = [material]
         let node = SCNNode(geometry: geometry)
         node.position = SCNVector3(position.x, position.y + Float(height / 2), position.z)

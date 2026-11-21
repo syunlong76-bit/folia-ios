@@ -3886,12 +3886,12 @@ final class HanabiStageRenderer: LyricStageRenderer {
                                            mode: tuning.colorMode)
         if let basePalette { backdropHex = hanabiBackdropOf(basePalette) }
         updateSky(tuning: tuning)
-        let key = snapshot.track.id + "|"
+        let key = snapshot.track?.id ?? "" + "|"
             + snapshot.lines.map { "\($0.id):\($0.start)" }.joined(separator: ",")
         if key != programKey {
             programKey = key
             let compiled = hanabiCompileProgram(
-                lines: snapshot.lines, seed: snapshot.track.id,
+                lines: snapshot.lines, seed: snapshot.track?.id ?? "",
                 duration: snapshot.track.duration)
             shots = compiled.shots
             programDuration = compiled.duration
@@ -4058,14 +4058,14 @@ final class HanabiStageRenderer: LyricStageRenderer {
         timelineKey = key
         clearHolders()
         let profiles = shots.map { hanabiProfileOf($0.profileKind) }
-        let direction = hanabiHashString(snapshot?.track.id ?? "") % 2 == 0
+        let direction = hanabiHashString(snapshot?.track?.id ?? "") % 2 == 0
             ? 1.0 : -1.0
         timeline = HanabiTimeline(
             shots: shots, profiles: profiles, unitStart: 0,
             unitEnd: programDuration, height: height,
             riseSpeed: tuning.riseSpeed, motion: tuning.textMotion,
             spinAmount: graphicsOn ? tuning.spin : 0,
-            spinDirection: direction, seed: snapshot?.track.id ?? "")
+            spinDirection: direction, seed: snapshot?.track?.id ?? "")
     }
 
     private func updateSky(tuning: HanabiTuningValues) {
@@ -4161,10 +4161,10 @@ final class HanabiStageRenderer: LyricStageRenderer {
         var glyphs: [HanabiGlyphData] = []
         if let line = shot.line {
             glyphs = hanabiBuildGlyphs(line: line, emphasis: profile.text.emphasis,
-                                       seed: snapshot.track.id)
+                                       seed: snapshot.track?.id ?? "")
             holder.glyphs = glyphs
             // 入场次序与时间表（构建时算好存下）。
-            var orderRng = HanabiRng(key: "\(snapshot.track.id):order:\(shot.id)")
+            var orderRng = HanabiRng(key: "\(snapshot.track?.id ?? ""):order:\(shot.id)")
             let ranks = hanabiEnterOrder(fx: profile.text.enter, count: glyphs.count,
                                          rng: &orderRng)
             for i in glyphs.indices { glyphs[i].order = ranks[i] }
@@ -4191,7 +4191,7 @@ final class HanabiStageRenderer: LyricStageRenderer {
                     glyphs: glyphs, layout: profile.text.layout,
                     regionW: Double(regionRect.width),
                     regionH: Double(regionRect.height),
-                    fontSize: Double(candidate), seed: snapshot.track.id)
+                    fontSize: Double(candidate), seed: snapshot.track?.id ?? "")
                 placed = layout.placed
                 emSize = (layout.width, layout.height)
                 let fit = min(1,
@@ -4291,7 +4291,7 @@ final class HanabiStageRenderer: LyricStageRenderer {
             profile: profile, timing: timing, palette: palette,
             bounds: bounds, textBounds: textBounds, glyphs: glyphs,
             glyphCenters: glyphCenters, exitFx: profile.text.exit,
-            tuning: tuning, seed: snapshot.track.id + ":" + shot.id)
+            tuning: tuning, seed: (snapshot.track?.id ?? "") + ":" + shot.id)
         for (burstIndex, plan) in events.bursts.enumerated() {
             if events.burstFront[burstIndex] {
                 holder.eventsFront.bursts.append(plan)

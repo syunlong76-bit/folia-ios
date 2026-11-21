@@ -235,7 +235,7 @@ struct LyricStageStyleInfo {
     /// 逐样式调参面板工厂（3.7 (57) 接线）：非空时选择器在该
     /// 样式行给出「调参」入口。只增字段（默认 nil），不属渲
     /// 染方冻结面（渲染器不消费本结构体），故不递增协议版本。
-    let tuningPanelFactory: (() -> UIViewController)? = nil
+    var tuningPanelFactory: (() -> UIViewController)? = nil
 
     var sourceTag: String { "stage.\(id)" }
 }
