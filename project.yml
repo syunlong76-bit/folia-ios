@@ -52,12 +52,14 @@ targets:
         CFBundleVersion: "60"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
-        # (53) I 组：启动屏直接垫油画海报图 + 海报主色，冷启第一帧
-        # 即油画（资源在 Assets.xcassets/EntryPoster.imageset 与
-        # EntryPosterColor.colorset，海报主色与 EntryPosterArt 同源）。
+        # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
+        # 不再垫油画海报图——(59) 规格「点进去可以黑、黑一下后
+        # 画面慢慢淡入」：系统启动屏即纯黑第一帧，入场淡入由
+        # 应用内 EntryIntro 接管。EntryPoster 资源本体保留，
+        # 播放期海报垫底行为不动。注意 iOS 缓存启动屏，验收
+        # 须删 App 重装才刷新。
         UILaunchScreen:
-          UIImageName: EntryPoster
-          UIColorName: EntryPosterColor
+          UIColorName: LaunchBlack
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
           UISceneConfigurations:

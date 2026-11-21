@@ -8,7 +8,8 @@ import Combine
 // ScratchpadEdge / ScratchpadPanel / ScratchpadQueue）：
 // 把手照 ScratchpadEdge + scratchpad.css：常驻只露左缘一条小记号
 // （形态/高度/显隐由三项设置决定，见 SketchbookHandleSettings；
-// 缺省 = (54) 的现行为：top 72、米白小条），热区 46pt 宽、高
+// 缺省形态 = (54) 的米白小条，纵向落点 (60) 第 2 条起下限
+// 115pt——避让缝合工具条，见 layoutSubviews），热区 46pt 宽、高
 // clamp(96, 20%屏高−76, 168)；点热区先长出完整米白标签（42pt
 // 宽，0.2s），再点标签才滑出非模态抽屉，标签闲置 2.5s 自动缩回。
 //
@@ -478,10 +479,14 @@ final class SketchbookDrawerView: UIView {
         super.layoutSubviews()
         applyHandleSettings(source: "layout")
         let edgeHeight = self.edgeHeight
-        // 把手高度锚点（设置 position，缺省 0 = top 72 = 现行为）。
-        let edgeTop = SketchbookHandleSettings.edgeTop(
+        // 把手高度锚点（设置 position，缺省 0 = top 72 = 旧行为）。
+        // (60) 第 2 条下限：与缝合工具条干涉根治——edgeTop 缺省
+        // 落点不得高于 115（工具条底边 107 + 8 间距），展开把手
+        // 同用本值随之下移；用户 position 设置推得更低时照常
+        // 更低，本下限只抬不降。
+        let edgeTop = max(115, SketchbookHandleSettings.edgeTop(
             position: handleSettings.position,
-            containerHeight: bounds.height, edgeHeight: edgeHeight)
+            containerHeight: bounds.height, edgeHeight: edgeHeight))
         // 安全区避让（3.7 (54) iOS 适配自查补修）：把手三件套的
         // 横向锚点取 safeAreaInsets.left——竖屏恒 0、与网页版
         // 贴左缘口径逐点一致；横屏灵动岛转到左侧时 inset≈59，

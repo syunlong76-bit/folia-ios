@@ -53,12 +53,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         //    裸 HomeWallViewController、无导航壳）。网页 WebView
         //    不再铺满全屏作主界面，只剩未迁样式的网页舞台兜底
         //    通道（WebStageHostViewController 按需承载）。窗口底
-        //    色 = 入场海报平均主色（3.7 (53) 工作流 I）：原纯黑
-        //    在 LaunchScreen 退场→海报 veil 就位之间露面即黑
-        //    帧；改油画色域兜底（EntryPosterArt 与入场海报同
-        //    源），任何缝隙露出都是海报色而非黑。
+        //    色 = 纯黑（3.7 (60) 第 1 条）：与启动屏纯黑口径
+        //    对齐——冷启第一帧起全程黑下完成旋转/就绪，入场
+        //    再缓动淡入（(59) Miller 规格）；缝隙露黑即规格
+        //    本身，不再露油画色。EntryPosterArt 本体保留供
+        //    播放期海报垫底使用。
         let window = UIWindow(windowScene: windowScene)
-        window.backgroundColor = EntryPosterArt.dominantColor
+        window.backgroundColor = .black
+        Breadcrumbs.log("scene.launchchrome bg=black poster=removed")
         window.rootViewController = HomeWallViewController()
         window.makeKeyAndVisible()
         self.window = window

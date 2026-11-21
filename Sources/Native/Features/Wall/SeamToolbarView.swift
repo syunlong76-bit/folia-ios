@@ -41,6 +41,13 @@ enum SeamSegment: Int, CaseIterable {
 ///
 /// 本视图只管呈现与回调分发，数据与呈现目标页全在宿主
 /// （HomeWallViewController 的 seam 接线段）。
+///
+/// 双态（3.7 (60) 第 2 条）：收起态只显示一根白色小横线
+/// （36×4pt 圆角 grabber，居中于本条顶部带内，沿用宿主现
+/// 安装约束）；点横线以系统弹簧（damping≈0.8）展开全条；
+/// 展开后无操作 3.5s 自动收回（任一钮点按重置计时）。展开/
+/// 收起只动 transform/alpha，不重排墙面。沉浸模式整条隐藏
+/// 的现行逻辑保留、横线同藏（见 setImmersiveHidden）。
 final class SeamToolbarView: UIView {
 
     var onSegmentChanged: ((SeamSegment) -> Void)?
@@ -64,7 +71,21 @@ final class SeamToolbarView: UIView {
     private let moreButton = UIButton(type: .system)
     private let fullscreenButton = UIButton(type: .system)
 
+    // 双态（(60) 第 2 条）：grabber 横线 + 全幅命中垫（收起态
+    // 承接点按，44pt 高与本条同高、好按）、闲置收起计时。
+    private let grabberView = UIView()
+    private let grabberHitView = UIView()
+    private var idleCollapseWorkItem: DispatchWorkItem?
+    private(set) var isToolbarExpanded = false
+
     private(set) var segment: SeamSegment = .songs
+
+    /// 全条内容视图组（双态只动这组的 alpha/transform）。
+    private var contentViews: [UIView] {
+        [blurView, avatarButton, avatarInitial, segmentControl,
+         searchButton, settingsButton, layoutButton, moreButton,
+         fullscreenButton]
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -159,6 +180,119 @@ final class SeamToolbarView: UIView {
                 button.heightAnchor.constraint(equalToConstant: 44),
             ])
         }
+
+        // grabber 横线（(60) 第 2 条）：36×4pt 白色圆角，居中于
+        // 本条（宿主安装在安全区顶下方，位置口径不变）；命中垫
+        // 铺满本条、仅收起态在场，点按即展开。
+        grabberView.backgroundColor = UIColor.white.withAlphaComponent(0.85)
+        grabberView.layer.cornerRadius = 2
+        grabberView.isUserInteractionEnabled = false
+        grabberView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(grabberView)
+        grabberHitView.backgroundColor = .clear
+        grabberHitView.accessibilityLabel = "展开工具条"
+        grabberHitView.accessibilityTraits = .button
+        grabberHitView.translatesAutoresizingMaskIntoConstraints = false
+        grabberHitView.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(grabberTapped)))
+        addSubview(grabberHitView)
+        NSLayoutConstraint.activate([
+            grabberView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            grabberView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            grabberView.widthAnchor.constraint(equalToConstant: 36),
+            grabberView.heightAnchor.constraint(equalToConstant: 4),
+            grabberHitView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            grabberHitView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            grabberHitView.topAnchor.constraint(equalTo: topAnchor),
+            grabberHitView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        // 初始态 = 收起（只剩横线），无动画直接落位。
+        applyToolbarState(expanded: false, animated: false, reason: "init")
+    }
+
+    // MARK: - 双态（(60) 第 2 条）
+
+    @objc private func grabberTapped() {
+        expandToolbar(reason: "tap")
+    }
+
+    func expandToolbar(reason: String) {
+        guard !isToolbarExpanded else { scheduleIdleCollapse(); return }
+        isToolbarExpanded = true
+        Breadcrumbs.log("seam.toolbar expand reason=\(reason)")
+        applyToolbarState(expanded: true, animated: true, reason: reason)
+        scheduleIdleCollapse()
+    }
+
+    func collapseToolbar(reason: String) {
+        guard isToolbarExpanded else { return }
+        isToolbarExpanded = false
+        idleCollapseWorkItem?.cancel()
+        idleCollapseWorkItem = nil
+        Breadcrumbs.log("seam.toolbar collapse reason=\(reason)")
+        applyToolbarState(expanded: false, animated: true, reason: reason)
+    }
+
+    /// 沉浸模式（宿主 seamSetImmersive 调用）：整条隐藏、横线
+    /// 同藏；退出沉浸回到收起态（横线在场）。
+    func setImmersiveHidden(_ on: Bool) {
+        if on {
+            idleCollapseWorkItem?.cancel()
+            idleCollapseWorkItem = nil
+            if isToolbarExpanded {
+                isToolbarExpanded = false
+                Breadcrumbs.log("seam.toolbar collapse reason=immersive")
+                applyToolbarState(expanded: false, animated: false, reason: "immersive")
+            }
+        }
+        isHidden = on
+    }
+
+    /// 任一钮点按 = 有操作：重置 3.5s 闲置收回计时。
+    private func noteToolbarInteraction() {
+        guard isToolbarExpanded else { return }
+        scheduleIdleCollapse()
+    }
+
+    private func scheduleIdleCollapse() {
+        idleCollapseWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.collapseToolbar(reason: "idle")
+        }
+        idleCollapseWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.5, execute: work)
+    }
+
+    private func applyToolbarState(expanded: Bool, animated: Bool, reason: String) {
+        grabberHitView.isHidden = expanded
+        let apply = { [self] in
+            for view in contentViews {
+                view.alpha = expanded ? 1 : 0
+            }
+            blurView.transform = expanded
+                ? .identity
+                : CGAffineTransform(scaleX: 0.92, y: 0.55)
+            grabberView.alpha = expanded ? 0 : 1
+        }
+        let setInteraction = { [self] in
+            for view in contentViews where view !== blurView && view !== avatarInitial {
+                view.isUserInteractionEnabled = expanded
+            }
+        }
+        if animated {
+            setInteraction()
+            UIView.animate(withDuration: 0.45, delay: 0,
+                           usingSpringWithDamping: 0.8, initialSpringVelocity: 0.2,
+                           options: [.allowUserInteraction, .beginFromCurrentState],
+                           animations: apply) { [weak self] _ in
+                guard let self, self.isToolbarExpanded == expanded else { return }
+                setInteraction()
+            }
+        } else {
+            apply()
+            setInteraction()
+        }
+        _ = reason
     }
 
     private func configureIcon(_ button: UIButton, symbol: String, label: String,
@@ -208,15 +342,16 @@ final class SeamToolbarView: UIView {
     @objc private func segmentChanged() {
         guard let selected = SeamSegment(rawValue: segmentControl.selectedSegmentIndex) else { return }
         segment = selected
+        noteToolbarInteraction()
         onSegmentChanged?(selected)
     }
 
-    @objc private func avatarTapped() { onAvatarTapped?() }
-    @objc private func searchTapped() { onSearchTapped?() }
-    @objc private func settingsTapped() { onSettingsTapped?() }
-    @objc private func layoutTapped() { onLayoutTapped?() }
-    @objc private func moreTapped() { onMoreTapped?(moreButton) }
-    @objc private func fullscreenTapped() { onFullscreenTapped?() }
+    @objc private func avatarTapped() { noteToolbarInteraction(); onAvatarTapped?() }
+    @objc private func searchTapped() { noteToolbarInteraction(); onSearchTapped?() }
+    @objc private func settingsTapped() { noteToolbarInteraction(); onSettingsTapped?() }
+    @objc private func layoutTapped() { noteToolbarInteraction(); onLayoutTapped?() }
+    @objc private func moreTapped() { noteToolbarInteraction(); onMoreTapped?(moreButton) }
+    @objc private func fullscreenTapped() { noteToolbarInteraction(); onFullscreenTapped?() }
 }
 
 /// 「…」菜单（3.7 (55) 工作流 E）：五项——喜欢的音乐 /

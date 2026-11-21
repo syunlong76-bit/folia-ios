@@ -197,7 +197,6 @@ final class WallPrototypeViewController: UIViewController,
     /// 四档各异，点按弹四档菜单点选，与队列面板/设置同一存储
     /// 同步。详注见 HomeWallViewController 同名属性。
     private var miniModeButton: UIButton!
-    private var miniQueueButton: UIButton!
     private var miniSeekHit: UIView!
     private var miniProgressFill: UIView!
     /// 进度拖动中：心跳不覆盖填充，松手 seek 后恢复。
@@ -700,29 +699,11 @@ final class WallPrototypeViewController: UIViewController,
         bar.addSubview(miniModeButton)
         refreshMiniModeButton()
 
-        // 播放列表入口（3.7 (48) 落台面、(53) H 修正迁出）：台面
-        // 不再常驻此钮，改置于顶部 chrome 排、紧挨设置齿轮（本面
-        // 无顶栏自动隐藏排，与设置入口同排即此排；样式同齿轮：
-        // 34×34 半透明圆底）。图标 music.note.list 为网页
-        // ListMusic 的 SF 等价符号；点按行为仍走 miniQueueTapped。
-        miniQueueButton = UIButton(type: .system)
-        miniQueueButton.tintColor = .white
-        miniQueueButton.setImage(UIImage(systemName: "music.note.list",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
-        miniQueueButton.backgroundColor = UIColor.black.withAlphaComponent(0.25)
-        miniQueueButton.layer.cornerRadius = 17
-        miniQueueButton.alpha = 0.5
-        miniQueueButton.accessibilityLabel = "播放列表"
-        miniQueueButton.translatesAutoresizingMaskIntoConstraints = false
-        miniQueueButton.addTarget(self, action: #selector(miniQueueTapped), for: .touchUpInside)
-        view.addSubview(miniQueueButton)
-        NSLayoutConstraint.activate([
-            miniQueueButton.widthAnchor.constraint(equalToConstant: 34),
-            miniQueueButton.heightAnchor.constraint(equalToConstant: 34),
-            miniQueueButton.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 54),
-            miniQueueButton.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
-        ])
-        Breadcrumbs.log("minibar.queue wallproto moved=top-chrome")
+        // 播放列表图标已删（3.7 (60) 第 10 条）：顶部 chrome 的
+        // miniQueueButton 整钮移除，设置齿轮位置不补位；队列入
+        // 口保留点播台面板页签与命令面板，QueuePanelViewController
+        // 本体保留。面包屑留痕确认新包在跑。
+        Breadcrumbs.log("minibar.queue wallproto removed=(60)")
 
         // 进度拖动手柄区：盖住底部进度条并向上放宽到 20pt 好按。
         let seekHit = UIView()
@@ -981,15 +962,6 @@ final class WallPrototypeViewController: UIViewController,
         resetMiniIdleTimer()
         stickerNoteTrackChangeTap()
         QueueManager.shared.playNext(manual: true)
-    }
-
-    /// 播放列表面板（3.7 (48)）：面板存续期间台面被 sheet 覆盖，
-    /// 关闭后重置无操作计时，避免一关面板台面已收起。
-    @objc private func miniQueueTapped() {
-        resetMiniIdleTimer()
-        QueuePanelViewController.present(from: self) { [weak self] in
-            self?.resetMiniIdleTimer()
-        }
     }
 
     /// 台面点按分发（13.1 定版、13.3 进度带改点按跳点）：按键各自
@@ -1436,20 +1408,32 @@ final class WallPrototypeViewController: UIViewController,
         let duration = min(0.85, max(0.45, Double(distance) * 0.00035))
         animateWorldOrigin(to: targetOrigin, duration: duration) { [weak self] in
             guard let self else { return }
-            self.wallLayout.expandedInstanceId = target.instanceId
-            self.wallLayout.refreshInstances()
-            // 展开是布局突变：交叉淡化盖住硬跳（13.1 衔接丝滑）。
-            UIView.transition(with: self.collectionView, duration: 0.25,
-                              options: [.transitionCrossDissolve]) {
-                self.collectionView.reloadData()
+            // hero 落点展开（(60) 第 3 条②）：飞行落位后以目标卡
+            // 现帧为源 hero 放大，去掉旧 crossDissolve+reloadData
+            // 硬切；身份变化的 reload 只在 hero 遮盖下发生（见
+            // animateHeroExpansion）。
+            let srcItem = self.wallLayout.instances.firstIndex(
+                where: { $0.instanceId == target.instanceId })
+            let srcCell = srcItem.flatMap {
+                self.collectionView.cellForItem(
+                    at: IndexPath(item: $0, section: 0)) as? WallPosterCell
             }
-            self.emphasizeLocateLanding()
-            // 落点校验（3.7 (13.2)）：淡化落定后核对展开的确实是
-            // 冻结目标，不是就纠正/重飞，全程面包屑（DS34）。
-            self.locateFlightInstanceId = target.instanceId
-            let gen = self.locateGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.verifyLocateLanding(generation: gen)
+            let hero = srcCell?.snapshotView(afterScreenUpdates: false)
+            let heroFrame = srcCell.map {
+                self.collectionView.convert($0.frame, to: self.view)
+            }
+            self.wallLayout.expandedInstanceId = target.instanceId
+            self.animateHeroExpansion(heroSnapshot: hero, sourceFrame: heroFrame,
+                                      targetInstanceId: target.instanceId) { [weak self] in
+                guard let self else { return }
+                self.emphasizeLocateLanding()
+                // 落点校验（3.7 (13.2)）：hero 落定后核对展开的
+                // 确实是冻结目标，不是就纠正/重飞，全程面包屑。
+                self.locateFlightInstanceId = target.instanceId
+                let gen = self.locateGeneration
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    self?.verifyLocateLanding(generation: gen)
+                }
             }
         }
     }
@@ -1553,17 +1537,29 @@ final class WallPrototypeViewController: UIViewController,
         let duration = min(0.85, max(0.45, Double(distance) * 0.00035))
         animateWorldOrigin(to: targetOrigin, duration: duration) { [weak self] in
             guard let self else { return }
-            self.wallLayout.expandedInstanceId = target.instanceId
-            self.wallLayout.refreshInstances()
-            UIView.transition(with: self.collectionView, duration: 0.25,
-                              options: [.transitionCrossDissolve]) {
-                self.collectionView.reloadData()
+            // hero 落点展开（(60) 第 3 条②）：与 locateCurrentTrack
+            // 同口径——目标卡现帧为源 hero 放大，无 crossDissolve
+            // 硬切（见 animateHeroExpansion）。
+            let srcItem = self.wallLayout.instances.firstIndex(
+                where: { $0.instanceId == target.instanceId })
+            let srcCell = srcItem.flatMap {
+                self.collectionView.cellForItem(
+                    at: IndexPath(item: $0, section: 0)) as? WallPosterCell
             }
-            self.emphasizeLocateLanding()
-            self.locateFlightInstanceId = target.instanceId
-            let gen = self.locateGeneration
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
-                self?.verifyLocateLanding(generation: gen)
+            let hero = srcCell?.snapshotView(afterScreenUpdates: false)
+            let heroFrame = srcCell.map {
+                self.collectionView.convert($0.frame, to: self.view)
+            }
+            self.wallLayout.expandedInstanceId = target.instanceId
+            self.animateHeroExpansion(heroSnapshot: hero, sourceFrame: heroFrame,
+                                      targetInstanceId: target.instanceId) { [weak self] in
+                guard let self else { return }
+                self.emphasizeLocateLanding()
+                self.locateFlightInstanceId = target.instanceId
+                let gen = self.locateGeneration
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+                    self?.verifyLocateLanding(generation: gen)
+                }
             }
         }
     }
@@ -2637,9 +2633,39 @@ final class WallPrototypeViewController: UIViewController,
     private var lastExpandInstanceId: String?
     private var lastExpandAt: CFTimeInterval = 0
 
+    // MARK: 按压反馈（(60) 第 3 条①）
+
+    func collectionView(_ collectionView: UICollectionView,
+                        didHighlightItemAt indexPath: IndexPath) {
+        (collectionView.cellForItem(at: indexPath) as? WallPosterCell)?
+            .applyPressTransform(true)
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        didUnhighlightItemAt indexPath: IndexPath) {
+        (collectionView.cellForItem(at: indexPath) as? WallPosterCell)?
+            .applyPressTransform(false)
+    }
+
+    /// 滚动开始即取消全部可见卡的按压态、交还滚动（(60) 第 3 条①）。
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        for cell in collectionView.visibleCells {
+            (cell as? WallPosterCell)?.cancelPressForScroll()
+        }
+    }
+
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
         Breadcrumbs.log("wall tap item=\(indexPath.item) queueIndex=\(instance.queueIndex)")
+        // hero 源（(60) 第 3 条②）：突变前先抓被点卡的快照与现帧，
+        // 展开/收起都从这张卡自身长出去/收回来，不再整墙硬换。
+        let sourceCell = collectionView.cellForItem(at: indexPath) as? WallPosterCell
+        sourceCell?.contentView.layer.removeAllAnimations()
+        sourceCell?.contentView.transform = .identity
+        let heroSnapshot = sourceCell?.snapshotView(afterScreenUpdates: false)
+        let heroSourceFrame = sourceCell.map {
+            collectionView.convert($0.frame, to: view)
+        }
         // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
         // 被点卡在原地长大、同块卡让位，镜头不动。
         if wallLayout.expandedInstanceId == instance.instanceId {
@@ -2675,21 +2701,95 @@ final class WallPrototypeViewController: UIViewController,
             }
             prefetchExpandedNeighbors(queueIndex: instance.queueIndex)
         }
+        animateHeroExpansion(heroSnapshot: heroSnapshot,
+                             sourceFrame: heroSourceFrame,
+                             targetInstanceId: instance.instanceId)
+    }
+
+    /// hero 展开/收起衔接（(60) 第 3 条②）：以被点卡快照为源，
+    /// 弹簧（damping 0.76、轻微过冲）从现帧放大到展开帧（收起
+    /// 反向）。布局切换在 hero 遮盖下完成：身份变化时先预排
+    /// 布局（invalidate 后取目标帧），reloadData 只许在 hero
+    /// 盖住源卡时于无动画块内发生、不再裸硬切；身份不变时其
+    /// 余卡走布局 animator 与 hero 并行让位。hero 结束才撤，
+    /// 随后刷播放态控件归属。无快照/Reduce Motion 时回退
+    /// (58) 旧路径（动画布局或 reload）。
+    private func animateHeroExpansion(heroSnapshot: UIView?,
+                                      sourceFrame: CGRect?,
+                                      targetInstanceId: String?,
+                                      completion: (() -> Void)? = nil) {
         // (58)：身份判定改用 refreshInstances 返回值（展开/收起
-        // 只换 expandedRects、实例序列不变 → 走动画路径）。
+        // 只换 expandedRects、实例序列不变）。
         let identityChanged = wallLayout.refreshInstances()
-        if !identityChanged {
-            let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
-                self.wallLayout.invalidateLayout()
+        guard let hero = heroSnapshot, let sourceFrame,
+              !UIAccessibility.isReduceMotionEnabled else {
+            if !identityChanged {
+                let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
+                    self.wallLayout.invalidateLayout()
+                    self.collectionView.layoutIfNeeded()
+                }
+                animator.startAnimation()
+            } else {
+                collectionView.reloadData()
+            }
+            refreshVisiblePlaybackUI()
+            completion?()
+            return
+        }
+        hero.frame = sourceFrame
+        hero.isUserInteractionEnabled = false
+        view.addSubview(hero)
+        wallLayout.invalidateLayout()
+        if identityChanged {
+            // 预排：hero 盖住源卡期间无动画完成 reload + 布局落位。
+            UIView.performWithoutAnimation {
+                collectionView.reloadData()
                 collectionView.layoutIfNeeded()
             }
-            animator.startAnimation()
-        } else {
-            collectionView.reloadData()
         }
-        // 展开/收起后控件归属变了：动画路径不重查 cell，手动刷一遍
-        // 可见 cell 的播放态（展开卡出控件、收起卡撤控件）。
-        refreshVisiblePlaybackUI()
+        // 目标帧：按实例 id 在新布局里定位（身份变化后下标可变）。
+        var targetFrame = sourceFrame
+        var targetItem: Int?
+        if let targetInstanceId,
+           let newItem = wallLayout.instances.firstIndex(
+               where: { $0.instanceId == targetInstanceId }) {
+            targetItem = newItem
+            if let attrs = collectionView.layoutAttributesForItem(
+                at: IndexPath(item: newItem, section: 0)) {
+                targetFrame = collectionView.convert(attrs.frame, to: view)
+            }
+        }
+        Breadcrumbs.log("wall.hero expand from=\(Int(sourceFrame.minX)),\(Int(sourceFrame.minY))"
+            + " \(Int(sourceFrame.width))x\(Int(sourceFrame.height))"
+            + " to=\(Int(targetFrame.width))x\(Int(targetFrame.height))"
+            + " identity=\(identityChanged)")
+        if !identityChanged {
+            // 其余卡与 hero 并行弹簧让位（同一时长/阻尼族）。
+            let animator = UIViewPropertyAnimator(duration: 0.55, dampingRatio: 0.76) {
+                self.collectionView.layoutIfNeeded()
+            }
+            animator.startAnimation()
+        }
+        // 目标 cell 在 hero 下藏好，撤 hero 时无缝交接。
+        let targetCell = targetItem.flatMap {
+            collectionView.cellForItem(at: IndexPath(item: $0, section: 0))
+        }
+        targetCell?.alpha = 0
+        collectionView.isUserInteractionEnabled = false
+        UIView.animate(withDuration: 0.55, delay: 0,
+                       usingSpringWithDamping: 0.76, initialSpringVelocity: 0.25,
+                       options: [.beginFromCurrentState]) {
+            hero.frame = targetFrame
+        } completion: { [weak self] _ in
+            hero.removeFromSuperview()
+            targetCell?.alpha = 1
+            guard let self else { completion?(); return }
+            self.collectionView.isUserInteractionEnabled = true
+            // 展开/收起后控件归属变了：手动刷一遍可见 cell 的
+            // 播放态（展开卡出控件、收起卡撤控件）。
+            self.refreshVisiblePlaybackUI()
+            completion?()
+        }
     }
 }
 
@@ -3069,14 +3169,30 @@ final class WallPosterCell: UICollectionViewCell {
         playingBadge.frame = CGRect(x: bounds.width - 30, y: 4, width: 24, height: 24)
     }
 
-    /// 按压反馈：轻微缩放（原生点击手感的最低成本件）。
+    /// 按压反馈（(60) 第 3 条①，两面墙共用本 cell）：touch-down
+    /// （isHighlighted 置真与 VC 的 didHighlightItemAt 同点）缩
+    /// 0.96、touch-up/取消以系统弹簧回弹（约 0.25s）；滚动开始
+    /// 时 VC 调 cancelPressForScroll 交还滚动、按压态即取消，
+    /// 不与平移手势打架。
     override var isHighlighted: Bool {
-        didSet {
-            UIView.animate(withDuration: 0.15) {
-                self.contentView.transform = self.isHighlighted
-                    ? CGAffineTransform(scaleX: 0.96, y: 0.96) : .identity
-            }
+        didSet { applyPressTransform(isHighlighted) }
+    }
+
+    func applyPressTransform(_ pressed: Bool) {
+        UIView.animate(withDuration: pressed ? 0.18 : 0.25, delay: 0,
+                       usingSpringWithDamping: pressed ? 0.8 : 0.65,
+                       initialSpringVelocity: 0.2,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            self.contentView.transform = pressed
+                ? CGAffineTransform(scaleX: 0.96, y: 0.96) : .identity
         }
+    }
+
+    /// 滚动接管时取消按压态：立即弹簧回弹，之后 touch 结束时
+    /// isHighlighted 复位再调一次回弹为同目标、无副作用。
+    func cancelPressForScroll() {
+        guard isHighlighted || contentView.transform != .identity else { return }
+        applyPressTransform(false)
     }
 
     func configure(entry: WallPrototypeViewController.Entry, tier: Int) {

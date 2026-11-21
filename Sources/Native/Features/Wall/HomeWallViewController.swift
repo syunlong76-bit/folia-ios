@@ -176,6 +176,9 @@ final class HomeWallViewController: UIViewController,
     // 隐藏过滤 + 文字过滤」后的呈现集（applyWallData 唯一装配点）。
     private var seamToolbar: SeamToolbarView?
     private var seamToolbarTrailing: NSLayoutConstraint?
+    /// 歌单→曲目墙共享元素转场的 hero 快照（(60) 第 3 条③）：
+    /// beginPosterTransition 起、endPosterTransition 收。
+    private var seamPosterHeroView: UIView?
     private var seamSegment: SeamSegment = .songs
     private var seamRawPlaylists: [NativePlaylistSummary] = []
     private var seamRecommendedPlaylists: [NativePlaylistSummary]?
@@ -404,9 +407,10 @@ final class HomeWallViewController: UIViewController,
         // 齿轮/搜索并入侧栏，真机对账以此行确认新包在跑。
         Breadcrumbs.log("wall.chrome home hintBar=removed gearSearch=sidebar close=glass-x")
 
-        // 缝合工具条安装（3.7 (55) 工作流 E）：装在工作台宿主与
-        // 速记簿之后——侧栏打开时宿主盖住本条（共存口径），速记
-        // 簿把手在其下层左缘、二者纵向错位不打架。接线见文件尾。
+        // 缝合工具条安装（3.7 (55) 工作流 E、(60) 第 2 条改 z
+        // 序）：装在工作台宿主与速记簿之后，工具条本体插到速
+        // 记簿宿主之上（见 installSeamChrome），速记簿把手热
+        // 区下移 ≥115 与本条纵向错位。接线见文件尾。
         installSeamChrome()
 
         loadEntries()
@@ -858,10 +862,33 @@ final class HomeWallViewController: UIViewController,
     /// 页被全屏曲目墙盖住后 transform 立即复位（不可见
     /// 时刻复位、无跳变），回程落位另由
     /// beginHomeWallReturnSettle 承担。
-    private func beginPosterTransition(source: String, playlistId: String) {
+    private func beginPosterTransition(source: String, playlistId: String,
+                                       heroSnapshot: UIView? = nil,
+                                       heroFrame: CGRect? = nil) {
         Breadcrumbs.log("transition home->poster begin source=\(source) playlist=\(playlistId)")
         posterReturnSettlePending = true
         guard !UIAccessibility.isReduceMotionEnabled else { return }
+        // 共享元素式转场（(60) 第 3 条③）：有被点海报帧为源时，
+        // 快照从现帧弹簧放大向全屏中心生长、与 present 的
+        // crossDissolve 同段衔接（crossDissolve 降为兜底：无源
+        // 帧的菜单入口仍走旧 1.02 蓄势）。
+        if let heroSnapshot, let heroFrame {
+            heroSnapshot.frame = heroFrame
+            heroSnapshot.isUserInteractionEnabled = false
+            view.addSubview(heroSnapshot)
+            seamPosterHeroView = heroSnapshot
+            Breadcrumbs.log("wall.hero expand from=\(Int(heroFrame.minX)),\(Int(heroFrame.minY))"
+                + " \(Int(heroFrame.width))x\(Int(heroFrame.height)) source=poster")
+            let scale = max(view.bounds.width / max(heroFrame.width, 1),
+                            view.bounds.height / max(heroFrame.height, 1))
+            UIView.animate(withDuration: 0.55, delay: 0,
+                           usingSpringWithDamping: 0.78, initialSpringVelocity: 0.2,
+                           options: [.allowUserInteraction, .beginFromCurrentState]) {
+                heroSnapshot.center = self.view.center
+                heroSnapshot.transform = CGAffineTransform(scaleX: scale, y: scale)
+            }
+            return
+        }
         collectionView.transform = .identity
         UIView.animate(withDuration: 0.45, delay: 0,
                        usingSpringWithDamping: 0.9, initialSpringVelocity: 0.2,
@@ -875,6 +902,16 @@ final class HomeWallViewController: UIViewController,
     /// present 动画总时长可由 begin/end 两条对账）。
     private func endPosterTransition(source: String, seedReady: Bool) {
         collectionView.transform = .identity
+        // hero 收口（(60) 第 3 条③）：快照淡出撤除，目标墙已
+        // 在其下完成 present，不留残影。
+        if let hero = seamPosterHeroView {
+            seamPosterHeroView = nil
+            UIView.animate(withDuration: 0.2) {
+                hero.alpha = 0
+            } completion: { _ in
+                hero.removeFromSuperview()
+            }
+        }
         Breadcrumbs.log("transition home->poster end source=\(source) seed=\(seedReady)")
     }
 
@@ -905,6 +942,28 @@ final class HomeWallViewController: UIViewController,
     }
 
     // MARK: - 点按：打开该歌单的曲目墙（详情 MVP 前的桥）
+
+    // 按压反馈（(60) 第 3 条①，与曲目墙同 cell 同口径）：
+    // touch-down 缩 0.96、touch-up/取消弹簧回弹。
+    func collectionView(_ collectionView: UICollectionView,
+                        didHighlightItemAt indexPath: IndexPath) {
+        (collectionView.cellForItem(at: indexPath) as? WallPosterCell)?
+            .applyPressTransform(true)
+    }
+
+    func collectionView(_ collectionView: UICollectionView,
+                        didUnhighlightItemAt indexPath: IndexPath) {
+        (collectionView.cellForItem(at: indexPath) as? WallPosterCell)?
+            .applyPressTransform(false)
+    }
+
+    /// 滚动开始即取消按压态、交还滚动（墙面与网格两台同口径）。
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        guard let cv = scrollView as? UICollectionView else { return }
+        for cell in cv.visibleCells {
+            (cell as? WallPosterCell)?.cancelPressForScroll()
+        }
+    }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         // 网格形态（(55) E）：索引即条目序，与墙面点卡同路。
@@ -937,10 +996,25 @@ final class HomeWallViewController: UIViewController,
         // 丝滑切入（3.7 (8)）：先预加载，最多等 250ms 让首批数据
         // 落地再 present——预热命中时墙带着内容直接切入，黑屏不
         // 出现；超时照常切入，由墙内氛围底兜住剩余等待。
-        // 转场同族化（3.7 (40) 项8）：crossDissolve 保留，
-        // 呈现侧加 1.02 弹簧蓄势、目标墙弹簧落位（见
-        // beginPosterTransition），不再是静止墙面单方淡化。
-        beginPosterTransition(source: "tap", playlistId: playlistIds[queueIndex])
+        // 转场（3.7 (40) 项8 同族弹簧、(60) 第 3 条③共享元素）：
+        // 以被点海报卡现帧为源抓快照，present 时 hero 弹簧放
+        // 大衔接、crossDissolve 只作无源帧时的兜底（见
+        // beginPosterTransition）。
+        var heroSnapshot: UIView?
+        var heroFrame: CGRect?
+        if seamGridMode, let grid = gridCollectionView,
+           let cell = grid.cellForItem(at: IndexPath(item: queueIndex, section: 0)) {
+            heroSnapshot = cell.snapshotView(afterScreenUpdates: false)
+            heroFrame = grid.convert(cell.frame, to: view)
+        } else if let item = wallLayout.instances.firstIndex(
+                      where: { $0.queueIndex == queueIndex }),
+                  let cell = collectionView.cellForItem(
+                      at: IndexPath(item: item, section: 0)) {
+            heroSnapshot = cell.snapshotView(afterScreenUpdates: false)
+            heroFrame = collectionView.convert(cell.frame, to: view)
+        }
+        beginPosterTransition(source: "tap", playlistId: playlistIds[queueIndex],
+                              heroSnapshot: heroSnapshot, heroFrame: heroFrame)
         wall.startPreload()
         Task { [weak self] in
             guard let self else { return }
@@ -2098,13 +2172,16 @@ extension HomeWallViewController {
         collectionView.isHidden = seamGridMode
         gridCollectionView = grid
 
-        // 工具条：插在工作台宿主之下——侧栏打开时宿主整层盖住
-        // 本条（随墙被覆盖的共存口径，不新造避让）；关闭态宿主
-        // 只占把手/头像小命中区，与本条纵向错位（宿主头像在
-        // safeTop+50、本条底沿 safeTop+48）。
+        // 工具条 z 序（(60) 第 2 条）：提到速记簿宿主之上作双
+        // 保险——速记簿把手热区已下移（edgeTop ≥115）与本条纵
+        // 向错位，此处再保顶部条带的命中不被速记簿层拦截。
+        // 工作台宿主/侧栏彼此的相对序不动（速记簿原本即在工
+        // 作台宿主之上，本条只是越过速记簿一层）。
         let toolbar = SeamToolbarView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
-        if let host = workbenchHost {
+        if let drawer = sketchbookDrawer {
+            view.insertSubview(toolbar, aboveSubview: drawer)
+        } else if let host = workbenchHost {
             view.insertSubview(toolbar, belowSubview: host)
         } else {
             view.addSubview(toolbar)
@@ -2492,7 +2569,9 @@ extension HomeWallViewController {
     func seamSetImmersive(_ on: Bool) {
         seamImmersive = on
         Breadcrumbs.log("wall.seam.immersive on=\(on) platformSubstitute=1 nonEquivalent=1")
-        seamToolbar?.isHidden = on
+        // (60) 第 2 条：沉浸隐藏走工具条双态入口——整条与
+        // grabber 横线同藏，退出沉浸回落收起态。
+        seamToolbar?.setImmersiveHidden(on)
         seamFilterBar?.isHidden = true
         seamImmersiveTapView?.isHidden = !on
         if on {
