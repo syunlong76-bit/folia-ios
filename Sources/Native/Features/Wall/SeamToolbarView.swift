@@ -332,6 +332,29 @@ final class SeamToolbarView: UIView {
         segmentControl.selectedSegmentIndex = newSegment.rawValue
     }
 
+    // MARK: - (62) 骑墙缝弹性形态
+
+    private var seamElasticAnimator62: UIViewPropertyAnimator?
+
+    /// 骑墙缝弹性跟随（(62) §1）：宿主滚动时以内容偏移调用，
+    /// 本条以欠阻尼弹簧把偏移的 30% 化为纵向弹性位移（钳
+    /// ±10pt），停滚后宿主以 0 调用回弹归位。只动 transform，
+    /// 不改约束与七路回调。接线在宿主滚动 delegate（WA 文件
+    /// 域）——本 API 为 WD 提供面，宿主未接时不生效（报告标注）。
+    func applySeamElasticOffset(_ offset: CGFloat) {
+        let target = max(-10, min(10, offset * 0.3))
+        seamElasticAnimator62?.stopAnimation(true)
+        let animator = UIViewPropertyAnimator(
+            duration: 0.55,
+            timingParameters: UISpringTimingParameters(
+                dampingRatio: 0.55, initialVelocity: CGVector(dx: 0, dy: 0.4)))
+        animator.addAnimations { [weak self] in
+            self?.transform = CGAffineTransform(translationX: 0, y: target)
+        }
+        seamElasticAnimator62 = animator
+        animator.startAnimation()
+    }
+
     /// 布局钮图标随当前形态：网格态显示墙形符号、反之网格。
     func setLayoutMode(grid: Bool) {
         layoutButton.setImage(UIImage(systemName: grid ? "rectangle.3.group" : "square.grid.2x2",

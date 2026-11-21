@@ -77,7 +77,7 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
         case 0: return styles.count
-        case 1: return 2
+        case 1: return 3
         default: return 1
         }
     }
@@ -95,6 +95,29 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
                 case .video: config.secondaryText = "当前：视频（静音循环）· 点按更换"
                 case nil: config.secondaryText = "从相册选择图片 / 动图 / 视频"
                 }
+                config.textProperties.color = .white
+                config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.45)
+                cell.contentConfiguration = config
+                cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+                cell.accessoryType = .disclosureIndicator
+                cell.accessoryView = nil
+                cell.selectionStyle = .default
+                cell.isUserInteractionEnabled = true
+            } else if indexPath.row == 1 {
+                // (62) 背景体系（StageBackdrop62）：9 档模式行，
+                // 当前值回显；与自定义背景互斥——已设自定义背景
+                // 时本行注明让位关系，点按进模式选择。
+                config.text = "舞台背景体系"
+                let modeNames: [String: String] = [
+                    "none": "无（样式自带）", "common": "通用",
+                    "latentCover": "隐现 · 封面", "latentLyric": "隐现 · 歌词",
+                    "latentSpectrum": "隐现 · 频谱", "monet": "莫奈",
+                    "nomand": "漫游", "sora": "星空", "url": "远程图",
+                ]
+                let modeName = modeNames[SettingsStore.backdropMode62] ?? "无"
+                config.secondaryText = current != nil
+                    ? "当前：\(modeName)（自定义背景生效中，体系让位）"
+                    : "当前：\(modeName) · 点按切换"
                 config.textProperties.color = .white
                 config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.45)
                 cell.contentConfiguration = config
@@ -214,6 +237,33 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         present(nav, animated: true)
     }
 
+    /// 背景体系模式选择（(62)）：9 档 actionSheet，写
+    /// SettingsStore.backdropMode62 并通知 StageBackdrop62。
+    private func presentBackdropModePicker62() {
+        let modes: [(String, String)] = [
+            ("none", "无（样式自带背景）"), ("common", "通用 · 光晕几何"),
+            ("latentCover", "隐现 · 封面"), ("latentLyric", "隐现 · 歌词"),
+            ("latentSpectrum", "隐现 · 频谱"), ("monet", "莫奈 · 色彩 Wash"),
+            ("nomand", "漫游 · 纸感"), ("sora", "星空"),
+            ("url", "远程图（设置页填地址）"),
+        ]
+        let sheet = UIAlertController(
+            title: "舞台背景体系",
+            message: "与自定义背景互斥：已设自定义背景时体系自动让位，清除自定义背景后恢复。",
+            preferredStyle: .actionSheet)
+        for (value, name) in modes {
+            let isCurrent = SettingsStore.backdropMode62 == value
+            sheet.addAction(UIAlertAction(
+                title: isCurrent ? "\(name) ✓" : name, style: .default) { _ in
+                SettingsStore.backdropMode62 = value
+                StageBackdrop62.modeDidChange()
+                self.tableView.reloadData()
+            })
+        }
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        present(sheet, animated: true)
+    }
+
     @objc private func handleTuningDone() {
         dismiss(animated: true)
     }
@@ -224,6 +274,7 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         tableView.deselectRow(at: indexPath, animated: true)
         if indexPath.section == 1 {
             if indexPath.row == 0 { onPickCustomBackground?() }
+            else if indexPath.row == 1 { presentBackdropModePicker62() }
             else { onClearCustomBackground?() }
             return
         }

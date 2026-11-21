@@ -108,6 +108,13 @@ final class MiniBarQuickRowView: UIView {
                   title: "命令", accessibility: "命令",
                   action: #selector(commandTapped))
 
+        // 星标长按（(62) 网页语义分工）：长按 = 切换本地星标，
+        // 点按 = 开收藏弹层（见 starTapped）。
+        let starLongPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(starLongPressed(_:)))
+        starLongPress.minimumPressDuration = 0.45
+        starButton.addGestureRecognizer(starLongPress)
+
         // 五钮等宽平分整排：链式等宽＋首尾贴边，钮高撑满
         // 本排。等宽保证任一台宽下每钮命中宽一致（最窄台
         // 宽 353pt 时单钮 ≈70pt）。
@@ -257,6 +264,9 @@ final class MiniBarQuickRowView: UIView {
         let id = track.id
         let newState = LikesStore.shared.toggle(id)
         refreshLike()
+        // (62) toast 补齐：点按即给文字反馈（既有 toast 通路）。
+        NativePlaybackFailureToast.show(
+            message: newState ? "已喜欢" : "已取消喜欢")
         Breadcrumbs.log("minibar.webrow like id=\(id) on=\(newState)")
         Task { [weak self] in
             do {
@@ -268,18 +278,70 @@ final class MiniBarQuickRowView: UIView {
         }
     }
 
+    /// 长按已触发标记：长按抬手时 touchUpInside 仍会到，
+    /// starTapped 见标记即吞掉本次点按（防长按后误开弹层）。
+    private var starLongPressFired62 = false
+
+    /// 星标点按（(62) 网页语义）：开 AddToPlaylist 收藏弹层
+    /// 把当前歌加入歌单；本地星标改由长按切换（见下）。
     @objc private func starTapped() {
+        if starLongPressFired62 {
+            starLongPressFired62 = false
+            return
+        }
+        onUserInteraction?()
+        guard let track = PlaybackEngine.shared.currentTrack else { return }
+        Breadcrumbs.log("minibar.webrow.star id=\(track.id) openAddToPlaylist")
+        presentAddToPlaylist62(track: track)
+    }
+
+    /// 星标长按：切换 StarStore 本地星标（(55) C 本地态保留）。
+    @objc private func starLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        starLongPressFired62 = true
         onUserInteraction?()
         guard let track = PlaybackEngine.shared.currentTrack else { return }
         let newState = StarStore.shared.toggle(track.id)
         refreshStar()
-        Breadcrumbs.log("minibar.webrow.star id=\(track.id) on=\(newState)")
+        NativePlaybackFailureToast.show(
+            message: newState ? "已星标（本地）" : "已取消星标")
+        Breadcrumbs.log("minibar.webrow.starLong id=\(track.id) on=\(newState)")
+    }
+
+    /// 收藏弹层呈现（(62)）：沿响应链找宿主控制器呈现
+    /// AddToPlaylist（与搜索页 pageSheet 同形态）；找不到宿主
+    /// 时退到 keyWindow 顶层控制器。
+    private func presentAddToPlaylist62(track: FoliaTrack) {
+        var responder: UIResponder? = self
+        var host: UIViewController?
+        while let current = responder {
+            if let vc = current as? UIViewController { host = vc; break }
+            responder = current.next
+        }
+        if host == nil {
+            host = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .flatMap { $0.windows }
+                .first { $0.isKeyWindow }?.rootViewController
+            while let presented = host?.presentedViewController {
+                host = presented
+            }
+        }
+        guard let host else {
+            NativePlaybackFailureToast.show(message: "暂时无法打开收藏")
+            return
+        }
+        let nav = UINavigationController(
+            rootViewController: AddToPlaylistViewController(track: track))
+        nav.modalPresentationStyle = .pageSheet
+        host.present(nav, animated: true)
     }
 
     @objc private func shuffleTapped() {
         onUserInteraction?()
         Breadcrumbs.log("minibar.webrow shuffleQueue")
         QueueManager.shared.shuffleQueue()
+        NativePlaybackFailureToast.show(message: "已打乱队列")
     }
 
     /// 格子（面板）本体未在本文件域：只发定名信号，宿主工

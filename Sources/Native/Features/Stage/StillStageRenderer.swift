@@ -165,7 +165,9 @@ final class StillStageRenderer: NSObject, LyricStageRenderer {
     /// isDaylight 协议无字段，以 palette.isDark 近似。
     private func updateVignette() {
         guard let snapshot else { return }
-        let alpha: CGFloat = snapshot.palette.isDark ? 0.65 : 0.30
+        // 暗角强度 (62) 由 StillTuning62.vignetteScale 调制。
+        let alpha: CGFloat = (snapshot.palette.isDark ? 0.65 : 0.30)
+            * CGFloat(StillTuning62.vignetteScale)
         vignetteLayer.colors = [
             UIColor.clear.cgColor,
             UIColor.black.withAlphaComponent(alpha).cgColor,
@@ -197,9 +199,16 @@ final class StillStageRenderer: NSObject, LyricStageRenderer {
                 continue
             }
             let size = fontSize(isCurrent: isCurrent)
-            // 字重：当前 700、相邻 600；Songti 无 600 档，
-            // StageFonts.bold（700）统一承载，差异见档案。
-            let font = StageFonts.bold(size: size)
+            // 字重：(62) 由 StillTuning62.fontWeightChoice 决定
+            // （细/常规/粗三档同落三行；此前恒 bold 700）。
+            let font: UIFont
+            switch StillTuning62.fontWeightChoice {
+            case "light": font = StageFonts.light(size: size)
+            case "regular":
+                font = UIFont(name: "STSongti-SC-Regular", size: size)
+                    ?? .systemFont(ofSize: size, weight: .regular)
+            default: font = StageFonts.bold(size: size)
+            }
             // 行高：当前 leading-tight = 1.25 × 40 = 50；
             // 相邻 text-3xl 自带行高 36（30 × 1.2）。
             let paragraph = NSMutableParagraphStyle()

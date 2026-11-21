@@ -42,8 +42,10 @@ import QuartzCore
 // 宿主 frameTick(position)；SceneKit 渲染循环（isPlaying）
 // 只驱动陈列物自转/尘埃漂移等环境动画，不读播放位置。
 // 频谱：协议 hostCapabilities.requiresSpectrum=false、无
-// 音频数据源，audioReactivity 只存不用（网页口径里音频也
-// 从不驱动相机，只驱动几何包络；原生包络以中性值运行）。
+// 音频数据源：(62) C5 起 audioReactivity 接 StageEnergy62
+// 能量近似调制辉光/灵魂包络（无真频谱，近似口径）；keyword-
+// Coloring 与 render 两项同批做真（见 updateActiveUnits 与
+// applyRenderOverride62）。跨曲走廊以 blend 偏移近似（corridorBlend62）。
 final class DioramaStageRenderer: LyricStageRenderer {
 
     let view: UIView
@@ -199,6 +201,14 @@ final class DioramaStageRenderer: LyricStageRenderer {
 
     private var coverTask: Task<Void, Never>?
     private var coverKey: String? = nil
+    /// 跨曲走廊近似（(62)）：切歌时 blend 0→1（约 1.6s），相机位
+    /// 姿叠加横向走廊偏移衰减——网页 46 单位/3.2s 贝塞尔飞行的
+    /// 近似，非逐式移植（见报告）。
+    private var corridorBlend62: Double = 1
+    /// 关键词单元（(62) keywordColoring）：建行时按单元长度选
+    /// 前二长单元作关键词，唱完后保持 accent 着色。
+    private var keywordUnitIndices62: Set<Int> = []
+    private var lastRenderKey62 = "" 
     private var spinAngle: Double = 0
 
     init() {
@@ -290,6 +300,10 @@ final class DioramaStageRenderer: LyricStageRenderer {
         self.snapshot = snapshot
         if snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount {
+            if builtTrackId != nil, snapshot.track?.id != builtTrackId {
+                corridorBlend62 = 0
+                Breadcrumbs.log("stage62.diorama corridor transition start")
+            }
             builtTrackId = snapshot.track?.id
             builtLineCount = snapshot.lines.count
             seedBase = Self.hashSeed(snapshot.track?.id)
@@ -323,6 +337,10 @@ final class DioramaStageRenderer: LyricStageRenderer {
         lastTickWall = now
         lastPosition = position
         let tuning = DioramaTuningStore.snapshot(now: now)
+        if corridorBlend62 < 1 {
+            corridorBlend62 = min(1, corridorBlend62 + delta / 1.6)
+        }
+        applyRenderOverride62(tuning: tuning)
 
         updateDampedColors(snapshot: snapshot, delta: delta)
 
@@ -617,6 +635,9 @@ final class DioramaStageRenderer: LyricStageRenderer {
         let line = snapshot.lines[index]
         let units = StageLyricUnits.units(for: line)
         activeUnits = units
+        keywordUnitIndices62 = Set(units.enumerated()
+            .sorted { $0.element.text.count > $1.element.text.count }
+            .prefix(2).map { $0.offset })
         unitLightVals = [Double](repeating: 0, count: units.count)
         unitSoulVals = [Double](repeating: 0, count: units.count)
         guard !units.isEmpty else { return }
@@ -1168,7 +1189,8 @@ final class DioramaStageRenderer: LyricStageRenderer {
         let liftD = (sin(t * 0.13 + ph * 1.3) * 0.6 + sin(t * 0.061 + ph * 2.1) * 0.4) * C.liftAmp * driftScale
         let distD = sin(t * 0.05 + ph * 1.1) * C.distAmp * driftScale
 
-        let offR = shot.right + swayX
+        let corridorOff = (1 - corridorBlend62) * -14
+        let offR = shot.right + swayX + corridorOff
         let offU = shot.up + swayY + liftD
         let offB = shot.back + distD
         let pose = base + frame.right * offR + frame.up * offU + frame.forward * (-offB)
@@ -1212,6 +1234,26 @@ final class DioramaStageRenderer: LyricStageRenderer {
         _ = base
     }
 
+    /// 画布参数消费（(62) C5 render 组）：renderScale →
+    /// SCNView contentScaleFactor（"global" 跟随全局歌词倍率），
+    /// renderAntialias → SCNView 抗锯齿模式（off 关、余开 4X）。
+    private func applyRenderOverride62(tuning: DioramaTuningValues) {
+        let key = "\(tuning.renderScale)|\(tuning.renderAntialias)"
+        guard key != lastRenderKey62 else { return }
+        lastRenderKey62 = key
+        let factor: CGFloat
+        if tuning.renderScale == "global" {
+            factor = CGFloat(SettingsStore.lyricRenderScale)
+        } else {
+            factor = CGFloat(Double(tuning.renderScale) ?? 1)
+        }
+        let native = UIScreen.main.scale
+        scnView.contentScaleFactor = max(0.5, native * factor)
+        scnView.antialiasingMode = tuning.renderAntialias == "off"
+            ? .none : .multisampling4X
+        Breadcrumbs.log("stage62.diorama render scale=\(tuning.renderScale) aa=\(tuning.renderAntialias)")
+    }
+
     // MARK: 跟唱（updateDioramaActiveUnits 的三路移植）
 
     private static func stepEnvelope(current: Double, target: Double,
@@ -1222,8 +1264,12 @@ final class DioramaStageRenderer: LyricStageRenderer {
     private func updateActiveUnits(position: TimeInterval, delta: Double,
                                    tuning: DioramaTuningValues) {
         guard !activeUnits.isEmpty else { return }
-        let glowEffective = tuning.glowEnabled ? tuning.glowIntensity : 0
-        let soulEffective = tuning.soulEnabled ? tuning.soulIntensity : 0
+        // (62) C5：audioReactivity 接能量近似（StageEnergy62，
+        // 无真频谱时的确定性伪能量）调制辉光/灵魂包络强度。
+        let energyFactor62 = 0.3 + StageEnergy62.level(at: position)
+            * tuning.audioReactivity
+        let glowEffective = (tuning.glowEnabled ? tuning.glowIntensity : 0) * energyFactor62
+        let soulEffective = (tuning.soulEnabled ? tuning.soulIntensity : 0) * energyFactor62
         let gradientEffective = tuning.gradientEnabled ? tuning.gradientIntensity : 0
         let palette = snapshot?.palette
         for (i, unit) in activeUnits.enumerated() {
@@ -1249,7 +1295,10 @@ final class DioramaStageRenderer: LyricStageRenderer {
             if unitStates.indices.contains(i), unitStates[i] != state {
                 unitStates[i] = state
                 if unitBaseMats.indices.contains(i) {
-                    let useAccent = state == 1 || (state == 2 && gradientEffective > 0)
+                    let isKeyword62 = tuning.keywordColoringEnabled
+                        && keywordUnitIndices62.contains(i)
+                    let useAccent = state == 1
+                        || (state == 2 && (gradientEffective > 0 || isKeyword62))
                     let image = useAccent
                         ? unitAccentImages[i] : unitWhiteImages[i]
                     unitBaseMats[i].diffuse.contents = image

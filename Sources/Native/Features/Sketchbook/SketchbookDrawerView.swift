@@ -103,6 +103,9 @@ final class SketchbookDrawerView: UIView {
     /// 抽屉段落模型（refresh 时按 Store 现状重建）。
     private enum DrawerSection {
         case overview
+        /// (62) 自动来源组（组头分「自动/我的分组」两段：自动
+        /// 段在未分组之后、用户组之前）。
+        case autoGroup(key: String)
         case group(id: String?)
         case draft
         case queue
@@ -222,22 +225,23 @@ final class SketchbookDrawerView: UIView {
         expandedBottomCircle.isUserInteractionEnabled = false
         expandedHandle.addSubview(expandedBottomCircle)
 
-        // 抽屉本体。
-        drawerView.backgroundColor = UIColor(
-            red: 0.09, green: 0.09, blue: 0.11, alpha: 0.97)
+        // 抽屉本体：(62) §7 纸面造型——整面改米白纸色（与把手
+        // paperColor 同源），深色字适配随本文件各行/组头改 ink
+        // 系；开抽屉时整体轻倾斜 0.7°（见 setOpen）。
+        drawerView.backgroundColor = Self.paperColor
         drawerView.isHidden = true
         addSubview(drawerView)
 
         titleLabel.text = "速记簿"
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.95)
+        titleLabel.textColor = Self.inkColor
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         drawerView.addSubview(titleLabel)
 
         clearButton.setTitle("清空", for: .normal)
         clearButton.titleLabel?.font = .systemFont(ofSize: 13)
         clearButton.setTitleColor(
-            UIColor.white.withAlphaComponent(0.65), for: .normal)
+            Self.inkColor.withAlphaComponent(0.65), for: .normal)
         clearButton.addTarget(
             self, action: #selector(clearTapped), for: .touchUpInside)
         clearButton.translatesAutoresizingMaskIntoConstraints = false
@@ -245,7 +249,7 @@ final class SketchbookDrawerView: UIView {
 
         closeButton.setImage(
             UIImage(systemName: "chevron.left"), for: .normal)
-        closeButton.tintColor = UIColor.white.withAlphaComponent(0.8)
+        closeButton.tintColor = Self.inkColor.withAlphaComponent(0.8)
         closeButton.accessibilityLabel = "收起速记簿"
         closeButton.addTarget(
             self, action: #selector(closeTapped), for: .touchUpInside)
@@ -254,14 +258,14 @@ final class SketchbookDrawerView: UIView {
 
         // 工具栏：形态切换 + 新建组。
         modeControl.selectedSegmentIndex = 0
-        modeControl.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        modeControl.backgroundColor = Self.inkColor.withAlphaComponent(0.06)
         modeControl.selectedSegmentTintColor =
-            UIColor.white.withAlphaComponent(0.22)
+            Self.inkColor.withAlphaComponent(0.16)
         modeControl.setTitleTextAttributes(
-            [.foregroundColor: UIColor.white.withAlphaComponent(0.75),
+            [.foregroundColor: Self.inkColor.withAlphaComponent(0.75),
              .font: UIFont.systemFont(ofSize: 12.5)], for: .normal)
         modeControl.setTitleTextAttributes(
-            [.foregroundColor: UIColor.white,
+            [.foregroundColor: Self.inkColor,
              .font: UIFont.systemFont(ofSize: 12.5, weight: .semibold)],
             for: .selected)
         modeControl.addTarget(
@@ -272,7 +276,7 @@ final class SketchbookDrawerView: UIView {
         newGroupButton.setTitle("＋组", for: .normal)
         newGroupButton.titleLabel?.font = .systemFont(ofSize: 13)
         newGroupButton.setTitleColor(
-            UIColor.white.withAlphaComponent(0.8), for: .normal)
+            Self.inkColor.withAlphaComponent(0.8), for: .normal)
         newGroupButton.accessibilityLabel = "新建分组"
         newGroupButton.addTarget(
             self, action: #selector(newGroupTapped), for: .touchUpInside)
@@ -375,8 +379,31 @@ final class SketchbookDrawerView: UIView {
             .store(in: &cancellables)
     }
 
+    /// (62) 空态贴纸小图位（懒建）：entries 为空时作表背景。
+    private lazy var emptyArtView62: UIView = {
+        let container = UIView()
+        let imageView = UIImageView()
+        if let url = Bundle.main.url(forResource: "cat-02",
+                                     withExtension: "png",
+                                     subdirectory: "Stickers") {
+            imageView.image = UIImage(contentsOfFile: url.path)
+        }
+        imageView.contentMode = .scaleAspectFit
+        imageView.translatesAutoresizingMaskIntoConstraints = false
+        container.addSubview(imageView)
+        NSLayoutConstraint.activate([
+            imageView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
+            imageView.topAnchor.constraint(equalTo: container.topAnchor, constant: 120),
+            imageView.widthAnchor.constraint(equalToConstant: 96),
+            imageView.heightAnchor.constraint(equalToConstant: 96),
+        ])
+        return container
+    }()
+
     private func refresh() {
         let count = store.entries.count
+        // (62) 空态：空时表背景出贴纸小图，非空撤下。
+        tableView.backgroundView = count == 0 ? emptyArtView62 : nil
         expandedCountBadge.isHidden = count == 0
         expandedCountLabel.text = "\(count)"
         titleLabel.text = count > 0 ? "速记簿 · \(count)" : "速记簿"
@@ -393,6 +420,8 @@ final class SketchbookDrawerView: UIView {
     private func rebuildSections() {
         historyDays = store.historyByDay()
         var next: [DrawerSection] = [.overview, .group(id: nil)]
+        // (62) 自动来源组段（非空才出现）。
+        for auto in store.autoGroups62 { next.append(.autoGroup(key: auto.key)) }
         for group in store.groups { next.append(.group(id: group.id)) }
         next.append(.draft)
         next.append(.queue)
@@ -689,6 +718,10 @@ final class SketchbookDrawerView: UIView {
             self.drawerView.frame = CGRect(
                 x: open ? 0 : -width, y: 0,
                 width: width, height: self.bounds.height)
+            // (62) 纸面轻倾斜：开 0.7°、收回正（scratchpadTilt 等价）。
+            self.drawerView.transform = open
+                ? CGAffineTransform(rotationAngle: 0.7 * .pi / 180)
+                : .identity
         }
         animator.addCompletion { [weak self] _ in
             guard let self, !self.isOpen else { return }
@@ -729,7 +762,7 @@ final class SketchbookDrawerView: UIView {
         clearConfirmDeadline = nil
         clearButton.setTitle("清空", for: .normal)
         clearButton.setTitleColor(
-            UIColor.white.withAlphaComponent(0.65), for: .normal)
+            Self.inkColor.withAlphaComponent(0.65), for: .normal)
     }
 
     @objc private func clearTapped() {
@@ -863,6 +896,8 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
             let count = store.entries(inGroup: groupId).count
             // 表格形态多一行列头。
             return notesMode == .table && count > 0 ? count + 1 : count
+        case .autoGroup(let key):
+            return store.entries(inAutoGroup: key).count
         case .draft:
             return store.draft.count
         case .queue:
@@ -935,6 +970,11 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
                 title: groupId == nil
                     ? name : "\(collapsed ? "▸" : "▾") \(name)",
                 detail: "\(count) 首", buttons: buttons)
+        case .autoGroup(let key):
+            return SketchbookSectionHeaderView(
+                title: "自动 · \(SketchbookStore.autoGroupName(forKey: key))",
+                detail: "\(store.entries(inAutoGroup: key).count) 首",
+                buttons: [])
         case .draft:
             let armed = applyDraftDeadline.map { $0 > Date() } ?? false
             var buttons: [SketchbookSectionHeaderView.Button] = []
@@ -964,7 +1004,7 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
         _ tableView: UITableView, heightForHeaderInSection section: Int
     ) -> CGFloat {
         switch sections[section] {
-        case .overview, .group, .draft: return 34
+        case .overview, .group, .draft, .autoGroup: return 34
         default: return 28
         }
     }
@@ -997,6 +1037,17 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
                 withIdentifier: SketchbookRowCell.reuseId,
                 for: indexPath) as! SketchbookRowCell
             let entry = groupEntries[indexPath.row]
+            cell.configure(
+                track: entry.track, isCurrent: false, removeLocked: false)
+            cell.onRemove = { [weak self] in
+                self?.store.remove(trackId: entry.track.id, source: "drawer")
+            }
+            return cell
+        case .autoGroup(let key):
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: SketchbookRowCell.reuseId,
+                for: indexPath) as! SketchbookRowCell
+            let entry = store.entries(inAutoGroup: key)[indexPath.row]
             cell.configure(
                 track: entry.track, isCurrent: false, removeLocked: false)
             cell.onRemove = { [weak self] in
@@ -1061,6 +1112,12 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
             // 网页版单条「播放」语义：插进当前队列并播放，不换队列。
             queueManager.insertAndPlay(track)
             Breadcrumbs.log("sketchbook.play source=notes id=\(track.id)")
+        case .autoGroup(let key):
+            let autoEntries = store.entries(inAutoGroup: key)
+            guard autoEntries.indices.contains(indexPath.row) else { return }
+            let track = autoEntries[indexPath.row].track
+            queueManager.insertAndPlay(track)
+            Breadcrumbs.log("sketchbook.play source=autogroup id=\(track.id)")
         case .draft:
             let track = store.draft[indexPath.row]
             queueManager.insertAndPlay(track)
@@ -1148,10 +1205,26 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
 
     // MARK: - 总览 / 历史文案（全部从 Store 现有数据现算）
 
+    /// (62) 时段问候（早/午/晚/深夜四池）。
+    static func greeting62() -> String {
+        switch Calendar.current.component(.hour, from: Date()) {
+        case 5..<11: return "早上好，先把想听的收好。"
+        case 11..<14: return "中午好，午休挑几首放着。"
+        case 14..<19: return "下午好，顺手收几首喜欢的。"
+        case 19..<24: return "晚上好，夜里听的先收进来。"
+        default: return "夜深了，收完早点休息。"
+        }
+    }
+
     private func overviewText() -> String {
         let groupCount = store.groups.count
         let historyCount = store.history.count
-        return "暂存 \(store.entries.count) 首 · 分组 \(groupCount) 个"
+        if store.entries.isEmpty {
+            // (62) 空态文案（贴纸小图位见 emptyArtView62）。
+            return "\(Self.greeting62())\n这里还空着——在搜索、歌单、队列里点速记簿钮，歌就会收进这张纸。"
+        }
+        return "\(Self.greeting62())\n"
+            + "暂存 \(store.entries.count) 首 · 分组 \(groupCount) 个"
             + " · 未分组 \(store.entries(inGroup: nil).count) 首\n"
             + "今日新增 \(store.addedTodayCount) 首"
             + " · 历史 \(historyCount) 条\n"
@@ -1207,12 +1280,14 @@ final class SketchbookSectionHeaderView: UIView {
 
     init(title: String, detail: String?, buttons: [Button]) {
         super.init(frame: CGRect(x: 0, y: 0, width: 300, height: 34))
-        backgroundColor = UIColor.white.withAlphaComponent(0.04)
+        backgroundColor = UIColor(red: 0.078, green: 0.078, blue: 0.078,
+                                  alpha: 0.05)
 
         let titleLabel = UILabel()
         titleLabel.text = title
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.85)
+        titleLabel.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078,
+                                       alpha: 0.9)
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
@@ -1228,7 +1303,8 @@ final class SketchbookSectionHeaderView: UIView {
             uiButton.setTitle(button.title, for: .normal)
             uiButton.titleLabel?.font = .systemFont(ofSize: 12)
             uiButton.setTitleColor(
-                UIColor.white.withAlphaComponent(0.75), for: .normal)
+                UIColor(red: 0.078, green: 0.078, blue: 0.078,
+                        alpha: 0.75), for: .normal)
             uiButton.accessibilityLabel = button.accessibilityLabel
             let index = actions.count
             actions.append(button.action)
@@ -1249,7 +1325,8 @@ final class SketchbookSectionHeaderView: UIView {
             let detailLabel = UILabel()
             detailLabel.text = detail
             detailLabel.font = .systemFont(ofSize: 11.5)
-            detailLabel.textColor = UIColor.white.withAlphaComponent(0.45)
+            detailLabel.textColor = UIColor(red: 0.078, green: 0.078,
+                                            blue: 0.078, alpha: 0.5)
             detailLabel.translatesAutoresizingMaskIntoConstraints = false
             addSubview(detailLabel)
             constraints += [
@@ -1284,7 +1361,8 @@ final class SketchbookTextCell: UITableViewCell {
         backgroundColor = .clear
         selectionStyle = .none
         bodyLabel.font = .systemFont(ofSize: 12.5)
-        bodyLabel.textColor = UIColor.white.withAlphaComponent(0.75)
+        bodyLabel.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078,
+                                      alpha: 0.8)
         bodyLabel.numberOfLines = 0
         bodyLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(bodyLabel)
@@ -1328,13 +1406,13 @@ final class SketchbookTableRowCell: UITableViewCell {
         selectionStyle = .none
         for label in [titleLabel, artistLabel, albumLabel, durationLabel] {
             label.font = .systemFont(ofSize: 12)
-            label.textColor = UIColor.white.withAlphaComponent(0.8)
+            label.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.8)
             label.lineBreakMode = .byTruncatingTail
             label.translatesAutoresizingMaskIntoConstraints = false
             contentView.addSubview(label)
         }
         titleLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.95)
+        titleLabel.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.95)
         durationLabel.textAlignment = .right
         NSLayoutConstraint.activate([
             titleLabel.leadingAnchor.constraint(
@@ -1369,7 +1447,7 @@ final class SketchbookTableRowCell: UITableViewCell {
         durationLabel.text = "时长"
         for label in [titleLabel, artistLabel, albumLabel, durationLabel] {
             label.font = .systemFont(ofSize: 11, weight: .semibold)
-            label.textColor = UIColor.white.withAlphaComponent(0.45)
+            label.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.5)
         }
     }
 
@@ -1379,10 +1457,10 @@ final class SketchbookTableRowCell: UITableViewCell {
         albumLabel.text = track.album
         durationLabel.text = Self.durationText(track.duration)
         titleLabel.font = .systemFont(ofSize: 12.5, weight: .medium)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.95)
+        titleLabel.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.95)
         for label in [artistLabel, albumLabel, durationLabel] {
             label.font = .systemFont(ofSize: 12)
-            label.textColor = UIColor.white.withAlphaComponent(0.8)
+            label.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.8)
         }
     }
 
@@ -1417,18 +1495,18 @@ final class SketchbookRowCell: UITableViewCell {
         coverView.contentMode = .scaleAspectFill
         coverView.clipsToBounds = true
         coverView.layer.cornerRadius = 4
-        coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        coverView.backgroundColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.07)
         coverView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(coverView)
 
         titleLabel.font = .systemFont(ofSize: 14.5, weight: .medium)
-        titleLabel.textColor = UIColor.white.withAlphaComponent(0.95)
+        titleLabel.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.95)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(titleLabel)
 
         artistLabel.font = .systemFont(ofSize: 12)
-        artistLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+        artistLabel.textColor = UIColor(red: 0.078, green: 0.078, blue: 0.078, alpha: 0.55)
         artistLabel.lineBreakMode = .byTruncatingTail
         artistLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(artistLabel)

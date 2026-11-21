@@ -14,8 +14,9 @@ import UIKit
 // showTranslation 为布尔直取。渲染器（CladdaghStage-
 // Renderer）只经本门面读参，逐帧读走 0.25s 缓存（照
 // StageEffectSettings / PendoloTuningStore 先例）。
-// 译文环参数（showTranslation 一组）只存不用：协议
-// LyricLine 无译文字段、无数据通路，见渲染器头注差异表。
+// 译文环参数（showTranslation 一组）：(62) C3 起经
+// LyricTranslation62 侧通路（/lyric/new 的 tlyric）真消费；
+// 无译文歌曲无数据可显，见渲染器 updateTranslationRing。
 
 /// 一次读全的参数快照（渲染器消费的形状）。
 struct CladdaghTuningValues: Equatable {
@@ -103,19 +104,19 @@ enum CladdaghTuningStore {
         set { setDouble("positionY", newValue, range: -40...40) }
     }
 
-    /// 沿环显示译文，缺省 false（只存不用，见文件头注）。
+    /// 沿环显示译文，缺省 false（(62) 起真消费，见文件头注）。
     static var showTranslation: Bool {
         get { boolValue("showTranslation", fallback: false) }
         set { defaults.set(newValue, forKey: key("showTranslation")) }
     }
 
-    /// 译文字号倍率，[0.5, 2]，缺省 1（只存不用）。
+    /// 译文字号倍率，[0.5, 2]，缺省 1（(62) 起真消费）。
     static var translationScale: Double {
         get { doubleValue("translationScale", fallback: 1, range: 0.5...2) }
         set { setDouble("translationScale", newValue, range: 0.5...2) }
     }
 
-    /// 译文字距偏移，[-5, 20]，缺省 0（只存不用）。
+    /// 译文字距偏移，[-5, 20]，缺省 0（(62) 起真消费）。
     static var translationLetterSpacingOffset: Double {
         get { doubleValue("translationLetterSpacingOffset", fallback: 0, range: -5...20) }
         set { setDouble("translationLetterSpacingOffset", newValue, range: -5...20) }
@@ -292,7 +293,7 @@ final class CladdaghTuningPanelViewController: UIViewController {
         stack.addArrangedSubview(reset)
 
         let note = UILabel()
-        note.text = "说明：协议未下发逐行译文，「沿环显示译文」一组参数已保存但暂不生效，待译文数据通路接入后启用。"
+        note.text = "说明：译文经 /lyric/new 的 tlyric 侧通路下发（LyricTranslation62）；无译文的歌曲开启后不显示，属无数据源而非未生效。"
         note.font = .systemFont(ofSize: 12)
         note.textColor = .secondaryLabel
         note.numberOfLines = 0

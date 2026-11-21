@@ -101,6 +101,15 @@ struct SearchWorkspaceView: View {
     @State private var addTarget: SongItem?
     /// 搜索框前置小方块的旋转角（搜索中旋转成菱形代替 spinner）。
     @State private var markRotation: Double = 0
+    /// (62) §3 来源范围：网易云恒开，QQ/酷狗为多选开关
+    /// （SettingsStore62D 两键持久化）。
+    @State private var qqEnabled62 = SettingsStore.searchProviderQQEnabled62
+    @State private var kugouEnabled62 = SettingsStore.searchProviderKugouEnabled62
+    /// (62) 各来源聚合注记（失败诚实空态的说明行）。
+    @State private var providerNotes62: [String] = []
+    /// (62) §7 批量收进：多选态与已选集（行长按进入）。
+    @State private var selecting62 = false
+    @State private var selectedIds62: Set<String> = []
 
     @FocusState private var fieldFocused: Bool
 
@@ -127,6 +136,53 @@ struct SearchWorkspaceView: View {
                     .padding(.horizontal, 16)
                     .padding(.top, 12)
             }
+
+            // (62) §7 多选底栏：收进速记簿（addBatch）/ 加入
+            // 队列 / 取消。收进后退出多选态并 toast 回执。
+            if selecting62 {
+                VStack {
+                    Spacer()
+                    HStack(spacing: 18) {
+                        Text("已选 \(selectedIds62.count) 首")
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(ink)
+                        Spacer()
+                        Button("收进速记簿") {
+                            let picked = songs.map(\.track)
+                                .filter { selectedIds62.contains($0.id) }
+                            let added = sketchbookStore.addBatch(picked, source: "search")
+                            Breadcrumbs.log("search62.batch sketchbook added=\(added)")
+                            NativePlaybackFailureToast.show(
+                                message: "已收进速记簿 \(added) 首")
+                            selecting62 = false
+                            selectedIds62 = []
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(ink)
+                        Button("加入队列") {
+                            let picked = songs.map(\.track)
+                                .filter { selectedIds62.contains($0.id) }
+                            QueueManager.shared.appendToQueue(picked)
+                            NativePlaybackFailureToast.show(message: "已加入播放队列")
+                            selecting62 = false
+                            selectedIds62 = []
+                        }
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(ink)
+                        Button("取消") {
+                            selecting62 = false
+                            selectedIds62 = []
+                        }
+                        .font(.system(size: 13))
+                        .foregroundColor(FoliaTheme.secondary)
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 12)
+                    .background(paper.opacity(0.97))
+                    .overlay(Rectangle().fill(hairline).frame(height: 1),
+                             alignment: .top)
+                }
+            }
         }
         .preferredColorScheme(.dark)
         .onReceive(NotificationCenter.default.publisher(for: .foliaStarChanged)) { _ in
@@ -148,10 +204,38 @@ struct SearchWorkspaceView: View {
         }
     }
 
+    /// (62) 来源多选片：勾选态以方块+下划线示之（与来源排同语言）。
+    private func providerToggle62(title: String, isOn: Bool,
+                                  action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                HStack(spacing: 5) {
+                    Image(systemName: isOn ? "checkmark.square.fill" : "square")
+                        .font(.system(size: 12))
+                    Text(title)
+                        .font(.system(size: 13, weight: .bold))
+                        .tracking(13 * 0.06)
+                }
+                .foregroundColor(isOn ? ink : FoliaTheme.secondary)
+                Rectangle().fill(isOn ? accent : Color.clear).frame(height: 3)
+            }
+            .fixedSize()
+        }
+        .buttonStyle(.plain)
+    }
+
     // MARK: - 头部（搜索框 + 来源排 + 种类排 + 状态行，gap 20）
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 20) {
+            // (62) §3 面包屑行（网页同位）。
+            Text("书库 › 搜索")
+                .font(.system(size: 12, weight: .medium))
+                .foregroundColor(FoliaTheme.secondary)
+            // (62) §3 说明文案（底账 §3 网页原话）。
+            Text("联网搜索…结果在搜索页打开、不会收窄当前墙")
+                .font(.system(size: 12))
+                .foregroundColor(FoliaTheme.secondary)
             // 搜索框行：方块 + 输入（22px/700、仅底部 2px ink 线）+ 关闭 X（44×44、1.5px ink 边）。
             HStack(spacing: 16) {
                 VStack(spacing: 0) {
@@ -183,7 +267,8 @@ struct SearchWorkspaceView: View {
                 .buttonStyle(.plain)
             }
 
-            // 来源排（13px/700/字距 0.06em，选中底部 3px 强调条）：本轮仅网易云可达。
+            // 来源排（13px/700/字距 0.06em，选中底部 3px 强调条）：
+            // (62) §3 改多选——网易云恒开，QQ/酷狗可勾选聚合。
             HStack(spacing: 22) {
                 VStack(spacing: 6) {
                     Text("网易云")
@@ -193,6 +278,21 @@ struct SearchWorkspaceView: View {
                     Rectangle().fill(accent).frame(height: 3)
                 }
                 .fixedSize()
+                providerToggle62(title: "QQ 音乐", isOn: qqEnabled62) {
+                    qqEnabled62.toggle()
+                    SettingsStore.searchProviderQQEnabled62 = qqEnabled62
+                    if !submittedQuery.isEmpty { submitSearch() }
+                }
+                providerToggle62(title: "酷狗", isOn: kugouEnabled62) {
+                    kugouEnabled62.toggle()
+                    SettingsStore.searchProviderKugouEnabled62 = kugouEnabled62
+                    if !submittedQuery.isEmpty { submitSearch() }
+                }
+            }
+            if !providerNotes62.isEmpty {
+                Text(providerNotes62.joined(separator: "；"))
+                    .font(.system(size: 11))
+                    .foregroundColor(FoliaTheme.secondary)
             }
 
             // 种类排（序号 11px 等宽 + 标签 22px/900，选中前 11×11 强调方块）。
@@ -346,14 +446,24 @@ struct SearchWorkspaceView: View {
     // MARK: - 单曲行（高 76）
 
     private func songRow(index: Int, item: SongItem) -> some View {
+        // (62) 多选态行首选中标（渲染在行容器外层 HStack 前导）。
         let track = item.track
         // 读一次星标代次，把 FoliaStarChanged 的刷新依赖挂到行渲染上。
         _ = starRefreshTick
         return HStack(spacing: 14) {
-            Text(String(format: "%02d", index + 1))
-                .font(.system(size: 12, design: .monospaced))
-                .foregroundColor(FoliaTheme.secondary)
-                .frame(width: 20, alignment: .leading)
+            if selecting62 {
+                Image(systemName: selectedIds62.contains(item.id)
+                      ? "checkmark.circle.fill" : "circle")
+                    .font(.system(size: 18))
+                    .foregroundColor(selectedIds62.contains(item.id)
+                                     ? ink : FoliaTheme.secondary)
+                    .frame(width: 20, alignment: .leading)
+            } else {
+                Text(String(format: "%02d", index + 1))
+                    .font(.system(size: 12, design: .monospaced))
+                    .foregroundColor(FoliaTheme.secondary)
+                    .frame(width: 20, alignment: .leading)
+            }
 
             NativeCoverView(url: track.artworkURL, targetPixels: 150)
                 .frame(width: 48, height: 48)
@@ -447,13 +557,32 @@ struct SearchWorkspaceView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture {
+            // (62) 多选态下点按改切换选中，不起播。
+            if selecting62 {
+                if selectedIds62.contains(item.id) {
+                    selectedIds62.remove(item.id)
+                } else {
+                    selectedIds62.insert(item.id)
+                }
+                return
+            }
             guard !item.isUnavailable else { return }
             onPlaySong(track, songs.map(\.track))
         }
+        // (62) §7：行长按进多选态（批量收进速记簿/加入队列，
+        // 底栏承接；加号钮自身的长按加队列语义不动）。
+        .onLongPressGesture(minimumDuration: 0.5) {
+            if !selecting62 {
+                selecting62 = true
+                selectedIds62 = [item.id]
+                Breadcrumbs.log("search62.multiselect enter")
+            }
+        }
         .opacity(item.isUnavailable ? 0.5 : 1)
-        // 入场：从左滑入、按序 32ms 递延（上限 12 行；其后的行不再滑入）。
+        // 入场：(62) §3 换网页版行入场——淡入 + 上移 10pt、
+        // 按序 32ms 递延（上限 12 行）；原生左滑入退役。
         .opacity(entered || index >= 12 ? 1 : 0)
-        .offset(x: entered || index >= 12 ? 0 : -24)
+        .offset(y: entered || index >= 12 ? 0 : 10)
         .animation(.easeOut(duration: 0.3).delay(Double(min(index, 12)) * 0.032), value: entered)
     }
 
@@ -493,8 +622,9 @@ struct SearchWorkspaceView: View {
         }
         .contentShape(Rectangle())
         .onTapGesture { onOpenCollection(item) }
+        // 入场：(62) 同单曲行——淡入 + 上移 stagger。
         .opacity(entered || index >= 12 ? 1 : 0)
-        .offset(x: entered || index >= 12 ? 0 : -24)
+        .offset(y: entered || index >= 12 ? 0 : 10)
         .animation(.easeOut(duration: 0.3).delay(Double(min(index, 12)) * 0.032), value: entered)
     }
 
@@ -535,6 +665,9 @@ struct SearchWorkspaceView: View {
                 guard generation == searchGeneration else { return }
                 if offset == 0 {
                     songs = page.items
+                    // (62) §3 来源聚合：勾选的 QQ/酷狗在首面
+                    // 追加（客户端聚合，按标题+歌手去重）。
+                    await aggregateExtraProviders62(generation: generation)
                 } else {
                     let known = Set(songs.map(\.id))
                     songs.append(contentsOf: page.items.filter { !known.contains($0.id) })
@@ -579,6 +712,101 @@ struct SearchWorkspaceView: View {
     /// 单曲页：走代理 /search 原始响应（要 status / mvid / songCount 做标签与分页，
     /// 类型化 searchSongs 不带这些字段），再用 /song/detail 批量补封面（/search 的
     /// album 不带 picUrl，只有 picId）。补封面失败则回退无封面行，不整页失败。
+    /// (62) §3 来源聚合（首面、单曲页）：QQ 真发请求——后端
+    /// 现回 400（审计 D5），失败记诚实注记不塞假结果；酷狗
+    /// 按实测形状宽松解析（data.lists：FileHash/OriSongName/
+    /// SingerName/AlbumName/Duration，2026-11-21 本机实测）。
+    private func aggregateExtraProviders62(generation: Int) async {
+        var notes: [String] = []
+        if qqEnabled62 {
+            do {
+                let data = try await EdgeOneAPIClient.shared.searchRaw(
+                    provider: .qq, keywords: submittedQuery, limit: pageSize)
+                // QQ 形状未实测核对：宽松解析 data.song.list，
+                // 解不出即诚实注记、不并入（防假结果）。
+                let items = Self.parseQQSearch62(data)
+                guard generation == searchGeneration else { return }
+                if items.isEmpty {
+                    notes.append("QQ 音乐：已返回但形状未核对，暂不并入")
+                } else {
+                    let known = Set(songs.map { $0.track.id })
+                    songs.append(contentsOf: items.filter { !known.contains($0.track.id) })
+                    notes.append("QQ 音乐：\(items.count) 首")
+                }
+            } catch {
+                notes.append("QQ 音乐：后端未通，暂无结果（D5）")
+                Breadcrumbs.log("search62.provider qq failed")
+            }
+        }
+        if kugouEnabled62 {
+            do {
+                let data = try await EdgeOneAPIClient.shared.searchRaw(
+                    provider: .kugou, keywords: submittedQuery, limit: pageSize)
+                let items = Self.parseKugouSearch62(data)
+                guard generation == searchGeneration else { return }
+                let known = Set(songs.map {
+                    "\($0.track.title.lowercased())|\($0.track.artist.lowercased())"
+                })
+                let fresh = items.filter {
+                    !known.contains(
+                        "\($0.track.title.lowercased())|\($0.track.artist.lowercased())")
+                }
+                songs.append(contentsOf: fresh)
+                notes.append("酷狗：\(fresh.count) 首")
+            } catch {
+                notes.append("酷狗：搜索失败，暂无结果")
+                Breadcrumbs.log("search62.provider kugou failed")
+            }
+        }
+        guard generation == searchGeneration else { return }
+        providerNotes62 = notes
+    }
+
+    /// QQ 搜索宽松解析（形状未核对，QQMusicApi 常见形状
+    /// data.song.list：songmid/name/singer[].name/albumname/
+    /// interval）：解不出即空，由调用方诚实注记。
+    private static func parseQQSearch62(_ data: Data) -> [SongItem] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataObj = root["data"] as? [String: Any],
+              let song = dataObj["song"] as? [String: Any],
+              let list = song["list"] as? [[String: Any]] else { return [] }
+        return list.compactMap { entry in
+            guard let mid = entry["songmid"] as? String, !mid.isEmpty else { return nil }
+            let title = (entry["name"] as? String) ?? (entry["songname"] as? String) ?? ""
+            guard !title.isEmpty else { return nil }
+            let singers = (entry["singer"] as? [[String: Any]])?
+                .compactMap { $0["name"] as? String } ?? []
+            let duration = (entry["interval"] as? NSNumber)?.doubleValue ?? 0
+            let track = FoliaTrack(
+                id: "qq_\(mid)", sourceType: .qq, title: title,
+                artist: singers.joined(separator: " / "),
+                album: (entry["albumname"] as? String) ?? "",
+                duration: duration, artworkURL: nil, fee: nil)
+            return SongItem(track: track, isUnavailable: false, hasVideo: false)
+        }
+    }
+
+    /// 酷狗搜索宽松解析（形状实测，见上）：解析不了即空。
+    private static func parseKugouSearch62(_ data: Data) -> [SongItem] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let dataObj = root["data"] as? [String: Any],
+              let lists = dataObj["lists"] as? [[String: Any]] else { return [] }
+        return lists.compactMap { entry in
+            guard let hash = entry["FileHash"] as? String, !hash.isEmpty else { return nil }
+            let title = (entry["OriSongName"] as? String)
+                ?? (entry["SongName"] as? String) ?? ""
+            guard !title.isEmpty else { return nil }
+            let artist = (entry["SingerName"] as? String) ?? ""
+            let album = (entry["AlbumName"] as? String) ?? ""
+            let duration = (entry["Duration"] as? NSNumber)?.doubleValue ?? 0
+            let track = FoliaTrack(
+                id: "kg_\(hash)", sourceType: .kugou, title: title,
+                artist: artist, album: album, duration: duration,
+                artworkURL: nil, fee: nil)
+            return SongItem(track: track, isUnavailable: false, hasVideo: false)
+        }
+    }
+
     private func fetchSongPage(keywords: String, offset: Int) async throws -> (items: [SongItem], total: Int) {
         let data = try await EdgeOneAPIClient.shared.requestData(
             provider: .netease,

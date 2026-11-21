@@ -545,10 +545,19 @@ final class SonnetStageRenderer: NSObject, LyricStageRenderer {
     }
 
     /// 段落分类（网页 classifyParagraph；isChorus/songPart 协议
-    /// 无字段，副歌/桥段判定以文本关键词近似，其余逐项照搬）。
+    /// 无字段）：(62) 段落推导升级——副歌判定先走重复行推导
+    /// （段内过半行属全曲重复行集 → chorus，LyricDerivation62），
+    /// 再回退文本关键词；桥段仍关键词近似，其余逐项照搬。
     private func classifyParagraph(lines: [LyricLine], index: Int,
                                    total: Int) -> SonnetParagraphKind {
         let texts = lines.map { $0.text }
+        if let allLines = snapshot?.lines, !allLines.isEmpty {
+            let chorusIds = LyricDerivation62.chorusLineIds(in: allLines)
+            let hit = lines.filter { chorusIds.contains($0.id) }.count
+            if !lines.isEmpty, Double(hit) / Double(lines.count) >= 0.5 {
+                return .chorus
+            }
+        }
         if texts.contains(where: {
             sonnetTextContains($0, keywords: ["chorus", "副歌"])
         }) { return .chorus }

@@ -234,13 +234,31 @@ final class LumiereStageRenderer: NSObject, LyricStageRenderer {
             wordViews = []
             prevLabel = nil
             nextLabel = nil
-            // 出场：seamless 时交叉淡出 0.3s，否则同样淡出（网页
-            // 非 seamless 的熄灯/闪白转场未落，见档案）。
-            UIView.animate(withDuration: 0.3, delay: 0,
-                           options: [.curveEaseInOut]) {
-                old.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
-                old.alpha = 0
-            } completion: { _ in old.removeFromSuperview() }
+            if tuning.seamlessTransitions {
+                // seamless：交叉淡出 0.3s（新行同时淡入，无黑场）。
+                UIView.animate(withDuration: 0.3, delay: 0,
+                               options: [.curveEaseInOut]) {
+                    old.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
+                    old.alpha = 0
+                } completion: { _ in old.removeFromSuperview() }
+            } else {
+                // 非 seamless（(62) 补）：网页的熄灯/闪白转场——
+                // 旧行 0.08s 硬熄 + 一记 0.16s 白闪覆盖切点，
+                // 与 seamless 的平滑交叉明确区分（不再同式淡出）。
+                UIView.animate(withDuration: 0.08, delay: 0,
+                               options: [.curveEaseIn]) {
+                    old.alpha = 0
+                } completion: { _ in old.removeFromSuperview() }
+                let flash = UIView(frame: textView.bounds)
+                flash.backgroundColor = .white
+                flash.alpha = 0.55
+                flash.isUserInteractionEnabled = false
+                textView.addSubview(flash)
+                UIView.animate(withDuration: 0.16, delay: 0,
+                               options: [.curveEaseOut]) {
+                    flash.alpha = 0
+                } completion: { _ in flash.removeFromSuperview() }
+            }
         }
         activeLineId = idx
         guard let idx, let snapshot,

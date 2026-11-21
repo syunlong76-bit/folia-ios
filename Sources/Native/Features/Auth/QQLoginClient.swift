@@ -162,4 +162,66 @@ final class QQLoginClient {
         _ = try? await ProviderLoginTransport.getJSON(
             provider: .qq, path: "/logout", cookie: cookie)
     }
+
+    // MARK: - (62) Keepalive（§2 / D4）
+
+    /// 会话续期：后端 /login/refresh 实测存在（POST-only，
+    /// 无会话 401）。回包若带新 cookie（data.cookie）即换存；
+    /// 未带新 cookie 时以「服务端已确认续期」口径把本地
+    /// expiresAt 顺延（仍是估算值，但锚点从登录时刻改为
+    /// 最近一次服务端续期成功时刻，不再是纯 +3 天盲估）。
+    /// 返回 true = 续期成功。
+    func refreshSession(cookie: String) async -> Bool {
+        guard let response = try? await ProviderLoginTransport.postJSON(
+            provider: .qq, path: "/login/refresh", cookie: cookie) else {
+            Breadcrumbs.log("login62.qq.refresh transportFail")
+            return false
+        }
+        let root = response.root
+        if let code = NativeJSON.int(root["code"]), code == 401 {
+            Breadcrumbs.log("login62.qq.refresh unauthorized")
+            return false
+        }
+        let data = ProviderLoginTransport.dataObject(of: root)
+        let newCookie = ProviderLoginTransport.stringValue(data, "cookie")
+            ?? ProviderLoginTransport.stringValue(root, "cookie")
+        let store = NativeSessionStore.shared
+        let envelope = store.loadQQEnvelope()
+        let renewedExpiry = Date().addingTimeInterval(3 * 24 * 3600)
+        if let newCookie, newCookie != cookie {
+            let saved = store.saveQQSession(
+                cookie: newCookie,
+                accountId: envelope?.accountId,
+                displayName: envelope?.displayName,
+                loginType: envelope?.loginType ?? 2,
+                expiresAt: renewedExpiry)
+            Breadcrumbs.log("login62.qq.refresh ok rotated=\(saved ? 1 : 0)")
+            return saved
+        }
+        let saved = store.saveQQSession(
+            cookie: cookie,
+            accountId: envelope?.accountId,
+            displayName: envelope?.displayName,
+            loginType: envelope?.loginType ?? 2,
+            expiresAt: renewedExpiry)
+        Breadcrumbs.log("login62.qq.refresh ok rotated=0 saved=\(saved ? 1 : 0)")
+        return saved
+    }
+
+    /// 到期前主动续期：envelope.expiresAt 在 36 小时内（或已
+    /// 过期/缺失）时调 refreshSession；未到窗口不发请求。
+    /// 由 LoginVC 打开/账户卡展示时调用（无定时器基建，
+    /// 前台打开即检查，与「到期前主动重验」口径一致）。
+    func keepaliveIfNeeded() async {
+        let store = NativeSessionStore.shared
+        guard let envelope = store.loadQQEnvelope(),
+              let cookie = store.qqCookieString() else { return }
+        let expiry = envelope.expiresAt.flatMap {
+            ISO8601DateFormatter().date(from: $0)
+        }
+        let due = expiry.map { $0.timeIntervalSinceNow < 36 * 3600 } ?? true
+        guard due else { return }
+        Breadcrumbs.log("login62.qq.keepalive due expiry=\(envelope.expiresAt ?? "nil")")
+        _ = await refreshSession(cookie: cookie)
+    }
 }

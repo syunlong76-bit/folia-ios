@@ -121,6 +121,14 @@ final class SketchbookCanvasView: UIScrollView {
                 card.onRemove = { [weak self] in
                     self?.onRemoveTrack?(entry.track.id)
                 }
+                card.onShapeCycle = { [weak self] in
+                    guard let self else { return }
+                    let order = ["rect", "round", "tape"]
+                    let current = entry.shape ?? "rect"
+                    let next = order[((order.firstIndex(of: current) ?? 0) + 1) % order.count]
+                    self.store.setShape(trackId: entry.track.id, shape: next)
+                    self.reload()
+                }
                 let pan = UIPanGestureRecognizer(
                     target: self, action: #selector(cardPanned(_:)))
                 card.addGestureRecognizer(pan)
@@ -129,9 +137,16 @@ final class SketchbookCanvasView: UIScrollView {
             }
             let rows = Int(ceil(
                 Double(groupEntries.count) / Double(columns)))
-            let gridHeight = rows > 0
+            var gridHeight = rows > 0
                 ? CGFloat(rows) * Self.cardHeight
                     + CGFloat(rows - 1) * Self.gap : 0
+            // (62) 自由坐标：已摆卡片的落点可超出网格高，块高
+            // 取两者大者防后续组压住自由摆放的卡片。
+            for entry in groupEntries {
+                if let cy = entry.canvasY {
+                    gridHeight = max(gridHeight, CGFloat(cy) + Self.cardHeight)
+                }
+            }
             y = gridOrigin.y + gridHeight + Self.blockGap
         }
 
@@ -164,7 +179,7 @@ final class SketchbookCanvasView: UIScrollView {
             y: CGFloat(index / columns) * (Self.cardHeight + Self.gap))
     }
 
-    // MARK: - 拖拽（dropIndexAt 吸附）
+    // MARK: - 拖拽（(62) 起自由坐标，旧 dropIndexAt 吸附退役）
 
     @objc private func cardPanned(_ gesture: UIPanGestureRecognizer) {
         guard let card = gesture.view as? SketchbookCanvasCardView,
@@ -197,30 +212,16 @@ final class SketchbookCanvasView: UIScrollView {
                 isScrollEnabled = true
             }
             guard let groupId = dragGroupId else { return }
-            let groupEntries = store.entries(inGroup: groupId)
-            // 落点换算（dropIndexAt）：卡片左上角相对网格原点，
-            // 取最近格子，夹进 [0, 挪走后剩余张数]。
+            // (62) 自由坐标落盘：脱离网格槽位——落点即卡片左
+            // 上角相对组原点的原始坐标（钳 ≥0），不再吸附、
+            // 不再改组内序（moveWithinGroup 退役于画布拖拽）。
             let topLeft = CGPoint(
-                x: card.frame.minX - dragGridOrigin.x,
-                y: card.frame.minY - dragGridOrigin.y)
-            let columns = self.columns
-            let column = min(
-                columns - 1,
-                max(0, Int(round(topLeft.x / (Self.cardWidth + Self.gap)))))
-            let row = max(
-                0, Int(round(topLeft.y / (Self.cardHeight + Self.gap))))
-            let target = min(
-                max(0, groupEntries.count - 1), row * columns + column)
-            store.moveWithinGroup(
-                trackId: trackId, groupId: groupId, targetIndex: target)
-            // 最终槽位落点落盘（组内序号可能没变也要记：第一次摆）。
-            let finalIndex = store.entries(inGroup: groupId)
-                .firstIndex { $0.track.id == trackId } ?? target
-            let slot = slotOrigin(index: finalIndex, columns: columns)
+                x: max(0, card.frame.minX - dragGridOrigin.x),
+                y: max(0, card.frame.minY - dragGridOrigin.y))
             store.setCanvasPosition(
-                trackId: trackId, x: Double(slot.x), y: Double(slot.y))
+                trackId: trackId, x: Double(topLeft.x), y: Double(topLeft.y))
             Breadcrumbs.log(
-                "sketchbook.canvas drop id=\(trackId) group=\(groupId ?? "none") at=\(finalIndex)")
+                "sketchbook.canvas drop62 id=\(trackId) group=\(groupId ?? "none") x=\(Int(topLeft.x)) y=\(Int(topLeft.y))")
             UIView.animate(withDuration: 0.22) {
                 card.transform = .identity
                 card.layer.shadowOpacity = 0
@@ -239,7 +240,11 @@ final class SketchbookCanvasCardView: UIView {
     private(set) var trackId: String?
     var onTap: (() -> Void)?
     var onRemove: (() -> Void)?
+    /// (62) 长按循环切换便签形状（rect→round→tape）。
+    var onShapeCycle: (() -> Void)?
 
+    /// (62) 胶带角的胶带条（tape 形状时显）。
+    private let tapeView = UIView()
     private let coverView = UIImageView()
     private let titleLabel = UILabel()
     private let artistLabel = UILabel()
@@ -285,12 +290,45 @@ final class SketchbookCanvasCardView: UIView {
         let tap = UITapGestureRecognizer(
             target: self, action: #selector(tapped))
         addGestureRecognizer(tap)
+        let longPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(shapeLongPressed(_:)))
+        longPress.minimumPressDuration = 0.6
+        addGestureRecognizer(longPress)
+        tapeView.backgroundColor = UIColor(red: 0.98, green: 0.93,
+                                           blue: 0.72, alpha: 0.85)
+        tapeView.isHidden = true
+        tapeView.isUserInteractionEnabled = false
+        addSubview(tapeView)
+    }
+
+    @objc private func shapeLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        onShapeCycle?()
+    }
+
+    /// (62) 形状应用：rect 矩形（圆角 8）/ round 圆角（18）/
+    /// tape 胶带角（顶部胶带条）。
+    func applyShape62(_ shape: String?) {
+        switch shape {
+        case "round":
+            layer.cornerRadius = 18
+            tapeView.isHidden = true
+        case "tape":
+            layer.cornerRadius = 8
+            tapeView.isHidden = false
+        default:
+            layer.cornerRadius = 8
+            tapeView.isHidden = true
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        tapeView.frame = CGRect(x: bounds.width / 2 - 26, y: -5,
+                                width: 52, height: 14)
+        tapeView.transform = CGAffineTransform(rotationAngle: -0.06)
         coverView.frame = CGRect(x: 6, y: 6, width: bounds.width - 12, height: 104)
         titleLabel.frame = CGRect(
             x: 8, y: 116, width: bounds.width - 16, height: 34)
@@ -305,6 +343,7 @@ final class SketchbookCanvasCardView: UIView {
 
     func configure(entry: SketchbookStore.Entry) {
         trackId = entry.track.id
+        applyShape62(entry.shape)
         titleLabel.text = entry.track.title
         artistLabel.text = entry.track.artist
         coverTask?.cancel()

@@ -15,8 +15,8 @@ import UIKit
 // render 在网页是一个 {scale, antialias} 对象，原生拆成
 // renderScale / renderAntialias 两键；网页浮名面板
 // （FumeSettingsPanel）渲染组只给分辨率一行，本面板同义。
-// 原生 fume 为 UIKit 矢量绘制、无画布缩放消费点，renderScale
-// 仅存档对齐、渲染器不消费（见 C1 报告）。
+// renderScale：(62) C7 起渲染器真消费——乘进焦点块标签的
+// 栅格化倍率（UIKit 矢量绘制下的画布分辨率等价点）。
 
 /// 一次读全的参数快照（渲染器消费的形状）。
 struct FumeStoredTuningValues: Equatable {
