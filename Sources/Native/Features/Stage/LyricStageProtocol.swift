@@ -220,6 +220,17 @@ protocol LyricStageRenderer: AnyObject {
     func frameTick(position: TimeInterval)
     /// 卸载：停掉一切逐帧工作、释放大图。只调一次。
     func unmount()
+    /// chrome 占用下发（3.7 (60) 第 4 条，只增不删的可选钩子）：
+    /// 舞台全样式全幅后，宿主在每次 layoutStage 时把顶栏/点播台
+    /// 的当前占用算成 insets 下发；只有构图重心在下部的样式才
+    /// 需要实现（按 bottom inset 内缩焦点），其余走协议扩展的
+    /// 默认空实现 = 忽略。insets 坐标系为宿主 view 坐标。
+    func applyChromeInsets(_ insets: UIEdgeInsets)
+}
+
+extension LyricStageRenderer {
+    /// 默认空实现：不消费 chrome insets（全幅画面任 chrome 浮压）。
+    func applyChromeInsets(_ insets: UIEdgeInsets) {}
 }
 
 /// 样式注册条目：17 种样式全量登记（id/显示名/展示序与网页侧
@@ -236,6 +247,12 @@ struct LyricStageStyleInfo {
     /// 样式行给出「调参」入口。只增字段（默认 nil），不属渲
     /// 染方冻结面（渲染器不消费本结构体），故不递增协议版本。
     var tuningPanelFactory: (() -> UIViewController)? = nil
+    /// 锁定禁用位（3.7 (60) 第 4 条，只增字段、缺省 false）：
+    /// 锁定样式代码与资源全保留，但用户选不到、用不了——选择
+    /// 器置灰带锁禁点选/禁调参、洗牌袋过滤、持久化回退。注意
+    /// 不许用 isNativeAvailable=false 冒充锁定：那会把样式分
+    /// 流去网页舞台，等于换个地方能用。
+    var isLocked: Bool = false
 
     var sourceTag: String { "stage.\(id)" }
 }
@@ -261,8 +278,12 @@ enum LyricStageRegistry {
               factory: { LumiereStageRenderer() }, tuningPanelFactory: { LumiereTuning.makePanel() }),
         .init(id: "hanabi",   displayName: "花火", order: 26,  styleVersion: 1, isNativeAvailable: true,
               factory: { HanabiStageRenderer() }, tuningPanelFactory: { HanabiTuning.makePanel() }),
+        // (60) 第 4 条：machi 锁定禁用（Miller 改判：不删、代码与
+        // WebEffect 资源保留，用户选不到用不了）——isLocked=true，
+        // isNativeAvailable 保持 true 不动（置 false 会分流网页舞台）。
         .init(id: "machi",    displayName: "町景", order: 27,  styleVersion: 1, isNativeAvailable: true,
-              factory: { MachiStageRenderer() }, tuningPanelFactory: { MachiTuning.makePanel() }),
+              factory: { MachiStageRenderer() }, tuningPanelFactory: { MachiTuning.makePanel() },
+              isLocked: true),
         .init(id: "nebbia",   displayName: "雾笺", order: 29,  styleVersion: 1, isNativeAvailable: true,
               factory: { NebbiaStageRenderer() }, tuningPanelFactory: { NebbiaTuning.makePanel() }),
         .init(id: "classic",  displayName: "流光", order: 30,  styleVersion: 2, isNativeAvailable: true,
@@ -304,6 +325,11 @@ enum LyricStageRegistry {
 
     static var nativeStyleIds: [String] {
         allStyles.filter { $0.isNativeAvailable }.map { $0.id }
+    }
+
+    /// 样式是否被锁定禁用（3.7 (60) 第 4 条）：未登记 id 视为未锁。
+    static func isLocked(_ styleId: String) -> Bool {
+        info(for: styleId)?.isLocked ?? false
     }
 
     /// 协议默认样式（与网页侧 DEFAULT_VISUALIZER_MODE 对齐）。

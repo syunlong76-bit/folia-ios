@@ -166,12 +166,15 @@ final class WallPrototypeViewController: UIViewController,
     private var miniBarWidthConstraint: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
-    /// 点播台上排（3.7 (54) 工作流 H）：网页整排的上排（喜欢/
-    /// 打乱/模式/睡眠/设置，MiniBarQuickRowView 唯一实现），
-    /// 展开态台高 70→122、主排下移；形态名单（淡出/禁交互）
-    /// 与主排同收口。主排 centerY 约束存引用供形态切换改常量
-    /// （展开 +13 / 收起 −5，与旧 70pt 台的 −5 同值兜底）。
+    /// 点播台附加功能行（3.7 (54) 工作流 H 建、(60) 第 7 条迁
+    /// 浮层）：五钮行不再装进台本体，改住透明浮层
+    /// （MiniBarQuickRowOverlayView）挂本 VC 的 view、锚台顶上
+    /// 方 8pt；台高恢复 70。miniQuickRow 指向浮层内的行本体，
+    /// 浮层显隐与台 5 秒闲置同钟、点台身空白区呼出、点浮层外
+    /// 收起（见 buildMiniBar 与 quickrow overlay 段）。
     private var miniQuickRow: MiniBarQuickRowView?
+    private var miniQuickRowOverlay: MiniBarQuickRowOverlayView?
+    private var miniQuickRowHideWorkItem: DispatchWorkItem?
     private var miniMainCenterY: [NSLayoutConstraint] = []
     /// 迷你台收起态（3.7 (21)：5 秒无操作自动收成进度条）：
     /// 与 miniBarPresented 分工——后者管在不在场，本标志管
@@ -246,13 +249,11 @@ final class WallPrototypeViewController: UIViewController,
             self, selector: #selector(stickerTrackSkippedUnplayable),
             name: .foliaTrackSkippedUnplayable, object: nil)
         // 点播台面板通知接线（3.7 (55) 工作流 E 任务三）：工作
-        // 流 C 的顶排字幕/面板/命令键 post 这三条通知（object
+        // 流 C 的顶排面板/命令键 post 这两条通知（object
         // 为发出信号的 quick row 本身），本墙订阅后 present 工
-        // 作流 D 的三个面板（类名定死，处理见 viewDidLoad 后
-        // 的 miniBarPanel* 方法）。
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(miniBarPanelSubtitle),
-            name: .foliaMiniBarSubtitle, object: nil)
+        // 作流 D 的面板（类名定死，处理见 viewDidLoad 后
+        // 的 miniBarPanel* 方法）。字幕键信号 .foliaMiniBar-
+        // Subtitle 已随 (60) 第 11 条整组删除。
         NotificationCenter.default.addObserver(
             self, selector: #selector(miniBarPanelPanel),
             name: .foliaMiniBarPanel, object: nil)
@@ -455,15 +456,12 @@ final class WallPrototypeViewController: UIViewController,
 
     // MARK: - 点播台面板通知（(55) E 任务三）与主排模式钮回显
     //
-    // 顶排（工作流 C）post .foliaMiniBarSubtitle / Panel /
-    // Command，本墙 present 工作流 D 的三个面板（类名定死）；
-    // 已有面板在呈时不叠开。模式钮与主页墙同构：glyph 四档
-    // 各异（顺序 list.bullet 与循环 repeat 区分开，防语义撞
-    // 车），菜单四项与队列面板同名，写回同一 playMode 存储。
-
-    @objc private func miniBarPanelSubtitle() {
-        presentMiniBarPanel(SubtitleSettingsPanelViewController(), kind: "subtitle")
-    }
+    // 顶排（工作流 C）post .foliaMiniBarPanel / Command，本墙
+    // present 工作流 D 的面板（类名定死）；已有面板在呈时不
+    // 叠开。字幕键与字幕面板已随 (60) 第 11 条整组删除。模式
+    // 钮与主页墙同构：glyph 四档各异（顺序 list.bullet 与循
+    // 环 repeat 区分开，防语义撞车），菜单四项与队列面板同
+    // 名，写回同一 playMode 存储。
 
     @objc private func miniBarPanelPanel() {
         presentMiniBarPanel(PlaybackPanelViewController(initialTab: .cover), kind: "panel")
@@ -593,26 +591,32 @@ final class WallPrototypeViewController: UIViewController,
             glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
 
-        // 点播台上排（3.7 (54) 工作流 H、(55) C 改版）：网页六钮
-        // 整排贴台顶，主排整体下移、台高 70→122。尺寸单一出处
-        // 在 MiniBarQuickRowView（rowHeight / expandedBarHeight），
-        // 本处只读常量不写死。功能走该视图唯一实现（与舞台/
-        // 主页墙同件）；点按先行回调重置无操作计时（与台面其
-        // 他操作同口径续命）。(55) C 起顶排已无设置钮，旧
-        // onOpenSettings 接线为死代码、已移除（属性声明在 C
-        // 侧保留；本面设置入口在顶部 chrome 排、未动）。
-        let quickRow = MiniBarQuickRowView()
-        quickRow.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(quickRow)
+        // 点播台附加功能浮层（3.7 (54) 工作流 H 建上排、(60) 第 7
+        // 条迁浮层）：五钮行不再装进台本体，改住透明浮层挂本 VC
+        // 的 view（z 序在台之上），底边锚台顶上方 8pt、横向与台
+        // 同宽同边距；台高恢复 70（expandedBarHeight）。功能走
+        // MiniBarQuickRowView 唯一实现（与舞台/主页墙同件）；点
+        // 按先行回调重置无操作计时（浮层自动收起与台闲置同钟）。
+        // 宠物层以台顶为地面、零改动。
+        let overlay = MiniBarQuickRowOverlayView()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlay)
+        miniQuickRowOverlay = overlay
+        let quickRow = overlay.quickRow
         miniQuickRow = quickRow
         quickRow.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
         NSLayoutConstraint.activate([
-            quickRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
-            quickRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-            quickRow.topAnchor.constraint(equalTo: bar.topAnchor, constant: 3),
-            quickRow.heightAnchor.constraint(equalToConstant: MiniBarQuickRowView.rowHeight),
+            overlay.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -8),
+            overlay.heightAnchor.constraint(equalToConstant: MiniBarQuickRowView.rowHeight),
         ])
-        Breadcrumbs.log("minibar.webrow wallproto attached h=\(Int(MiniBarQuickRowView.expandedBarHeight))")
+        // 点浮层外立即收起（观察式点按，不消费触摸）。
+        let overlayOutsideTap = UITapGestureRecognizer(
+            target: self, action: #selector(miniQuickRowOutsideTapped(_:)))
+        overlayOutsideTap.cancelsTouchesInView = false
+        view.addGestureRecognizer(overlayOutsideTap)
+        Breadcrumbs.log("minibar.webrow wallproto overlay attached h=\(Int(MiniBarQuickRowView.expandedBarHeight))")
 
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
@@ -780,14 +784,13 @@ final class WallPrototypeViewController: UIViewController,
         miniKnobLeading = knob.leadingAnchor.constraint(
             equalTo: progressTrack.leadingAnchor, constant: -4.5)
         miniKnobLeading?.isActive = true
-        // 主排纵向位置（3.7 (54) H、(55) C 复核）：展开 122 台
-        // 里主排中心在上排（3..51）与 seek 命中带（102..122）
-        // 之间正中，相对台中心 +15.5（台高/上排 +4 增量复核，
-        // 封面上下留白各 3.5pt 对称）；收起态回 −5。模式钮
-        // （(55) E 修正项）同入本组。
+        // 主排纵向位置（3.7 (54) H 曾 +15.5、(60) 第 7 条复原）：
+        // 上排迁浮层后展开台高回 70，主排中心相对台中心 −5
+        // （70 台旧口径，封面 44 居 y 8..52、轨道顶 59 不重叠）；
+        // 收起态同 −5。模式钮（(55) E 修正项）同入本组。
         // 形态切换在 setMiniBarForm 里统一改这组常量。
         miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniModeButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 15.5)
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // 轨道底距存引用（3.7 (21)）：收起形态 −7→−6 使轨道
@@ -937,8 +940,8 @@ final class WallPrototypeViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniModeButton.frame.contains(point) { return }
-        // 上排（(54) H）长按不切主题：与按键区同口径豁免。
-        if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
+        // 附加功能行已迁浮层（(60) 第 7 条）：浮层不在台身内，
+        // 其触摸不进本识别器，旧上排豁免随之退役。
         miniTheme = miniTheme.next
         MiniPlayerTheme.stored = miniTheme
         applyMiniTheme()
@@ -965,8 +968,10 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     /// 台面点按分发（13.1 定版、13.3 进度带改点按跳点）：按键各自
-    /// 处理；封面 = 定位；底部进度带 = 跳到点按位置；其余台身 =
-    /// 进播放详情页。封面判定仍先于进度带（两者仅在封面下缘约
+    /// 处理；封面 = 定位；底部进度带 = 跳到点按位置；其余台身
+    /// 空白区 = 呼出附加功能浮层（(60) 第 7 条新触发，取代旧
+    /// 「台身空白也进详情页」——双击台/封面定位等既有入口不
+    /// 动）。封面判定仍先于进度带（两者仅在封面下缘约
     /// 2pt 相接，先判进度带会让点封面下缘变成跳进度）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
         guard let bar = miniBar else { return }
@@ -983,9 +988,6 @@ final class WallPrototypeViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniModeButton.frame.contains(point) { return }
-        // 上排（(54) H）：键各自处理、排内空隙不落台身分发
-        // （防瞄准上排时误触进详情页）。
-        if let quickRow = miniQuickRow, quickRow.frame.contains(point) { return }
         if miniCover.frame.contains(point) {
             locateCurrentTrack()
             return
@@ -1002,7 +1004,8 @@ final class WallPrototypeViewController: UIViewController,
             engine.seek(to: Double(fraction) * engine.duration)
             return
         }
-        openNativeStageFromWall()
+        // 台身空白区（(60) 第 7 条）：呼出附加功能浮层（五钮行）。
+        showMiniQuickRowOverlay()
     }
 
     /// 进度拖动（13.1）：拖动中只更新填充，松手才 seek（防拖动
@@ -1088,6 +1091,8 @@ final class WallPrototypeViewController: UIViewController,
             resetMiniIdleTimer()
         } else {
             cancelMiniIdleTimer()
+            // 台退场时浮层立即收起（(60) 第 7 条），不许悬空残留。
+            hideMiniQuickRowOverlay(reason: "bar-hidden")
         }
         bar.layer.removeAllAnimations()
         if visible {
@@ -1151,6 +1156,11 @@ final class WallPrototypeViewController: UIViewController,
     private func resetMiniIdleTimer() {
         miniIdleWorkItem?.cancel()
         miniIdleWorkItem = nil
+        // 浮层与台闲置同钟（(60) 第 7 条）：浮层在显时顺延其
+        // 5 秒自动收起（与台收起同一时刻落点）。
+        if miniQuickRowOverlay?.isShown == true {
+            scheduleMiniQuickRowAutoHide()
+        }
         guard miniBarPresented, !miniBarCollapsed, !miniSeekDragging else { return }
         let work = DispatchWorkItem { [weak self] in
             self?.collapseMiniBarIdle()
@@ -1165,7 +1175,7 @@ final class WallPrototypeViewController: UIViewController,
         miniIdleWorkItem = nil
     }
 
-    /// 收成细进度条：同位置同宽，高度 122→16、轨道居中，封面/
+    /// 收成细进度条：同位置同宽，高度 70→16、轨道居中，封面/
     /// 标题/歌手/按键淡出且按键禁交互；背景全去（3.7 (22)：
     /// 主题层/毛玻璃/玻璃高光隐藏），只保留轨道（极淡底轨）
     /// + 填充 + 发光圆点，由 setMiniProgress 继续步进。系统
@@ -1177,6 +1187,8 @@ final class WallPrototypeViewController: UIViewController,
         miniBarCollapsed = true
         miniPetStage?.barFormChanged(collapsed: true)
         cancelMiniIdleTimer()
+        // 台收成细条时浮层同钟收起（(60) 第 7 条）。
+        hideMiniQuickRowOverlay(reason: "idle")
         Breadcrumbs.log("minibar collapse idle")
         setMiniBarContentsInteractive(false)
         if UIAccessibility.isReduceMotionEnabled {
@@ -1223,7 +1235,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 直接置位即瞬时生效。
     private func setMiniBarForm(collapsed: Bool) {
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
-        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 15.5 }
+        // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
+        for constraint in miniMainCenterY { constraint.constant = -5 }
         miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
@@ -1248,9 +1261,10 @@ final class WallPrototypeViewController: UIViewController,
     private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
         // 圆点不在淡出名单（3.7 (22)）：收起态保留发光圆点
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
-        // (54) H：上排整排同入淡出名单（收起细条上只留轨道）。
+        // 附加功能行已迁浮层（(60) 第 7 条），不入台形态名单：
+        // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniModeButton, miniQuickRow]
+                                miniPrevButton, miniNextButton, miniModeButton]
         for view in views {
             view?.alpha = alpha
         }
@@ -1261,8 +1275,50 @@ final class WallPrototypeViewController: UIViewController,
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
-        // (54) H：上排以整件开关交互（收起态不许点到隐形键）。
-        miniQuickRow?.isUserInteractionEnabled = interactive
+    }
+
+    // MARK: 附加功能浮层（3.7 (60) 第 7 条，曲目墙宿主）
+    //
+    // 触发 = 点台身空白区（miniBarTapped 末路）；收起 = 与台闲
+    // 置同钟 5 秒、点浮层外立即收起、台收起/退场时随台收起。
+    // 进出动画在 MiniBarQuickRowOverlayView.setShown 内（系统
+    // 弹簧 0.85、自台顶滑入＋淡入）。宠物站位以台顶为地面，
+    // 浮层零干涉；台身 0.55s 长按切主题挂在台身上、浮层不在
+    // 台内，其触摸不进该识别器，不受影响。
+
+    private func showMiniQuickRowOverlay() {
+        guard let overlay = miniQuickRowOverlay, !overlay.isShown else { return }
+        overlay.setShown(true)
+        Breadcrumbs.log("quickrow.overlay show host=wallproto")
+        scheduleMiniQuickRowAutoHide()
+    }
+
+    private func hideMiniQuickRowOverlay(reason: String) {
+        miniQuickRowHideWorkItem?.cancel()
+        miniQuickRowHideWorkItem = nil
+        guard let overlay = miniQuickRowOverlay, overlay.isShown else { return }
+        overlay.setShown(false)
+        Breadcrumbs.log("quickrow.overlay hide host=wallproto reason=\(reason)")
+    }
+
+    private func scheduleMiniQuickRowAutoHide() {
+        miniQuickRowHideWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.hideMiniQuickRowOverlay(reason: "idle")
+        }
+        miniQuickRowHideWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.miniIdleCollapseDelay, execute: work)
+    }
+
+    /// 点浮层外立即收起：观察式识别器（不消费触摸）——落点在
+    /// 浮层胶囊或点播台之内都不算「外」。
+    @objc private func miniQuickRowOutsideTapped(_ gesture: UITapGestureRecognizer) {
+        guard let overlay = miniQuickRowOverlay, overlay.isShown,
+              let bar = miniBar else { return }
+        let point = gesture.location(in: view)
+        if overlay.frame.contains(point) || bar.frame.contains(point) { return }
+        hideMiniQuickRowOverlay(reason: "outside-tap")
     }
 
     /// 显隐边沿的形态无动画复位：收起态不跨显隐周期残留。

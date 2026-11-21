@@ -38,9 +38,13 @@ final class StageStyleCycleBag {
     /// 可选全集（与样式选择器同源同序）：LyricStageRegistry
     /// 全部登记条目——已迁条目在选择器走原生切换、未迁条目
     /// 走网页兜底，两者在选择器里都可选，故全部入袋；注册
-    /// 表之外不存在其他可选样式。
+    /// 表之外不存在其他可选样式。（60) 第 4 条：锁定样式
+    /// （isLocked，如 machi）过滤出袋——next() 取前对账会把
+    /// 已在余量里的锁定残留一并剔除，进行中的一轮自动清净。
     static var selectableStyleIds: [String] {
-        LyricStageRegistry.allStyles.sorted { $0.order < $1.order }.map { $0.id }
+        LyricStageRegistry.allStyles
+            .filter { !$0.isLocked }
+            .sorted { $0.order < $1.order }.map { $0.id }
     }
 
     /// 外部选样式对账（选择器手选 / 提示条回网页 / 开台初始

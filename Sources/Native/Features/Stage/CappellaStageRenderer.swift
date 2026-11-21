@@ -511,6 +511,10 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
     private var isActive = false
+    /// chrome 占用（3.7 (60) 第 4 条）：宿主 layoutStage 下发；
+    /// 消息面板构图重心在下部，面板按 bottom inset 的一半上移
+    /// 避让点播台浮压。变更时重跑 performLayout。
+    private var chromeInsets: UIEdgeInsets = .zero
 
     private var messages: [CappellaMessageModel] = []
     private var rows: [String: CappellaRowView] = [:]
@@ -552,6 +556,14 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
 
     func mount(context: LyricStageContext) {
         self.context = context
+    }
+
+    /// chrome 内缩（3.7 (60) 第 4 条）：bottom inset 变化即重排
+    /// 面板（performLayout 按 bottom/2 上移 contentView）。
+    func applyChromeInsets(_ insets: UIEdgeInsets) {
+        guard insets != chromeInsets else { return }
+        chromeInsets = insets
+        performLayout()
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
@@ -1289,8 +1301,10 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
         let panelW = panelWidth()
+        // (60) 第 4 条：面板上移 bottom chrome inset 的一半避让
+        // 点播台浮压（全幅容器下 chrome 不再靠宿主带状容器避让）。
         contentView.frame = CGRect(
-            x: (bounds.width - panelW) / 2, y: 0,
+            x: (bounds.width - panelW) / 2, y: -chromeInsets.bottom / 2,
             width: panelW, height: bounds.height)
         lastVisibleKey = "" // 视口变化后下一帧按新几何重算窗口
         windowMemoKey = ""

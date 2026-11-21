@@ -135,23 +135,30 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
             return cell
         }
         let style = styles[indexPath.row]
+        // (60) 第 4 条：锁定样式（machi）整行置灰——文字降至系统
+        // tertiary 量级（深色外观下仍可读）、徽标换「锁」、调参钮
+        // 禁用、点选在 didSelect 直接返回不发任何回调。
+        let locked = style.isLocked
         var config = UIListContentConfiguration.valueCell()
         config.text = style.displayName
         config.secondaryText = style.id
-        config.textProperties.color = .white
+        config.textProperties.color = locked
+            ? UIColor.white.withAlphaComponent(0.35) : .white
         config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.45)
         cell.contentConfiguration = config
         cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         cell.accessoryType = .none
-        cell.selectionStyle = .default
+        cell.selectionStyle = locked ? .none : .default
         cell.isUserInteractionEnabled = true
-        let isActive = style.id == activeStyleId
+        let isActive = style.id == activeStyleId && !locked
         let badge = UILabel()
-        badge.text = style.isNativeAvailable ? " 原生 " : " 网页版 "
+        badge.text = locked ? " 锁 " : (style.isNativeAvailable ? " 原生 " : " 网页版 ")
         badge.font = .systemFont(ofSize: 11, weight: .medium)
-        badge.textColor = style.isNativeAvailable
-            ? UIColor(red: 0.55, green: 0.9, blue: 0.65, alpha: 1)
-            : UIColor.white.withAlphaComponent(0.55)
+        badge.textColor = locked
+            ? UIColor.white.withAlphaComponent(0.45)
+            : (style.isNativeAvailable
+                ? UIColor(red: 0.55, green: 0.9, blue: 0.65, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.55))
         badge.layer.borderWidth = 1
         badge.layer.borderColor = badge.textColor.cgColor
         badge.layer.cornerRadius = 7
@@ -161,6 +168,7 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         // 逐样式调参入口（3.7 (57)）：有调参面板的样式在徽章
         // 左侧加一颗「调参」钮，点按呈现该样式的专属面板
         // （面板本体由各样式 Tuning 文件提供，本选择器只呈现）。
+        // (60) 第 4 条：锁定样式的调参入口一并禁用（置灰不可点）。
         let hasTuning = style.tuningPanelFactory != nil
         let tuningWidth: CGFloat = hasTuning ? 46 : 0
         let wrapWidth = tuningWidth + badgeWidth + (isActive ? 26 : 0)
@@ -170,6 +178,8 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
             tuningButton.setTitle("调参", for: .normal)
             tuningButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .medium)
             tuningButton.setTitleColor(UIColor(red: 0.55, green: 0.9, blue: 0.65, alpha: 1), for: .normal)
+            tuningButton.setTitleColor(UIColor.white.withAlphaComponent(0.3), for: .disabled)
+            tuningButton.isEnabled = !locked
             tuningButton.tag = indexPath.row
             tuningButton.addTarget(self, action: #selector(handleTuningTap(_:)), for: .touchUpInside)
             tuningButton.frame = CGRect(x: 0, y: 0, width: 40, height: 24)
@@ -192,7 +202,9 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
     /// 回选择器，舞台重挂样式时新参数生效。
     @objc private func handleTuningTap(_ sender: UIButton) {
         let style = styles[sender.tag]
-        guard let makePanel = style.tuningPanelFactory else { return }
+        // (60) 第 4 条：锁定样式调参入口禁用（钮已 isEnabled=false，
+        // 此处再兜底一道，防程序化触发）。
+        guard !style.isLocked, let makePanel = style.tuningPanelFactory else { return }
         let panel = makePanel()
         panel.title = style.displayName + "调参"
         let nav = UINavigationController(rootViewController: panel)
@@ -220,6 +232,12 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
             return
         }
         let style = styles[indexPath.row]
+        // (60) 第 4 条：锁定样式点选直接返回，不发 onPickNative/
+        // onPickWeb 任何回调（选不到、用不了；代码与资源保留）。
+        if style.isLocked {
+            Breadcrumbs.log("style.lock picker tap ignored style=\(style.id)")
+            return
+        }
         if style.isNativeAvailable {
             onPickNative?(style.id)
         } else {

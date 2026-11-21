@@ -24,18 +24,38 @@ enum StageStyleStore {
     static var lastNativeStyleId: String? {
         get {
             let stored = UserDefaults.standard.string(forKey: lastNativeKey)
-            guard let stored, LyricStageRegistry.nativeStyleIds.contains(stored) else { return nil }
+            // (60) 第 4 条：锁定样式不得作回退落点（与未迁同等对待）。
+            guard let stored, LyricStageRegistry.nativeStyleIds.contains(stored),
+                  !LyricStageRegistry.isLocked(stored) else { return nil }
             return stored
         }
         set { UserDefaults.standard.set(newValue, forKey: lastNativeKey) }
     }
 
-    /// 进原生舞台时应实际使用的样式：当前样式已迁则用它，未迁
-    /// 则用最近用过的已迁样式（再无则默认 classic）。
+    /// 进原生舞台时应实际使用的样式：当前样式已迁且未锁定则用
+    /// 它，未迁/被锁定则用最近用过的已迁未锁样式（再无则默认
+    /// classic）。当前样式被锁定时同时把持久值改写为回退值并落
+    /// 面包屑（存量 machi 一次清净，后续读到的恒为回退值）。
     static func effectiveStyleId() -> String {
         let current = currentStyleId
-        if LyricStageRegistry.nativeStyleIds.contains(current) { return current }
-        return lastNativeStyleId ?? LyricStageRegistry.defaultStyleId
+        if LyricStageRegistry.nativeStyleIds.contains(current),
+           !LyricStageRegistry.isLocked(current) { return current }
+        let fallback = lastNativeStyleId ?? LyricStageRegistry.defaultStyleId
+        if LyricStageRegistry.isLocked(current) {
+            currentStyleId = fallback
+            Breadcrumbs.log("style.lock fallback style=\(current) to=\(fallback)")
+        }
+        return fallback
+    }
+
+    /// 启动改写（3.7 (60) 第 4 条）：存量 currentStyleId 是锁定
+    /// 样式（如 machi）时，在任何舞台呈现之前直接改写为回退值，
+    /// 避免「当前样式」提示条等显示路径还报锁定样式。由
+    /// runLaunchStyleGuard 在启动最先调用。
+    static func applyLockedStyleFallbackIfNeeded() {
+        let current = currentStyleId
+        guard LyricStageRegistry.isLocked(current) else { return }
+        _ = effectiveStyleId()
     }
 
     static var currentStyleIsNative: Bool {
@@ -70,6 +90,8 @@ enum StageStyleStore {
     /// 功：回退持久化样式至 classic 并清标记、落面包屑。
     /// 无 pending 时为空操作。
     static func runLaunchStyleGuard() {
+        // (60) 第 4 条：锁定样式存量改写先行（与 pending 守卫互不依赖）。
+        applyLockedStyleFallbackIfNeeded()
         guard let pending = stylePendingId else { return }
         clearStylePending()
         if currentStyleId == pending {

@@ -44,9 +44,10 @@ final class StageViewController: UIViewController {
     private let noticeWebButton = UIButton(type: .system)
     private let noticeCloseButton = UIButton(type: .system)
     private let rendererContainer = UIView()
-    // 底部字幕层（3.7 (55) 工作流 D）：固定槽挂载（锚展开态台顶，
-    // 不随点播台收起位移，见 layoutStage），逐帧喂入在 frameStep。
-    private let subtitleOverlay = SubtitleOverlayView()
+    // 底部字幕层已于 (60) 第 11 条整组删除（SubtitleOverlayView/
+    // SubtitleSettingsPanel/SubtitleSettingsStore 三文件退役）：
+    // 特效画面不再有宿主级小字行。汪汪队提词条 teleBar 是渲染
+    // 器本体元素、不在本条范围，未动。
     // 点播台（3.7 (32) 同步改造）：原固定 128pt 控制带（私有
     // 进度条 + 时间标签 + 44/64/44 三键）整体换成与墙台同规
     // 格的点播台——70pt 玻璃胶囊 + 同款主题层 + 可拖进度轨，
@@ -73,16 +74,22 @@ final class StageViewController: UIViewController {
     /// 钮，glyph 随 QueueManager.playMode 四档变，点按弹 UIMenu
     /// 四档点选（非盲循环）；与队列面板/播放面板同一 playMode 存储。
     private let stageModeButton = UIButton(type: .system)
-    private let queueButton = UIButton(type: .system)
+    // 播放列表图标（顶栏 queueButton）已于 (60) 第 10 条删除：
+    // 队列入口保留点播台面板页签与命令面板，QueuePanel 本体不动。
     private var stageBarWidthConstraint: NSLayoutConstraint?
     private var stageBarHeightConstraint: NSLayoutConstraint?
     private var stageTrackBottomConstraint: NSLayoutConstraint?
-    /// 点播台上排（3.7 (54) 工作流 H）：网页整排的上排（喜欢/
-    /// 打乱/模式/睡眠/设置，MiniBarQuickRowView 唯一实现），
-    /// 展开态台高 70→122（(55) C 常量 expandedBarHeight）、主排下移；形态名单与主排同收口。
-    /// 主排 centerY 约束存引用供形态切换改常量（展开 +13 /
-    /// 收起 −5）。喜欢态变化经回调同步顶栏红心。
+    /// 点播台附加功能行（3.7 (54) 工作流 H 建、(60) 第 7 条迁
+    /// 浮层）：五钮行（喜欢/星标/打乱/面板/命令，字幕钮已随第
+    /// 11 条删）不再装进点播台本体，改住透明浮层
+    /// （MiniBarQuickRowOverlayView）挂本 VC 的 view、锚台顶上
+    /// 方 8pt；台高恢复 70（expandedBarHeight）。stageQuickRow
+    /// 指向浮层内的行本体（回调接线用），浮层显隐与点播台 5 秒
+    /// 闲置同钟、点台身空白区呼出、点浮层外收起（见 quickrow
+    /// overlay 段）。喜欢态变化经回调同步顶栏红心。
     private var stageQuickRow: MiniBarQuickRowView?
+    private var stageQuickRowOverlay: MiniBarQuickRowOverlayView?
+    private var stageQuickRowHideWorkItem: DispatchWorkItem?
     private var stageMainCenterY: [NSLayoutConstraint] = []
     private var stageKnobLeading: NSLayoutConstraint?
     private var stageTheme: MiniPlayerTheme = MiniPlayerTheme.effective
@@ -191,10 +198,9 @@ final class StageViewController: UIViewController {
     private var headerChromeHidden = false
 
     private var stageHeaderViews: [UIView] {
-        // (53) H 修正：播放列表入口自点播台台面迁入本顶栏隐藏排
-        // （与样式入口同排、随顶栏 5 秒自动隐藏/双击恢复的既有
-        // 语义显隐），台面不再常驻该钮。
-        [closeButton, titleLabel, artistLabel, likeButton, styleButton, queueButton]
+        // (53) H 修正：播放列表入口曾在本顶栏隐藏排；(60) 第 10
+        // 条已删该钮（queueButton），名单同步摘除。
+        [closeButton, titleLabel, artistLabel, likeButton, styleButton]
     }
 
     private func installStageHeaderAutoHideRecognizers() {
@@ -659,7 +665,7 @@ final class StageViewController: UIViewController {
         styleButton.layer.cornerRadius = 12
         styleButton.contentEdgeInsets = UIEdgeInsets(top: 4, left: 10, bottom: 4, right: 10)
         styleButton.addTarget(self, action: #selector(styleTapped), for: .touchUpInside)
-        for v in [closeButton, titleLabel, artistLabel, likeButton, styleButton, queueButton] as [UIView] {
+        for v in [closeButton, titleLabel, artistLabel, likeButton, styleButton] as [UIView] {
             view.addSubview(v)
         }
         noticeBar.backgroundColor = UIColor.white.withAlphaComponent(0.12)
@@ -682,14 +688,8 @@ final class StageViewController: UIViewController {
         view.addSubview(rendererContainer)
         // 点播台（3.7 (32)）：与墙台同规格的台体在此装配，
         // 三键仍走既有按钮与命令入口（handleCommand 同路）。
+        // 附加功能浮层在 buildStageBar 内随台一并装配（锚台顶）。
         buildStageBar()
-        // 字幕层挂载（3.7 (55) 工作流 D）：加在点播台之后（z 序在
-        // 台之上、帧位在台上方固定槽不重叠）；高度变化时请宿主
-        // 重跑 layoutStage 定帧。
-        view.addSubview(subtitleOverlay)
-        subtitleOverlay.onNeedsRelayout = { [weak self] in
-            self?.view.setNeedsLayout()
-        }
         refreshPlayButton()
         refreshLikeButton()
         // 主题变更通知（设置页/任一台长按）→ 本台同步换装。
@@ -700,13 +700,11 @@ final class StageViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(stageBarSlotsChanged),
             name: .foliaMiniBarSlotsChanged, object: nil)
-        // 点播台顶排三信号订阅（3.7 (55) 工作流 D，名称由工作流 C
-        // 定死）：字幕钮 → 字幕调节面板、格子钮 → 播放面板、命令
-        // 钮 → 命令面板。信号由三台的 quick row 都可能发出，本台
-        // 只在自身在窗（view.window != nil）时响应（handler 内守卫）。
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(stageMiniBarSubtitleTapped),
-            name: .foliaMiniBarSubtitle, object: nil)
+        // 点播台顶排信号订阅（3.7 (55) 工作流 D，名称由工作流 C
+        // 定死）：格子钮 → 播放面板、命令钮 → 命令面板。信号由
+        // 三台的 quick row 都可能发出，本台只在自身在窗
+        // （view.window != nil）时响应（handler 内守卫）。字幕钮
+        // 信号 .foliaMiniBarSubtitle 已随 (60) 第 11 条整组删除。
         NotificationCenter.default.addObserver(
             self, selector: #selector(stageMiniBarPanelTapped),
             name: .foliaMiniBarPanel, object: nil)
@@ -725,9 +723,6 @@ final class StageViewController: UIViewController {
         let headerTop = safe.top + 6
         closeButton.frame = CGRect(x: 12, y: headerTop, width: 38, height: 38)
         likeButton.frame = CGRect(x: bounds.width - 50, y: headerTop, width: 38, height: 38)
-        // 播放列表入口（顶栏排，喜欢钮左侧；图标为网页 ListMusic
-        // 的 SF 等价符号，点按行为仍走 queueTapped 开队列面板）。
-        queueButton.frame = CGRect(x: bounds.width - 94, y: headerTop, width: 38, height: 38)
         let titleWidth = bounds.width - 120
         titleLabel.frame = CGRect(x: 60, y: headerTop, width: titleWidth, height: 22)
         artistLabel.frame = CGRect(x: 60, y: headerTop + 22, width: titleWidth, height: 17)
@@ -758,42 +753,34 @@ final class StageViewController: UIViewController {
         let barHeight: CGFloat = stageBarCollapsed ? 16
             : MiniBarQuickRowView.expandedBarHeight
         let controlsTop = bounds.height - safe.bottom - 10 - barHeight
-        // 演唱会全屏（3.7 (55) 工作流 B 横屏定案 + (57) 工作流 E
-        // 竖屏补全）：petconcert 横竖屏都吃满整屏（渲染器内部全
-        // 层 = bounds、无 aspect-fit）。(55) 横屏补丁只限横屏，
-        // 竖屏仍走旧公式被 controlsTop 限高成中间一条——真机截
-        // 图上方露宿主封面约 15%、下方脚灯行以下露暗带与进度
-        // 条。舞台是整屏接管面：chrome（顶栏/提示条/点播台/
-        // 字幕层）浮于容器之上，bringSubviewToFront 两朝向同
-        // 路（字幕层对 petconcert 恒让位隐藏，见 frameStep）。
-        // 其余样式仍走下方 else 旧公式，一行未动、零回归。
-        // 面包屑 concert.hostframe 的 cover = 容器面积/窗口面积
-        // （PetConcertRenderer.performLayout 口径，只读核实）：
-        // 容器 = 窗口 bounds 后横竖屏恒 1.000。
-        if activeStyleId == "petconcert" {
-            rendererContainer.frame = bounds
-            renderer?.view.frame = rendererContainer.bounds
-            for chrome in [closeButton, likeButton, queueButton,
-                           titleLabel, artistLabel, styleButton,
-                           noticeBar, stageBar, subtitleOverlay] as [UIView] {
-                view.bringSubviewToFront(chrome)
-            }
-        } else {
-            rendererContainer.frame = CGRect(
-                x: 0, y: contentTop, width: bounds.width,
-                height: max(controlsTop - contentTop - 4, 0))
-            renderer?.view.frame = rendererContainer.bounds
+        // 全样式全幅（3.7 (60) 第 4 条，取代 (55)/(57) 的 petconcert
+        // 独占全幅特判）：rendererContainer 对全部样式一律 = view
+        // bounds，chrome（顶栏/提示条/点播台/附加功能浮层）浮压
+        // 其上——此前其余 20 样式被 contentTop..controlsTop 的带
+        // 状容器限高（横屏只剩约 150pt），是「很多特效横屏半幅」
+        // 的统一成因；各样式内部既已 bounds 自适应，容器放大即
+        // 全屏。演唱会行为不变（它本来就是全幅）。浮名（世界
+        // 制）、群唱（居中面板）、静止（限宽槽）属构图设计、不
+        // 强行拉满，仍按各自内部几何走。
+        rendererContainer.frame = bounds
+        renderer?.view.frame = rendererContainer.bounds
+        for chrome in [closeButton, likeButton,
+                       titleLabel, artistLabel, styleButton,
+                       noticeBar, stageBar] as [UIView] {
+            view.bringSubviewToFront(chrome)
         }
-        // 字幕层固定槽（3.7 (55) 工作流 D/DS 修正1）：底边锚定在
-        // 「展开态点播台顶 − 8pt」——恒按 expandedBarHeight 推导，
-        // 不读 stageBarCollapsed：点播台 5 秒收起成细条时细条在字幕
-        // 层下方滑过，字幕位置不动、不周期性跳动破坏阅读。
-        let expandedBarTop = bounds.height - safe.bottom - 10
-            - MiniBarQuickRowView.expandedBarHeight
-        let subtitleHeight = subtitleOverlay.preferredHeight(forWidth: bounds.width)
-        subtitleOverlay.frame = CGRect(
-            x: 0, y: expandedBarTop - 8 - subtitleHeight,
-            width: bounds.width, height: subtitleHeight)
+        if let overlay = stageQuickRowOverlay {
+            view.bringSubviewToFront(overlay)
+        }
+        // 统一 chromeInsets 规则（(60) 第 4 条）：把当前 chrome
+        // 占用（顶栏高 = contentTop、点播台当前形态高含安全区与
+        // 间距）算成 insets 下发当前渲染器；只有下部构图重心的
+        // 样式实现内缩（pendolo 表盘中心上移 bottom/2、cappella
+        // 面板上移 bottom/2），其余走协议默认空实现忽略。
+        let chromeInsets = UIEdgeInsets(
+            top: contentTop, left: 0,
+            bottom: bounds.height - controlsTop, right: 0)
+        renderer?.applyChromeInsets(chromeInsets)
         // 贴纸层（3.7 (24)，纯新增）：贴纸与陪伴宠物定位。
         stickerLayoutOverlays()
     }
@@ -831,6 +818,10 @@ final class StageViewController: UIViewController {
         // 时由 applyBackdrop 落 `stage gate backdrop decoded`
         // 一行，含像素尺寸与估算 MB）。
         Breadcrumbs.log("stage gate decoded style=\(styleId) rendererImages=0 textOnly=1 metalTextures=0")
+        // 激活样式 footprint 自证（3.7 (60) 第 4 条）：Breadcrumbs
+        // .log 尾巴恒带 footprintMB=（Breadcrumbs 内部采样口径），
+        // 本行即「激活时刻全应用 footprint」的可判读记录。
+        Breadcrumbs.log("stage.style.footprint style=\(styleId)")
         rendererContainer.addSubview(next.view)
         next.view.frame = rendererContainer.bounds
         next.view.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -939,9 +930,6 @@ final class StageViewController: UIViewController {
         refreshLikeButton()
         reanchor(armSettle: true)
         pushSnapshot()
-        // 字幕层（3.7 (55) 工作流 D）：切歌先清屏，新行表到货后
-        // 由 frameStep 喂入呈现，不留上一首字幕。
-        subtitleOverlay.reset()
         loadLyrics(for: track)
         loadBackdropFallback(for: track)
         Breadcrumbs.log("stage track \(track.id) title=\(track.title)")
@@ -1328,16 +1316,8 @@ final class StageViewController: UIViewController {
         handleCommand(LyricStageCommand(kind: .next, source: "stage.controls"))
     }
 
-    /// 播放列表面板（3.7 (48)，与墙台同面板）：pageSheet 呈现不
-    /// 触发舞台 viewWillDisappear，不惊动 StageExitGate；关闭后
-    /// 重置台面无操作计时并重排顶栏隐藏。
-    @objc private func queueTapped() {
-        resetStageIdleTimer()
-        QueuePanelViewController.present(from: self) { [weak self] in
-            self?.resetStageIdleTimer()
-            self?.scheduleStageHeaderHide()
-        }
-    }
+    // 播放列表图标 queueTapped 已于 (60) 第 10 条随钮删除；队列
+    // 面板改由点播台面板页签/命令面板进入（QueuePanel 本体保留）。
     @objc private func likeTapped() {
         scheduleStageHeaderHide()
         handleCommand(LyricStageCommand(kind: .like, source: "stage.controls"))
@@ -1428,14 +1408,14 @@ final class StageViewController: UIViewController {
         stageModeButton.showsMenuAsPrimaryAction = true
     }
 
-    // MARK: 面板呈现（3.7 (55) 工作流 D：字幕/播放面板/命令面板）
+    // MARK: 面板呈现（3.7 (55) 工作流 D：播放面板/命令面板）
     //
-    // 三个入口都是点播台顶排信号（工作流 C 发出、本台在
+    // 入口都是点播台顶排信号（工作流 C 发出、本台在
     // buildLayout 订阅）：呈现一律 pageSheet（命令面板大 detent
     // 在其自身 present 内定），不触发舞台 viewWillDisappear、
-    // 不惊动 StageExitGate（与 queueTapped 同口径）；关闭后由
-    // 各面板自身 onDismiss/系统 dismiss 回落，宿主在这里只重置
-    // 无操作计时与顶栏隐藏（handler 进入时已做）。
+    // 不惊动 StageExitGate；关闭后由各面板自身 onDismiss/系统
+    // dismiss 回落，宿主在这里只重置无操作计时与顶栏隐藏
+    // （handler 进入时已做）。字幕面板入口已随 (60) 第 11 条删除。
 
     /// 本台响应信号的守卫：三台 quick row 都发同一信号，只有真
     /// 正 在窗且未在呈现其他面的舞台响应（墙台在场时本台不在窗，
@@ -1450,11 +1430,6 @@ final class StageViewController: UIViewController {
         return true
     }
 
-    @objc private func stageMiniBarSubtitleTapped() {
-        guard stagePanelSignalAllowed("subtitle") else { return }
-        SubtitleSettingsPanelViewController.present(from: self)
-    }
-
     @objc private func stageMiniBarPanelTapped() {
         guard stagePanelSignalAllowed("panel") else { return }
         PlaybackPanelViewController.present(from: self)
@@ -1466,10 +1441,7 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             // 跨面跳转：命令面板关闭后由本台呈现目标面（样式选择
             // 必须走本台的选样式通路，见 presentStylePickerForPalette）。
-            palette.onOpenSubtitleSettings = { [weak self] in
-                guard let self, self.presentedViewController == nil else { return }
-                SubtitleSettingsPanelViewController.present(from: self)
-            }
+            // 字幕调节跳转已随 (60) 第 11 条删除（面板本体退役）。
             palette.onOpenQueuePanel = { [weak self] in
                 guard let self, self.presentedViewController == nil else { return }
                 PlaybackPanelViewController.present(from: self, initialTab: .queue)
@@ -1611,26 +1583,36 @@ final class StageViewController: UIViewController {
         bar.addSubview(glassTint)
         stageGlassTint = glassTint
 
-        // 点播台上排（3.7 (54) 工作流 H）：网页整排接入——上排
-        // 44pt 贴台顶（喜欢/打乱/模式/睡眠＋右端设置），主排
-        // 整体下移、台高 70→122（(55) C 常量）。功能走 MiniBarQuickRowView
-        // 唯一实现（与两面墙台同件）；点按先行回调重置无操作
-        // 计时；喜欢态变化回调刷新顶栏红心（同一 LikesStore
-        // 真源两处回显不许打架）；设置走组件缺省呈现（顶层
-        // VC＝本舞台，overFullScreen 同墙口径）。
-        let quickRow = MiniBarQuickRowView()
-        quickRow.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(quickRow)
+        // 点播台附加功能浮层（3.7 (54) 工作流 H 建上排、(60) 第 7
+        // 条迁浮层）：五钮行不再装进台本体，改住透明浮层挂本 VC
+        // 的 view（z 序在台之上），底边锚台顶上方 8pt、横向与台
+        // 同宽同边距；台高恢复 70。功能走 MiniBarQuickRowView 唯
+        // 一实现（与两面墙台同件）；点按先行回调重置无操作计时
+        // （浮层自动收起与台闲置同钟，见 quickrow overlay 段）；
+        // 喜欢态变化回调刷新顶栏红心（同一 LikesStore 真源两处
+        // 回显不许打架）。宠物层以台顶为地面、零改动（浮层在其
+        // 上方呼出/收起，不改宠物站位）。
+        let overlay = MiniBarQuickRowOverlayView()
+        overlay.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(overlay)
+        stageQuickRowOverlay = overlay
+        let quickRow = overlay.quickRow
         stageQuickRow = quickRow
         quickRow.onUserInteraction = { [weak self] in self?.resetStageIdleTimer() }
         quickRow.onLikeStateChanged = { [weak self] in self?.refreshLikeButton() }
         NSLayoutConstraint.activate([
-            quickRow.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 8),
-            quickRow.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-            quickRow.topAnchor.constraint(equalTo: bar.topAnchor, constant: 3),
-            quickRow.heightAnchor.constraint(equalToConstant: MiniBarQuickRowView.rowHeight),
+            overlay.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            overlay.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            overlay.bottomAnchor.constraint(equalTo: bar.topAnchor, constant: -8),
+            overlay.heightAnchor.constraint(equalToConstant: MiniBarQuickRowView.rowHeight),
         ])
-        Breadcrumbs.log("minibar.webrow stage attached h=\(Int(MiniBarQuickRowView.expandedBarHeight))")
+        // 点浮层外立即收起（观察式点按，不消费触摸、不与台身/
+        // 舞台既有手势互斥）：落在浮层胶囊与台身之外才收。
+        let overlayOutsideTap = UITapGestureRecognizer(
+            target: self, action: #selector(stageQuickRowOutsideTapped(_:)))
+        overlayOutsideTap.cancelsTouchesInView = false
+        view.addGestureRecognizer(overlayOutsideTap)
+        Breadcrumbs.log("minibar.webrow stage overlay attached h=\(Int(MiniBarQuickRowView.expandedBarHeight))")
 
         let progressTrack = UIView()
         progressTrack.backgroundColor = UIColor.white.withAlphaComponent(0.25)
@@ -1695,14 +1677,8 @@ final class StageViewController: UIViewController {
         bar.addSubview(stageModeButton)
         refreshStageModeButton()
 
-        // 播放列表入口（3.7 (48) 落台面、(53) H 修正迁顶栏隐藏排）：
-        // 按钮本体已在顶栏装配段加入 view 并由 layoutStage 按帧
-        // 布局（见 stageHeaderViews），此处只配图标/色/动作；
-        // 图标 music.note.list 为网页 ListMusic 的 SF 等价符号。
-        queueButton.setImage(UIImage(systemName: "music.note.list", withConfiguration: sideConfig), for: .normal)
-        queueButton.tintColor = .white
-        queueButton.addTarget(self, action: #selector(queueTapped), for: .touchUpInside)
-        Breadcrumbs.log("minibar.queue stage moved=header-row")
+        // 播放列表入口已于 (60) 第 10 条整钮删除（原 (48) 落台面、
+        // (53) H 迁顶栏隐藏排）；队列面板本体保留，经面板页签进入。
 
         let seekHit = UIView()
         seekHit.backgroundColor = .clear
@@ -1780,13 +1756,13 @@ final class StageViewController: UIViewController {
         stageTrackBottomConstraint = progressTrack.bottomAnchor.constraint(
             equalTo: bar.bottomAnchor, constant: -7)
         stageTrackBottomConstraint?.isActive = true
-        // 主排纵向位置（3.7 (54) H，(55) C 顺延）：展开 122 台里
-        // 主排中心在上排（3..51）与 seek 命中带（102..122）之间，
-        // 相对台中心 +17（上排 44→48 的 +4 顺延）；收起态回 −5。
-        // 形态切换在 setStageBarForm 里统一改这组常量。
+        // 主排纵向位置（3.7 (54) H 曾 +17、(60) 第 7 条复原）：上
+        // 排迁浮层后展开台高回 70，主排中心相对台中心 −5（70 台
+        // 旧口径：主排 40 高居 y 10..50、seek 命中带 y 50..70 不
+        // 重叠）；收起态同 −5。形态切换在 setStageBarForm 收口。
         stageMainCenterY = [currentTimeLabel, totalTimeLabel,
                             playButton, prevButton, nextButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 17)
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
         }
         NSLayoutConstraint.activate(stageMainCenterY)
         // 模式钮纵向跟随主排（锚 playButton 的 centerY，随形态切换
@@ -1914,8 +1890,8 @@ final class StageViewController: UIViewController {
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
             || nextButton.frame.contains(point) { return }
-        // 上排（(54) H）长按不切主题：与按键区同口径豁免。
-        if let quickRow = stageQuickRow, quickRow.frame.contains(point) { return }
+        // 附加功能行已迁浮层（(60) 第 7 条）：浮层不在台身内，
+        // 其触摸不进本识别器，无须再豁免（旧上排豁免随之退役）。
         stageTheme = stageTheme.next
         MiniPlayerTheme.stored = stageTheme
         applyStageTheme()
@@ -1925,8 +1901,8 @@ final class StageViewController: UIViewController {
     }
 
     /// 台面点按分发（与墙同构）：收起态只展开；展开态按键
-    /// 各自处理、底部进度带按轨道实际帧跳点、其余台身无动
-    /// 作（已在详情页，不再开台）。任何点按重置无操作计时。
+    /// 各自处理、底部进度带按轨道实际帧跳点、其余台身空白
+    /// 区呼出附加功能浮层（(60) 第 7 条）。任何点按重置无操作计时。
     @objc private func stageBarTapped(_ gesture: UITapGestureRecognizer) {
         if stageBarCollapsed {
             expandStageBar()
@@ -1937,15 +1913,16 @@ final class StageViewController: UIViewController {
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
             || nextButton.frame.contains(point) { return }
-        // 上排（(54) H）：键各自处理、排内空隙不落台身分发。
-        if let quickRow = stageQuickRow, quickRow.frame.contains(point) { return }
         if let seekHit = stageSeekHit, seekHit.frame.contains(point) {
             guard let track = stageProgressTrack?.frame, track.width > 0,
                   engine.duration > 0 else { return }
             let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
             setStageProgress(Double(fraction))
             performSeek(to: Double(fraction) * engine.duration, source: "stage.bar.tap")
+            return
         }
+        // 台身空白区（(60) 第 7 条）：呼出附加功能浮层（五钮行）。
+        showStageQuickRowOverlay()
     }
 
     /// 进度拖动（与墙同构）：拖动只更填充、松手才 seek；拖
@@ -1996,6 +1973,12 @@ final class StageViewController: UIViewController {
     private func resetStageIdleTimer() {
         stageIdleWorkItem?.cancel()
         stageIdleWorkItem = nil
+        // 浮层与台闲置同钟（(60) 第 7 条）：浮层在显时，任一台面
+        // 操作（含浮层钮点按经 onUserInteraction 回到这里）同时
+        // 顺延浮层的 5 秒自动收起。
+        if stageQuickRowOverlay?.isShown == true {
+            scheduleStageQuickRowAutoHide()
+        }
         guard stageBarPresented, !stageBarCollapsed, !stageSeekDragging else { return }
         let work = DispatchWorkItem { [weak self] in
             self?.collapseStageBarIdle()
@@ -2015,6 +1998,8 @@ final class StageViewController: UIViewController {
         stageBarCollapsed = true
         stagePetStage?.barFormChanged(collapsed: true)
         cancelStageIdleTimer()
+        // 台收成细条时浮层同钟收起（(60) 第 7 条），不许悬在细条上方。
+        hideStageQuickRowOverlay(reason: "idle")
         Breadcrumbs.log("stage bar collapse idle")
         setStageBarContentsInteractive(false)
         if UIAccessibility.isReduceMotionEnabled {
@@ -2057,7 +2042,8 @@ final class StageViewController: UIViewController {
 
     private func setStageBarForm(collapsed: Bool) {
         stageBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
-        for constraint in stageMainCenterY { constraint.constant = collapsed ? -5 : 17 }
+        // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
+        for constraint in stageMainCenterY { constraint.constant = -5 }
         stageTrackBottomConstraint?.constant = collapsed ? -6 : -7
         let radius: CGFloat = collapsed ? 8 : 35
         stageBar.layer.cornerRadius = radius
@@ -2072,21 +2058,64 @@ final class StageViewController: UIViewController {
 
     private func setStageBarContentsAlpha(_ alpha: CGFloat) {
         // 圆点不淡出（收起态保留主题圆点随进度步进，同墙）。
-        // (54) H：上排整排同入淡出名单（收起细条上只留轨道）。
+        // 附加功能行已迁浮层（(60) 第 7 条），不入台形态名单：
+        // 台收起时浮层由 collapseStageBarIdle 单独收起。
         for view in [currentTimeLabel, totalTimeLabel,
                      playButton, prevButton, nextButton,
                      stageModeButton] as [UIView] {
             view.alpha = alpha
         }
-        stageQuickRow?.alpha = alpha
     }
 
     private func setStageBarContentsInteractive(_ interactive: Bool) {
         for button in [playButton, prevButton, nextButton, stageModeButton] {
             button.isUserInteractionEnabled = interactive
         }
-        // (54) H：上排以整件开关交互（收起态不许点到隐形键）。
-        stageQuickRow?.isUserInteractionEnabled = interactive
+    }
+
+    // MARK: 附加功能浮层（3.7 (60) 第 7 条，舞台宿主）
+    //
+    // 触发 = 点台身空白区（stageBarTapped 末路）；收起 = 与点播
+    // 台闲置同钟（呼出/任一操作后 5 秒，resetStageIdleTimer 顺
+    // 延）、点浮层外立即收起、台收成细条时随台收起。进出动画在
+    // MiniBarQuickRowOverlayView.setShown 内（系统弹簧 0.85、
+    // 自台顶滑入＋淡入）。宠物站位以台顶为地面，浮层零干涉。
+
+    private func showStageQuickRowOverlay() {
+        guard let overlay = stageQuickRowOverlay, !overlay.isShown else { return }
+        overlay.setShown(true)
+        Breadcrumbs.log("quickrow.overlay show host=stage")
+        scheduleStageQuickRowAutoHide()
+    }
+
+    private func hideStageQuickRowOverlay(reason: String) {
+        stageQuickRowHideWorkItem?.cancel()
+        stageQuickRowHideWorkItem = nil
+        guard let overlay = stageQuickRowOverlay, overlay.isShown else { return }
+        overlay.setShown(false)
+        Breadcrumbs.log("quickrow.overlay hide host=stage reason=\(reason)")
+    }
+
+    private func scheduleStageQuickRowAutoHide() {
+        stageQuickRowHideWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.hideStageQuickRowOverlay(reason: "idle")
+        }
+        stageQuickRowHideWorkItem = work
+        DispatchQueue.main.asyncAfter(
+            deadline: .now() + Self.stageIdleCollapseDelay, execute: work)
+    }
+
+    /// 点浮层外立即收起：观察式识别器（不消费触摸）——落点在浮
+    /// 层胶囊或点播台之内都不算「外」；舞台 5 秒长按切样式挂在
+    /// rendererContainer、台身 0.55s 长按切主题挂在台身上，本
+    /// 识别器 cancelsTouchesInView=false 且不 require 任何互斥，
+    /// 两者不被破坏。
+    @objc private func stageQuickRowOutsideTapped(_ gesture: UITapGestureRecognizer) {
+        guard let overlay = stageQuickRowOverlay, overlay.isShown else { return }
+        let point = gesture.location(in: view)
+        if overlay.frame.contains(point) || stageBar.frame.contains(point) { return }
+        hideStageQuickRowOverlay(reason: "outside-tap")
     }
 
     /// 在场边沿的形态无动画复位：收起态不跨呈现周期残留。
@@ -2131,18 +2160,9 @@ final class StageViewController: UIViewController {
         let position = positionNow()
         logStageLineIfChanged(position: position)
         renderer?.frameTick(position: position)
-        // 字幕层喂入（3.7 (55) 工作流 D）：与渲染器同一个锚点外推
-        // 位置、同一份 linesCache 行表，不自建第二套时钟。演唱会
-        // 样式（petconcert）底部提词条与字幕层同槽——提词条优先，
-        // 字幕层让位隐藏（DS 修正1；切走样式下一帧自动恢复）。
-        if activeStyleId == "petconcert" {
-            subtitleOverlay.setConcertYielded(true)
-        } else {
-            subtitleOverlay.setConcertYielded(false)
-            let currentLines = engine.currentTrack
-                .flatMap { linesCache[$0.id] } ?? []
-            subtitleOverlay.update(lines: currentLines, position: position)
-        }
+        // 宿主级字幕层已于 (60) 第 11 条整组删除：frameStep 不再
+        // 逐帧喂行。汪汪队提词条 teleBar 在 PetConcertRenderer 内
+        // 自行随帧推进、不经宿主，不在本条范围。
         // 防卡死守卫证明（3.7 (44) 建，(45) R-4 补口径）：
         // 帧条件（满 60 帧或存活满 2 秒）只置 framesOK，还须
         // 歌词首次 applied 才结算（via=frames+lyrics），覆

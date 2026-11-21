@@ -183,6 +183,10 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
     private var isActive = false
+    /// chrome 占用（3.7 (60) 第 4 条）：宿主 layoutStage 下发；
+    /// 表盘构图重心在下部，轮心按 bottom inset 的一半上移避让
+    /// 点播台浮压。变更时重建结构（逐帧路径不读本值）。
+    private var chromeInsets: UIEdgeInsets = .zero
 
     // 几何缓存（布局/调参/调色板变化时重建，逐帧不重建）。
     private var builtSize: CGSize = .zero
@@ -251,6 +255,17 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
 
     func mount(context: LyricStageContext) {
         self.context = context
+    }
+
+    /// chrome 内缩（3.7 (60) 第 4 条）：bottom inset 变化即重建
+    /// 结构让轮心上移 bottom/2；无快照时只存值，首帧重建自取。
+    func applyChromeInsets(_ insets: UIEdgeInsets) {
+        guard insets != chromeInsets else { return }
+        chromeInsets = insets
+        guard snapshot != nil else { return }
+        rebuildStructure(tuning: PendoloTuningStore.valuesCached(
+            now: CACurrentMediaTime()))
+        builtTarget = nil
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
@@ -439,7 +454,12 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
         let centerX = mirrored
             ? size.width * CGFloat(1 - tuning.wheelCenterX)
             : size.width * CGFloat(tuning.wheelCenterX)
-        hub = CGPoint(x: centerX, y: size.height * CGFloat(tuning.wheelCenterY))
+        // (60) 第 4 条：轮心上移 bottom chrome inset 的一半，
+        // 让表盘焦点避开点播台浮压区（全幅容器下 chrome 不再
+        // 靠宿主带状容器天然避让，改由本内缩口径承担）。
+        hub = CGPoint(x: centerX,
+                      y: size.height * CGFloat(tuning.wheelCenterY)
+                        - chromeInsets.bottom / 2)
         let shortSide = min(size.width, size.height)
         baseRadius = shortSide * CGFloat(tuning.arcRadius)
         ringRadius = baseRadius + shortSide * 0.06

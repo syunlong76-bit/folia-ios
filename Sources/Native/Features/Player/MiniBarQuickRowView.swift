@@ -16,27 +16,27 @@ import UIKit
 ///   星标只落本地集合＋FoliaStarChanged 通知，不冒充入歌单。
 /// - 打乱队列：QueueManager.shuffleQueue，队列不足 2 首禁用。
 ///   沿用 (54)。
-/// - 字幕 / 格子（面板）/ 命令键：本体在别的工作流，本视图
-///   只发信号——点按 post .foliaMiniBarSubtitle /
-///   .foliaMiniBarPanel / .foliaMiniBarCommand（名称定死，
-///   宿主工作流按此订阅），并落同词根面包屑。
+/// - 格子（面板）/ 命令键：本体在别的工作流，本视图只发信
+///   号——点按 post .foliaMiniBarPanel / .foliaMiniBarCommand
+///   （名称定死，宿主工作流按此订阅），并落同词根面包屑。
+///   字幕钮已于 (60) 第 11 条整组删除（字幕层/面板/store 一
+///   并退役，.foliaMiniBarSubtitle 通知随之作废）。
 ///
 /// 退出顶排（(55) C 定案，不许再放回本排）：播放模式（队列
 /// 面板与设置里已有四档切换）、睡眠定时（改走命令面板/面
 /// 板控制页签）、设置（侧栏设置行与面板承接）。
 ///
-/// 每钮图标＋小字标签双通道（标签 喜欢/星标/打乱/字幕/
-/// 面板/命令，10pt），根治 (54) 真机点名的「打乱与模式随机
-/// 档图标几乎一样、又无文字」。六钮等宽平分整排，任一屏宽
-/// 下单钮命中宽 ≥40pt（核算见 (55) C 报告自查节）。按下态
-/// 反馈：configurationUpdateHandler 给高亮态加白 14% 圆角
-/// 底＋0.92 缩放（系统式即时反馈，不用罩体染色）。
+/// 每钮图标＋小字标签双通道（标签 喜欢/星标/打乱/面板/
+/// 命令，10pt），根治 (54) 真机点名的「打乱与模式随机档图
+/// 标几乎一样、又无文字」。五钮等宽平分整排，任一屏宽下单
+/// 钮命中宽 ≥40pt。按下态反馈：configurationUpdateHandler
+/// 给高亮态加白 14% 圆角底＋0.92 缩放（系统式即时反馈，不
+/// 用罩体染色）。
 ///
 /// 展开高度单一出处：rowHeight / expandedBarHeight 两常量
-/// 为宿主应读的唯一真源——宿主现写死台高 118、上排高 44
-/// （清单见 (55) C 报告），改读常量后上排 44→48、台高
-/// 118→122 自动跟随；本视图内部不依赖宿主给的高度数字，
-/// 钮高由宿主约束撑满本排。
+/// 为宿主应读的唯一真源。(60) 第 7 条起本排迁出点播台本
+/// 体、改住透明浮层（MiniBarQuickRowOverlayView），台高回
+/// 落为不含上排的 70；rowHeight 仍是浮层胶囊内本排的高度。
 ///
 /// 宿主接线：onUserInteraction（任一键点按先回调，宿主据此
 /// 重置 5 秒无操作计时，与台面其他操作同口径续命）；
@@ -56,11 +56,11 @@ final class MiniBarQuickRowView: UIView {
     /// 本排的 heightAnchor 应改读本值（现写死 44）。
     static let rowHeight: CGFloat = 48
 
-    /// 展开态点播台总高（唯一出处）：旧 118 ＝ 顶距 3 ＋
-    /// 上排 44 ＋ 主排/seek 区 71；上排 44→48 后 ＝ 3 ＋
-    /// 48 ＋ 71 ＝ 122。宿主写死的 118 应改读本值，主排中
-    /// 心/seek 带等相对量由宿主按 +4 复核顺延。
-    static let expandedBarHeight: CGFloat = 122
+    /// 展开态点播台总高（唯一出处）：(60) 第 7 条起上排迁出
+    /// 台本体住透明浮层，台高恢复为不含上排的 70（＝ (54) 前
+    /// 的主排/seek 区口径）。宿主读本常量处自动跟随；主排
+    /// centerY 等相对量由宿主按 70 台口径复核（展开 −5）。
+    static let expandedBarHeight: CGFloat = 70
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?
@@ -72,7 +72,6 @@ final class MiniBarQuickRowView: UIView {
     private let likeButton = UIButton(type: .system)
     private let starButton = UIButton(type: .system)
     private let shuffleButton = UIButton(type: .system)
-    private let subtitleButton = UIButton(type: .system)
     private let panelButton = UIButton(type: .system)
     private let commandButton = UIButton(type: .system)
 
@@ -102,9 +101,6 @@ final class MiniBarQuickRowView: UIView {
         configure(shuffleButton, symbol: "shuffle", pointSize: 16,
                   title: "打乱", accessibility: "打乱队列",
                   action: #selector(shuffleTapped))
-        configure(subtitleButton, symbol: "captions.bubble", pointSize: 16,
-                  title: "字幕", accessibility: "字幕",
-                  action: #selector(subtitleTapped))
         configure(panelButton, symbol: "square.grid.2x2", pointSize: 16,
                   title: "面板", accessibility: "面板",
                   action: #selector(panelTapped))
@@ -112,11 +108,11 @@ final class MiniBarQuickRowView: UIView {
                   title: "命令", accessibility: "命令",
                   action: #selector(commandTapped))
 
-        // 六钮等宽平分整排：链式等宽＋首尾贴边，钮高撑满
-        // 本排。等宽保证任一台宽下每钮命中宽一致（自查核
-        // 算：最窄台宽 353pt 时单钮 ≈58.8pt）。
+        // 五钮等宽平分整排：链式等宽＋首尾贴边，钮高撑满
+        // 本排。等宽保证任一台宽下每钮命中宽一致（最窄台
+        // 宽 353pt 时单钮 ≈70pt）。
         let buttons = [likeButton, starButton, shuffleButton,
-                       subtitleButton, panelButton, commandButton]
+                       panelButton, commandButton]
         for (index, button) in buttons.enumerated() {
             button.translatesAutoresizingMaskIntoConstraints = false
             addSubview(button)
@@ -286,14 +282,6 @@ final class MiniBarQuickRowView: UIView {
         QueueManager.shared.shuffleQueue()
     }
 
-    /// 字幕本体未在本文件域：只发定名信号，宿主工作流订阅
-    /// .foliaMiniBarSubtitle 后呈现字幕调节面。
-    @objc private func subtitleTapped() {
-        onUserInteraction?()
-        Breadcrumbs.log("minibar.webrow subtitle")
-        NotificationCenter.default.post(name: .foliaMiniBarSubtitle, object: self)
-    }
-
     /// 格子（面板）本体未在本文件域：只发定名信号，宿主工
     /// 作流订阅 .foliaMiniBarPanel 后呈现面板。
     @objc private func panelTapped() {
@@ -313,14 +301,113 @@ final class MiniBarQuickRowView: UIView {
 }
 
 extension Notification.Name {
-    /// 点播台顶排字幕钮信号（3.7 (55) C 定名）：MiniBarQuickRowView
-    /// 点按发出（object = 发出信号的 quick row），宿主订阅后
-    /// 呈现字幕调节面。
-    static let foliaMiniBarSubtitle = Notification.Name("FoliaMiniBarSubtitle")
+    // 点播台顶排字幕钮信号 .foliaMiniBarSubtitle 已于 (60) 第
+    // 11 条随字幕钮整组删除，三处宿主订阅一并摘除。
     /// 点播台顶排格子（面板）钮信号（3.7 (55) C 定名）：同上，
     /// 宿主订阅后呈现面板。
     static let foliaMiniBarPanel = Notification.Name("FoliaMiniBarPanel")
     /// 点播台顶排命令键信号（3.7 (55) C 定名）：同上，宿主订
     /// 阅后呈现命令面板。
     static let foliaMiniBarCommand = Notification.Name("FoliaMiniBarCommand")
+}
+
+/// 点播台附加功能透明浮层（3.7 (60) 第 7 条）：承载从三处点播
+/// 台本体迁出的五钮行（喜欢/星标/打乱/面板/命令）。容器本身
+/// clear 透明，只有胶囊本体一块毛玻璃；挂在宿主 VC 的 view
+/// 上、z 序在点播台之上，底边锚点播台顶边上方 8pt、横向与台
+/// 同宽（宿主约束）。触摸纪律：bounds 内只有胶囊算命中（胶囊
+/// 外穿透回下层），收起态整体不接手势。显隐动画由本类收口：
+/// 系统弹簧（damping 0.85）自台顶方向滑入＋淡入、收起反之；
+/// 触发/闲置自动收起/点外收起的时机由宿主掌握（与点播台 5 秒
+/// 闲置同钟），宿主在 show/hide 落点打 quickrow.overlay 面包屑。
+final class MiniBarQuickRowOverlayView: UIView {
+
+    /// 五钮行本体（宿主接 onUserInteraction 等回调的唯一对象）。
+    let quickRow = MiniBarQuickRowView()
+    private let capsule = UIVisualEffectView(
+        effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private(set) var isShown = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        capsule.layer.cornerRadius = MiniBarQuickRowView.rowHeight / 2
+        capsule.layer.borderWidth = 1
+        capsule.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        capsule.clipsToBounds = true
+        capsule.isUserInteractionEnabled = false
+        capsule.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(capsule)
+        quickRow.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(quickRow)
+        NSLayoutConstraint.activate([
+            capsule.leadingAnchor.constraint(equalTo: leadingAnchor),
+            capsule.trailingAnchor.constraint(equalTo: trailingAnchor),
+            capsule.topAnchor.constraint(equalTo: topAnchor),
+            capsule.bottomAnchor.constraint(equalTo: bottomAnchor),
+            quickRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            quickRow.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            quickRow.topAnchor.constraint(equalTo: topAnchor),
+            quickRow.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+        // 初始收起态：隐藏、不接手势、停在滑入起点位形。
+        alpha = 0
+        isHidden = true
+        isUserInteractionEnabled = false
+        transform = CGAffineTransform(translationX: 0, y: 10)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    /// 只认胶囊：胶囊外（含容器其余透明区）一律穿透；收起态不命中。
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard isShown, capsule.frame.contains(point) else { return nil }
+        return super.hitTest(point, with: event)
+    }
+
+    /// 显隐切换（系统弹簧 damping 0.85）：呼出 = 自台顶上方滑
+    /// 入＋淡入；收起 = 反向滑出＋淡出，落定后置 hidden。重复
+    /// 同态调用为空操作。
+    func setShown(_ shown: Bool, animated: Bool = true) {
+        guard shown != isShown else { return }
+        isShown = shown
+        if shown {
+            isHidden = false
+            isUserInteractionEnabled = true
+            if animated {
+                alpha = 0
+                transform = CGAffineTransform(translationX: 0, y: 10)
+                UIView.animate(withDuration: 0.45, delay: 0,
+                               usingSpringWithDamping: 0.85,
+                               initialSpringVelocity: 0,
+                               options: [.beginFromCurrentState,
+                                         .allowUserInteraction]) {
+                    self.alpha = 1
+                    self.transform = .identity
+                }
+            } else {
+                alpha = 1
+                transform = .identity
+            }
+        } else {
+            isUserInteractionEnabled = false
+            if animated {
+                UIView.animate(withDuration: 0.3, delay: 0,
+                               usingSpringWithDamping: 0.85,
+                               initialSpringVelocity: 0,
+                               options: [.beginFromCurrentState,
+                                         .allowUserInteraction]) {
+                    self.alpha = 0
+                    self.transform = CGAffineTransform(translationX: 0, y: 10)
+                } completion: { _ in
+                    if !self.isShown { self.isHidden = true }
+                }
+            } else {
+                alpha = 0
+                transform = CGAffineTransform(translationX: 0, y: 10)
+                isHidden = true
+            }
+        }
+    }
 }
