@@ -492,7 +492,10 @@ final class GlowWordView: UIView {
         let emphasisOn = StageEffectSettings.wordEmphasisEnabled
         let headroom: CGFloat = emphasisOn
             ? ((unit.end - unit.start) >= 1.0 ? 1.9 : 1.38) : 1.1
+        // (62) WB §4.4：全局歌词画布分辨率档位叠加本词超采
+        // 样推导（上限仍受下方 3/4 封顶约束，逐样式上限优先）。
         let rawScale = pose.scale * 1.4 * headroom * (emphasisOn ? 1.03 : 1)
+            * LyricCanvas62.globalScale
         self.renderScale = rawScale <= 1.05
             ? 1 : min(emphasisOn ? 4 : 3, ceil(rawScale * 4) / 4)
         super.init(frame: .zero)

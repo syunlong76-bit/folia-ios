@@ -475,6 +475,21 @@ final class WallPrototypeViewController: UIViewController,
         presentMiniBarPanel(PlaybackPanelViewController(initialTab: .cover), kind: "panel")
     }
 
+    // (62) WB §4.8：海报墙 S 键打开命令窗口（外接键盘
+    // UIKeyCommand，开关 posterWallSHotkeyEnabled 门控）。
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? {
+        guard SettingsStore.posterWallSHotkeyEnabled else { return nil }
+        return [UIKeyCommand(title: "命令面板", action: #selector(wb62OpenCommandPalette),
+                             input: "s", modifierFlags: [])]
+    }
+
+    @objc private func wb62OpenCommandPalette() {
+        Breadcrumbs.log("shortcuts62.sKey host=wallproto")
+        miniBarPanelCommand()
+    }
+
     @objc private func miniBarPanelCommand() {
         presentMiniBarPanel(CommandPaletteViewController(), kind: "command")
     }
@@ -1191,7 +1206,7 @@ final class WallPrototypeViewController: UIViewController,
         }
         bar.layer.removeAllAnimations()
         if visible {
-            if UIAccessibility.isReduceMotionEnabled {
+            if FoliaMotion62.reduced(.microEffects) {
                 miniBlurView?.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
                 bar.transform = .identity
                 bar.isHidden = false
@@ -1221,11 +1236,11 @@ final class WallPrototypeViewController: UIViewController,
                 self.miniCover.alpha = 1
             }
         } else {
-            let duration = UIAccessibility.isReduceMotionEnabled ? 0.2 : 0.28
+            let duration = FoliaMotion62.reduced(.microEffects) ? 0.2 : 0.28
             UIView.animate(withDuration: duration, delay: 0,
                            options: [.curveEaseIn, .beginFromCurrentState], animations: {
                 bar.alpha = 0
-                if !UIAccessibility.isReduceMotionEnabled {
+                if !FoliaMotion62.reduced(.microEffects) {
                     bar.transform = CGAffineTransform(translationX: 0, y: 8)
                 }
             }, completion: { [weak self] _ in
@@ -1286,7 +1301,7 @@ final class WallPrototypeViewController: UIViewController,
         hideMiniQuickRowOverlay(reason: "idle")
         Breadcrumbs.log("minibar collapse idle")
         setMiniBarContentsInteractive(false)
-        if UIAccessibility.isReduceMotionEnabled {
+        if FoliaMotion62.reduced(.microEffects) {
             setMiniBarForm(collapsed: true)
             UIView.animate(withDuration: 0.2) { self.setMiniBarContentsAlpha(0) }
             return
@@ -1310,7 +1325,7 @@ final class WallPrototypeViewController: UIViewController,
         miniPetStage?.barFormChanged(collapsed: false)
         Breadcrumbs.log("minibar expand")
         setMiniBarContentsInteractive(true)
-        if UIAccessibility.isReduceMotionEnabled {
+        if FoliaMotion62.reduced(.microEffects) {
             setMiniBarForm(collapsed: false)
             UIView.animate(withDuration: 0.2) { self.setMiniBarContentsAlpha(1) }
         } else {
@@ -1503,7 +1518,7 @@ final class WallPrototypeViewController: UIViewController,
     /// 造 morph（(13) 已否伪 morph 与播放页动画打架）。
     private func emphasizeLocateLanding() {
         Breadcrumbs.log("locate land settle begin")
-        guard !UIAccessibility.isReduceMotionEnabled else {
+        guard !FoliaMotion62.reduced(.queueCollage) else {
             collectionView.transform = .identity
             Breadcrumbs.log("locate land settle end reduced=1")
             return
@@ -1765,7 +1780,7 @@ final class WallPrototypeViewController: UIViewController,
         // 缩放同支弹簧（P6）：飞行中段轻微放大（钟形，峰值
         // 1.03、由同一弹簧进度驱动），落点回到 1.0——位置
         // 与缩放同曲线插值，无分段跳变；Reduce Motion 不缩放。
-        if UIAccessibility.isReduceMotionEnabled {
+        if FoliaMotion62.reduced(.queueCollage) {
             collectionView.transform = .identity
         } else {
             let bell = CGFloat(eased * (1 - eased) * 4)
@@ -1876,7 +1891,7 @@ final class WallPrototypeViewController: UIViewController,
         // .crossDissolve）+ 轻微缩放弹簧落位；完成复位
         // transform，不留残留缩放。Reduce Motion 直接落位。
         Breadcrumbs.log("transition poster settle begin playlist=\(playlistId)")
-        if UIAccessibility.isReduceMotionEnabled {
+        if FoliaMotion62.reduced(.playlistExpand) {
             collectionView.transform = .identity
             Breadcrumbs.log("transition poster settle end reduced=1")
         } else {
@@ -1922,7 +1937,7 @@ final class WallPrototypeViewController: UIViewController,
     /// 不碰关闭语义。Reduce Motion 时不缩放（guard 直接返回，
     /// ended 仍复位防残留）。
     @objc private func closePressBegan() {
-        guard !UIAccessibility.isReduceMotionEnabled,
+        guard !FoliaMotion62.reduced(.microEffects),
               let chrome = closeChromeView else { return }
         UIView.animate(withDuration: 0.18, delay: 0,
                        usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
@@ -2876,7 +2891,7 @@ final class WallPrototypeViewController: UIViewController,
         // 只换 expandedRects、实例序列不变）。
         let identityChanged = wallLayout.refreshInstances()
         guard let hero = heroSnapshot, let sourceFrame,
-              !UIAccessibility.isReduceMotionEnabled else {
+              !FoliaMotion62.reduced(.queueCollage) else {
             if !identityChanged {
                 let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
                     self.wallLayout.invalidateLayout()

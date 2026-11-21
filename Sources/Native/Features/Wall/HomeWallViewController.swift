@@ -438,6 +438,8 @@ final class HomeWallViewController: UIViewController,
         // 记簿宿主之上（见 installSeamChrome），速记簿把手热
         // 区下移 ≥115 与本条纵向错位。接线见文件尾。
         installSeamChrome()
+        // (62) WB 钩子总装（动态背景门控/左滑/长按工具条/思索钮）。
+        WB62HomeWallHooks.install(in: self)
 
         loadEntries()
     }
@@ -447,12 +449,27 @@ final class HomeWallViewController: UIViewController,
         dismiss(animated: true)
     }
 
+    // (62) WB §4.8：海报墙 S 键打开命令窗口（外接键盘
+    // UIKeyCommand，开关 posterWallSHotkeyEnabled 门控）。
+    override var canBecomeFirstResponder: Bool { true }
+
+    override var keyCommands: [UIKeyCommand]? {
+        guard SettingsStore.posterWallSHotkeyEnabled else { return nil }
+        return [UIKeyCommand(title: "命令面板", action: #selector(wb62OpenCommandPalette),
+                             input: "s", modifierFlags: [])]
+    }
+
+    @objc private func wb62OpenCommandPalette() {
+        Breadcrumbs.log("shortcuts62.sKey host=homewall")
+        miniBarPanelCommand()
+    }
+
     /// 关闭键按压反馈（3.7 (53) L 组）：按下缩 0.86 + 压暗，
     /// 松手系统弹簧回弹；只动 chrome 容器的 transform/alpha，
     /// 不碰关闭语义。Reduce Motion 时不缩放（guard 直接返回，
     /// ended 仍复位防残留）。
     @objc private func closePressBegan() {
-        guard !UIAccessibility.isReduceMotionEnabled,
+        guard !FoliaMotion62.reduced(.microEffects),
               let chrome = rootCloseButton else { return }
         UIView.animate(withDuration: 0.18, delay: 0,
                        usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
@@ -520,6 +537,8 @@ final class HomeWallViewController: UIViewController,
         refreshHomeTrackPill62()
         Breadcrumbs.log("wall.appear kind=home")
         Breadcrumbs.log("home appear")
+        // (62) WB §4.8：S 键命令需本墙在响应链上（外接键盘场景）。
+        becomeFirstResponder()
         Breadcrumbs.samplerStart()
         progressDriver.start()
         miniThemeLayer?.setHostVisible(true)
@@ -541,6 +560,8 @@ final class HomeWallViewController: UIViewController,
             // 担，本处不叠第二支缩放动画，只落面包屑供真机
             // 对账「播完→主页」衔接是否连续。
             Breadcrumbs.log("transition entry->home appear source=intro-finish")
+            // (62) WB §4.7：启动后直达播放界面（入场退场落点消费）。
+            WB62HomeWallHooks.entryDidFinish(in: self)
         } else if !didPlayEntryIntro {
             // present 受理才置位：资源缺失/呈现中被拒时不烧掉
             // 本实例唯一的一次，留待下次露面重试，不漏播真入口。
@@ -911,7 +932,7 @@ final class HomeWallViewController: UIViewController,
                                        heroFrame: CGRect? = nil) {
         Breadcrumbs.log("transition home->poster begin source=\(source) playlist=\(playlistId)")
         posterReturnSettlePending = true
-        guard !UIAccessibility.isReduceMotionEnabled else { return }
+        guard !FoliaMotion62.reduced(.playlistExpand) else { return }
         // 共享元素式转场（(60) 第 3 条③）：有被点海报帧为源时，
         // 快照从现帧弹簧放大向全屏中心生长、与 present 的
         // crossDissolve 同段衔接（crossDissolve 降为兜底：无源
@@ -969,7 +990,7 @@ final class HomeWallViewController: UIViewController,
     /// 叠乘。完成复位 transform。
     private func beginHomeWallReturnSettle(source: String) {
         Breadcrumbs.log("transition home settle begin source=\(source)")
-        if UIAccessibility.isReduceMotionEnabled {
+        if FoliaMotion62.reduced(.playlistExpand) {
             collectionView.transform = .identity
             Breadcrumbs.log("transition home settle end source=\(source) reduced=1")
             return
@@ -1758,7 +1779,7 @@ final class HomeWallViewController: UIViewController,
         }
         bar.layer.removeAllAnimations()
         if visible {
-            if UIAccessibility.isReduceMotionEnabled {
+            if FoliaMotion62.reduced(.microEffects) {
                 miniBlurView?.effect = UIBlurEffect(style: .systemUltraThinMaterialDark)
                 bar.transform = .identity
                 bar.isHidden = false
@@ -1788,11 +1809,11 @@ final class HomeWallViewController: UIViewController,
                 self.miniCover.alpha = 1
             }
         } else {
-            let duration = UIAccessibility.isReduceMotionEnabled ? 0.2 : 0.28
+            let duration = FoliaMotion62.reduced(.microEffects) ? 0.2 : 0.28
             UIView.animate(withDuration: duration, delay: 0,
                            options: [.curveEaseIn, .beginFromCurrentState], animations: {
                 bar.alpha = 0
-                if !UIAccessibility.isReduceMotionEnabled {
+                if !FoliaMotion62.reduced(.microEffects) {
                     bar.transform = CGAffineTransform(translationX: 0, y: 8)
                 }
             }, completion: { [weak self] _ in
@@ -1853,7 +1874,7 @@ final class HomeWallViewController: UIViewController,
         hideMiniQuickRowOverlay(reason: "idle")
         Breadcrumbs.log("minibar collapse idle")
         setMiniBarContentsInteractive(false)
-        if UIAccessibility.isReduceMotionEnabled {
+        if FoliaMotion62.reduced(.microEffects) {
             setMiniBarForm(collapsed: true)
             UIView.animate(withDuration: 0.2) { self.setMiniBarContentsAlpha(0) }
             return
@@ -1877,7 +1898,7 @@ final class HomeWallViewController: UIViewController,
         miniPetStage?.barFormChanged(collapsed: false)
         Breadcrumbs.log("minibar expand")
         setMiniBarContentsInteractive(true)
-        if UIAccessibility.isReduceMotionEnabled {
+        if FoliaMotion62.reduced(.microEffects) {
             setMiniBarForm(collapsed: false)
             UIView.animate(withDuration: 0.2) { self.setMiniBarContentsAlpha(1) }
         } else {

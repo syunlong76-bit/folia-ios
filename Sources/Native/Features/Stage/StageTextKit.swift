@@ -268,6 +268,10 @@ enum StageTextKit {
             space: CGColorSpaceCreateDeviceRGB(),
             bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
         else { return nil }
+        // (62) WB §4.4：歌词画布抗锯齿全局键统一消费点（全
+        // 渲染器共用栅格入口）；逐样式 antialias 自带口径的
+        // 调用点不经此面时以其值为准（行 hint 已标注优先序）。
+        LyricCanvas62.applyAntialias(to: cg)
         cg.scaleBy(x: scale, y: scale)
         cg.translateBy(x: 0, y: size.height)
         cg.scaleBy(x: 1, y: -1)

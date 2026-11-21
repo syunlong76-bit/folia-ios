@@ -293,6 +293,13 @@ final class QueueManager: ObservableObject {
     private init() {
         engine.onTrackEnded = { [weak self] in
             guard let self else { return }
+            // (62) WB：智能过渡进行中时旧曲完播通知不推进——
+            // 收口走 engine.onCrossfadeCompleted 的静默 adopt，
+            // 此处推进会与之双开并把新曲重头装载。
+            if self.engine.isCrossfading {
+                Breadcrumbs.log("crossfade62 queue end-ignored during-fade")
+                return
+            }
             if self.playMode == .repeatOne {
                 // 单曲循环：回开头续播同一首（地址不重换，条目仍在引擎里）。
                 self.engine.seek(to: 0)
@@ -313,6 +320,24 @@ final class QueueManager: ObservableObject {
         }
         engine.onTrackFailed = { [weak self] error in
             self?.handleFailure(error)
+        }
+        // (62) WB §4.5：智能过渡完成——引擎已切到新曲，本侧
+        // 只静默推进下标与快照，不重走 load（防双起播）。
+        engine.onCrossfadeCompleted = { [weak self] track in
+            guard let self else { return }
+            self.runOnMain {
+                guard let index = self.queue.firstIndex(where: { $0.id == track.id })
+                else { return }
+                self.currentIndex = index
+                self.consecutiveFailures = 0
+                self.lastError = nil
+                self.updateCommandAvailability()
+                self.persistQueueSnapshot()
+                DatabaseManager.shared.upsertTrack(track)
+                PlayHistoryStore.shared.recordPlay(track)
+                Breadcrumbs.log("crossfade62 queue adopted index=\(index) track=\(track.id)")
+                self.prepareNextCrossfadeIfEnabled()
+            }
         }
         NowPlayingController.shared.onNextTrack = { [weak self] in
             self?.playNext(manual: true)
@@ -617,6 +642,40 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    // MARK: - (62) WB：智能过渡的队列侧配合
+
+    /// 按播放模式预判下一首（loopAll 取模下一首；off 未到末
+    /// 尾取下一首；repeatOne/shuffle 不可预判返回 nil——单曲
+    /// 循环无切歌、随机序在完播时刻才定）。
+    func peekNextTrackForCrossfade() -> FoliaTrack? {
+        guard queue.count > 1 else { return nil }
+        switch playMode {
+        case .loopAll:
+            return queue[(currentIndex + 1) % queue.count]
+        case .off:
+            return currentIndex + 1 < queue.count ? queue[currentIndex + 1] : nil
+        case .repeatOne, .shuffle:
+            return nil
+        }
+    }
+
+    /// 解析下一首地址并交引擎预载到 B 轨（开关关/无下一首/
+    /// 解析失败均静默放弃，完播链硬切兜底）。
+    func prepareNextCrossfadeIfEnabled() {
+        guard SettingsStore.smartTransitionEnabled,
+              let next = peekNextTrackForCrossfade() else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let url = try? await self.resolvePlayableURL(for: next) else {
+                Breadcrumbs.log("crossfade62 queue preload-resolve-failed track=\(next.id)")
+                return
+            }
+            await MainActor.run {
+                _ = self.engine.prepareCrossfade(track: next, playableURL: url)
+            }
+        }
+    }
+
     func playNext(manual: Bool) {
         runOnMain { [weak self] in
             guard let self, !self.queue.isEmpty else { return }
@@ -754,6 +813,8 @@ final class QueueManager: ObservableObject {
                     PlayHistoryStore.shared.recordPlay(track)
                     // 封面不阻塞起播：先以 nil 起播，封面到后再补。
                     self.engine.load(track: track, playableURL: playableURL, artwork: nil)
+                    // (62) WB §4.5：装载成功后为智能过渡预载下一首。
+                    self.prepareNextCrossfadeIfEnabled()
                     // 取流耗时埋点（DS26）：与失败分类成对，判冷热节点与缓存命中。
                     let resolveMs = Int(Date().timeIntervalSince(resolveStart) * 1000)
                     FoliaBridgeLogStore.shared.write(
