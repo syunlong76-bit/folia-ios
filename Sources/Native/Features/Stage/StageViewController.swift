@@ -758,12 +758,19 @@ final class StageViewController: UIViewController {
         let barHeight: CGFloat = stageBarCollapsed ? 16
             : MiniBarQuickRowView.expandedBarHeight
         let controlsTop = bounds.height - safe.bottom - 10 - barHeight
-        // 演唱会横屏全屏（3.7 (55) 工作流 B 定案、协调者集成）：
-        // petconcert 横屏时容器吃满整屏（渲染器内部全层 = bounds、
-        // 无 aspect-fit），否则横屏容器被 controlsTop 限高成屏高
-        // 约 40% 的中间一条、上下露封面底。竖屏与其余样式保持
-        // 现行推导，零回归。全屏后把 chrome 提到容器之上防被盖。
-        if activeStyleId == "petconcert" && bounds.width > bounds.height {
+        // 演唱会全屏（3.7 (55) 工作流 B 横屏定案 + (57) 工作流 E
+        // 竖屏补全）：petconcert 横竖屏都吃满整屏（渲染器内部全
+        // 层 = bounds、无 aspect-fit）。(55) 横屏补丁只限横屏，
+        // 竖屏仍走旧公式被 controlsTop 限高成中间一条——真机截
+        // 图上方露宿主封面约 15%、下方脚灯行以下露暗带与进度
+        // 条。舞台是整屏接管面：chrome（顶栏/提示条/点播台/
+        // 字幕层）浮于容器之上，bringSubviewToFront 两朝向同
+        // 路（字幕层对 petconcert 恒让位隐藏，见 frameStep）。
+        // 其余样式仍走下方 else 旧公式，一行未动、零回归。
+        // 面包屑 concert.hostframe 的 cover = 容器面积/窗口面积
+        // （PetConcertRenderer.performLayout 口径，只读核实）：
+        // 容器 = 窗口 bounds 后横竖屏恒 1.000。
+        if activeStyleId == "petconcert" {
             rendererContainer.frame = bounds
             renderer?.view.frame = rendererContainer.bounds
             for chrome in [closeButton, likeButton, queueButton,

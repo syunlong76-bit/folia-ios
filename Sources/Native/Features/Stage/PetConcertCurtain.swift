@@ -103,39 +103,84 @@ final class PetConcertBackdropView: UIView {
             UIBezierPath(ovalIn: CGRect(x: x - r, y: y - r,
                                         width: r * 2, height: r * 2)).fill()
         }
-        // 木地板（(54) Q）：地平线 floorTopY 向后收分、向前满
-        // 屏延伸。9 带横板（y 边按 (i/9)^1.35 透视收分，越靠
-        // 前带越宽）+ 自灭点 (w/2, y0) 放射的纵向板缝 + 每带
-        // 错位短横缝，拼出木板纵深；整幅 0…w × y0…h 无露底。
-        // 横屏地板（(54) U）：地平线按 L 表（300/1080=0.278），
-        // 板带仍 9 带 ^1.35 收分——横屏高矮，带高自动变浅，
-        // 成宽而浅的透视；纵缝灭点/错位缝算法不变、全幅无露底。
+        // 木地板（(57) E 重画，同源几何）：全部线条只从
+        // ConcertPlan.floor* 推导（其唯一输入是 slotCellRect
+        // 与既有常数，见 PetConcertPlan 地板同源几何段）——
+        // 旧画法 9 带 pow1.35 边与格位行界最大差 275 参考 px、
+        // 6 条任意分数（0.06…0.94）放射缝与列界零关系、地板
+        // 全宽矩形无梯形收分，(55) 真机呈蛛网扇形，一并退役。
+        //  - 横线 = floorBandEdges：队形区与格位行界逐条重
+        //    合，apron 区按格位行高等差步长延续（越往后越
+        //    密 = 透视压缩），独唱脚圈/脚灯所在的前台同表。
+        //  - 板缝 = 消失点 (refW/2, floorTopY)（地平线中点）
+        //    → 地板前沿等分点 floorFrontColumnX 的直线，穿
+        //    过格位列界在队形前沿线上的锚点；apron 同线延
+        //    续、不另起参数。
+        //  - 地板面 = 梯形（后沿幕布开口外侧界 @ 地平线 →
+        //    前沿最外侧板缝点 @ refH）；带面逐带按梯形宽拼
+        //    四边形、板缝经 ctx 裁剪于梯形内。梯形自地平线
+        //    起恒宽于幕布有效开口（后沿已减摆动极值、前沿
+        //    外扩出屏），侧幕之下无露底；横屏同口径（L 表）。
         let y0 = (land ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY) * sy, y1 = h
-        var edges: [CGFloat] = []
-        for i in 0...9 {
-            edges.append(y0 + (y1 - y0) * pow(CGFloat(i) / 9, 1.35))
-        }
-        for i in 0..<9 {
+        let cols = land ? PetConcertConst.gridColsL : PetConcertConst.gridCols
+        let edgesRef = ConcertPlan.floorBandEdges(landscape: land)
+        let edges = edgesRef.map { $0 * sy }
+        // 梯形轮廓（视图坐标，后沿两角 → 前沿两角）。
+        let horizonRef = land ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY
+        let frontRef = land ? PetConcertConst.refHL : PetConcertConst.refH
+        let trapBack = ConcertPlan.floorTrapezoidX(atY: horizonRef, landscape: land)
+        let trapFront = ConcertPlan.floorTrapezoidX(atY: frontRef, landscape: land)
+        let trapPath = UIBezierPath()
+        trapPath.move(to: CGPoint(x: trapBack.left * sx, y: y0))
+        trapPath.addLine(to: CGPoint(x: trapBack.right * sx, y: y0))
+        trapPath.addLine(to: CGPoint(x: trapFront.right * sx, y: y1))
+        trapPath.addLine(to: CGPoint(x: trapFront.left * sx, y: y1))
+        trapPath.close()
+        for i in 0..<(edges.count - 1) {
+            let topRef = edgesRef[i], botRef = edgesRef[i + 1]
+            let (l0, r0) = ConcertPlan.floorTrapezoidX(atY: topRef, landscape: land)
+            let (l1, r1) = ConcertPlan.floorTrapezoidX(atY: botRef, landscape: land)
+            // 带面：梯形内四边形（左右边随 y 收分）。
+            let band = UIBezierPath()
+            band.move(to: CGPoint(x: l0 * sx, y: edges[i]))
+            band.addLine(to: CGPoint(x: r0 * sx, y: edges[i]))
+            band.addLine(to: CGPoint(x: r1 * sx, y: edges[i + 1]))
+            band.addLine(to: CGPoint(x: l1 * sx, y: edges[i + 1]))
+            band.close()
             (i % 2 == 0 ? PetConcertPalette.woodA
                 : PetConcertPalette.woodB).setFill()
-            UIBezierPath(rect: CGRect(x: 0, y: edges[i], width: w,
-                                      height: edges[i + 1] - edges[i])).fill()
+            band.fill()
+            // 横线（带上边）：只画梯形宽内，与格位行界重合。
             PetConcertPalette.woodLine.setFill()
-            UIBezierPath(rect: CGRect(x: 0, y: edges[i], width: w,
+            UIBezierPath(rect: CGRect(x: l0 * sx, y: edges[i],
+                                      width: (r0 - l0) * sx,
                                       height: max(1, 3 * sy))).fill()
-            // 带内错位短横缝（板长错落，种子固定不闪烁）。
-            let seamY = (edges[i] + edges[i + 1]) / 2
-            let seamX = w * (i % 2 == 0 ? 0.30 : 0.68)
-            UIBezierPath(rect: CGRect(x: seamX, y: edges[i], width: max(1, 3 * sx),
-                                      height: seamY - edges[i])).fill()
+            // 带内错位短缝（板长错落）：沿本带所选板缝自带顶
+            // 走到带中点——短缝本身就是板缝线段，不自备坐标。
+            let k = (i * 3 + 1) % (cols + 1)
+            let joint = UIBezierPath()
+            joint.move(to: CGPoint(
+                x: ConcertPlan.floorSeamX(k, atY: topRef, landscape: land) * sx,
+                y: edges[i]))
+            joint.addLine(to: CGPoint(
+                x: ConcertPlan.floorSeamX(k, atY: (topRef + botRef) / 2,
+                                           landscape: land) * sx,
+                y: (edges[i] + edges[i + 1]) / 2))
+            PetConcertPalette.woodLine.setStroke()
+            joint.lineWidth = max(1, 3 * sx)
+            joint.stroke()
         }
-        // 纵向板缝：自灭点放射到地板前缘（透视收分）。
+        // 纵向板缝：消失点 → 前沿等分点，全程裁剪在梯形内。
         ctx.saveGState()
+        ctx.addPath(trapPath.cgPath)
+        ctx.clip()
         PetConcertPalette.woodLine.setStroke()
         let seams = UIBezierPath()
-        for f in [CGFloat(0.06), 0.22, 0.38, 0.62, 0.78, 0.94] {
-            seams.move(to: CGPoint(x: w / 2, y: y0))
-            seams.addLine(to: CGPoint(x: w * f, y: y1))
+        let vanishX = (land ? PetConcertConst.refWL : PetConcertConst.refW) / 2 * sx
+        for k in 0...cols {
+            seams.move(to: CGPoint(x: vanishX, y: y0))
+            seams.addLine(to: CGPoint(
+                x: ConcertPlan.floorFrontColumnX(k, landscape: land) * sx, y: y1))
         }
         seams.lineWidth = max(1, 2.5 * sx)
         seams.stroke()

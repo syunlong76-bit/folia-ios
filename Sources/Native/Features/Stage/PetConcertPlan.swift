@@ -187,6 +187,14 @@ enum PetConcertConst {
     static let footlightY: CGFloat = 1766       // 参考 px
     /// 木地板地平线（(54) Q）：与后排顶 543 对齐，地板自此
     /// 向前（向下）透视延伸满屏。
+    /// 地板透视同源几何（3.7 (57) 工作流 E 定版）：消失点 =
+    /// 地平线中点 (refW/2, floorTopY)；梯形后沿 = 幕布开口外
+    /// 侧界 [curtainOpenX − curtainSwayMax, refW − 同值] @ 地
+    /// 平线（开口名义 84 减摆动极值 19.8 = 64.2，侧幕摆到最
+    /// 外侧时地板仍不露底），前沿 = 最外侧板缝前沿点 @ refH；
+    /// 横线/板缝/梯形边的全部数值只许由 ConcertPlan.floor*
+    /// 推导（其唯一输入是 slotCellRect 与本节既有常数），
+    /// 地板绘制（PetConcertBackdropView）不得自备第二套数。
     static let floorTopY: CGFloat = 540         // 参考 px
     /// 独唱位金色脚圈（(54) Q 放大）：中心 (540, 1712)、半径 (190, 42)。
     static let soloRingY: CGFloat = 1712
@@ -240,6 +248,9 @@ enum PetConcertConst {
     static let soloRingYL: CGFloat = 965
     static let soloRingRXL: CGFloat = 150
     static let soloRingRYL: CGFloat = 30
+    /// 横屏地平线；同源几何口径与竖屏同构（消失点
+    /// (refWL/2, floorTopYL)、后沿 = curtainOpenXL −
+    /// curtainSwayMax @ 地平线，见竖屏 floorTopY 注释）。
     static let floorTopYL: CGFloat = 300
     static let valanceSwagsL = 11
     static let valanceBaseYL: CGFloat = 105
@@ -970,6 +981,137 @@ struct ConcertPlan {
     /// 朝向分发（格位矩形）。
     static func slotCellRect(_ slot: Int, landscape: Bool) -> CGRect {
         landscape ? slotCellRectLandscape(slot) : slotCellRect(slot)
+    }
+
+    // MARK: 地板同源几何（3.7 (57) 工作流 E）
+    //
+    // 唯一几何源：本段全部函数只读 slotCellRect（上）与
+    // PetConcertConst 既有常数（地平线/幕布开口/摆动极值/
+    // 参考画布），地板绘制（PetConcertBackdropView）只许调
+    // 本段，不许自备线表——(55) 真机「画一套站一套」（旧地
+    // 板 9 带 pow1.35 边与格位行界最大差 275 参考 px、6 条
+    // 任意分数板缝与列界零关系）在此闭环。
+    //
+    // 口径：
+    //  - 消失点 VP = 地平线中点（竖屏 (540, 540)、横屏
+    //    (960, 300)，即 (refW/2, floorTopY)），落在地板后
+    //    沿（地平线）上、水平居中 = 格位推导的中心点
+    //    （gridX0/gridX0L 本就是画布中点）。
+    //  - 横线 = floorBandEdges：队形区逐条 = slotCellRect
+    //    行边界；独唱位前台（apron）区按格位行高的等差步
+    //    长同函数延续（竖屏行距差恒 +8、横屏恒 0），越往
+    //    后行距越小 = 透视压缩，不另起参数。
+    //  - 板缝 = 直线 VP → floorFrontColumnX(k)：前沿点由格
+    //    位列界 b_k 锚定外推——缝线穿过锚点 (b_k, 队形前
+    //    沿线 = 末行格下边)，故每条列界的前沿锚点精确落在
+    //    对应板缝上；b_k 等距 ⇒ 前沿点等距（竖屏步长
+    //    120×1380/902 ≈ 183.6、横屏 144×780/525 ≈ 213.9）。
+    //    apron 区为同一批直线越过锚线的自然延续。
+    //  - 梯形 = 后沿 [curtainOpenX − curtainSwayMax, 对称]
+    //    @ 地平线 → 前沿 [F_0, F_last] @ refH 的四边形；
+    //    最外侧板缝与梯形边在前沿角点相接、其余板缝恒在
+    //    梯形内（凸四边形 + 两端点在内/界上），绘制侧再加
+    //    一层 ctx 裁剪兜底。
+
+    /// 格位行边界（参考 px，升序）：slotCellRect 各行上边
+    /// 与末行下边。竖屏 [546, 630, 722, 822, 930, 1046,
+    /// 1170, 1302, 1442]、横屏 [275, 385, 495, 605, 715, 825]。
+    static func floorRowBoundaries(landscape: Bool) -> [CGFloat] {
+        let rows = landscape ? PetConcertConst.gridRowsL : PetConcertConst.gridRows
+        let cols = landscape ? PetConcertConst.gridColsL : PetConcertConst.gridCols
+        var bounds: [CGFloat] = []
+        for r in 0..<rows {
+            let rect = slotCellRect(r * cols, landscape: landscape)
+            if bounds.isEmpty { bounds.append(rect.minY) }
+            bounds.append(rect.maxY)
+        }
+        return bounds
+    }
+
+    /// 地板横线全表（参考 px，升序）：地平线起，队形区 =
+    /// 格位行边界（地平线之上的首格上边被地平线截去，如横
+    /// 屏 275 < 300），apron 区按行距等差步长延续，末项 =
+    /// 地板前沿 refH/refHL。竖屏结果 [540, 546, 630, 722,
+    /// 822, 930, 1046, 1170, 1302, 1442, 1590, 1746, 1910,
+    /// 1920]、横屏 [300, 385, 495, 605, 715, 825, 935,
+    /// 1045, 1080]。
+    static func floorBandEdges(landscape: Bool) -> [CGFloat] {
+        let horizon = landscape ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY
+        let front = landscape ? PetConcertConst.refHL : PetConcertConst.refH
+        var edges = floorRowBoundaries(landscape: landscape)
+            .filter { $0 > horizon }
+        edges.insert(horizon, at: 0)
+        while let last = edges.last, last < front {
+            let n = edges.count
+            guard n >= 2 else { break }
+            let stepPrev = edges[n - 1] - edges[n - 2]
+            let stepPrev2 = n >= 3 ? edges[n - 2] - edges[n - 3] : stepPrev
+            let next = last + stepPrev + (stepPrev - stepPrev2)
+            if next >= front { break }
+            edges.append(next)
+        }
+        edges.append(front)
+        return edges
+    }
+
+    /// 格位列边界（参考 px，升序，cols+1 条）：slotCellRect
+    /// 首行各格左右边。竖屏 [120, 240, …, 960]、横屏
+    /// [168, 312, …, 1752]。
+    static func floorColumnBoundaries(landscape: Bool) -> [CGFloat] {
+        let cols = landscape ? PetConcertConst.gridColsL : PetConcertConst.gridCols
+        var bounds: [CGFloat] = []
+        for c in 0..<cols {
+            let rect = slotCellRect(c, landscape: landscape)
+            if bounds.isEmpty { bounds.append(rect.minX) }
+            bounds.append(rect.maxX)
+        }
+        return bounds
+    }
+
+    /// 板缝前沿点（参考 px）：第 k 条列界的板缝在地板前沿
+    /// y = refH/refHL 处的 x。由锚点 (b_k, 队形前沿线) 与
+    /// 消失点共线外推：F_k = VPx + (b_k − VPx) ×
+    /// (front − horizon)/(anchorY − horizon)。
+    static func floorFrontColumnX(_ k: Int, landscape: Bool) -> CGFloat {
+        let bounds = floorColumnBoundaries(landscape: landscape)
+        let kk = min(max(k, 0), bounds.count - 1)
+        let horizon = landscape ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY
+        let front = landscape ? PetConcertConst.refHL : PetConcertConst.refH
+        let anchorY = floorRowBoundaries(landscape: landscape).last ?? front
+        let vanishX = (landscape ? PetConcertConst.refWL : PetConcertConst.refW) / 2
+        return vanishX + (bounds[kk] - vanishX)
+            * (front - horizon) / (anchorY - horizon)
+    }
+
+    /// 板缝线在任意 y 的 x（参考 px）：消失点 → 前沿点的
+    /// 直线参数式。y = 队形前沿线时恒 = 对应列界 b_k（同源
+    /// 自证的代数恒等，见本段头注）。
+    static func floorSeamX(_ k: Int, atY y: CGFloat, landscape: Bool) -> CGFloat {
+        let horizon = landscape ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY
+        let front = landscape ? PetConcertConst.refHL : PetConcertConst.refH
+        let vanishX = (landscape ? PetConcertConst.refWL : PetConcertConst.refW) / 2
+        guard front > horizon else { return vanishX }
+        let fx = floorFrontColumnX(k, landscape: landscape)
+        return vanishX + (fx - vanishX) * (y - horizon) / (front - horizon)
+    }
+
+    /// 地板梯形左右边在任意 y 的 x（参考 px）：后沿 =
+    /// 幕布开口外侧界（curtainOpenX − curtainSwayMax，横屏
+    /// curtainOpenXL − 同值）@ 地平线，前沿 = 最外侧板缝
+    /// 前沿点 @ refH/refHL，两边各为一条直线。
+    static func floorTrapezoidX(atY y: CGFloat, landscape: Bool)
+        -> (left: CGFloat, right: CGFloat) {
+        let horizon = landscape ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY
+        let front = landscape ? PetConcertConst.refHL : PetConcertConst.refH
+        let refW = landscape ? PetConcertConst.refWL : PetConcertConst.refW
+        let cols = landscape ? PetConcertConst.gridColsL : PetConcertConst.gridCols
+        let backLeft = (landscape ? PetConcertConst.curtainOpenXL
+            : PetConcertConst.curtainOpenX) - PetConcertConst.curtainSwayMax
+        let t = front > horizon ? (y - horizon) / (front - horizon) : 0
+        let frontLeft = floorFrontColumnX(0, landscape: landscape)
+        let frontRight = floorFrontColumnX(cols, landscape: landscape)
+        return (backLeft + (frontLeft - backLeft) * t,
+                (refW - backLeft) + (frontRight - (refW - backLeft)) * t)
     }
 
     private static func breathBlocks(
