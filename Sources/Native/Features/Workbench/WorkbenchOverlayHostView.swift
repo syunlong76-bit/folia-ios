@@ -315,7 +315,7 @@ final class WorkbenchOverlayHostView: UIView {
         // 位未到目标位，不触发，淡入淡出不受影响。
         if !isDraggingSidebar {
             let targetTx: CGFloat = isSidebarOpen ? 0 : -panelWidth
-            let presentedTx = sidebarView.layer.presentation()?.transform.tx
+            let presentedTx = sidebarView.layer.presentation()?.transform.m41
                 ?? sidebarView.transform.tx
             if sidebarAnimator == nil || abs(presentedTx - targetTx) <= 0.5 {
                 applySettledChrome()
