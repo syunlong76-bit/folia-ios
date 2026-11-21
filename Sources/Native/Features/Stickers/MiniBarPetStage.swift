@@ -25,8 +25,12 @@ import UIKit
 // - 语言系统：与 (25) 同一套交互语法与台词库（PetLines 为
 //   唯一真源）——点头顶冒反应小贴纸（1.5s 淡出）、点本体
 //   弹对话框（被点贴纸本体 + 一句台词，点气泡/点别处关、
-//   5s 自动关）、长按 0.35s 拖动安置（停在落点、不参加漫
-//   游与编排，直到切歌/形态切换）。宠物之间自主互动沿
+//   5s 自动关）、长按阶梯（(60) 第 8 条：单个长按识别器
+//   0.35s 起识别 + 自维护状态机，时序自 touch-down 起算——
+//   0.35s 抓起反馈、1.0s 进入可拖、位移 >10pt 立即转拖动
+//   并取消关闭计时、静止满 3.0s 触发关闭走 dismiss 告别
+//   离场；拖动安置停在落点、不参加漫游与编排，直到切歌/
+//   形态切换）。宠物之间自主互动沿
 //   (25) 编排：相遇打招呼一问一答、追逐，约每 10–16s 一
 //   轮；气泡不压台上控件（都在台面之上的墙面空区）。
 // - 关心用户（22:23 新增）：宠物不时冒关心气泡（按时段
@@ -83,6 +87,27 @@ private final class MiniPetActor: UIView {
 
     weak var stage: MiniBarPetStage?
 
+    // MARK: 长按阶梯状态机（(60) 第 8 条，DS 定案）
+    /// 单个 UILongPressGestureRecognizer（0.35s 起识别）＋本
+    /// 状态机：时序自 touch-down 起算（基点/时刻在
+    /// touchesBegan 捕获，识别器只负责 .began/.changed/.ended
+    /// 的确认与兜底收尾）。pressing（<0.35s）→ grabbed
+    /// （0.35s 抓起反馈，不算可拖）→ dragging（满 1.0s 或
+    /// 累计位移 >10pt 立即转入，走 stage 既有 petDrag 链）；
+    /// grabbed 静止满 3.0s → closed（触发关闭）。手势结束/
+    /// 取消一律复位到 idle 并作废全部已排期迁移。
+    private enum PressPhase { case idle, pressing, grabbed, dragging, closed }
+    private var pressPhase: PressPhase = .idle
+    private var pressStartPoint: CGPoint = .zero
+    private var pressLastPoint: CGPoint = .zero
+    /// 三个赛跑迁移各自独立句柄：1.0s 进入可拖不得连带取消
+    /// 3.0s 关闭计时——静止按住满 1.0s 只是「可拖待命」，手
+    /// 指不动继续到 3.0s 仍须触发关闭；只有真实位移 >10pt
+    /// 才取消关闭（见 routePressMovement / enterDragging）。
+    private var grabWork: DispatchWorkItem?
+    private var dragWork: DispatchWorkItem?
+    private var closeWork: DispatchWorkItem?
+
     init(asset: String, size: CGFloat) {
         super.init(frame: CGRect(x: 0, y: 0, width: size, height: size))
         stickerView.frame = bounds
@@ -107,8 +132,16 @@ private final class MiniPetActor: UIView {
         let press = UILongPressGestureRecognizer(
             target: self, action: #selector(handlePress(_:)))
         press.minimumPressDuration = 0.35
+        // 位移门限由状态机自管（>10pt 转拖动态）：识别器自身
+        // 的 allowableMovement 放开，防移动中途被系统判失败；
+        // cancelsTouchesInView 关掉，本视图的 touches 流在识别
+        // 后不断（识别前位移与结束收尾都靠它兜底）。
+        press.allowableMovement = .greatestFiniteMagnitude
+        press.cancelsTouchesInView = false
         addGestureRecognizer(press)
     }
+
+    deinit { cancelPressWork() }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
@@ -131,11 +164,141 @@ private final class MiniPetActor: UIView {
         guard let stage else { return }
         let point = gesture.location(in: stage)
         switch gesture.state {
-        case .began: stage.petDragBegan(self)
-        case .changed: stage.petDragChanged(self, to: point)
-        case .ended: stage.petDragEnded(self, at: point)
-        case .cancelled, .failed: stage.petDragCancelled(self)
+        case .began: enterGrabbed()
+        case .changed: routePressMovement(to: point)
+        case .ended: finishPress(cancelled: false)
+        case .cancelled, .failed: finishPress(cancelled: true)
         default: break
+        }
+    }
+
+    // MARK: 阶梯状态机（时序自 touch-down 起算）
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        guard pressPhase == .idle, let stage,
+              let touch = touches.first else { return }
+        pressPhase = .pressing
+        pressStartPoint = touch.location(in: stage)
+        pressLastPoint = pressStartPoint
+        // 三个赛跑迁移自 touch-down 排期：0.35s 抓起反馈、
+        // 1.0s 进入可拖、3.0s 静止关闭。位移 >10pt 时由
+        // routePressMovement 抢先转拖动并作废关闭计时。
+        grabWork = schedulePressWork(after: 0.35) { [weak self] in
+            self?.enterGrabbed()
+        }
+        dragWork = schedulePressWork(after: 1.0) { [weak self] in
+            self?.enterDragging(source: "hold")
+        }
+        closeWork = schedulePressWork(after: 3.0) { [weak self] in
+            self?.triggerClose()
+        }
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesMoved(touches, with: event)
+        guard let stage, let touch = touches.first else { return }
+        routePressMovement(to: touch.location(in: stage))
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        finishPress(cancelled: false)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        finishPress(cancelled: true)
+    }
+
+    private func schedulePressWork(after delay: TimeInterval,
+                                   _ body: @escaping () -> Void) -> DispatchWorkItem {
+        let work = DispatchWorkItem(block: body)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+        return work
+    }
+
+    private func cancelPressWork() {
+        grabWork?.cancel(); grabWork = nil
+        dragWork?.cancel(); dragWork = nil
+        closeWork?.cancel(); closeWork = nil
+    }
+
+    /// 0.35s 抓起反馈：缩放 + 轻震动，不算可拖（mode 不动、
+    /// petDrag 链不接通）。识别器 .began 与排期双路同到，
+    /// 幂等只生效一次。
+    private func enterGrabbed() {
+        guard pressPhase == .pressing else { return }
+        pressPhase = .grabbed
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        UIView.animate(withDuration: 0.18) {
+            self.transform = CGAffineTransform(scaleX: 1.07, y: 1.07)
+        }
+        stage?.petPressGrabbed(self)
+    }
+
+    /// 进入可拖：满 1.0s 静止（source=hold）或位移 >10pt
+    /// （source=move）任一先到。接通既有 petDragBegan 链。
+    /// hold 路径只作废待拖计时、保留关闭计时（静止续按到
+    /// 3.0s 仍关闭）；move 路径同时作废关闭计时。
+    private func enterDragging(source: String) {
+        if pressPhase == .pressing { enterGrabbed() }
+        guard pressPhase == .grabbed else { return }
+        pressPhase = .dragging
+        dragWork?.cancel(); dragWork = nil
+        grabWork?.cancel(); grabWork = nil
+        if source == "move" {
+            closeWork?.cancel(); closeWork = nil
+        }
+        stage?.petPressDragActivated(self, source: source)
+    }
+
+    /// 位移路由：累计位移（自 touch-down 基点）>10pt 立即
+    /// 转拖动态并取消关闭计时；已在拖动态（1.0s hold 转入）
+    /// 后首次出现 >10pt 真实位移同样取消关闭计时，其余转发
+    /// 既有 petDragChanged。
+    private func routePressMovement(to point: CGPoint) {
+        guard pressPhase == .pressing || pressPhase == .grabbed
+            || pressPhase == .dragging else { return }
+        pressLastPoint = point
+        let drift = hypot(point.x - pressStartPoint.x,
+                          point.y - pressStartPoint.y)
+        if pressPhase != .dragging {
+            if drift > 10 { enterDragging(source: "move") }
+            return
+        }
+        if drift > 10, closeWork != nil {
+            closeWork?.cancel(); closeWork = nil
+        }
+        stage?.petDragChanged(self, to: point)
+    }
+
+    /// 静止满 3.0s 触发关闭：在 grabbed 或「hold 转入可拖但
+    /// 始终未真实位移」态生效（真实位移已把 closeWork 作废、
+    /// 本函数根本不会被调）。写开关与 dismiss 告别离场全在
+    /// stage 侧收口；演员 mode 若已 .dragged（hold 转入），
+    /// 告别流 stepFarewell 会把 mode 改写为 .farewell。
+    private func triggerClose() {
+        guard pressPhase == .grabbed || pressPhase == .dragging else { return }
+        pressPhase = .closed
+        cancelPressWork()
+        UIView.animate(withDuration: 0.2) { self.transform = .identity }
+        stage?.petPressCloseTriggered(self)
+    }
+
+    /// 手势结束/取消复位：拖动态走既有 petDragEnded/
+    /// Cancelled 落位；其余态只收抓起缩放。双路（识别器与
+    /// touches）同到时凭 phase 幂等，后到者为空操作。
+    private func finishPress(cancelled: Bool) {
+        guard pressPhase != .idle else { return }
+        let wasDragging = pressPhase == .dragging
+        cancelPressWork()
+        pressPhase = .idle
+        if wasDragging {
+            if cancelled { stage?.petDragCancelled(self) }
+            else { stage?.petDragEnded(self, at: pressLastPoint) }
+        } else {
+            UIView.animate(withDuration: 0.2) { self.transform = .identity }
         }
     }
 
@@ -242,6 +405,31 @@ enum PetLines {
         // (32) 补 2 句
         "我闻到饭香了，跟过去看看",
         "球还在院子里，我去叼回来",
+    ]
+
+    // MARK: 打招呼词（(60) 第 8 条新增：开关开启飘落入场专用池）
+    /// 落地后 0.1–0.3s 由先落地的前 2 只说一句（showTransient-
+    /// Bubble）。种子句自 singles 问候句迁入（dogSingles 的
+    /// 「你回来啦！等你好久了！」「嘿嘿，被你发现我了。」），
+    /// 其余按猫狗人格声口新写；singles 原池不动（对话框仍用）。
+
+    static let greetingCat = [
+        "你回来啦，我在这儿等你呢。",
+        "嗯？你来了……那就陪你听一会儿。",
+        "喵，我刚睡醒，你就来了。",
+        "来了就坐吧，歌刚开始。",
+        "等你好久了……才怪，我刚睡醒。",
+        "你好呀，今天也一起听歌吧。",
+        "抬头看看我，我一直都在。",
+    ]
+    static let greetingDog = [
+        "你回来啦！等你好久了！",
+        "嘿嘿，被你发现我了。",
+        "你好呀！我来啦我来啦！",
+        "我来陪你听歌啦！",
+        "今天也要一起开心哦！",
+        "汪！你终于来啦！",
+        "我准备好了，放歌吧！",
     ]
 
     // MARK: 关心词（(27) 新增；按时段分池，种子句在各池内）
@@ -388,6 +576,21 @@ final class MiniBarPetStage: UIView {
     private var farewellRemaining = 0
     private var afterFarewell: (() -> Void)?
     private var flowGeneration = 0
+    /// 告别去向（(60) 第 8 条）：islandSplit = 现行收起分流
+    /// （蹦岛/回详情页台待命）；dismiss = 开关关闭离场（无
+    /// 分流、无落点、登记回池、淡出 0.9s）。tick 硬清场分
+    /// 支对 dismiss 进行中的告别流让路（见 tick）。
+    enum FarewellDestination {
+        case islandSplit, dismiss
+    }
+    private var farewellDestination: FarewellDestination = .islandSplit
+    /// 飘落入场进行中（(60) 第 8 条）：期间暂停 chat 轮转、
+    /// 关心触发与停靠过期扫描，落地收尾后恢复。
+    private var dropInActive = false
+    private var lastGreetingIndex: [Bool: Int] = [:]
+    /// 4s 开启手势组件（attachOpenGesture 时建并由本层持有，
+    /// 组件对 stage 只弱引用、无环）。
+    private var openGestureComponent: MiniBarPetOpenGesture?
     private var transientBubbles: [UILabel] = []
 
     private var displayLink: CADisplayLink?
@@ -964,6 +1167,201 @@ final class MiniBarPetStage: UIView {
         if !framesRunning { actor.stickerView.pause() }
     }
 
+    // MARK: 飘落入场（(60) 第 8 条：仅「开关开启」入口）
+
+    /// 开启入场：落点沿用现有槽位分配先算好（展开台＝常驻
+    /// 位+嘉宾位、收起态＝批次槽位），演员入场期临时挂全高
+    /// 承载层（PetDockLayer，与停靠同承载方式；未安装时退
+    /// 回本层内落下），自屏幕顶端外 curveEaseIn 重力感加速
+    /// 飘落（行程 ≈600pt 时 0.55–0.8s，距离短按比例缩短、
+    /// 下限 0.45s）＋起始 x 微漂移，落地系统弹簧收尾
+    /// （damping≈0.55、0.28s）后同坐标交回本层切常规行为
+    /// 机、不跳位。逐只错峰 0.2s；先落地的前 2 只落地后
+    /// 0.1–0.3s 冒打招呼气泡（greetingCat/greetingDog 池）；
+    /// 入场期暂停 chat 轮转（cancelChat/hideBubbles 封口 +
+    /// dropInActive 门控）。常规 spawn（切歌换班底/嘉宾轮
+    /// 换/批次）不走此路、保持现行。
+    func performDropInEntrance() {
+        guard barPresented else {
+            Breadcrumbs.log("pet.dropin skip reason=barNotPresented")
+            return
+        }
+        guard StickerSettings.miniPetsEnabled else {
+            Breadcrumbs.log("pet.dropin skip reason=petsDisabled")
+            return
+        }
+        guard !concertRelocated else {
+            Breadcrumbs.log("pet.dropin skip reason=concertRelocated")
+            return
+        }
+        isHidden = false
+        petsActive = true
+        syncFrame()
+        cancelChat()
+        hideBubbles()
+        closeCare()
+        hideDialog()
+
+        // 落点先行：与 ensureExpandedCast / spawnBatch 同口径
+        // 取人与槽位，只建新人（在场者不重落）。
+        let size = petSizeNow()
+        let ground = currentGroundY()
+        var newcomers: [(actor: MiniPetActor, landing: CGPoint)] = []
+        if !collapsed {
+            if resident == nil {
+                let wallResident: String = {
+                    let pool = Self.residentDogPool
+                    for offset in 0..<pool.count {
+                        let candidate = pool[(trackSerial + offset) % pool.count]
+                        if PetHomeRegistry.shared.home(of: candidate) != .island {
+                            return candidate
+                        }
+                    }
+                    return pool[trackSerial % pool.count]
+                }()
+                let asset = role == .stage
+                    ? (pickAssets(count: 1, excluding: []).first ?? wallResident)
+                    : wallResident
+                let actor = makeActor(asset: asset)
+                resident = actor
+                if role == .wall {
+                    seenAssets.insert(asset)
+                    persistSeen()
+                }
+                newcomers.append((actor, CGPoint(
+                    x: bounds.width * 0.32, y: ground - size / 2)))
+            }
+            while allActors.count < Self.expandedCast {
+                guard let asset = pickAssets(
+                    count: 1, excluding: Set(allActors.map { $0.asset })).first
+                else { break }
+                let actor = makeActor(asset: asset)
+                guests.append(actor)
+                let range = walkRange(for: actor)
+                newcomers.append((actor, CGPoint(
+                    x: CGFloat.random(in: range), y: ground - size / 2)))
+            }
+        } else if allActors.isEmpty {
+            let maxFit = max(3, Int(bounds.width / 44))
+            let count = min(Int.random(in: 5...8), maxFit)
+            let assets = pickAssets(count: count, excluding: [])
+            batchActive = true
+            batchEndsAt = clockTime + Double(assets.count) * 0.2 + 0.9
+                + Self.batchDuration
+            for (index, asset) in assets.enumerated() {
+                let actor = makeActor(asset: asset)
+                guests.append(actor)
+                let slotX = bounds.width * (CGFloat(index) + 0.5)
+                    / CGFloat(max(1, assets.count))
+                let range = walkRange(for: actor)
+                let x = min(max(slotX + .random(in: -8...8), range.lowerBound),
+                            range.upperBound)
+                newcomers.append((actor, CGPoint(x: x, y: ground - size / 2)))
+            }
+            Breadcrumbs.log("pet.cast.generate kind=batch-dropin"
+                + " assets=\(assets.joined(separator: ","))")
+        }
+        guard !newcomers.isEmpty else {
+            Breadcrumbs.log("pet.dropin skip reason=noNewcomers")
+            return
+        }
+        if !framesRunning {
+            for actor in allActors { actor.stickerView.pause() }
+        }
+
+        dropInActive = true
+        let generation = flowGeneration
+        let dock = PetDockLayer.shared
+        let useDock = dock.superview != nil
+        Breadcrumbs.log("pet.dropin begin cast=\(newcomers.count)"
+            + " carrier=\(useDock ? "dock" : "stage-fallback")"
+            + " form=\(collapsed ? "collapsed" : "expanded")")
+        var landedCount = 0
+        for (index, entry) in newcomers.enumerated() {
+            let actor = entry.actor
+            let landing = entry.landing
+            let landingInCarrier = useDock ? convert(landing, to: dock) : landing
+            // 入场期以 placed 豁免地面吸附与漫游（advance 的
+            // idle 分支对 placed 直接返回）；parkedClock 同步
+            // 刷新，防停靠过期扫描误伤（dropInActive 亦门控）。
+            actor.placed = true
+            actor.parkedClock = clockTime
+            actor.mode = .idle
+            if useDock {
+                dock.addSubview(actor)
+                actor.dockHosted = true
+                dock.refrontIfNeeded()
+            }
+            let drift: CGFloat = .random(in: -4...4)
+            actor.center = CGPoint(x: landingInCarrier.x - drift,
+                                   y: -size / 2)
+            actor.alpha = 1
+            actor.transform = .identity
+            let distance = max(0, landingInCarrier.y - actor.center.y)
+            let fallDuration = min(0.8, max(0.45, distance * (0.7 / 600)))
+            UIView.animate(withDuration: fallDuration,
+                           delay: Double(index) * 0.2,
+                           options: [.curveEaseIn], animations: {
+                actor.center = CGPoint(x: landingInCarrier.x + drift * 0.5,
+                                       y: landingInCarrier.y)
+            }, completion: { [weak self, weak actor] finished in
+                guard let self, let actor, finished,
+                      generation == self.flowGeneration,
+                      self.allActors.contains(where: { $0 === actor })
+                else { return }
+                // 落地交接：先按同坐标换回本层（落点帧精确对
+                // 齐、不跳位），再走弹簧收尾（transform 与父
+                // 视图无关，换父后继续播完）。
+                if actor.dockHosted {
+                    self.addSubview(actor)
+                    actor.dockHosted = false
+                }
+                actor.center = landing
+                actor.placed = false
+                actor.mode = .idle
+                actor.until = self.activeTime + 1 + .random(in: 0...2)
+                actor.transform = CGAffineTransform(scaleX: 1.06, y: 1.06)
+                UIView.animate(withDuration: 0.28, delay: 0,
+                               usingSpringWithDamping: 0.55,
+                               initialSpringVelocity: 0.6, options: []) {
+                    actor.transform = .identity
+                }
+                landedCount += 1
+                Breadcrumbs.log("pet.dropin land asset=\(actor.asset)"
+                    + " idx=\(landedCount)/\(newcomers.count)")
+                // 打招呼：同批只让先落地的前 2 只说话。
+                if landedCount <= 2 {
+                    let delay = Double.random(in: 0.1...0.3)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+                        [weak self, weak actor] in
+                        guard let self, let actor,
+                              generation == self.flowGeneration,
+                              self.allActors.contains(where: { $0 === actor })
+                        else { return }
+                        self.showGreetingBubble(above: actor)
+                    }
+                }
+                if landedCount >= newcomers.count {
+                    self.dropInActive = false
+                    Breadcrumbs.log("pet.dropin done cast=\(newcomers.count)")
+                }
+            })
+        }
+    }
+
+    /// 打招呼气泡（入场专用）：greetingCat/greetingDog 池，
+    /// 防连抽去重与告别池同口径，走既有 showTransientBubble。
+    private func showGreetingBubble(above actor: MiniPetActor) {
+        let lines = actor.isCat ? PetLines.greetingCat : PetLines.greetingDog
+        let key = actor.isCat
+        var index = Int.random(in: 0..<lines.count)
+        if lines.count > 1, index == lastGreetingIndex[key] {
+            index = (index + 1) % lines.count
+        }
+        lastGreetingIndex[key] = index
+        showTransientBubble(lines[index], above: actor, duration: 1.5)
+    }
+
     /// 移除演员。sendToPool = 去向回幕后（轮换/裁员/停靠过
     /// 期）；告别流的移除不走这里回池——去向已由分流决策写
     /// 好（岛/stageBar），此处默认不动登记。
@@ -1055,6 +1453,18 @@ final class MiniBarPetStage: UIView {
         guestRotateAt = activeTime + 18
     }
 
+    // MARK: 4s 开启手势接线（(60) 第 8 条）
+
+    /// 宿主一行接线：把 4s 开启手势组件挂到点播台 bar 视图
+    /// 上（组件由本层持有，宿主无需另存）。触发语义、触摸
+    /// 域隔离与进度环全在 MiniBarPetOpenGesture 内自洽。
+    func attachOpenGesture(to barView: UIView) {
+        let component = MiniBarPetOpenGesture(stage: self)
+        openGestureComponent = component
+        component.attach(to: barView)
+        Breadcrumbs.log("pet.openGesture attach role=\(role == .wall ? "wall" : "stage")")
+    }
+
     // MARK: 三分交互（演员回调，语法与 (25) 同构）
 
     fileprivate func petTapped(_ actor: MiniPetActor, head: Bool) {
@@ -1131,6 +1541,45 @@ final class MiniBarPetStage: UIView {
     fileprivate func petDragCancelled(_ actor: MiniPetActor) {
         UIView.animate(withDuration: 0.2) { actor.transform = .identity }
         dropActor(actor, at: actor.center, src: "cancelled")
+    }
+
+    // MARK: 长按阶梯回调（(60) 第 8 条；状态机在 MiniPetActor）
+
+    /// 0.35s 抓起反馈已由演员自身完成（缩放+轻震动），此处
+    /// 只落痕：grab 不算可拖、petDrag 链尚未接通。
+    fileprivate func petPressGrabbed(_ actor: MiniPetActor) {
+        Breadcrumbs.log("pet.gesture state=grab asset=\(actor.asset)")
+    }
+
+    /// 进入可拖（满 1.0s 或位移 >10pt）：接通既有 petDrag
+    /// 链（petDragBegan 起、后续 Changed/Ended 由演员转发）。
+    fileprivate func petPressDragActivated(_ actor: MiniPetActor, source: String) {
+        Breadcrumbs.log("pet.gesture state=drag asset=\(actor.asset) src=\(source)")
+        petDragBegan(actor)
+    }
+
+    /// 静止满 3.0s 触发关闭：写开关（SettingsStore 新键与
+    /// StickerSettings 旧键同值双写，两读者同源）后走
+    /// dismiss 告别离场——不走 tick 硬清场（tick 对进行中
+    /// 的 dismiss 告别让路，全员走完 completion 才收尾）。
+    fileprivate func petPressCloseTriggered(_ actor: MiniPetActor) {
+        guard petsActive, !farewellActive else { return }
+        Breadcrumbs.log("pet.gesture state=close-trigger asset=\(actor.asset)")
+        SettingsStore.miniPetsEnabled = false
+        StickerSettings.miniPetsEnabled = false
+        pendingSpawns.removeAll()
+        batchActive = false
+        pendingForm = nil
+        let leaving = allActors
+        Breadcrumbs.log("pet.switch off via=gesture farewell=dismiss"
+            + " cast=\(leaving.count)")
+        startFarewell(of: leaving, destination: .dismiss) { [weak self] in
+            guard let self else { return }
+            self.clearCast()
+            self.petsActive = false
+            self.isHidden = true
+            Breadcrumbs.log("pet.switch off done farewell=dismiss")
+        }
     }
 
     /// 松手（3.7 (41) 组4 修订落位语义，Miller 2026-11-20
@@ -1379,6 +1828,8 @@ final class MiniBarPetStage: UIView {
     private func cancelFlow() {
         flowGeneration += 1
         farewellActive = false
+        farewellDestination = .islandSplit
+        dropInActive = false
         farewellQueue.removeAll()
         farewellRemaining = 0
         afterFarewell = nil
@@ -1463,8 +1914,19 @@ final class MiniBarPetStage: UIView {
         }
     }
 
-    private func startFarewell(of actors: [MiniPetActor], then completion: @escaping () -> Void) {
+    private func startFarewell(of actors: [MiniPetActor],
+                               destination: FarewellDestination = .islandSplit,
+                               then completion: @escaping () -> Void) {
         guard !actors.isEmpty else { completion(); return }
+        farewellDestination = destination
+        if destination == .dismiss {
+            // 关闭离场不分流：落点标记全清（防残留标记把演
+            // 员送去岛/详情页台），去向在淡出收尾时回池。
+            for actor in actors {
+                actor.divertToIsland = false
+                actor.divertToStageBar = false
+            }
+        }
         farewellQueue = actors
         farewellRemaining = actors.count
         farewellActive = true
@@ -1477,7 +1939,8 @@ final class MiniBarPetStage: UIView {
     }
 
     /// 告别推进（tick 墙钟驱动）：每 0.9s 送走一只——停步、
-    /// 弹离开词气泡（1.5s）、1.1s 起淡出（0.35s）。
+    /// 弹离开词气泡（1.5s）、1.1s 起淡出（islandSplit 0.35s；
+    /// dismiss 0.9s curveEaseOut 慢淡出，(60) 第 8 条）。
     private func stepFarewell() {
         guard farewellActive, clockTime >= farewellNextAt,
               !farewellQueue.isEmpty else { return }
@@ -1498,7 +1961,7 @@ final class MiniBarPetStage: UIView {
             // 分流落点（细修 B）：岛向的在告别词说完后蹦去灵
             // 动岛（去向此刻才写登记，岛层从它当前窗口位置
             // 接走）；详情页向的登记为 stageBar 后淡出。
-            if actor.divertToIsland {
+            if self.farewellDestination == .islandSplit, actor.divertToIsland {
                 let rect = actor.convert(actor.bounds, to: nil)
                 PetHomeRegistry.shared.setHome(actor.asset, .island)
                 PetIslandLayer.shared.receive(asset: actor.asset, fromRect: rect)
@@ -1507,10 +1970,19 @@ final class MiniBarPetStage: UIView {
                 self.finishFarewellDeparture(generation: generation)
                 return
             }
-            if actor.divertToStageBar {
+            if self.farewellDestination == .islandSplit, actor.divertToStageBar {
                 PetHomeRegistry.shared.setHome(actor.asset, .stageBar)
             }
-            UIView.animate(withDuration: 0.35, animations: {
+            if self.farewellDestination == .dismiss {
+                // 关闭离场：无落点，去向登记回幕后池。
+                PetHomeRegistry.shared.setHome(actor.asset, .pool)
+            }
+            let fadeDuration: TimeInterval =
+                self.farewellDestination == .dismiss ? 0.9 : 0.35
+            let fadeOptions: UIView.AnimationOptions =
+                self.farewellDestination == .dismiss ? [.curveEaseOut] : []
+            UIView.animate(withDuration: fadeDuration, delay: 0,
+                           options: fadeOptions, animations: {
                 actor.alpha = 0
             }, completion: { _ in
                 guard generation == self.flowGeneration else { return }
@@ -1537,7 +2009,7 @@ final class MiniBarPetStage: UIView {
 
     private func maybeStartCare() {
         guard petsActive, dialogView == nil, chatPair == nil,
-              !farewellActive, pendingForm == nil, carePet == nil,
+              !farewellActive, !dropInActive, pendingForm == nil, carePet == nil,
               activeTime >= nextCareAt else { return }
         let candidates = allActors.filter {
             $0.mode != .dragged && $0.mode != .farewell
@@ -1730,24 +2202,37 @@ final class MiniBarPetStage: UIView {
         }
 
         // 开关统管：关 → 整层停（清空班底）；开 → 恢复在场。
+        // (60) 第 8 条防抢跑：dismiss 告别进行中（长按关闭已
+        // 先写 false 并起告别流）时本分支让路——不清场、不
+        // isHidden、不 return（stepFarewell 还要靠 tick 推进），
+        // 等告别 completion 落地收尾。
+        let dismissFarewellInFlight = farewellActive
+            && farewellDestination == .dismiss
         if !StickerSettings.miniPetsEnabled {
-            if petsActive {
-                cancelFlow()
-                clearCast()
-                hideDialog()
-                hideBubbles()
-                closeCare()
-                petsActive = false
-                isHidden = true
+            if dismissFarewellInFlight {
+                // 落到下方主循环继续推进告别；重生类分支已逐
+                // 处以 farewellActive / petsActive 门控，不会
+                // 在离场途中补人。
+            } else {
+                if petsActive {
+                    cancelFlow()
+                    clearCast()
+                    hideDialog()
+                    hideBubbles()
+                    closeCare()
+                    petsActive = false
+                    isHidden = true
+                }
+                return
             }
-            return
         }
-        if !petsActive, !concertRelocated {
+        if !petsActive, !concertRelocated, !dismissFarewellInFlight {
             petsActive = true
             isHidden = false
             if collapsed { spawnBatch() } else { ensureExpandedCast() }
         }
-        if !collapsed, pendingForm == nil, resident == nil, !concertRelocated {
+        if !collapsed, pendingForm == nil, resident == nil,
+           !concertRelocated, !farewellActive {
             ensureExpandedCast()
         }
 
@@ -1829,7 +2314,7 @@ final class MiniBarPetStage: UIView {
 
         // 停靠过期（细修 4）：定格满 5 秒无互动 → 淡出回池。
         // 3.7 (35) 二分门：旁路时不设过期（退回 (27)/(30) 安置语义）。
-        if !FoliaBisect.pet32SubsystemsBypassed {
+        if !FoliaBisect.pet32SubsystemsBypassed, !farewellActive, !dropInActive {
             for actor in allActors where actor.placed && actor.mode != .dragged
                 && clockTime - actor.parkedClock >= 5 {
                 Breadcrumbs.log("pet.park.expire asset=\(actor.asset)")
@@ -1940,7 +2425,7 @@ final class MiniBarPetStage: UIView {
             }
             return
         }
-        guard activeTime >= nextChatAt, !farewellActive,
+        guard activeTime >= nextChatAt, !farewellActive, !dropInActive,
               pendingForm == nil, carePet == nil, dialogView == nil
         else { return }
         let free = allActors.filter {
@@ -2082,5 +2567,155 @@ final class MiniBarPetStage: UIView {
         bubbleB?.removeFromSuperview()
         bubbleA = nil
         bubbleB = nil
+    }
+}
+
+// MARK: - 4s 开启手势组件（(60) 第 8 条）
+
+/// 点播台宠物「长按 4 秒开启」组件：关闭态下宠物层
+/// isHidden 接不到触摸，开启识别器只能挂点播台本体（bar）。
+/// 宿主接线一行：`petStage.attachOpenGesture(to: bar)`（组件
+/// 由 MiniBarPetStage 持有）；也可自行建组件 attach（须自
+/// 行持有组件，识别器 target 与 delegate 均不强引组件）。
+///
+/// 手势域隔离（组件侧已做满）：
+/// - delegate shouldReceive 沿触摸视图祖先链查 UIControl：
+///   一切控件命中（播放/前后曲/模式/快排钮等）一律拒绝，
+///   只认台身空白背景域；进度环观察器共用同一 delegate、
+///   同一域限定，按在控件上不亮环。
+/// - 触发识别器 allowableMovement 与舞台 5s 轮换同值 12pt，
+///   漂移超限系统自动判失败、本次作废。
+/// 与台身既有 0.55s 切主题长按的域重叠在空白区仍存在（两
+/// 者都认空白域）——组件侧无权改宿主识别器，宿主接线时须
+/// 配合：在三处切主题 handler 里加开关门控（宠物关时切主
+/// 题长按不动作），否则开启按压会在 0.55s 先切一次主题。
+/// 详见交付报告 attach 建议。
+///
+/// 按压进度反馈：沿舞台 5s 轮换的现行做法——StageCycle-
+/// PressObserver（永不识别）驱动 StageCycleProgressRingView，
+/// 延迟 0.22s 出环（短点按不闪环）、填充时长 = 4s − 0.22s
+/// 与触发时刻对齐补满、漂移超限/抬手撤环、触发补满淡出。
+/// 宠物已开启时整组件静默（不亮环、不重复触发）。
+final class MiniBarPetOpenGesture: NSObject, UIGestureRecognizerDelegate {
+
+    static let holdDuration: TimeInterval = 4.0
+    private static let ringDelay: TimeInterval = 0.22
+
+    let recognizer: UILongPressGestureRecognizer
+    private weak var stage: MiniBarPetStage?
+    private weak var barView: UIView?
+
+    private var ring: StageCycleProgressRingView?
+    private var ringWorkItem: DispatchWorkItem?
+    private var pressPoint: CGPoint = .zero
+    private var pressActive = false
+    private var fired = false
+
+    init(stage: MiniBarPetStage) {
+        self.stage = stage
+        recognizer = UILongPressGestureRecognizer()
+        super.init()
+        recognizer.minimumPressDuration = Self.holdDuration
+        recognizer.allowableMovement = StageStyleCycleBag.pressMoveTolerance
+        recognizer.delegate = self
+        recognizer.addTarget(self, action: #selector(handleRecognizer(_:)))
+    }
+
+    func attach(to barView: UIView) {
+        self.barView = barView
+        barView.addGestureRecognizer(recognizer)
+        let observer = StageCyclePressObserver()
+        observer.cancelsTouchesInView = false
+        observer.delegate = self
+        observer.onPressBegan = { [weak self] point in
+            self?.pressBegan(at: point)
+        }
+        observer.onPressMoved = { [weak self] point in
+            self?.pressMoved(to: point)
+        }
+        observer.onPressEnded = { [weak self] in
+            self?.pressEnded()
+        }
+        barView.addGestureRecognizer(observer)
+    }
+
+    // MARK: 触摸域限定（识别器与观察器共用）
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldReceive touch: UITouch) -> Bool {
+        // 沿祖先链（止于所挂 bar 视图）任一 UIControl 命中即
+        // 拒绝：只认台身空白背景域。
+        var view: UIView? = touch.view
+        while let current = view, current !== gestureRecognizer.view {
+            if current is UIControl { return false }
+            view = current.superview
+        }
+        return true
+    }
+
+    // MARK: 触发
+
+    @objc private func handleRecognizer(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        guard !StickerSettings.miniPetsEnabled else { return }
+        fired = true
+        ring?.dismiss(completed: true)
+        ring = nil
+        // 开关双写同源（与关闭路径同口径）：SettingsStore 新
+        // 键 + StickerSettings 旧键，设置页与 tick 读者一致。
+        SettingsStore.miniPetsEnabled = true
+        StickerSettings.miniPetsEnabled = true
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        Breadcrumbs.log("pet.switch on via=longpress4s dropin")
+        stage?.performDropInEntrance()
+    }
+
+    // MARK: 进度环（舞台 5s 轮换同款做法）
+
+    private func pressBegan(at point: CGPoint) {
+        guard !StickerSettings.miniPetsEnabled else { return }
+        pressActive = true
+        fired = false
+        pressPoint = point
+        ringWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.pressActive, !self.fired,
+                  let barView = self.barView else { return }
+            self.ring?.dismiss(completed: false)
+            let ring = StageCycleProgressRingView()
+            self.ring = ring
+            let parent = barView.superview ?? barView
+            let center = parent === barView
+                ? self.pressPoint
+                : barView.convert(self.pressPoint, to: parent)
+            ring.show(at: center, in: parent,
+                      duration: Self.holdDuration - Self.ringDelay)
+        }
+        ringWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.ringDelay,
+                                      execute: work)
+    }
+
+    private func pressMoved(to point: CGPoint) {
+        guard pressActive, !fired else { return }
+        let drift = hypot(point.x - pressPoint.x, point.y - pressPoint.y)
+        if drift > StageStyleCycleBag.pressMoveTolerance {
+            pressActive = false
+            ringWorkItem?.cancel()
+            ringWorkItem = nil
+            ring?.dismiss(completed: false)
+            ring = nil
+        }
+    }
+
+    private func pressEnded() {
+        let wasActive = pressActive
+        pressActive = false
+        ringWorkItem?.cancel()
+        ringWorkItem = nil
+        if wasActive, !fired {
+            ring?.dismiss(completed: false)
+            ring = nil
+        }
     }
 }
