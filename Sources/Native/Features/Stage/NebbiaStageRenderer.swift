@@ -1651,9 +1651,9 @@ private func nebbiaBakeJelly(color: UIColor) -> UIImage? {
 private final class NebbiaLineView: UIView {
 
     let plan: NebbiaLinePlan
-    private let labels: [UILabel]
-    private let patchLayers: [CALayer]
-    private let clipMasks: [CALayer?]
+    private var labels: [UILabel] = []
+    private var patchLayers: [CALayer] = []
+    private var clipMasks: [CALayer?] = []
     private let breathView: UIView
     private let breathGradient = CAGradientLayer()
     private let smearA = UIView()
