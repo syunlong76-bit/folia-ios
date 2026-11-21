@@ -152,12 +152,15 @@ private func hanabiMixColor(_ a: Int, _ b: Int, _ t: Double) -> Int {
     let k = hanabiClamp01(t)
     if k <= 0 { return a }
     if k >= 1 { return b }
-    let r = Int((Double((a >> 16) & 255)
-        + (Double((b >> 16) & 255) - Double((a >> 16) & 255)) * k).rounded())
-    let g = Int((Double((a >> 8) & 255)
-        + (Double((b >> 8) & 255) - Double((a >> 8) & 255)) * k).rounded())
-    let bl = Int((Double(a & 255)
-        + (Double(b & 255) - Double(a & 255)) * k).rounded())
+    let ar = Double((a >> 16) & 255)
+    let ag = Double((a >> 8) & 255)
+    let ab = Double(a & 255)
+    let br = Double((b >> 16) & 255)
+    let bg = Double((b >> 8) & 255)
+    let bb = Double(b & 255)
+    let r = Int((ar + (br - ar) * k).rounded())
+    let g = Int((ag + (bg - ag) * k).rounded())
+    let bl = Int((ab + (bb - ab) * k).rounded())
     return (r << 16) | (g << 8) | bl
 }
 
@@ -1107,7 +1110,7 @@ private func hanabiSparkColor(palette: HanabiPaletteData,
     let sparks = palette.sparks.isEmpty ? [HANABI_WHITE] : palette.sparks
     let n = sparks.count
     let index = colors.isEmpty ? i : colors[((i % colors.count) + colors.count) % colors.count]
-    return sparks[((Int(index.rounded()) % n) + n) % n]
+    return sparks[((Int(Double(index).rounded()) % n) + n) % n]
 }
 
 /// burstPlan.ts planBurst：一个 BurstEvent 展开成星组参数。
@@ -1440,8 +1443,9 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
             let speed = R * k * 0.88 * (0.8 + rng.next() * 0.3)
             add(StarInput(vx: dx * speed, vy: dy * speed, drag: k, fall: R * 0.12,
                 life: lifeFrac(0.85, 0.99), size: R * 0.028, color: white,
-                endColor: c(i), shift: 0.25, strobe: 7 + rng.next() * 7,
-                strobeFrom: 0.3 + rng.next() * 0.25, fadeTail: 0.15,
+                endColor: c(i), shift: 0.25, fadeTail: 0.15,
+                strobe: 7 + rng.next() * 7,
+                strobeFrom: 0.3 + rng.next() * 0.25,
                 depth: depthOf(dz), tex: rng.next() < 0.3 ? 1 : 0))
         }
         flash(0, 0, 0, R * 0.9, white, 0.3)
@@ -1455,10 +1459,10 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
                 drag: k, fall: R * 0.25, life: lifeFrac(0.5, 0.98),
                 size: R * 0.013, color: silver, endColor: c(i), shift: 0.6,
                 trailColor: hanabiMixColor(silver, HANABI_EMBER, 0.3),
-                trail: 0.08 + trailK * 0.14, segments: 2,
+                trail: 0.08 + trailK * 0.14, segments: 2, fadeTail: 0.3,
+                twinkle: 0.4 + twinkleK * 0.6,
                 spiral: R * (0.05 + rng.next() * 0.11),
-                spin: (rng.next() < 0.5 ? -1.0 : 1.0) * (9 + rng.next() * 12),
-                twinkle: 0.4 + twinkleK * 0.6, fadeTail: 0.3))
+                spin: (rng.next() < 0.5 ? -1.0 : 1.0) * (9 + rng.next() * 12)))
         }
         flash(0, 0, 0, R * 0.6, silver, 0.24)
     case "willow-ring":
@@ -1499,9 +1503,8 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
                     + ((Double(i) + 0.5) / Double(per) - 0.5) * 1.3
                     + (rng.next() - 0.5) * 0.12
                 let speed = R * k * (1.45 + rng.next() * 0.45)
-                add(StarInput(start: delay,
-                    vx: cos(angle) * speed, vy: sin(angle) * speed,
-                    drag: k, fall: R * 0.9,
+                add(StarInput(vx: cos(angle) * speed, vy: sin(angle) * speed,
+                    drag: k, fall: R * 0.9, start: delay,
                     life: lifeV * (0.8 + rng.next() * 0.2), size: R * 0.02,
                     color: color, endColor: hanabiMixColor(color, HANABI_WHITE, 0.6),
                     shift: 0.7, trail: 0.1 + trailK * 0.3, segments: 3,
@@ -1747,7 +1750,7 @@ private func hanabiEnterPose(fx: String, p: Double, ctx: HanabiFxContext) -> Han
     var pose = HanabiGlyphPose()
     if p >= 1 { return pose }
     let q = hanabiClamp01(p)
-    let (r0, r1, r2) = ctx.rand
+    let (r0, r1, r2, _) = ctx.rand
     switch fx {
     case "pop":
         let s = hanabiEaseOutBack(q, 2.4)
@@ -1927,7 +1930,7 @@ private func hanabiExitPose(fx: String, p: Double, ctx: HanabiFxContext) -> Hana
     var pose = HanabiGlyphPose()
     if p <= 0 { return pose }
     let q = hanabiClamp01(p)
-    let (r0, r1, r2) = ctx.rand
+    let (r0, r1, r2, _) = ctx.rand
     switch fx {
     case "ascend":
         let e = hanabiEaseInCubic(q)
@@ -3817,8 +3820,8 @@ private final class HanabiShotHolder {
 final class HanabiStageRenderer: LyricStageRenderer {
     let view: UIView
     let capabilities = LyricStageCapabilities(
-        supportsWordSync: true, supportsNativeControls: false,
-        requiresSpectrum: false)
+        supportsWordSync: true, requiresSpectrum: false,
+        supportsLineSeek: false)
 
     private let root = LyricStageRootView()
     private let skyView = UIView()
@@ -3892,7 +3895,7 @@ final class HanabiStageRenderer: LyricStageRenderer {
             programKey = key
             let compiled = hanabiCompileProgram(
                 lines: snapshot.lines, seed: snapshot.track?.id ?? "",
-                duration: snapshot.track.duration)
+                duration: snapshot.track?.duration ?? 0)
             shots = compiled.shots
             programDuration = compiled.duration
             timeline = nil
