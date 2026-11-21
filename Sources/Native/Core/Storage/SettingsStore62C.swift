@@ -29,10 +29,17 @@ extension SettingsStore {
         static let playerCapIgnoreClear = "settings.playercap.ignoreClear"
         static let transparentStageBackground = "settings.live.transparentStageBackground"
         static let obsKeepMainAnimation = "settings.live.obsKeepMainAnimation"
+        // (66) 本机歌词接口开放开关（LocalServer /v1/lyric）
+        static let lyricAPIEnabled = "settings.integration.lyricAPIEnabled"
+        // (66) 媒体缓存目录自选（安全作用域书签 Data）
+        static let mediaCacheDirBookmark = "settings.storage.mediaCacheDirBookmark"
+        // (66) 运行日志采集开关（FoliaBridgeLogStore 总门控）
+        static let logCaptureEnabled = "settings.dev.logCaptureEnabled"
         // 播放面板（§5）
         static let streamQuality = "settings.player.streamQuality"
         // 存储与备份（§4.10）
         static let mediaCacheEnabled = "settings.storage.mediaCacheEnabled"
+        static let mediaCacheAutoRefill = "settings.storage.mediaCacheAutoRefill"
         static let mediaCacheLimitMB = "settings.storage.mediaCacheLimitMB"
         static let autoScanImportedFolders = "settings.storage.autoScanImportedFolders"
         static let folderWatchEnabled = "settings.storage.folderWatchEnabled"
@@ -123,6 +130,34 @@ extension SettingsStore {
         set { d62c.set(newValue, forKey: Key62C.obsKeepMainAnimation) }
     }
 
+    /// (66) 本机歌词接口（默认关）：开时 LocalServer 增开
+    /// GET /v1/lyric 输出当前曲歌词 JSON 供本机外部程序读。
+    static var lyricAPIEnabled62: Bool {
+        get { d62c.bool(forKey: Key62C.lyricAPIEnabled) }
+        set { d62c.set(newValue, forKey: Key62C.lyricAPIEnabled) }
+    }
+
+    /// (66) 运行日志采集（默认开）：关时 FoliaBridgeLogStore
+    /// 不再记录（落盘与内存环都停，控制台 NSLog 不受影响）。
+    static var logCaptureEnabled62: Bool {
+        get {
+            if d62c.object(forKey: Key62C.logCaptureEnabled) == nil { return true }
+            return d62c.bool(forKey: Key62C.logCaptureEnabled)
+        }
+        set { d62c.set(newValue, forKey: Key62C.logCaptureEnabled) }
+    }
+
+    /// (66) 媒体缓存自选目录书签（DS 改判落地）：UIDocument-
+    /// Picker 选文件夹后存安全作用域书签；MediaCache62 根目
+    /// 录解析消费。nil = 用默认 Caches/folia-media62。
+    static var mediaCacheDirBookmark62: Data? {
+        get { d62c.data(forKey: Key62C.mediaCacheDirBookmark) }
+        set {
+            if let newValue { d62c.set(newValue, forKey: Key62C.mediaCacheDirBookmark) }
+            else { d62c.removeObject(forKey: Key62C.mediaCacheDirBookmark) }
+        }
+    }
+
     // MARK: - 音质（§5 音质页签，EdgeOneAPIClient 取流消费）
 
     /// 取流音质档位（网易云 /song/url/v1 的 level 参数）：
@@ -145,6 +180,16 @@ extension SettingsStore {
             return d62c.bool(forKey: Key62C.mediaCacheEnabled)
         }
         set { d62c.set(newValue, forKey: Key62C.mediaCacheEnabled) }
+    }
+    /// (66) 缓存歌曲自动回填（默认开）：切歌时自动把当前
+    /// 曲与队列后续曲目回填进媒体缓存（MediaCache62.
+    /// startAutoRefill 消费；仍受 mediaCacheEnabled62 总闸）。
+    static var mediaCacheAutoRefill62: Bool {
+        get {
+            if d62c.object(forKey: Key62C.mediaCacheAutoRefill) == nil { return true }
+            return d62c.bool(forKey: Key62C.mediaCacheAutoRefill)
+        }
+        set { d62c.set(newValue, forKey: Key62C.mediaCacheAutoRefill) }
     }
     /// 媒体缓存上限（MB）：默认 256，钳制 32...512（通用契约
     /// 媒体缓存默认上限克制 ≤512MB）。

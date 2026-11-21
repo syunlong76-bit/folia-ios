@@ -168,15 +168,69 @@ enum Settings62ClusterA {
     }
 
     // MARK: - 页签 0 外观
+    //
+    // (66) 分组构成/顺序/命名对齐网页版 AppearancePage：
+    // 歌词渲染器（动画调整/场景/声线追踪）→ 主题（明暗/预设/
+    // 主题乐园）→ 歌曲主题（自动切换/自动生成/来源/优先自定义）。
 
     private static func buildAppearance(host: SettingsViewController, into stack: UIStackView,
                                         reg: (UIView, Int) -> Void) {
         host.beginCheckGroup("外观·62A")
 
-        let theme = group(host, into: stack, tab: 0, header: "主题系统（62）", reg: reg)
-        addRow(host, to: theme, buttonRow(host, "主题乐园",
-            detail: "当前：\(ThemeSystem62.currentSourceLabel)") {
-            ThemeParkViewController.present(from: host)
+        let lyrics = group(host, into: stack, tab: 0, header: "歌词渲染器", reg: reg)
+        addRow(host, to: lyrics, buttonRow(host, "歌词动画调整",
+            detail: "样式工作台") {
+            VisPlaygroundViewController.present(from: host)
+        }, hairline: false)
+        addRow(host, to: lyrics, segmentedRow(host, "场景",
+            items: ["无", "影厅", "现场", "书房"], selected: SettingsStore.scenePreset) { idx in
+            SettingsStore.scenePreset = idx
+            post(SettingsStore.Key62A.scenePreset)
+        })
+        addRow(host, to: lyrics, switchRow(host, "声线追踪",
+            isOn: SettingsStore.soundTracingEnabled) { on in
+            SettingsStore.soundTracingEnabled = on
+            post(SettingsStore.Key62A.soundTracingEnabled)
+        })
+        // (66) 逐场景设置面：调参场景选择＋三滑杆（暗角/氛围
+        // /氛围色调），写 sceneOverrides62，SceneSystem62 在
+        // 注册表基值上叠加消费；未覆盖的场景用内置参数。
+        let editor = SceneOverrideEditor62()
+        addRow(host, to: lyrics, segmentedRow(host, "逐场景调参 · 场景",
+            items: ["影厅", "现场", "书房"], selected: editor.targetScene - 1) { idx in
+            editor.targetScene = idx + 1
+            Breadcrumbs.log("settings66.sceneEdit target=\(idx + 1)")
+        })
+        let sceneNames = ["影厅", "现场", "书房"]
+        addRow(host, to: lyrics, sliderRow(host, "逐场景调参 · 暗角",
+            value: editor.value(at: 0), min: 0, max: 1,
+            format: { "\(Int(($0 * 100).rounded()))%" }) { v in
+            editor.setValue(at: 0, v)
+            post(SettingsStore.Key62A.sceneOverrides62)
+        })
+        addRow(host, to: lyrics, sliderRow(host, "逐场景调参 · 氛围浓度",
+            value: editor.value(at: 1), min: 0, max: 1,
+            format: { "\(Int(($0 * 100).rounded()))%" }) { v in
+            editor.setValue(at: 1, v)
+            post(SettingsStore.Key62A.sceneOverrides62)
+        })
+        addRow(host, to: lyrics, sliderRow(host, "逐场景调参 · 氛围色调",
+            value: editor.value(at: 2), min: 0, max: 1,
+            format: { "\(Int(($0 * 100).rounded()))%" }) { v in
+            editor.setValue(at: 2, v)
+            post(SettingsStore.Key62A.sceneOverrides62)
+        })
+        addRow(host, to: lyrics, host.makeHintRow(
+            "场景影响舞台氛围层（暗角/氛围/对比基线）；逐场景调参写入覆盖值、切到该场景即生效，滑杆初值为当前调参场景（默认 \(sceneNames[editor.targetScene - 1])）的有效值。声线追踪在舞台右上画电平近似轨迹线——原生暂无真实频谱数据源，视图内已标注「非频谱」。浅色模式下舞台/墙面等深色设计面仍以深色呈现（见交付报告适配清单）。"))
+
+        let theme = group(host, into: stack, tab: 0, header: "主题", reg: reg)
+        addRow(host, to: theme, segmentedRow(host, "明暗模式",
+            items: ["浅色", "深色", "跟随系统"],
+            selected: [2, 1, 0][SettingsStore.daylightMode]) { idx in
+            // 网页序为 浅色/深色/跟随系统；存储口径 0 跟随/1 恒深/2 恒浅。
+            SettingsStore.daylightMode = [2, 1, 0][idx]
+            post(SettingsStore.Key62A.daylightMode)
+            Breadcrumbs.log("settings62.daylightMode=\(SettingsStore.daylightMode)")
         }, hairline: false)
         addRow(host, to: theme, buttonRow(host, "切换配色预设",
             detail: ThemeSystem62.selectedPreset.name) {
@@ -184,114 +238,78 @@ enum Settings62ClusterA {
             let current = ids.firstIndex(of: SettingsStore.themePresetId) ?? 0
             ThemeSystem62.applyPreset(id: ids[(current + 1) % ids.count])
         })
-        addRow(host, to: theme, switchRow(host, "歌曲主题自动切换",
+        addRow(host, to: theme, buttonRow(host, "主题乐园",
+            detail: "当前：\(ThemeSystem62.currentSourceLabel)") {
+            ThemeParkViewController.present(from: host)
+        })
+        addRow(host, to: theme, host.makeHintRow(
+            "主题乐园里可预览当前歌曲主题、应用预设与自定义三色。"))
+
+        let songTheme = group(host, into: stack, tab: 0, header: "歌曲主题", reg: reg)
+        addRow(host, to: songTheme, switchRow(host, "歌曲主题自动切换",
             isOn: SettingsStore.songThemeAutoSwitch) { on in
             SettingsStore.songThemeAutoSwitch = on
             post(SettingsStore.Key62A.songThemeAutoSwitch)
             Breadcrumbs.log("settings62.songThemeAutoSwitch=\(on ? 1 : 0)")
-        })
-        addRow(host, to: theme, switchRow(host, "自动生成歌曲主题",
+        }, hairline: false)
+        addRow(host, to: songTheme, switchRow(host, "自动生成歌曲主题",
             isOn: SettingsStore.songThemeAutoGenerate) { on in
             SettingsStore.songThemeAutoGenerate = on
             post(SettingsStore.Key62A.songThemeAutoGenerate)
         })
-        addRow(host, to: theme, segmentedRow(host, "主题生成来源",
+        addRow(host, to: songTheme, segmentedRow(host, "主题生成来源",
             items: ["封面", "专辑", "艺术家"], selected: SettingsStore.themeSource) { idx in
             SettingsStore.themeSource = idx
             post(SettingsStore.Key62A.themeSource)
         })
-        addRow(host, to: theme, switchRow(host, "优先使用自定义主题",
+        addRow(host, to: songTheme, switchRow(host, "优先使用自定义主题",
             isOn: SettingsStore.preferCustomTheme) { on in
             SettingsStore.preferCustomTheme = on
             post(SettingsStore.Key62A.preferCustomTheme)
         })
-        addRow(host, to: theme, host.makeHintRow(
-            "歌曲主题由封面主色生成（来源为艺术家时原生无艺术家图源，回退封面并落面包屑标注）。主题乐园里可预览当前歌曲主题、应用预设与自定义三色。"))
-
-        let look = group(host, into: stack, tab: 0, header: "明暗 · 场景 · 声线（62）", reg: reg)
-        addRow(host, to: look, segmentedRow(host, "明暗模式",
-            items: ["跟随系统", "恒深色", "恒浅色"], selected: SettingsStore.daylightMode) { idx in
-            SettingsStore.daylightMode = idx
-            post(SettingsStore.Key62A.daylightMode)
-            Breadcrumbs.log("settings62.daylightMode=\(idx)")
-        }, hairline: false)
-        addRow(host, to: look, segmentedRow(host, "场景",
-            items: ["无", "影厅", "现场", "书房"], selected: SettingsStore.scenePreset) { idx in
-            SettingsStore.scenePreset = idx
-            post(SettingsStore.Key62A.scenePreset)
-        })
-        addRow(host, to: look, switchRow(host, "声线追踪",
-            isOn: SettingsStore.soundTracingEnabled) { on in
-            SettingsStore.soundTracingEnabled = on
-            post(SettingsStore.Key62A.soundTracingEnabled)
-        })
-        addRow(host, to: look, host.makeHintRow(
-            "场景影响舞台氛围层（暗角/氛围/对比基线）。声线追踪在舞台右上画电平近似轨迹线——原生暂无真实频谱数据源，视图内已标注「非频谱」。浅色模式下舞台/墙面等深色设计面仍以深色呈现（见交付报告适配清单）。"))
-
-        let style = group(host, into: stack, tab: 0, header: "歌词动画样式（62）", reg: reg)
-        addRow(host, to: style, buttonRow(host, "样式工作台（预览＋调参）",
-            detail: "VisPlayground") {
-            VisPlaygroundViewController.present(from: host)
-        }, hairline: false)
+        addRow(host, to: songTheme, host.makeHintRow(
+            "歌曲主题由封面主色生成（来源为艺术家时原生无艺术家图源，回退封面并落面包屑标注）。"))
     }
 
     // MARK: - 页签 1 播放页
+    //
+    // (66) 对齐网页版 PlayerPage：进入视图（进入视图＋Lattice
+    // 全行）→ 控制栏（自动隐藏/高度/拖动定位/两槽指派）→
+    // 舞台歌曲卡 → 视频层 → 播放页实验（显隐类＋点播台槽位集）。
 
     private static func buildPlayer(host: SettingsViewController, into stack: UIStackView,
                                     reg: (UIView, Int) -> Void) {
         host.beginCheckGroup("播放页·62A")
 
-        let entry = group(host, into: stack, tab: 1, header: "进入与顶栏（62）", reg: reg)
+        let entry = group(host, into: stack, tab: 1, header: "进入视图", reg: reg)
         addRow(host, to: entry, segmentedRow(host, "播放后进入的视图",
             items: ["舞台", "播放详情", "留在当前页"],
             selected: SettingsStore.playbackEntryView) { idx in
             SettingsStore.playbackEntryView = idx
             post(SettingsStore.Key62A.playbackEntryView)
         }, hairline: false)
-        addRow(host, to: entry, switchRow(host, "自动隐藏控制栏",
-            isOn: SettingsStore.headerAutoHideEnabled) { on in
-            SettingsStore.headerAutoHideEnabled = on
-            post(SettingsStore.Key62A.headerAutoHideEnabled)
-        })
-        addRow(host, to: entry, switchRow(host, "始终显示播放页返回按钮",
-            isOn: SettingsStore.alwaysShowBackButton) { on in
-            SettingsStore.alwaysShowBackButton = on
-            post(SettingsStore.Key62A.alwaysShowBackButton)
-        })
-        addRow(host, to: entry, switchRow(host, "播放页顶栏模糊背景",
-            isOn: SettingsStore.headerBlurEnabled) { on in
-            SettingsStore.headerBlurEnabled = on
-            post(SettingsStore.Key62A.headerBlurEnabled)
-        })
-        addRow(host, to: entry, switchRow(host, "显示信息卡片关闭按钮",
-            isOn: SettingsStore.showPanelCloseButton) { on in
-            SettingsStore.showPanelCloseButton = on
-            post(SettingsStore.Key62A.showPanelCloseButton)
-        })
-
-        let lattice = group(host, into: stack, tab: 1, header: "Lattice 海报墙（62）", reg: reg)
-        addRow(host, to: lattice, switchRow(host, "Lattice 边缘暗角",
+        addRow(host, to: entry, switchRow(host, "Lattice 边缘暗角",
             isOn: SettingsStore.latticeVignetteEnabled) { on in
             SettingsStore.latticeVignetteEnabled = on
             post(SettingsStore.Key62A.latticeVignetteEnabled)
-        }, hairline: false)
-        addRow(host, to: lattice, sliderRow(host, "暗角强度",
+        })
+        addRow(host, to: entry, sliderRow(host, "暗角强度",
             value: SettingsStore.latticeVignetteStrength, min: 0, max: 1,
             format: { "\(Int(($0 * 100).rounded()))%" }) { v in
             SettingsStore.latticeVignetteStrength = v
             post(SettingsStore.Key62A.latticeVignetteStrength)
         })
-        addRow(host, to: lattice, switchRow(host, "海报聚焦叠色",
+        addRow(host, to: entry, switchRow(host, "海报聚焦叠色",
             isOn: SettingsStore.latticePosterTintEnabled) { on in
             SettingsStore.latticePosterTintEnabled = on
             post(SettingsStore.Key62A.latticePosterTintEnabled)
         })
-        addRow(host, to: lattice, switchRow(host, "叠色强制自定义颜色",
+        addRow(host, to: entry, switchRow(host, "叠色强制自定义颜色",
             isOn: SettingsStore.latticePosterTintForceCustom) { on in
             SettingsStore.latticePosterTintForceCustom = on
             post(SettingsStore.Key62A.latticePosterTintForceCustom)
         })
-        addRow(host, to: lattice, buttonRow(host, "叠层颜色",
+        addRow(host, to: entry, buttonRow(host, "叠层颜色",
             detail: SettingsStore.latticePosterTintColorHex) {
             let palette = ["#8B7CF0", "#4C8BF5", "#F58C40", "#66CC80",
                            "#F27399", "#5EC8D8", "#F2C94C", "#EB5757"]
@@ -299,64 +317,58 @@ enum Settings62ClusterA {
             SettingsStore.latticePosterTintColorHex = palette[(current + 1) % palette.count]
             post(SettingsStore.Key62A.latticePosterTintColorHex)
         })
-        addRow(host, to: lattice, sliderRow(host, "叠色强度",
+        addRow(host, to: entry, sliderRow(host, "叠色强度",
             value: SettingsStore.latticePosterTintStrength, min: 0, max: 1,
             format: { "\(Int(($0 * 100).rounded()))%" }) { v in
             SettingsStore.latticePosterTintStrength = v
             post(SettingsStore.Key62A.latticePosterTintStrength)
         })
-        addRow(host, to: lattice, switchRow(host, "只显示正在播放的序号",
+        addRow(host, to: entry, switchRow(host, "只显示正在播放的序号",
             isOn: SettingsStore.latticeBadgeCurrentOnly) { on in
             SettingsStore.latticeBadgeCurrentOnly = on
             post(SettingsStore.Key62A.latticeBadgeCurrentOnly)
         })
 
-        let bar = group(host, into: stack, tab: 1, header: "底部组件（62）", reg: reg)
+        let bar = group(host, into: stack, tab: 1, header: "控制栏", reg: reg)
+        addRow(host, to: bar, switchRow(host, "自动隐藏控制栏",
+            isOn: SettingsStore.headerAutoHideEnabled) { on in
+            SettingsStore.headerAutoHideEnabled = on
+            post(SettingsStore.Key62A.headerAutoHideEnabled)
+        }, hairline: false)
         addRow(host, to: bar, sliderRow(host, "底部组件高度",
             value: SettingsStore.bottomBarHeight, min: 48, max: 110,
             format: { "\(Int($0.rounded())) pt" }) { v in
             SettingsStore.bottomBarHeight = v
             post(SettingsStore.Key62A.bottomBarHeight)
-        }, hairline: false)
+        })
+        addRow(host, to: bar, buttonRow(host, "在播放页拖动调整",
+            detail: "拖点播台顶缘") {
+            // (66) 网页「底部组件重定位」原生落点：关设置回
+            // 舞台后，舞台点播台顶缘拖高柄会脉冲提示一次，
+            // 拖动与上方滑杆同键（bottomBarHeight）落盘。
+            NotificationCenter.default.post(name: .foliaStageBarLocate66, object: nil)
+            Breadcrumbs.log("settings66.barLocate posted=1")
+            host.dismiss(animated: true)
+        })
+        let slotNames = ["无", "上一首", "下一首", "播放列表", "喜欢", "播放模式", "睡眠定时"]
+        addRow(host, to: bar, segmentedRow(host, "进度条左槽功能",
+            items: slotNames,
+            selected: SettingsStore.barSlotFunctions62.firstIndex(of: SettingsStore.barSlotLeft62) ?? 5) { idx in
+            SettingsStore.barSlotLeft62 = SettingsStore.barSlotFunctions62[idx]
+            post(SettingsStore.Key62A.barSlotLeft62)
+            Breadcrumbs.log("settings66.barSlotL=\(SettingsStore.barSlotLeft62)")
+        })
+        addRow(host, to: bar, segmentedRow(host, "进度条右槽功能",
+            items: slotNames,
+            selected: SettingsStore.barSlotFunctions62.firstIndex(of: SettingsStore.barSlotRight62) ?? 3) { idx in
+            SettingsStore.barSlotRight62 = SettingsStore.barSlotFunctions62[idx]
+            post(SettingsStore.Key62A.barSlotRight62)
+            Breadcrumbs.log("settings66.barSlotR=\(SettingsStore.barSlotRight62)")
+        })
         addRow(host, to: bar, host.makeHintRow(
-            "在播放页拖动点播台顶缘可直接调整高度并落盘（与本滑杆同键）。"))
-        addRow(host, to: bar, switchRow(host, "隐藏底部控制条",
-            isOn: SettingsStore.hideBottomBar) { on in
-            SettingsStore.hideBottomBar = on
-            post(SettingsStore.Key62A.hideBottomBar)
-        })
-        addRow(host, to: bar, switchRow(host, "隐藏右侧按钮",
-            isOn: SettingsStore.hideRightButtons) { on in
-            SettingsStore.hideRightButtons = on
-            post(SettingsStore.Key62A.hideRightButtons)
-        })
-        addRow(host, to: bar, switchRow(host, "始终显示切歌按钮",
-            isOn: SettingsStore.alwaysShowSkipButtons) { on in
-            SettingsStore.alwaysShowSkipButtons = on
-            post(SettingsStore.Key62A.alwaysShowSkipButtons)
-        })
+            "两槽位于播放页进度条左右两端（网页同位），点按执行所指派功能；网页右槽默认的「歌词时间轴」原生无对应功能面，默认置为播放列表。"))
 
-        let slots = group(host, into: stack, tab: 1, header: "进度条右侧按钮槽位（62）", reg: reg)
-        let slotDefs: [(String, String)] = [
-            ("prev", "上一首"), ("next", "下一首"), ("queue", "播放列表"),
-            ("like", "喜欢"), ("mode", "播放模式"), ("sleep", "睡眠定时"),
-        ]
-        for (index, def) in slotDefs.enumerated() {
-            addRow(host, to: slots, switchRow(host, def.1,
-                isOn: SettingsStore.barSlots62.contains(def.0)) { on in
-                var current = SettingsStore.barSlots62
-                if on, !current.contains(def.0) { current.append(def.0) }
-                if !on { current.removeAll { $0 == def.0 } }
-                // 槽位顺序按候选集固定序落盘，消费面按此序排布。
-                SettingsStore.barSlots62 = slotDefs.map { $0.0 }.filter { current.contains($0) }
-                post(SettingsStore.Key62A.barSlots62)
-                Breadcrumbs.log("settings62.barSlots=\(SettingsStore.barSlots62.joined(separator: ","))")
-            }, hairline: index == 0 ? false : true)
-        }
-        addRow(host, to: slots, host.makeHintRow(
-            "在既有三键（上一首/下一首/列表）基础上扩展；舞台侧即时消费，点播台（MiniPlayerView）侧由 WD 簇按同一键 settings.player.barSlots62 消费。"))
-
-        let pill = group(host, into: stack, tab: 1, header: "舞台歌曲卡（62）", reg: reg)
+        let pill = group(host, into: stack, tab: 1, header: "舞台歌曲卡", reg: reg)
         addRow(host, to: pill, segmentedRow(host, "显示方式",
             items: ["切歌时显", "常显", "关"],
             selected: SettingsStore.trackPillDisplayMode) { idx in
@@ -380,25 +392,22 @@ enum Settings62ClusterA {
             SettingsStore.trackPillShowOnHome = on
             post(SettingsStore.Key62A.trackPillShowOnHome)
         })
-        addRow(host, to: pill, buttonRow(host, "在浏览器源启用",
-            detail: "随 OBS 浏览器源") {
-            let alert = UIAlertController(
-                title: "舞台歌曲卡 · 浏览器源",
-                message: "此项随 OBS 浏览器源通路启用：原生尚无 OBS 输出（WC 簇施工中），开关值会先落盘，OBS 通路就绪后按此值生效。当前值：\(SettingsStore.trackPillOBSEnabled ? "开" : "关")。",
-                preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "开启", style: .default) { _ in
-                SettingsStore.trackPillOBSEnabled = true
-                post(SettingsStore.Key62A.trackPillOBSEnabled)
-            })
-            alert.addAction(UIAlertAction(title: "关闭", style: .default) { _ in
-                SettingsStore.trackPillOBSEnabled = false
-                post(SettingsStore.Key62A.trackPillOBSEnabled)
-            })
-            alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-            host.present(alert, animated: true)
+        // (66) 假生效做真：原按钮行＋「通路未就绪」弹窗摘除，
+        // 改真开关——消费在 LocalServer /obs 页（开启时页面
+        // 渲染歌曲卡区块，见 LocalServer.obsPageHTML）。
+        addRow(host, to: pill, switchRow(host, "在浏览器源启用",
+            isOn: SettingsStore.trackPillOBSEnabled) { on in
+            SettingsStore.trackPillOBSEnabled = on
+            post(SettingsStore.Key62A.trackPillOBSEnabled)
+            Breadcrumbs.log("settings66.pillOBS=\(on ? 1 : 0)")
+        })
+        addRow(host, to: pill, switchRow(host, "显示信息卡片关闭按钮",
+            isOn: SettingsStore.showPanelCloseButton) { on in
+            SettingsStore.showPanelCloseButton = on
+            post(SettingsStore.Key62A.showPanelCloseButton)
         })
 
-        let video = group(host, into: stack, tab: 1, header: "视频层 · 歌词后方（62）", reg: reg)
+        let video = group(host, into: stack, tab: 1, header: "视频层", reg: reg)
         addRow(host, to: video, switchRow(host, "视频层开关",
             isOn: SettingsStore.videoLayerEnabled) { on in
             SettingsStore.videoLayerEnabled = on
@@ -438,15 +447,64 @@ enum Settings62ClusterA {
             SettingsStore.videoLayerFillMode = idx
             post(SettingsStore.Key62A.videoLayerFillMode)
         })
+
+        let lab = group(host, into: stack, tab: 1, header: "播放页实验", reg: reg)
+        addRow(host, to: lab, switchRow(host, "隐藏底部控制条",
+            isOn: SettingsStore.hideBottomBar) { on in
+            SettingsStore.hideBottomBar = on
+            post(SettingsStore.Key62A.hideBottomBar)
+        }, hairline: false)
+        addRow(host, to: lab, switchRow(host, "隐藏右侧按钮",
+            isOn: SettingsStore.hideRightButtons) { on in
+            SettingsStore.hideRightButtons = on
+            post(SettingsStore.Key62A.hideRightButtons)
+        })
+        addRow(host, to: lab, switchRow(host, "始终显示切歌按钮",
+            isOn: SettingsStore.alwaysShowSkipButtons) { on in
+            SettingsStore.alwaysShowSkipButtons = on
+            post(SettingsStore.Key62A.alwaysShowSkipButtons)
+        })
+        addRow(host, to: lab, switchRow(host, "始终显示播放页返回按钮",
+            isOn: SettingsStore.alwaysShowBackButton) { on in
+            SettingsStore.alwaysShowBackButton = on
+            post(SettingsStore.Key62A.alwaysShowBackButton)
+        })
+        addRow(host, to: lab, switchRow(host, "播放页顶栏模糊背景",
+            isOn: SettingsStore.headerBlurEnabled) { on in
+            SettingsStore.headerBlurEnabled = on
+            post(SettingsStore.Key62A.headerBlurEnabled)
+        })
+        addRow(host, to: lab, sectionHeaderRow(host, "点播台按钮槽位集"))
+        let slotDefs: [(String, String)] = [
+            ("prev", "上一首"), ("next", "下一首"), ("queue", "播放列表"),
+            ("like", "喜欢"), ("mode", "播放模式"), ("sleep", "睡眠定时"),
+        ]
+        for def in slotDefs {
+            addRow(host, to: lab, switchRow(host, def.1,
+                isOn: SettingsStore.barSlots62.contains(def.0)) { on in
+                var current = SettingsStore.barSlots62
+                if on, !current.contains(def.0) { current.append(def.0) }
+                if !on { current.removeAll { $0 == def.0 } }
+                SettingsStore.barSlots62 = slotDefs.map { $0.0 }.filter { current.contains($0) }
+                post(SettingsStore.Key62A.barSlots62)
+                Breadcrumbs.log("settings62.barSlots=\(SettingsStore.barSlots62.joined(separator: ","))")
+            })
+        }
+        addRow(host, to: lab, host.makeHintRow(
+            "槽位集为点播台进度条右侧的按钮集合（(50) 三键自定义的扩展面），舞台与点播台同键消费；上方「控制栏」两槽为播放页进度条两端的单钮指派，两者不同面。"))
     }
 
     // MARK: - 页签 2 主页与歌单
+    //
+    // (66) 对齐网页版 HomePage：资料库 → 主页（胶囊入口）→
+    // 网格 → 墙面（BravaisWallGroup）；速记簿组为宿主老面卡，
+    // 归整后随老面卡在本签末尾（网页同为末组）。
 
     private static func buildHome(host: SettingsViewController, into stack: UIStackView,
                                   reg: (UIView, Int) -> Void) {
         host.beginCheckGroup("主页与歌单·62A")
 
-        let suite = group(host, into: stack, tab: 2, header: "资料库（62）", reg: reg)
+        let suite = group(host, into: stack, tab: 2, header: "资料库", reg: reg)
         addRow(host, to: suite, segmentedRow(host, "资料库界面",
             items: ["Bravais 墙", "网格"],
             selected: SettingsStore.librarySuiteChoice) { idx in
@@ -457,7 +515,7 @@ enum Settings62ClusterA {
         addRow(host, to: suite, host.makeHintRow(
             "与墙面工具条布局钮同一状态源：在这里改，回墙即生效；在墙上切，设置页同步。"))
 
-        let tabs = group(host, into: stack, tab: 2, header: "顶部胶囊入口（62）", reg: reg)
+        let tabs = group(host, into: stack, tab: 2, header: "主页", reg: reg)
         addRow(host, to: tabs, switchRow(host, "顶部胶囊入口总开关",
             isOn: SettingsStore.homeTabsEnabled) { on in
             SettingsStore.homeTabsEnabled = on
@@ -491,12 +549,21 @@ enum Settings62ClusterA {
         addRow(host, to: tabs, host.makeHintRow(
             "消费点为工作台侧栏分区行：原生侧栏分区为歌单/电台/搜索/专辑/本地，推荐→电台行、探索→搜索行。关掉的分区不渲染。"))
 
-        let grid = group(host, into: stack, tab: 2, header: "网格卡片（62）", reg: reg)
-        addRow(host, to: grid, switchRow(host, "歌单卡片样式 · 3D 卡片",
+        let grid = group(host, into: stack, tab: 2, header: "网格", reg: reg)
+        // (66) 歌单卡片样式做实：拍立得卡片（默认）/纯图片
+        // 封面，消费 CollectionView 拍立得网格 cell。
+        addRow(host, to: grid, segmentedRow(host, "歌单卡片样式",
+            items: ["拍立得卡片", "纯图片封面"],
+            selected: SettingsStore.playlistCardStyle62 == "image" ? 1 : 0) { idx in
+            SettingsStore.playlistCardStyle62 = idx == 1 ? "image" : "card"
+            post(SettingsStore.Key62A.playlistCardStyle62)
+            Breadcrumbs.log("settings66.plistStyle=\(SettingsStore.playlistCardStyle62)")
+        }, hairline: false)
+        addRow(host, to: grid, switchRow(host, "3D 卡片",
             isOn: SettingsStore.grid3DCardStyle) { on in
             SettingsStore.grid3DCardStyle = on
             post(SettingsStore.Key62A.grid3DCardStyle)
-        }, hairline: false)
+        })
         addRow(host, to: grid, switchRow(host, "全画幅封面",
             isOn: SettingsStore.gridFullBleedCover) { on in
             SettingsStore.gridFullBleedCover = on
@@ -520,9 +587,9 @@ enum Settings62ClusterA {
             post(SettingsStore.Key62A.gridCardMinOpacity)
         })
         addRow(host, to: grid, host.makeHintRow(
-            "3D 卡片为透视倾斜＋高光近似（非真 3D 渲染）。"))
+            "3D 卡片为透视倾斜＋高光近似（非真 3D 渲染）。纯图片封面只影响歌单网格的卡片外观（去白框与标题条）。"))
 
-        let wall = group(host, into: stack, tab: 2, header: "墙面（62 · 本体 WD 接入）", reg: reg)
+        let wall = group(host, into: stack, tab: 2, header: "墙面", reg: reg)
         addRow(host, to: wall, switchRow(host, "记住主页卡片位置",
             isOn: SettingsStore.rememberCardPositions) { on in
             SettingsStore.rememberCardPositions = on
@@ -560,8 +627,32 @@ enum Settings62ClusterA {
             post(SettingsStore.Key62A.backdropBlurAmount)
         })
         addRow(host, to: wall, host.makeHintRow(
-            "墙面透光/墙后画面的渲染本体由 WD 簇接入，键与访问器已定死（SettingsStore62A），本组只落键＋行。"))
+            "记住卡片位置开启后，卡片顺序与墙面相机位置（平移原点/网格滚动偏移）一并落盘，下次进墙恢复（(66) 几何面做实）。"))
     }
+}
+
+/// (66) 逐场景调参编辑器：持有当前调参场景（三滑杆共用），
+/// 读 SceneSystem62 有效参数、写 sceneOverrides62 覆盖。
+final class SceneOverrideEditor62 {
+    var targetScene: Int
+    init() { targetScene = min(max(SettingsStore.scenePreset, 1), 3) }
+    func value(at index: Int) -> Double {
+        SceneSystem62.effectiveParams(forScene: targetScene).tuple[index]
+    }
+    func setValue(at index: Int, _ v: Double) {
+        var all = SettingsStore.sceneOverrides62
+        var arr = all["\(targetScene)"]
+            ?? SceneSystem62.registeredParams(forScene: targetScene).tuple
+        arr[index] = v
+        all["\(targetScene)"] = arr
+        SettingsStore.sceneOverrides62 = all
+        Breadcrumbs.log("settings66.sceneOverride scene=\(targetScene) idx=\(index)")
+    }
+}
+
+extension Notification.Name {
+    /// (66) 设置行「在播放页拖动调整」→ 舞台点播台拖高柄脉冲。
+    static let foliaStageBarLocate66 = Notification.Name("foliaStageBarLocate66")
 }
 
 /// (62) 视频层本地媒体选入：PHPicker 选图片/动图/视频 → 装进

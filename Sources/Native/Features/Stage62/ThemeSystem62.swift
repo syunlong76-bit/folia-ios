@@ -175,11 +175,19 @@ struct SceneParams62 {
     let tintAlpha: Double     // 氛围 tint alpha 基线
     let contrastFloor: Double // 对比保护基线（亮度差下限参考）
     let label: String
+    /// (66) 逐场景调参三元组（暗角/氛围/色调），设置面滑杆口径。
+    var tuple: [Double] { [vignette, atmosphereAlpha, tintAlpha] }
 }
 
 enum SceneSystem62 {
     static func params() -> SceneParams62 {
-        switch SettingsStore.scenePreset {
+        effectiveParams(forScene: SettingsStore.scenePreset)
+    }
+
+    /// (66) 场景注册表：全部场景的内置参数一处登记（网页
+    /// 「场景注册表」的原生落点；0 无场景基线不入设置面）。
+    static func registeredParams(forScene scene: Int) -> SceneParams62 {
+        switch scene {
         case 1: // 影厅：强暗角、氛围压暗、对比基线高
             return SceneParams62(vignette: 0.85, atmosphereAlpha: 0.9,
                                  tintAlpha: 0.62, contrastFloor: 0.5, label: "影厅")
@@ -193,6 +201,22 @@ enum SceneSystem62 {
             return SceneParams62(vignette: 0.45, atmosphereAlpha: 1.0,
                                  tintAlpha: 0.5, contrastFloor: 0.45, label: "无")
         }
+    }
+
+    /// (66) 有效参数 = 注册表基值＋逐场景覆盖（sceneOverrides62
+    /// 的 [暗角, 氛围, 色调] 三元组，钳 0...1）；无覆盖时即
+    /// 注册表原值，行为与 (62) 一致。StageVC 经 params() 消费。
+    static func effectiveParams(forScene scene: Int) -> SceneParams62 {
+        let base = registeredParams(forScene: scene)
+        guard scene >= 1,
+              let override = SettingsStore.sceneOverrides62["\(scene)"],
+              override.count >= 3 else { return base }
+        func clamp(_ v: Double) -> Double { min(max(v, 0), 1) }
+        return SceneParams62(vignette: clamp(override[0]),
+                             atmosphereAlpha: clamp(override[1]),
+                             tintAlpha: clamp(override[2]),
+                             contrastFloor: base.contrastFloor,
+                             label: base.label)
     }
 }
 

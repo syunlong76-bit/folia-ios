@@ -28,6 +28,8 @@ enum WC62Bootstrap {
         Scrobble62.shared.start()
         PlayerCap62.shared.start()
         ListeningStats62.shared.start()
+        // (66) 媒体缓存自动回填挂点（切歌订阅）。
+        MediaCache62.shared.startAutoRefill()
         Breadcrumbs.log("wc62.bootstrap started=1")
     }
 }

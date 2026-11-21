@@ -118,9 +118,14 @@ enum TransitionAnim62 {
     static var hostViewProvider: (() -> UIView?)?
 
     static func playCurrent() {
-        let kind = SettingsStore.transitionAnimation
-        guard kind != "none", let host = hostViewProvider?() else { return }
-        play(kind: kind, in: host)
+        // (66) 双开关口径：容器动画（圆环）与卡片描边各读
+        // 一键、可同时触发（网页为两个独立 bool）；旧三值键
+        // 只作导出镜像，不再是读取面。
+        let ring = SettingsStore.transitionAnimRing62
+        let card = SettingsStore.transitionAnimCard62
+        guard ring || card, let host = hostViewProvider?() else { return }
+        if ring { play(kind: "ring", in: host) }
+        if card { play(kind: "cardStroke", in: host) }
     }
 
     static func play(kind: String, in host: UIView) {

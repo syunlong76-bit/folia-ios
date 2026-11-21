@@ -738,7 +738,8 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
                 && placement.text.count > 1
             let wordView = CadenzaWordView(
                 placement: placement, font: font, splitGlow: splitGlow,
-                antialiasEnabled: CadenzaTuningStore.renderAntialias != "off")
+                antialiasEnabled: LyricCanvas62.resolvedAntialias(
+                    styleOverride: CadenzaTuningStore.renderAntialias))
             wordView.isHidden = true
             lineLayer.addSubview(wordView)
             wordViews[placement.id] = wordView

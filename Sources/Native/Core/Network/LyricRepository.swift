@@ -288,7 +288,7 @@ final class LyricRepository {
             flip = "lrc"
         }
         // (62) WB §4.6：歌词过滤正则（出口按行剔除）。
-        parsed = LyricFilter62.apply(to: parsed)
+        parsed = LyricFilter62.apply66(to: parsed)
         // (62) WB §4.6 / D9：AI 分词——开且端点已配置时给无
         // 戳行补词戳（上限 60 行防长曲阻塞）；未配置时如实落
         // 面包屑，走现有均分＋跨曲标定，不冒充 AI。
@@ -418,7 +418,7 @@ final class LyricRepository {
         if !SettingsStore.keepPlatformWordLyrics {
             lines = lines.map { LyricLineData(time: $0.time, text: $0.text, words: nil) }
         }
-        lines = LyricFilter62.apply(to: lines)
+        lines = LyricFilter62.apply66(to: lines)
         let ratio = Self.singingCalibration(for: lines)
             ?? (SingingRatioPool.median() ?? 0.8)
         Breadcrumbs.log("lrc source track=\(songId) lines=\(lines.count)"
@@ -453,7 +453,7 @@ final class LyricRepository {
         if !SettingsStore.keepPlatformWordLyrics {
             lines = lines.map { LyricLineData(time: $0.time, text: $0.text, words: nil) }
         }
-        lines = LyricFilter62.apply(to: lines)
+        lines = LyricFilter62.apply66(to: lines)
         let ratio = Self.singingCalibration(for: lines)
             ?? (SingingRatioPool.median() ?? 0.8)
         Breadcrumbs.log("lrc source track=\(songId) lines=\(lines.count)"
@@ -490,7 +490,7 @@ final class LyricRepository {
             parsed = parsed.map { LyricLineData(time: $0.time, text: $0.text, words: nil) }
             flip = "lrc"
         }
-        parsed = LyricFilter62.apply(to: parsed)
+        parsed = LyricFilter62.apply66(to: parsed)
         let ratio = Self.singingCalibration(for: parsed)
             ?? (SingingRatioPool.median() ?? 0.8)
         Breadcrumbs.log("lrc source track=\(songId) lines=\(parsed.count)"

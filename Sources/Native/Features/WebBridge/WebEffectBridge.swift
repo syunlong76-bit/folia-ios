@@ -230,6 +230,10 @@ final class FoliaBridgeLogStore {
     /// SettingsStore.bridgeLogWriteEnabled62 门控（默认开＝既有
     /// 行为）；关时只走 NSLog 控制台、不落盘。
     func write(level: String, module: String, message: String) {
+        // (66) 运行日志采集总门控（开发者页签）：关时本存储
+        // 完全不记录（控制台与落盘都停），与「写入本地文件」
+        // 子开关分层——采集关则子开关无意义。
+        guard SettingsStore.logCaptureEnabled62 else { return }
         let clean = sanitize(message)
         let line = "\(iso8601(Date())) [\(level.uppercased())][\(module)] \(clean)\n"
         // Xcode Console 与沙盒日志同步。
@@ -248,6 +252,8 @@ final class FoliaBridgeLogStore {
     /// asm 相位 / swap.begin / entry62.fire），调用方保证
     /// 低频；门控与 write 同口径。
     func writeSync(level: String, module: String, message: String) {
+        // (66) 采集总门控同 write（见上）。
+        guard SettingsStore.logCaptureEnabled62 else { return }
         let clean = sanitize(message)
         let line = "\(iso8601(Date())) [\(level.uppercased())][\(module)] \(clean)\n"
         NSLog("[FoliaBridge][\(module)] \(clean)")

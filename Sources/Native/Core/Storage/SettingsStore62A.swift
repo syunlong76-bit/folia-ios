@@ -50,6 +50,16 @@ extension SettingsStore {
         static var trackPillPosition: String { "settings.player.trackPillPosition" }
         static var trackPillShowOnHome: String { "settings.player.trackPillShowOnHome" }
         static var trackPillOBSEnabled: String { "settings.player.trackPillOBSEnabled" }
+        // (66) 进度条右侧两槽指派（网页「两槽 × 功能指派」的原生落点）
+        static var barSlotLeft62: String { "settings.player.barSlotLeft62" }
+        static var barSlotRight62: String { "settings.player.barSlotRight62" }
+        // (66) 逐场景调参覆盖（JSON：sceneId → [暗角, 氛围, 氛围tint]）
+        static var sceneOverrides62: String { "settings.appearance.sceneOverrides62" }
+        // (66) 歌单卡片样式：card 拍立得（默认）/ image 纯图片封面
+        static var playlistCardStyle62: String { "settings.home.playlistCardStyle62" }
+        // (66) 主页卡片位置记忆的几何面：墙相机原点 "x,y"
+        // （网格滚动偏移复用既有 wallScrollOriginY 键）
+        static var wallCamera62: String { "settings.home.wallCamera62" }
         // 播放页·视频层
         static var videoLayerEnabled: String { "settings.player.videoLayerEnabled" }
         static var videoLayerURL: String { "settings.player.videoLayerURL" }
@@ -276,11 +286,86 @@ extension SettingsStore {
         get { bool62(Key62A.trackPillShowOnHome, default: false) }
         set { setBool62(newValue, Key62A.trackPillShowOnHome) }
     }
-    /// 舞台歌曲卡在 OBS 浏览器源启用：依赖 WC 簇 OBS 通路，本键仅落盘+占位行。
+    /// 舞台歌曲卡在 OBS 浏览器源启用：(66) 做真——消费在
+    /// LocalServer /obs 页（开启时页面加渲染歌曲卡区块）。
     static var trackPillOBSEnabled: Bool {
         get { bool62(Key62A.trackPillOBSEnabled, default: false) }
         set { setBool62(newValue, Key62A.trackPillOBSEnabled) }
     }
+    /// (66) 进度条右侧两槽可指派功能集（原生现有功能面）。
+    static let barSlotFunctions62 = ["none", "prev", "next", "queue", "like", "mode", "sleep"]
+    /// (66) 左槽指派（默认 mode，对齐网页左槽默认循环模式）。
+    static var barSlotLeft62: String {
+        get {
+            let raw = string62(Key62A.barSlotLeft62, default: "mode")
+            return barSlotFunctions62.contains(raw) ? raw : "mode"
+        }
+        set {
+            UserDefaults.standard.set(
+                barSlotFunctions62.contains(newValue) ? newValue : "mode",
+                forKey: Key62A.barSlotLeft62)
+        }
+    }
+    /// (66) 右槽指派（默认 queue；网页右槽默认歌词时间轴，
+    /// 原生无此功能面，取最接近的队列入口，见交付报告）。
+    static var barSlotRight62: String {
+        get {
+            let raw = string62(Key62A.barSlotRight62, default: "queue")
+            return barSlotFunctions62.contains(raw) ? raw : "queue"
+        }
+        set {
+            UserDefaults.standard.set(
+                barSlotFunctions62.contains(newValue) ? newValue : "queue",
+                forKey: Key62A.barSlotRight62)
+        }
+    }
+    /// (66) 逐场景调参覆盖：[sceneId: [暗角, 氛围alpha, tint alpha]]，
+    /// sceneId = "1" 影厅 / "2" 现场 / "3" 书房；SceneSystem62 消费，
+    /// 无覆盖时用注册表内置参数。
+    static var sceneOverrides62: [String: [Double]] {
+        get {
+            let raw = string62(Key62A.sceneOverrides62, default: "")
+            guard let data = raw.data(using: .utf8),
+                  let decoded = try? JSONDecoder().decode([String: [Double]].self, from: data)
+            else { return [:] }
+            return decoded
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue),
+                  let text = String(data: data, encoding: .utf8) else { return }
+            UserDefaults.standard.set(text, forKey: Key62A.sceneOverrides62)
+        }
+    }
+    /// (66) 歌单卡片样式：card（拍立得卡片，默认）/ image（纯图片封面）。
+    /// 消费：CollectionView 拍立得网格（image 时去白框与标题条、纯封面）。
+    static var playlistCardStyle62: String {
+        get {
+            let raw = string62(Key62A.playlistCardStyle62, default: "card")
+            return raw == "image" ? "image" : "card"
+        }
+        set {
+            UserDefaults.standard.set(newValue == "image" ? "image" : "card",
+                                      forKey: Key62A.playlistCardStyle62)
+        }
+    }
+    /// (66) 墙相机原点记忆（worldOrigin，rememberCardPositions 的几何面）。
+    static var wallCamera62: CGPoint? {
+        get {
+            let raw = string62(Key62A.wallCamera62, default: "")
+            let parts = raw.split(separator: ",").compactMap { Double($0) }
+            guard parts.count == 2 else { return nil }
+            return CGPoint(x: parts[0], y: parts[1])
+        }
+        set {
+            if let point = newValue {
+                UserDefaults.standard.set("\(point.x),\(point.y)", forKey: Key62A.wallCamera62)
+            } else {
+                UserDefaults.standard.removeObject(forKey: Key62A.wallCamera62)
+            }
+        }
+    }
+    /// (66) 网格滚动偏移记忆走既有 wallScrollOriginY 键
+    /// （HomeWall 网格 contentOffset.y 的落盘面）。
     /// 视频层（歌词后方）独立开关：独立于 (47) 自定义背景槽的启用语义。
     static var videoLayerEnabled: Bool {
         get { bool62(Key62A.videoLayerEnabled, default: false) }
@@ -375,8 +460,8 @@ extension SettingsStore {
         set { UserDefaults.standard.set(newValue.joined(separator: ","), forKey: Key62A.wallCardOrder) }
     }
     static var wallScrollOriginY: Double {
-        get { double62(Key62A.wallScrollOriginY, default: 0, range: 0...100_000) }
-        set { setDouble62(newValue, Key62A.wallScrollOriginY, range: 0...100_000) }
+        get { double62(Key62A.wallScrollOriginY, default: 0, range: 0...1_000_000) }
+        set { setDouble62(newValue, Key62A.wallScrollOriginY, range: 0...1_000_000) }
     }
 
     // MARK: - 墙面组（访问器名任务定死，供 WD 簇消费；本体在 WD）

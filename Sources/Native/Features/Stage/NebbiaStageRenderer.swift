@@ -2277,7 +2277,8 @@ final class NebbiaStageRenderer: LyricStageRenderer {
         let scenePoints = CGSize(width: bounds.width * 1.25, height: bounds.height)
         let fogPoints = bounds.size
         let capBase: CGFloat = 1024
-        let cap = capBase * CGFloat(NebbiaTuningStore.renderScaleValue ?? 1)
+        let cap = capBase * LyricCanvas62.resolvedScale(
+            styleOverride: NebbiaTuningStore.renderScale)
         bakeQueue.async { [weak self] in
             let scene = nebbiaBakeScene(points: scenePoints, palette: palette,
                                         tokens: tokens, tuning: tuning, cap: cap)

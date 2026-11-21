@@ -213,10 +213,30 @@ final class LocalServer {
         // OBS 浏览器源（3.7 (62) WC 簇 §4.9/§8）：正在播放的纯
         // HTML 海报＋歌词页，OBS 浏览器源直读，5 秒自动刷新。
         if rawPath == "/obs" {
+            // (66) 连接活动登记：后台节流（BackgroundThrottle62）
+            // 以最近一次 /obs 拉取时刻判 OBS 客户端是否在场。
+            BackgroundThrottle62.noteOBSActivity()
             handler.respond(status: 200, reason: "OK",
                             headers: [("Content-Type", "text/html; charset=utf-8"),
                                       ("Cache-Control", "no-cache")],
                             body: Data(Self.obsPageHTML().utf8))
+            return
+        }
+
+        // (66) 本机歌词接口（网页同名能力）：开关开启时输出
+        // 当前曲歌词 JSON 供本机外部程序读取；关时 404 明示
+        // 未开放、无缓存歌词时 404 明示暂无，不造假数据。
+        if rawPath == "/v1/lyric" {
+            guard SettingsStore.lyricAPIEnabled62 else {
+                handler.respond(status: 404, reason: "Not Found",
+                                headers: [("Content-Type", "application/json; charset=utf-8")],
+                                body: Data("{\"error\":\"lyric api disabled\"}".utf8))
+                return
+            }
+            handler.respond(status: 200, reason: "OK",
+                            headers: [("Content-Type", "application/json; charset=utf-8"),
+                                      ("Cache-Control", "no-cache")],
+                            body: Self.lyricAPIJSON())
             return
         }
 
@@ -262,6 +282,17 @@ final class LocalServer {
             }.joined()
         }
         let cover = track?.artworkURL?.absoluteString ?? ""
+        // (66) 假生效做真：舞台歌曲卡「在浏览器源启用」——
+        // 开启时页面顶部加渲染紧凑歌曲卡（小封面＋标题/歌手
+        // ＋播放进度文本），OBS 捕获时可单独取景；关时不渲染。
+        var pillHTML = ""
+        if SettingsStore.trackPillOBSEnabled, let track {
+            let elapsed = Int(engine.rawPlayhead())
+            let total = Int(track.duration)
+            pillHTML = """
+            <div class="pill">\(cover.isEmpty ? "" : "<img class=\"pillimg\" src=\"\(esc(cover))\">")<div class="pillmeta"><div class="pilltitle">\(esc(track.title))</div><div class="pillartist">\(esc(track.artist))</div><div class="pilltime">\(elapsed / 60):\(String(format: "%02d", elapsed % 60)) / \(total / 60):\(String(format: "%02d", total % 60))</div></div></div>
+            """
+        }
         return """
         <!DOCTYPE html><html><head><meta charset="utf-8">
         <meta http-equiv="refresh" content="5">
@@ -275,13 +306,38 @@ final class LocalServer {
         .lyric{font-size:16px;color:rgba(255,255,255,.45);margin:4px 0}
         .lyric.current{font-size:20px;color:#fff;font-weight:600}
         .dim{color:rgba(255,255,255,.4)}
+        .pill{display:flex;align-items:center;gap:12px;max-width:420px;margin:0 auto 24px;
+        padding:10px 14px;background:rgba(20,20,26,.82);border-radius:14px;text-align:left}
+        .pillimg{width:52px;height:52px;border-radius:8px}
+        .pilltitle{font-size:16px;font-weight:600}
+        .pillartist{font-size:13px;color:rgba(255,255,255,.65)}
+        .pilltime{font-size:12px;color:rgba(255,255,255,.45);margin-top:2px}
         </style></head><body>
+        \(pillHTML)
         \(cover.isEmpty ? "" : "<img src=\"\(esc(cover))\">")
         <h1>\(esc(track?.title ?? "暂无播放"))</h1>
         <h2>\(esc(track?.artist ?? ""))</h2>
         \(lyricHTML)
         </body></html>
         """
+    }
+
+    /// (66) /v1/lyric 输出：当前曲＋仓库缓存歌词行（时刻＋
+    /// 文本）；无当前曲/无缓存时以空 lines 明示，不造假。
+    fileprivate static func lyricAPIJSON() -> Data {
+        let engine = PlaybackEngine.shared
+        var payload: [String: Any] = ["title": "", "artist": "", "lines": []]
+        if let track = engine.currentTrack {
+            payload["title"] = track.title
+            payload["artist"] = track.artist
+            if let entry = LyricRepository.shared.cachedEntry(for: track.id) {
+                payload["lines"] = entry.lines.map {
+                    ["time": $0.time, "text": $0.text] as [String: Any]
+                }
+                payload["currentTime"] = engine.rawPlayhead()
+            }
+        }
+        return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data("{}".utf8)
     }
 
     // MARK: - 静态文件

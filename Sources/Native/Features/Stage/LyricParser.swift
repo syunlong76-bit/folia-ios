@@ -77,7 +77,7 @@ enum LyricParser {
         }
         // (62) WB §4.6：歌词过滤正则在舞台出口按行剔除（仓
         // 库出口已过滤一层，此处同口径兜底直喂路径）。
-        return LyricFilter62.applyToStageLines(lines)
+        return LyricFilter62.apply66ToStageLines(lines)
     }
 
     /// 当前行查找：最后一个 start <= position 的行下标；无歌词或

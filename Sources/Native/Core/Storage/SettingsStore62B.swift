@@ -35,6 +35,10 @@ extension SettingsStore {
         static let transitionMaxDurationSec = "settings.playback.transitionMaxDurationSec"
         static let transitionCurve = "settings.playback.transitionCurve"
         static let transitionAnimation = "settings.playback.transitionAnimation"
+        static let transitionAggressive = "settings.playback.transitionAggressive"
+        static let transitionAnimRing = "settings.playback.transitionAnimRing"
+        static let transitionAnimCard = "settings.playback.transitionAnimCard"
+        static let dsdDopEnabled = "settings.playback.dsdDopEnabled"
         static let replayGainEnabled = "settings.playback.replayGainEnabled"
         static let playPauseFadeMs = "settings.playback.playPauseFadeMs"
         static let autoTranscodeEnabled = "settings.playback.autoTranscodeEnabled"
@@ -48,6 +52,13 @@ extension SettingsStore {
         static let localLyricPriority = "settings.lyrics.localLyricPriority"
         static let localLyricFormatOrder = "settings.lyrics.localLyricFormatOrder"
         static let lyricFilterRegex = "settings.lyrics.filterRegex"
+        static let lyricFilterPresetWords = "settings.lyrics.filterPresetWords"
+        static let lyricFilterColonForm = "settings.lyrics.filterColonForm"
+        static let lyricFilterOpeningOnly = "settings.lyrics.filterOpeningOnly"
+        static let lyricCreditsMode = "settings.lyrics.creditsMode"
+        static let lyricCreditsMinStay = "settings.lyrics.creditsMinStay"
+        static let lyricCreditsAbsorb = "settings.lyrics.creditsAbsorb"
+        static let lyricCreditsCustom = "settings.lyrics.creditsCustom"
         static let aiSegmentEnabled = "settings.lyrics.aiSegmentEnabled"
         static let aiSegmentEndpoint = "settings.lyrics.aiSegmentEndpoint"
         // §4.7 通用
@@ -62,6 +73,8 @@ extension SettingsStore {
         static let longPressToolbarCommandPalette = "settings.shortcuts.longPressToolbarCommandPalette"
         static let swipeLeftTarget = "settings.shortcuts.swipeLeftTarget"
         static let posterWallSHotkeyEnabled = "settings.shortcuts.posterWallSHotkeyEnabled"
+        static let customKeyLetter = "settings.shortcuts.customKeyLetter"
+        static let customKeyCommand = "settings.shortcuts.customKeyCommand"
         // §4.9（WB 两项）
         static let lyricAPIBaseURL = "settings.integration.lyricAPIBaseURL"
         static let stageModeEnabled = "settings.integration.stageModeEnabled"
@@ -256,6 +269,9 @@ extension SettingsStore {
 
     /// 过渡动画：none（默认）/ ring（屏幕圆环）/ cardStroke
     /// （卡片描边）。消费 TransitionAnim62（舞台顶层）。
+    /// (66) 起 UI 改双开关（transitionAnimRing62/Card62），本键
+    /// 保留为导出/兼容镜像：双开关写入时同步回写（三值无法表
+    /// 达「双开」，双开时镜像记 ring，真实值以双开关为准）。
     static var transitionAnimation: String {
         get {
             let raw = stringB62(Key62B.transitionAnimation, default: "none")
@@ -266,6 +282,58 @@ extension SettingsStore {
                 ["none", "ring", "cardStroke"].contains(newValue) ? newValue : "none",
                 forKey: Key62B.transitionAnimation)
         }
+    }
+
+    /// (66) 过渡表现模式·激进表现（网页同名开关）：开时过渡
+    /// 窗口与时长放大、双轨中段增益抬升让混音被听见。消费
+    /// PlaybackEngine 的过渡触发窗与 beginCrossfade。
+    static var transitionAggressive62: Bool {
+        get { boolB62(Key62B.transitionAggressive, default: false) }
+        set { setBoolB62(newValue, Key62B.transitionAggressive) }
+    }
+
+    /// (66) 过渡动画·屏幕圆环（双开关之一；未单独写过时由
+    /// 旧 transitionAnimation 派生，保证升级行为不变）。
+    static var transitionAnimRing62: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: Key62B.transitionAnimRing) != nil {
+                return boolB62(Key62B.transitionAnimRing, default: false)
+            }
+            return transitionAnimation == "ring"
+        }
+        set {
+            setBoolB62(newValue, Key62B.transitionAnimRing)
+            syncTransitionAnimationMirror()
+        }
+    }
+
+    /// (66) 过渡动画·卡片描边（双开关之二，派生口径同上）。
+    static var transitionAnimCard62: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: Key62B.transitionAnimCard) != nil {
+                return boolB62(Key62B.transitionAnimCard, default: false)
+            }
+            return transitionAnimation == "cardStroke"
+        }
+        set {
+            setBoolB62(newValue, Key62B.transitionAnimCard)
+            syncTransitionAnimationMirror()
+        }
+    }
+
+    private static func syncTransitionAnimationMirror() {
+        let ring = UserDefaults.standard.bool(forKey: Key62B.transitionAnimRing)
+        let card = UserDefaults.standard.bool(forKey: Key62B.transitionAnimCard)
+        transitionAnimation = ring ? "ring" : (card ? "cardStroke" : "none")
+    }
+
+    /// (66) DSD 以 DoP 输出（DS 改判「有条件」落地）：本地
+    /// DSD（.dsf）文件播放时，开且能力检测通过（外接输出＋
+    /// 176.4kHz）走 DoP 封装路径；不满足则明示降级为 PCM
+    /// 转换播放。消费 DSDPlayback62（PlaybackEngine 本地通路）。
+    static var dsdDopEnabled62: Bool {
+        get { boolB62(Key62B.dsdDopEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.dsdDopEnabled) }
     }
 
     /// ReplayGain 开关（默认关）：消费 PlaybackEngine 音量链。
@@ -387,6 +455,65 @@ extension SettingsStore {
         set { UserDefaults.standard.set(newValue, forKey: Key62B.lyricFilterRegex) }
     }
 
+    // MARK: - §4.6 (66) 歌词过滤规则卡与署名块处理
+
+    /// 预置词表过滤（默认关）：行首命中制作人员词（作词/作曲/
+    /// 编曲/制作/演唱等，见 LyricFilter62.presetHeads）的行剔除。
+    static var lyricFilterPresetWords62: Bool {
+        get { boolB62(Key62B.lyricFilterPresetWords, default: false) }
+        set { setBoolB62(newValue, Key62B.lyricFilterPresetWords) }
+    }
+
+    /// 冒号形态过滤（默认关）：行呈「短词＋冒号＋内容」的
+    /// 署名形态（行首 1...12 字后接全/半角冒号）时剔除。
+    static var lyricFilterColonForm62: Bool {
+        get { boolB62(Key62B.lyricFilterColonForm, default: false) }
+        set { setBoolB62(newValue, Key62B.lyricFilterColonForm) }
+    }
+
+    /// 只作用于开头段（默认关）：规则卡与正则只过滤第一句
+    /// 正式歌词之前的行，中段命中不删（网页「不删中段」）。
+    static var lyricFilterOpeningOnly62: Bool {
+        get { boolB62(Key62B.lyricFilterOpeningOnly, default: false) }
+        set { setBoolB62(newValue, Key62B.lyricFilterOpeningOnly) }
+    }
+
+    /// 开头署名块处理方式：keep 保留（默认）/ remove 整块删
+    /// 除 / merge 合并成一行（文本以「 / 」连接、时刻取首行）。
+    static var lyricCreditsMode62: String {
+        get {
+            let raw = stringB62(Key62B.lyricCreditsMode, default: "keep")
+            return ["keep", "remove", "merge"].contains(raw) ? raw : "keep"
+        }
+        set {
+            UserDefaults.standard.set(
+                ["keep", "remove", "merge"].contains(newValue) ? newValue : "keep",
+                forKey: Key62B.lyricCreditsMode)
+        }
+    }
+
+    /// 署名块最少停留（秒，0...10，默认 0）：remove/merge 时
+    /// 只有停留（行时长）≥ 本值的署名行才处理，短闪行保留。
+    static var lyricCreditsMinStay62: Double {
+        get { min(max(double62(Key62B.lyricCreditsMinStay, default: 0), 0), 10) }
+        set { UserDefaults.standard.set(min(max(newValue, 0), 10),
+                                        forKey: Key62B.lyricCreditsMinStay) }
+    }
+
+    /// 署名块吸收相邻行（默认关）：处理时把与署名块相邻的
+    /// 空行/纯符号行一并纳入块范围。
+    static var lyricCreditsAbsorb62: Bool {
+        get { boolB62(Key62B.lyricCreditsAbsorb, default: false) }
+        set { setBoolB62(newValue, Key62B.lyricCreditsAbsorb) }
+    }
+
+    /// 署名块自定义识别（正则，默认空）：命中行视为署名行
+    /// 参与署名块处理；保存时经 LyricFilter62.validate 校验。
+    static var lyricCreditsCustom62: String {
+        get { stringB62(Key62B.lyricCreditsCustom, default: "") }
+        set { UserDefaults.standard.set(newValue, forKey: Key62B.lyricCreditsCustom) }
+    }
+
     /// 自动 AI 分词开关（默认关）：消费 LyricRepository——开
     /// 且端点已配置时对无戳行调 AISegment62；未配置端点时走
     /// 现有均分＋跨曲标定并如实落面包屑（不冒充 AI 分词）。
@@ -493,6 +620,31 @@ extension SettingsStore {
     static var posterWallSHotkeyEnabled: Bool {
         get { boolB62(Key62B.posterWallSHotkeyEnabled, default: true) }
         set { setBoolB62(newValue, Key62B.posterWallSHotkeyEnabled) }
+    }
+
+    /// (66) 自定义快捷键·字母（网页 Alt＋字母的原生落点）：
+    /// 空 = 未设置；A–Z 单字母。消费 HomeWall/WallPrototype
+    /// 的 keyCommands（外接键盘场景，与 S 键行同通路）。
+    static var customKeyLetter62: String {
+        get {
+            let raw = stringB62(Key62B.customKeyLetter, default: "")
+                .trimmingCharacters(in: .whitespaces).uppercased()
+            guard raw.count == 1, let ch = raw.first, ch.isLetter else { return "" }
+            return raw
+        }
+        set {
+            let cleaned = newValue.trimmingCharacters(in: .whitespaces).uppercased()
+            UserDefaults.standard.set(
+                cleaned.count == 1 ? cleaned : "", forKey: Key62B.customKeyLetter)
+        }
+    }
+
+    /// (66) 自定义快捷键·命令 id（命令目录同固定槽位编辑器
+    /// 的 11 条，默认 playback.toggle）。消费同上：按键后经
+    /// 命令面板同款分发执行。
+    static var customKeyCommand62: String {
+        get { stringB62(Key62B.customKeyCommand, default: "playback.toggle") }
+        set { UserDefaults.standard.set(newValue, forKey: Key62B.customKeyCommand) }
     }
 
     // MARK: - §4.9 WB 两项（连接与集成）

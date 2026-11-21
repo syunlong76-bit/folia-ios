@@ -1,5 +1,8 @@
 import UIKit
 
+/// (66) SettingsViewController.clusterCards62 的关联对象键。
+private var clusterCards62Key: UInt8 = 0
+
 /// 原生设置页：账号（(51) 原生扫码登录/退出）、播放与歌词
 /// 设置、壳信息、桥日志入口。
 ///
@@ -1333,6 +1336,9 @@ extension SettingsViewController {
             cardStack.addArrangedSubview(card)
             reg(card, tab: tab)
         }
+
+        // (66) 全部卡构建完毕：按网页版 IA 归整页签内卡序。
+        reorderTabCards66()
     }
 
     // MARK: (55) 新增动作
@@ -1555,13 +1561,57 @@ final class BridgeLogViewController: UIViewController {
 // 行工厂（makeGroupCard/makeSwitchRow 等）已去私有化供扩展文件调用；
 // 控件一律用 UIAction 闭包接线，不依赖宿主存储属性。
 extension SettingsViewController {
+    /// (66) 簇卡捕获：build62Tabs 期间按页签记录四簇注册的
+    /// 卡片（顺序即簇内构建序，簇内已按网页版 IA 归整）。
+    var clusterCards62: [Int: [UIView]] {
+        get { objc_getAssociatedObject(self, &clusterCards62Key) as? [Int: [UIView]] ?? [:] }
+        set { objc_setAssociatedObject(self, &clusterCards62Key, newValue, .OBJC_ASSOCIATION_RETAIN_NONATOMIC) }
+    }
+
     func build62Tabs(into cardStack: UIStackView) {
         let regFn: (UIView, Int) -> Void = { [weak self] view, tab in
-            self?.reg(view, tab: tab)
+            guard let self else { return }
+            self.reg(view, tab: tab)
+            self.clusterCards62[tab, default: []].append(view)
         }
         Settings62ClusterA.build(host: self, into: cardStack, reg: regFn)
         Settings62ClusterB.build(host: self, into: cardStack, reg: regFn)
         Settings62ClusterC.build(host: self, into: cardStack, reg: regFn)
         Settings62ClusterD.build(host: self, into: cardStack, reg: regFn)
+    }
+
+    /// (66) 页签内卡序归整（Miller 18:15：参照网页版排版）：
+    /// 全部卡构建完后调一次——每签内簇卡（已按网页版分组
+    /// 构成/顺序构建）排前，宿主老面卡（迁移前原生卡）按原
+    /// 相对序排后，未接入注记卡随老面卡居末。实现为槽位替
+    /// 换：非卡行（抓手/标题/页签条）原地不动，各签卡片只
+    /// 在本签既有槽位内重排，不跨签串位。
+    func reorderTabCards66() {
+        guard let stack = cardStackRef else { return }
+        var tabOf: [ObjectIdentifier: Int] = [:]
+        for (tab, views) in tabGroups.enumerated() {
+            for view in views { tabOf[ObjectIdentifier(view)] = tab }
+        }
+        var queues: [Int: [UIView]] = [:]
+        for (tab, views) in tabGroups.enumerated() {
+            let cluster = clusterCards62[tab] ?? []
+            let clusterIDs = Set(cluster.map { ObjectIdentifier($0) })
+            let host = views.filter { !clusterIDs.contains(ObjectIdentifier($0)) }
+            queues[tab] = cluster + host
+        }
+        let arranged = stack.arrangedSubviews
+        let reordered: [UIView] = arranged.map { view in
+            guard let tab = tabOf[ObjectIdentifier(view)],
+                  var queue = queues[tab], !queue.isEmpty else { return view }
+            let next = queue.removeFirst()
+            queues[tab] = queue
+            return next
+        }
+        for view in arranged {
+            stack.removeArrangedSubview(view)
+            view.removeFromSuperview()
+        }
+        for view in reordered { stack.addArrangedSubview(view) }
+        Breadcrumbs.log("settings66.reorder done=1")
     }
 }

@@ -1241,16 +1241,11 @@ final class DioramaStageRenderer: LyricStageRenderer {
         let key = "\(tuning.renderScale)|\(tuning.renderAntialias)"
         guard key != lastRenderKey62 else { return }
         lastRenderKey62 = key
-        let factor: CGFloat
-        if tuning.renderScale == "global" {
-            factor = CGFloat(SettingsStore.lyricRenderScale)
-        } else {
-            factor = CGFloat(Double(tuning.renderScale) ?? 1)
-        }
+        let factor = LyricCanvas62.resolvedScale(styleOverride: tuning.renderScale)
         let native = UIScreen.main.scale
         scnView.contentScaleFactor = max(0.5, native * factor)
-        scnView.antialiasingMode = tuning.renderAntialias == "off"
-            ? .none : .multisampling4X
+        scnView.antialiasingMode = LyricCanvas62.resolvedAntialias(
+            styleOverride: tuning.renderAntialias) ? .multisampling4X : .none
         Breadcrumbs.log("stage62.diorama render scale=\(tuning.renderScale) aa=\(tuning.renderAntialias)")
     }
 

@@ -149,4 +149,29 @@ enum LyricCanvas62 {
         context.setShouldAntialias(edgeAntialiasingEnabled)
         context.setAllowsAntialiasing(edgeAntialiasingEnabled)
     }
+
+    // MARK: - (66) 统一读取口径（逐样式覆盖 × 全局键）
+
+    /// 分辨率统一解析：逐样式覆盖为数值串（"0.75"/"1"/"1.5"
+    /// 等）时覆盖全局档；"global"/nil/不可解析时回全局档
+    /// lyricRenderScale。此前各渲染器各行其是（Nebbia 的
+    /// "global" 曾落成 ×1 忽略全局档），(66) 起一律经此面。
+    static func resolvedScale(styleOverride raw: String?) -> CGFloat {
+        guard let raw, raw != "global", let value = Double(raw) else {
+            return globalScale
+        }
+        return CGFloat(value)
+    }
+
+    /// 抗锯齿统一解析：逐样式覆盖 "off" 关 / "on" 开优先；
+    /// "global"/nil/余值回全局键 lyricAntialiasEnabled。
+    /// 此前 Cadenza/Diorama 以 `!= "off"` 判定，全局键关闭
+    /// 时样式 "global" 仍开抗锯齿——(66) 修正。
+    static func resolvedAntialias(styleOverride raw: String?) -> Bool {
+        switch raw {
+        case "off": return false
+        case "on": return true
+        default: return edgeAntialiasingEnabled
+        }
+    }
 }

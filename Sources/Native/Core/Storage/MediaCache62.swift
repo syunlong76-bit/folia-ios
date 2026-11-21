@@ -37,11 +37,76 @@ final class MediaCache62: ObservableObject {
     @Published private(set) var entries: [Entry] = []
 
     var directory: URL {
+        if let custom = Self.customDirectory { return custom }
         let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("folia-media62", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
+
+    // MARK: - (66) 缓存目录自选（DS 改判落地）
+
+    /// 自选目录解析缓存：书签只解析一次，安全作用域访问在
+    /// 进程内保持（start 一次不 stop，随进程生命周期）。
+    private static var resolvedCustomDirectory: URL?
+    private static var customFallbackLogged = false
+
+    /// 当前生效的自选目录；未设置/书签失效时为 nil（回退
+    /// 默认目录，失效时落一条面包屑明示，不静默假装）。
+    static var customDirectory: URL? {
+        if let resolvedCustomDirectory { return resolvedCustomDirectory }
+        guard let data = SettingsStore.mediaCacheDirBookmark62 else { return nil }
+        var stale = false
+        guard let url = try? URL(resolvingBookmarkData: data, options: [],
+                                 relativeTo: nil, bookmarkDataIsStale: &stale),
+              !stale else {
+            if !customFallbackLogged {
+                customFallbackLogged = true
+                Breadcrumbs.log("mediacache66 dir fallback=bookmark-stale")
+            }
+            return nil
+        }
+        guard url.startAccessingSecurityScopedResource() else {
+            if !customFallbackLogged {
+                customFallbackLogged = true
+                Breadcrumbs.log("mediacache66 dir fallback=scope-denied")
+            }
+            return nil
+        }
+        let dir = url.appendingPathComponent("FoliaMediaCache", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        resolvedCustomDirectory = dir
+        Breadcrumbs.log("mediacache66 dir custom=1")
+        return dir
+    }
+
+    /// 目录切换后重读索引：索引随目录走，原目录缓存不迁移
+    /// （设置行说明里明示），新目录按其自有索引接管。
+    func reloadIndex() { loadIndex() }
+
+    /// 设置行选目录后调用：存安全作用域书签并清解析缓存。
+    static func setCustomDirectory(_ url: URL) {
+        guard let data = try? url.bookmarkData(
+            options: .minimalBookmark, includingResourceValuesForKeys: nil,
+            relativeTo: nil) else {
+            Breadcrumbs.log("mediacache66 dir bookmark-failed")
+            return
+        }
+        SettingsStore.mediaCacheDirBookmark62 = data
+        resolvedCustomDirectory = nil
+        customFallbackLogged = false
+        Breadcrumbs.log("mediacache66 dir set=1")
+    }
+
+    /// 恢复默认目录：摘书签并清解析缓存。
+    static func clearCustomDirectory() {
+        SettingsStore.mediaCacheDirBookmark62 = nil
+        resolvedCustomDirectory = nil
+        Breadcrumbs.log("mediacache66 dir set=0")
+    }
+
+    /// 当前是否在用自选目录（设置行状态面）。
+    static var usingCustomDirectory: Bool { customDirectory != nil }
     private var indexURL: URL { directory.appendingPathComponent("index.json") }
 
     var totalBytes: Int { entries.reduce(0) { $0 + $1.bytes } }
@@ -104,6 +169,39 @@ final class MediaCache62: ObservableObject {
             Breadcrumbs.log("mediacache62.cache fail id=\(track.id) err=\(error.localizedDescription)")
             return false
         }
+    }
+
+    // MARK: - (66) 缓存歌曲自动回填
+
+    private var autoRefillCancellables = Set<AnyCancellable>()
+    private var autoRefillStarted = false
+
+    /// 自动回填挂点：订阅引擎当前曲——切歌时把当前曲与队
+    /// 列后续 3 首回填进缓存（cache(track:) 内部按
+    /// mediaCacheEnabled62 与来源过滤）。节流口径：后台节
+    /// 流 aggressive 且 OBS 客户端在场时推迟本轮（见
+    /// BackgroundThrottle62）。由 WC62Bootstrap 启动一次。
+    func startAutoRefill() {
+        guard !autoRefillStarted else { return }
+        autoRefillStarted = true
+        PlaybackEngine.shared.$currentTrack
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] track in
+                guard let self, track != nil,
+                      SettingsStore.mediaCacheAutoRefill62,
+                      SettingsStore.mediaCacheEnabled62 else { return }
+                guard BackgroundThrottle62.allowsBackgroundWork else {
+                    Breadcrumbs.log("mediacache66 refill deferred=obs-active")
+                    return
+                }
+                Task { [weak self] in
+                    let done = await self?.precacheQueue(lookahead: 3) ?? 0
+                    if done > 0 {
+                        Breadcrumbs.log("mediacache66 refill done=\(done)")
+                    }
+                }
+            }
+            .store(in: &autoRefillCancellables)
     }
 
     /// 预缓存：当前曲＋队列后 N 首（手动触发入口：设置行/

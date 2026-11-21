@@ -547,7 +547,7 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
             Breadcrumbs.log("crossfade62 begin skipped ready=\(preparedCrossfade != nil)")
             return
         }
-        let effective = min(max(duration, 0.5), SettingsStore.transitionMaxDurationSec)
+        let effective = min(max(duration, 0.5), Self.effectiveTransitionMax62)
         preparedCrossfade = nil
         inactivePlayer.volume = 0
         inactivePlayer.play()
@@ -555,8 +555,9 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         if !FoliaMotion62.reduced(.mixTransition) {
             TransitionAnim62.playCurrent()
         }
-        Breadcrumbs.log("crossfade62 begin track=\(prepared.track.id) dur=\(String(format: "%.2f", effective)) mode=\(SettingsStore.transitionMode) curve=\(SettingsStore.transitionCurve)")
+        Breadcrumbs.log("crossfade62 begin track=\(prepared.track.id) dur=\(String(format: "%.2f", effective)) mode=\(SettingsStore.transitionMode) curve=\(SettingsStore.transitionCurve) aggr=\(SettingsStore.transitionAggressive62 ? 1 : 0)")
         var elapsed: TimeInterval = 0
+        let aggressive = SettingsStore.transitionAggressive62
         let timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] timer in
             guard let self, self.crossfadeContext != nil else { timer.invalidate(); return }
             elapsed += 0.02
@@ -564,14 +565,26 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
             let gains = Self.crossfadeGains(progress: progress,
                                             curve: SettingsStore.transitionCurve)
             let base = self.effectiveVolume()
-            self.activePlayer.volume = base * gains.out
-            self.inactivePlayer.volume = base * gains.in
+            // (66) 激进表现：双轨中段增益抬升（正弦包络，峰值
+            // +18%），让混音段被听见；钳到 1 不爆音量上限。
+            let boost: Float = aggressive
+                ? Float(1 + 0.18 * sin(progress * Double.pi)) : 1
+            self.activePlayer.volume = min(1, base * gains.out * boost)
+            self.inactivePlayer.volume = min(1, base * gains.in * boost)
             if progress >= 1 {
                 timer.invalidate()
                 self.finishCrossfade()
             }
         }
         crossfadeContext = (prepared.track, effective, 0, timer)
+    }
+
+    /// (66) 过渡时长有效上限：激进表现开时上限 ×1.5（窗口
+    /// 与时长同步放大，网页「激进表现」语义）；关时 = 用户
+    /// 设置的 transitionMaxDurationSec 原值。
+    private static var effectiveTransitionMax62: TimeInterval {
+        let base = SettingsStore.transitionMaxDurationSec
+        return SettingsStore.transitionAggressive62 ? base * 1.5 : base
     }
 
     /// 过渡音量曲线（出/入增益）：equalPower 恒功率、linear
@@ -647,13 +660,13 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         let remaining = duration - currentTime
         let window: TimeInterval
         if SettingsStore.transitionMode == "automix" {
-            window = min(SettingsStore.transitionMaxDurationSec, 10)
+            window = min(Self.effectiveTransitionMax62, 10)
             if !automixApproxLogged {
                 automixApproxLogged = true
                 Breadcrumbs.log("crossfade62 automix approx=fixed-lead lead=\(window) energy-data=none")
             }
         } else {
-            window = min(SettingsStore.transitionMaxDurationSec, duration * 0.25)
+            window = min(Self.effectiveTransitionMax62, duration * 0.25)
         }
         guard remaining > 0.3, remaining <= window else { return }
         beginCrossfade(duration: remaining)
