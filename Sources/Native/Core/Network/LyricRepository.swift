@@ -116,20 +116,93 @@ final class LyricRepository {
         var flip = "lrc"
         var lrcText = ""
         var mergeStats = LyricParsing.MergeStats()
-        if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: songId) {
+        // (62) WB §4.6：本地歌词优先（localFirst）——钩子已注
+        // 册且命中时整段替代远端链；未注册/未命中行为不变。
+        if SettingsStore.localLyricPriority == "localFirst",
+           let local = Self.localLyricLines(songId: songId) {
+            parsed = local.lines
+            lrcText = local.text
+            source = "local"
+            flip = local.isWordTimed ? "yrc" : "lrc"
+            Breadcrumbs.log("lyric62.local hit track=\(songId) lines=\(parsed.count)")
+        } else if let custom = await Self.fetchCustomLyric(songId: songId) {
+            // (62) WB §4.9：自定义歌词 API 基址非空时先试它，
+            // 命中即用（形状与 EdgeOne /lyric 兼容：{lrc:{lyric}}）。
+            parsed = custom.lines
+            lrcText = custom.text
+            source = "custom-api"
+            flip = "lrc"
+            Breadcrumbs.log("lyric62.customAPI hit track=\(songId) lines=\(parsed.count)")
+        } else if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: songId) {
             lrcText = bundle.lrc
-            let merged = LyricParsing.mergeLyricLines(
-                lrcLines: LyricParsing.parseLRC(bundle.lrc),
-                yrcLines: bundle.yrc.map(LyricParsing.parseYRC) ?? [])
-            parsed = merged.lines
-            source = merged.source
-            flip = merged.flip
-            mergeStats = merged.stats
+            let lrcLines = LyricParsing.parseLRC(bundle.lrc)
+            let yrcLines = bundle.yrc.map(LyricParsing.parseYRC) ?? []
+            // (62) WB §4.6：自动最佳歌词关时不合并 YRC、恒行级。
+            if !SettingsStore.autoBestLyricEnabled {
+                parsed = lrcLines
+                source = lrcLines.isEmpty ? "none" : "lrc"
+                flip = "lrc"
+                Breadcrumbs.log("lyric62.bestLyric off=1 track=\(songId)")
+            } else {
+                let merged = LyricParsing.mergeLyricLines(
+                    lrcLines: lrcLines, yrcLines: yrcLines,
+                    priority: SettingsStore.lyricMatchPriority)
+                parsed = merged.lines
+                source = merged.source
+                flip = merged.flip
+                mergeStats = merged.stats
+                // 最佳策略后处理：lrcFirst 丢逐字退行级；
+                // durationMatch 在两表末行时刻差 >2s 时以时
+                // 刻更靠后的表为准（跨度更完整者胜出）。
+                switch SettingsStore.bestLyricStrategy {
+                case "lrcFirst":
+                    parsed = parsed.map {
+                        LyricLineData(time: $0.time, text: $0.text, words: nil)
+                    }
+                    flip = "lrc"
+                case "durationMatch":
+                    if let lrcLast = lrcLines.last?.time, let yrcLast = yrcLines.last?.time,
+                       abs(lrcLast - yrcLast) > 2, yrcLast > lrcLast, !yrcLines.isEmpty {
+                        parsed = yrcLines
+                        source = "lrc+yrc"
+                        flip = "yrc"
+                    }
+                default:
+                    break
+                }
+            }
         } else if let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: songId) {
             lrcText = text
             parsed = LyricParsing.parseLRC(text)
             source = parsed.isEmpty ? "none" : "lrc-fallback"
             flip = "lrc"
+        }
+        // (62) WB §4.6：platformFirst（默认）时本地钩子作远端
+        // 皆空的兜底（localFirst 已在链头处理）。
+        if parsed.isEmpty, SettingsStore.localLyricPriority == "platformFirst",
+           let local = Self.localLyricLines(songId: songId) {
+            parsed = local.lines
+            lrcText = local.text
+            source = "local"
+            flip = local.isWordTimed ? "yrc" : "lrc"
+            Breadcrumbs.log("lyric62.local fallback track=\(songId) lines=\(parsed.count)")
+        }
+        // (62) WB §4.6：保留平台逐字关 → 合并后丢 words 退行级。
+        if !SettingsStore.keepPlatformWordLyrics {
+            parsed = parsed.map { LyricLineData(time: $0.time, text: $0.text, words: nil) }
+            flip = "lrc"
+        }
+        // (62) WB §4.6：歌词过滤正则（出口按行剔除）。
+        parsed = LyricFilter62.apply(to: parsed)
+        // (62) WB §4.6 / D9：AI 分词——开且端点已配置时给无
+        // 戳行补词戳（上限 60 行防长曲阻塞）；未配置时如实落
+        // 面包屑，走现有均分＋跨曲标定，不冒充 AI。
+        if SettingsStore.aiSegmentEnabled, !parsed.isEmpty {
+            if AISegment62.isConfigured {
+                parsed = await Self.applyAISegmentation(parsed)
+            } else {
+                Breadcrumbs.log("lyric62.aiSegment fallback=local-estimate reason=endpoint-empty track=\(songId)")
+            }
         }
         let bytes = Self.estimateBytes(lines: parsed, lrcText: lrcText)
         // r 三级来源（3.7 (46) 跨曲学习）：本曲有戳 → 同曲标定
@@ -179,6 +252,69 @@ final class LyricRepository {
                      flip: flip, singingRatio: ratio,
                      isNegative: parsed.isEmpty,
                      fetchedAt: Date(), estimatedBytes: bytes)
+    }
+
+    // MARK: - (62) WB 取词链扩展
+
+    /// 本地歌词钩子查询：未注册返回 nil（行为不变）；命中按
+    /// 格式（YRC/LRC）选解析器。注册方为 WC 的本地曲库。
+    private static func localLyricLines(songId: String)
+        -> (lines: [LyricLineData], text: String, isWordTimed: Bool)? {
+        guard let source = LocalLyricSource62Registry.shared.source,
+              let text = source.localLyricText(songId: songId), !text.isEmpty
+        else { return nil }
+        let isWordTimed = source.localLyricIsWordTimed(songId: songId)
+        let lines = isWordTimed ? LyricParsing.parseYRC(text) : LyricParsing.parseLRC(text)
+        return lines.isEmpty ? nil : (lines, text, isWordTimed)
+    }
+
+    /// 自定义歌词 API：GET {base}/lyric?id=<songId>，响应形
+    /// 状与 EdgeOne /lyric 兼容（{lrc:{lyric}} 或纯文本）。
+    /// 基址为空/失败/空结果返回 nil，调用方回落 EdgeOne。
+    private static func fetchCustomLyric(songId: String) async
+        -> (lines: [LyricLineData], text: String)? {
+        let base = SettingsStore.lyricAPIBaseURL.trimmingCharacters(in: .whitespaces)
+        guard !base.isEmpty, var components = URLComponents(string: base + "/lyric")
+        else { return nil }
+        components.queryItems = [URLQueryItem(name: "id", value: songId)]
+        guard let url = components.url else { return nil }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 8
+        guard let (data, response) = try? await URLSession.shared.data(for: request),
+              (response as? HTTPURLResponse)?.statusCode == 200 else {
+            if !base.isEmpty { Breadcrumbs.log("lyric62.customAPI miss track=\(songId)") }
+            return nil
+        }
+        let text: String
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let lrc = (json["lrc"] as? [String: Any])?["lyric"] as? String {
+            text = lrc
+        } else if let plain = String(data: data, encoding: .utf8) {
+            text = plain
+        } else {
+            return nil
+        }
+        let lines = LyricParsing.parseLRC(text)
+        return lines.isEmpty ? nil : (lines, text)
+    }
+
+    /// AI 分词应用：逐行（上限 60）给无戳行补词戳；单行失败
+    /// 保留原行（下游均分兜底）。
+    private static func applyAISegmentation(_ lines: [LyricLineData]) async -> [LyricLineData] {
+        var out = lines
+        var applied = 0
+        for index in out.indices where out[index].words == nil {
+            if applied >= 60 { break }
+            let line = out[index]
+            let end = index + 1 < out.count ? out[index + 1].time : line.time + 5
+            if let words = await AISegment62.fetchWords(text: line.text,
+                                                         start: line.time, end: end) {
+                out[index] = LyricLineData(time: line.time, text: line.text, words: words)
+                applied += 1
+            }
+        }
+        Breadcrumbs.log("lyric62.aiSegment applied=\(applied)")
+        return out
     }
 
     /// 演唱跨度压缩比标定（3.7 (43) 路3）：人声唱完一行通常
@@ -304,7 +440,8 @@ enum LyricParsing {
     /// 布）。实测动因：《孤勇者》LRC 半角括号 vs YRC 全角括
     /// 号一行漏配，折叠后该曲 57/57 全配（2026-11-20 真回包
     /// 复刻验证）。折叠只影响匹配键，显示文本仍用 LRC 原行。
-    static func mergeLyricLines(lrcLines: [LyricLineData], yrcLines: [LyricLineData])
+    static func mergeLyricLines(lrcLines: [LyricLineData], yrcLines: [LyricLineData],
+                                priority: String = "exactFirst")
         -> (lines: [LyricLineData], source: String, flip: String, stats: MergeStats) {
         var stats = MergeStats(yrcLineCount: yrcLines.count)
         if LyricTiming.flipSource == .yrc {
@@ -354,21 +491,44 @@ enum LyricParsing {
             }
             return out
         }
+        // (62) WB §4.6 匹配优先级：一级键随 priority 切换——
+        // foldedFirst 时一级直接用折叠键（折叠匹配优先于精
+        // 确），其余口径与现行两级法不变。
+        let level1Key: (String) -> String = priority == "foldedFirst" ? foldedKey : matchKey
         var yrcByText: [String: [Int]] = [:]
         for (i, line) in yrcLines.enumerated() {
-            yrcByText[matchKey(line.text), default: []].append(i)
+            yrcByText[level1Key(line.text), default: []].append(i)
         }
         // 一级：精确键消费。matchedYrc[i] = 第 i 个 LRC 行配到
         // 的 YRC 下标（二级单调判定与消费记账共用）。
         var matchedYrc: [Int?] = Array(repeating: nil, count: lrcLines.count)
         var consumedYrc = Set<Int>()
         for (i, lrcLine) in lrcLines.enumerated() {
-            let key = matchKey(lrcLine.text)
+            let key = level1Key(lrcLine.text)
             if var queue = yrcByText[key], !queue.isEmpty {
                 let idx = queue.removeFirst()
                 yrcByText[key] = queue
                 matchedYrc[i] = idx
                 consumedYrc.insert(idx)
+            }
+        }
+        // (62) WB §4.6：timeFirst 的二级——折叠键同文候选里
+        // 取行时刻最近者（差 <2s 才配），不要求唯一。
+        if priority == "timeFirst" {
+            for i in lrcLines.indices where matchedYrc[i] == nil {
+                let folded = foldedKey(lrcLines[i].text)
+                let candidates = yrcLines.indices.filter {
+                    !consumedYrc.contains($0) && foldedKey(yrcLines[$0].text) == folded
+                }
+                let nearest = candidates.min {
+                    abs(yrcLines[$0].time - lrcLines[i].time)
+                        < abs(yrcLines[$1].time - lrcLines[i].time)
+                }
+                if let idx = nearest,
+                   abs(yrcLines[idx].time - lrcLines[i].time) < 2 {
+                    matchedYrc[i] = idx
+                    consumedYrc.insert(idx)
+                }
             }
         }
         // 二级：折叠键兜底（候选唯一 + 顺序单调才配）。

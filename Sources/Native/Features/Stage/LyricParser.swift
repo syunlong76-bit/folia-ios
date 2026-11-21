@@ -63,14 +63,21 @@ enum LyricParser {
             } else {
                 end = row.time + 5
             }
-            let words = row.words?.map {
-                LyricWord(start: $0.start, end: $0.start + $0.duration, text: $0.text)
-            }
+            // (62) WB §4.6：保留平台逐字关时舞台出口同口径
+            // 丢词戳（与 LyricRepository 出口双保险，防其它
+            // 调用方绕过仓库直喂行表）。
+            let words = SettingsStore.keepPlatformWordLyrics
+                ? row.words?.map {
+                    LyricWord(start: $0.start, end: $0.start + $0.duration, text: $0.text)
+                }
+                : nil
             lines.append(LyricLine(id: index, start: row.time, end: end,
                                    text: row.text, words: words,
                                    singingRatio: singingRatio))
         }
-        return lines
+        // (62) WB §4.6：歌词过滤正则在舞台出口按行剔除（仓
+        // 库出口已过滤一层，此处同口径兜底直喂路径）。
+        return LyricFilter62.applyToStageLines(lines)
     }
 
     /// 当前行查找：最后一个 start <= position 的行下标；无歌词或

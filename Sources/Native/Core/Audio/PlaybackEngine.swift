@@ -115,6 +115,10 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         setupPeriodicTimeObservers()
         setupInterruptionAndRouteObservers()
         setupLifecycleObservers()
+        // (62) WB：后台节流策略层与外部舞台数据源的冷启恢复
+        // （引擎是冷启必经的单例，在此装配一次）。
+        BackgroundThrottle62.install()
+        StageDataSource62.shared.startIfEnabled()
     }
 
     deinit {
@@ -129,11 +133,39 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
 
     func play() {
         activateSessionIfNeeded()
+        // (62) WB：淡出途中被重新起播时，先废掉淡出斜坡并恢
+        // 复有效音量，防旧计时器稍后把已恢复的播放又暂停。
+        if fadeTimer != nil {
+            fadeTimer?.invalidate()
+            fadeTimer = nil
+            applyEffectiveVolume()
+        }
+        // (62) WB §4.5：播放淡入——时长键 playPauseFadeMs（默
+        // 认 200ms）；过渡进行中或已在播时不走斜坡，直达 play。
+        let fade = fadeDuration()
+        guard fade > 0, currentTrack != nil, playbackState != .playing,
+              crossfadeContext == nil else {
+            activePlayer.play()
+            return
+        }
+        activePlayer.volume = 0
         activePlayer.play()
+        rampActiveVolume(to: effectiveVolume(), duration: fade)
         // 状态不手工置位：等 timeControlStatus KVO 收敛为 .playing 后再同步锁屏。
     }
 
     func pause() {
+        // (62) WB §4.5：暂停淡出——斜坡到 0 后再真 pause，完
+        // 成后恢复有效音量待下次起播（起播侧另有淡入斜坡）。
+        let fade = fadeDuration()
+        if fade > 0, playbackState == .playing, crossfadeContext == nil {
+            rampActiveVolume(to: 0, duration: fade) { [weak self] in
+                guard let self else { return }
+                self.activePlayer.pause()
+                self.applyEffectiveVolume()
+            }
+            return
+        }
         activePlayer.pause()
         // 3.6 (3)：暂停不再停用音频会话。有曲目在手时保持会话激活，App 才
         // 稳定保持「正在播放应用」身份，锁屏/控制中心（含上一首/下一首）
@@ -158,11 +190,93 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
     func setVolume(_ value: Float) {
         let clamped = min(max(value, 0), 1)
         volume = clamped
-        playerA.volume = clamped
-        playerB.volume = clamped
+        applyEffectiveVolume()
+    }
+
+    // MARK: - (62) WB：ReplayGain 与有效音量
+
+    /// ReplayGain 增益系数（线性）。来源优先级（任务定死）：
+    /// ① WC 的 VolumeBalanceStore62 学习偏移（逐曲）② 曲目
+    /// 元数据 gain（FoliaTrack 现无 gain 字段，此级恒缺省，
+    /// 待模型补字段后在此接入）③ 1.0。
+    /// 学习偏移的量纲假设：dB（音量平衡学习惯例），换算
+    /// factor = 10^(dB/20)，夹 [0.25, 4]；原始值落面包屑供
+    /// 真机对账量纲是否一致。
+    private var replayGainFactor: Float = 1.0
+
+    /// 当前应作用于两台 player 的音量 = 用户音量 × 增益。
+    private func effectiveVolume() -> Float {
+        min(max(volume * replayGainFactor, 0), 1)
+    }
+
+    private func applyEffectiveVolume() {
+        let value = effectiveVolume()
+        playerA.volume = value
+        playerB.volume = value
+    }
+
+    /// 重算当前曲的增益系数并应用（切歌与设置开关变更时调）。
+    /// 符号依赖：VolumeBalanceStore62 由 WC 簇提供（同模块合
+    /// 并后链接）；本函数是全仓唯一调用点，若 WC 符号未就绪
+    /// 只需在此一处兜底。
+    func refreshReplayGain() {
+        guard SettingsStore.replayGainEnabled, let track = currentTrack else {
+            replayGainFactor = 1.0
+            applyEffectiveVolume()
+            return
+        }
+        let learnedDb = VolumeBalanceStore62.shared.learnedOffset(forTrackKey: track.id)
+        if learnedDb != 0 {
+            replayGainFactor = min(max(powf(10, learnedDb / 20), 0.25), 4)
+            Breadcrumbs.log("replayGain62 track=\(track.id) src=learned dB=\(learnedDb) factor=\(replayGainFactor)")
+        } else {
+            replayGainFactor = 1.0
+            Breadcrumbs.log("replayGain62 track=\(track.id) src=none factor=1.0")
+        }
+        applyEffectiveVolume()
+    }
+
+    // MARK: - (62) WB：播放/暂停淡变斜坡
+
+    private var fadeTimer: Timer?
+
+    private func fadeDuration() -> TimeInterval {
+        TimeInterval(SettingsStore.playPauseFadeMs) / 1000
+    }
+
+    /// 20ms 一拍的音量斜坡（只动 active 轨；过渡期由 crossfade
+    /// 自己管两轨音量，互斥见 play/pause 的 crossfadeContext 守卫）。
+    private func rampActiveVolume(to target: Float, duration: TimeInterval,
+                                  completion: (() -> Void)? = nil) {
+        fadeTimer?.invalidate()
+        let start = activePlayer.volume
+        let steps = max(Int(duration / 0.02), 1)
+        var step = 0
+        fadeTimer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            step += 1
+            let fraction = Float(step) / Float(steps)
+            self.activePlayer.volume = start + (target - start) * fraction
+            if step >= steps {
+                timer.invalidate()
+                self.fadeTimer = nil
+                completion?()
+            }
+        }
+    }
+
+    /// (62) WB §4.5：播放时阻止休眠——按播放态写系统空闲计
+    /// 时器（设置行/状态收敛点共用）。
+    func refreshIdleTimerGate() {
+        let shouldBlock = SettingsStore.preventSleepWhilePlaying && playbackState == .playing
+        UIApplication.shared.isIdleTimerDisabled = shouldBlock
+        Breadcrumbs.log("idleTimer62 disabled=\(shouldBlock)")
     }
 
     func stop() {
+        cancelCrossfade()
+        fadeTimer?.invalidate()
+        fadeTimer = nil
         activePlayer.pause()
         disarmLyricCues()
         lyricCues = nil
@@ -182,7 +296,37 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
     /// 唯一改曲入口。调用图写死：一切改曲 → QueueManager → loadTrackAtCurrentIndex → engine.load。
     /// playableURL 由 QueueManager 按 track id 现换（在线 URL 有效期仅 1200 秒，不落库）。
     func load(track: FoliaTrack, playableURL: URL, artwork: UIImage?) {
+        // (62) WB §4.5 / D7：本地资产不可播且自动转换开时，
+        // 先走本地转码通路（转 m4a 落缓存后以新地址重入本函
+        // 数）；流媒体地址不进此路（不可播走既有跳过逻辑，
+        // 服务端转码链不在本机能力内）。
+        if SettingsStore.autoTranscodeEnabled, track.sourceType == .local,
+           playableURL.isFileURL, !Self.isPlayableFile(playableURL) {
+            Breadcrumbs.log("transcode62 start track=\(track.id)")
+            Task { [weak self] in
+                let converted = await Self.transcodeToM4A(source: playableURL)
+                await MainActor.run {
+                    guard let self else { return }
+                    if let converted {
+                        Breadcrumbs.log("transcode62 ok track=\(track.id)")
+                        self.load(track: track, playableURL: converted, artwork: artwork)
+                    } else {
+                        Breadcrumbs.log("transcode62 failed track=\(track.id) fallback=original")
+                        self.loadAfterTranscodeCheck(track: track, playableURL: playableURL, artwork: artwork)
+                    }
+                }
+            }
+            return
+        }
+        loadAfterTranscodeCheck(track: track, playableURL: playableURL, artwork: artwork)
+    }
+
+    private func loadAfterTranscodeCheck(track: FoliaTrack, playableURL: URL, artwork: UIImage?) {
         Breadcrumbs.log("engine load track=\(track.id)")
+        // (62) WB：硬切歌时未完成的过渡/预载一律作废，防 B
+        // 轨残留与新装载打架。
+        cancelCrossfade()
+        automixApproxLogged = false
         flushListeningHistory(isCompleted: false)
         teardownCurrentItemObservers()
 
@@ -208,10 +352,42 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
             disarmLyricCues()
             lyricCues = nil
         }
+        refreshReplayGain()
         play()
         // 切歌是离散事件：先推一次乐观锁屏状态（elapsed 0 / rate 1），
         // KVO 收敛后 NowPlayingController 会再同步一次。
         NowPlayingController.shared.syncNowPlaying(elapsed: 0, rate: 1.0)
+    }
+
+    // MARK: - (62) WB：本地转码通路（D7）
+
+    /// 文件是否可被 AVPlayer 直接播放（资产可播性判定）。
+    private static func isPlayableFile(_ url: URL) -> Bool {
+        AVURLAsset(url: url).isPlayable
+    }
+
+    /// AVAssetExportSession 转 m4a：产物落 Caches/folia-transcode
+    /// （按源文件路径哈希命名，重复转码复用）；失败返回 nil。
+    private static func transcodeToM4A(source: URL) async -> URL? {
+        let asset = AVURLAsset(url: source)
+        guard let session = AVAssetExportSession(asset: asset,
+                                                 presetName: AVAssetExportPresetAppleM4A)
+        else { return nil }
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("folia-transcode", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let name = source.lastPathComponent.replacingOccurrences(of: ".", with: "_")
+            + "-\(abs(source.path.hashValue)).m4a"
+        let output = dir.appendingPathComponent(name)
+        if FileManager.default.fileExists(atPath: output.path) { return output }
+        session.outputURL = output
+        session.outputFileType = .m4a
+        // iOS 17 口径：exportAsynchronously + continuation 桥接
+        // （async export() 是 iOS 18 SDK 面，不用）。
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            session.exportAsynchronously { continuation.resume() }
+        }
+        return session.status == .completed ? output : nil
     }
 
     // MARK: - 歌词行边界（3.6 (3)）
@@ -313,12 +489,175 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         }
     }
 
-    // MARK: - Crossfade（阶段二 POC 前只留签名/桩，不实现）
+    // MARK: - Crossfade（(62) WB §4.5 智能过渡实装）
 
-    func prepareCrossfade(to track: FoliaTrack) async -> Bool { false }
-    func beginCrossfade(duration: TimeInterval) {}
-    func cancelCrossfade() {}
-    var isCrossfadeReady: Bool { false }
+    /// 预载完成的下一首（B 轨 item 已装入 inactive player）。
+    private var preparedCrossfade: (track: FoliaTrack, item: AVPlayerItem)?
+    /// 进行中的过渡上下文（20ms 一拍的音量斜坡计时器）。
+    private var crossfadeContext: (track: FoliaTrack, duration: TimeInterval,
+                                   elapsed: TimeInterval, timer: Timer)?
+    /// Automix 固定提前量近似只落一次面包屑（防周期 observer 刷屏）。
+    private var automixApproxLogged = false
+
+    /// 过渡完成回调（QueueManager 注入）：引擎已切到新曲，
+    /// 队列侧据此静默推进下标（不重走 load，防双起播）。
+    var onCrossfadeCompleted: ((FoliaTrack) -> Void)?
+
+    /// 协议面 prepare：只认已由 prepareCrossfade(track:url:)
+    /// 预载好的同曲（地址组装归 QueueManager，引擎不拼 URL，
+    /// 与 load 的分工一致）；未预载返回 false 并落痕。
+    func prepareCrossfade(to track: FoliaTrack) async -> Bool {
+        if preparedCrossfade?.track.id == track.id { return true }
+        Breadcrumbs.log("crossfade62 prepare miss track=\(track.id) reason=no-url-preload")
+        return false
+    }
+
+    /// 预载下一首到 B 轨（QueueManager 解析出地址后调用）：
+    /// 建 item 装入 inactive player、音量 0、不发声。解码并
+    /// 发红线：全程至多 A/B 两台 player，与既有双轨结构一致，
+    /// 不新增解码路。
+    @discardableResult
+    func prepareCrossfade(track: FoliaTrack, playableURL: URL) -> Bool {
+        guard SettingsStore.smartTransitionEnabled else { return false }
+        guard crossfadeContext == nil, currentTrack?.id != track.id else { return false }
+        let asset = RangeStreamResourceLoader.makeAsset(for: playableURL)
+        let item = AVPlayerItem(asset: asset)
+        preparedCrossfade = (track, item)
+        inactivePlayer.replaceCurrentItem(with: item)
+        inactivePlayer.volume = 0
+        Breadcrumbs.log("crossfade62 prepared track=\(track.id)")
+        return true
+    }
+
+    var isCrossfadeReady: Bool {
+        preparedCrossfade != nil && crossfadeContext == nil
+    }
+
+    /// 过渡进行中标志：完播通知在此期间到达应被忽略（收口
+    /// 由 finishCrossfade 的 onCrossfadeCompleted 推进队列，
+    /// QueueManager 的 onTrackEnded 据此守卫，防双推进）。
+    var isCrossfading: Bool { crossfadeContext != nil }
+
+    /// 开始过渡：B 轨起播，两轨按表现模式曲线斜坡（出轨降、
+    /// 入轨升，均乘有效音量）；时长受 transitionMaxDurationSec
+    /// 封顶。失败/无预载时直接返回，由完播链硬切兜底。
+    func beginCrossfade(duration: TimeInterval) {
+        guard SettingsStore.smartTransitionEnabled,
+              let prepared = preparedCrossfade, crossfadeContext == nil else {
+            Breadcrumbs.log("crossfade62 begin skipped ready=\(preparedCrossfade != nil)")
+            return
+        }
+        let effective = min(max(duration, 0.5), SettingsStore.transitionMaxDurationSec)
+        preparedCrossfade = nil
+        inactivePlayer.volume = 0
+        inactivePlayer.play()
+        // 过渡动画层（圆环/描边）：降低动态·混音过渡命中时停用。
+        if !FoliaMotion62.reduced(.mixTransition) {
+            TransitionAnim62.playCurrent()
+        }
+        Breadcrumbs.log("crossfade62 begin track=\(prepared.track.id) dur=\(String(format: "%.2f", effective)) mode=\(SettingsStore.transitionMode) curve=\(SettingsStore.transitionCurve)")
+        var elapsed: TimeInterval = 0
+        let timer = Timer.scheduledTimer(withTimeInterval: 0.02, repeats: true) { [weak self] timer in
+            guard let self, self.crossfadeContext != nil else { timer.invalidate(); return }
+            elapsed += 0.02
+            let progress = min(elapsed / effective, 1)
+            let gains = Self.crossfadeGains(progress: progress,
+                                            curve: SettingsStore.transitionCurve)
+            let base = self.effectiveVolume()
+            self.activePlayer.volume = base * gains.out
+            self.inactivePlayer.volume = base * gains.in
+            if progress >= 1 {
+                timer.invalidate()
+                self.finishCrossfade()
+            }
+        }
+        crossfadeContext = (prepared.track, effective, 0, timer)
+    }
+
+    /// 过渡音量曲线（出/入增益）：equalPower 恒功率、linear
+    /// 线性、easeInOut smoothstep。
+    private static func crossfadeGains(progress: Double, curve: String) -> (out: Float, in: Float) {
+        switch curve {
+        case "linear":
+            return (Float(1 - progress), Float(progress))
+        case "easeInOut":
+            let eased = progress * progress * (3 - 2 * progress)
+            return (Float(1 - eased), Float(eased))
+        default: // equalPower
+            let angle = progress * Double.pi / 2
+            return (Float(cos(angle)), Float(sin(angle)))
+        }
+    }
+
+    /// 过渡收口：换轨（usingA 翻转）、旧轨停并卸 item、新曲
+    /// 接管 currentTrack 与 item 观察者、音量回复有效值，末
+    /// 尾通知 QueueManager 静默推进下标。
+    private func finishCrossfade() {
+        guard let context = crossfadeContext else { return }
+        crossfadeContext = nil
+        let newTrack = context.track
+        let oldPlayer = activePlayer
+        usingA.toggle()
+        oldPlayer.pause()
+        teardownCurrentItemObservers()
+        oldPlayer.replaceCurrentItem(with: nil)
+        if let item = activePlayer.currentItem {
+            currentItem = item
+            registerCurrentItemObservers(item)
+        }
+        flushListeningHistory(isCompleted: true)
+        currentTrack = newTrack
+        currentTime = 0
+        listenedSeconds = 0
+        lastTickDate = nil
+        pendingSeek = false
+        disarmLyricCues()
+        lyricCues = nil
+        refreshReplayGain()
+        applyEffectiveVolume()
+        NowPlayingController.shared.syncNowPlaying(elapsed: 0, rate: 1.0)
+        Breadcrumbs.log("crossfade62 finished track=\(newTrack.id)")
+        onCrossfadeCompleted?(newTrack)
+    }
+
+    func cancelCrossfade() {
+        if let context = crossfadeContext {
+            context.timer.invalidate()
+            crossfadeContext = nil
+            inactivePlayer.pause()
+            inactivePlayer.replaceCurrentItem(with: nil)
+            applyEffectiveVolume()
+            Breadcrumbs.log("crossfade62 cancelled during-fade")
+            return
+        }
+        if preparedCrossfade != nil {
+            preparedCrossfade = nil
+            inactivePlayer.replaceCurrentItem(with: nil)
+            Breadcrumbs.log("crossfade62 cancelled prepared")
+        }
+    }
+
+    /// 周期 observer 内的尾段触发判定：剩余时长进入过渡窗
+    /// 口且预载就绪时开过渡。Automix 的对齐点本应按下一首
+    /// 前奏能量点——无能量数据源，以固定提前量（= 过渡时
+    /// 长，上限封顶）近似并落面包屑标注，不冒充能量对齐。
+    private func checkCrossfadeTrigger() {
+        guard SettingsStore.smartTransitionEnabled, isCrossfadeReady,
+              duration > 0, playbackState == .playing else { return }
+        let remaining = duration - currentTime
+        let window: TimeInterval
+        if SettingsStore.transitionMode == "automix" {
+            window = min(SettingsStore.transitionMaxDurationSec, 10)
+            if !automixApproxLogged {
+                automixApproxLogged = true
+                Breadcrumbs.log("crossfade62 automix approx=fixed-lead lead=\(window) energy-data=none")
+            }
+        } else {
+            window = min(SettingsStore.transitionMaxDurationSec, duration * 0.25)
+        }
+        guard remaining > 0.3, remaining <= window else { return }
+        beginCrossfade(duration: remaining)
+    }
 
     // MARK: - KVO：状态由 timeControlStatus 派生
 
@@ -349,6 +688,7 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         }
         guard derived != playbackState else { return }
         playbackState = derived
+        refreshIdleTimerGate()
         // isPlaying 是 playbackState 的派生镜像，只在这里写（KVO 收敛点），
         // 不在 play/pause/toggle/load 里手工置位。
         isPlaying = (derived == .playing)
@@ -384,6 +724,9 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
                     self.duration = itemDuration
                 }
                 self.onTimeSync?(seconds, self.currentRate)
+                // (62) WB：智能过渡尾段触发（仅 active 轨的
+                // observer 走到这里，与上方 guard 同域）。
+                self.checkCrossfadeTrigger()
             }
         }
     }
@@ -479,6 +822,13 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         case .began:
             wasPlayingBeforeInterruption = (playbackState == .playing)
             if wasPlayingBeforeInterruption { activePlayer.pause() }
+            // (62) WB §4.5：语音输入时暂停开时，中断（Siri/语
+            // 音输入）一律按用户暂停处理——ended 分支不再自动
+            // 恢复（wasPlaying 旗标在此清掉即达此效）。
+            if SettingsStore.pauseOnVoiceInput, wasPlayingBeforeInterruption {
+                wasPlayingBeforeInterruption = false
+                Breadcrumbs.log("voicePause62 interruption-held=1")
+            }
         case .ended:
             guard let optionsRaw = note.userInfo?[AVAudioSessionInterruptionOptionKey] as? UInt else { return }
             let options = AVAudioSession.InterruptionOptions(rawValue: optionsRaw)

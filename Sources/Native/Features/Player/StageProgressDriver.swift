@@ -27,11 +27,56 @@ final class StageProgressDriver {
 
     func start() {
         guard displayLink == nil else { return }
+        // (62) WB §4.4：静态模式开时逐帧驱动不起链（进度改由
+        // 宿主低频心跳兜底，与既有 stop 口径一致）。
+        guard !SettingsStore.staticModeEnabled else {
+            Breadcrumbs.log("progressDriver62 start skipped=staticMode")
+            return
+        }
+        // (62) WB §4.4：后台积极节流的停链态（回前台由
+        // foliaBackgroundThrottleChanged 的 foreground 事件清）。
+        guard !backgroundThrottled else {
+            Breadcrumbs.log("progressDriver62 start skipped=backgroundThrottle")
+            return
+        }
         reanchor()
         let link = CADisplayLink(target: LinkProxy(owner: self),
                                  selector: #selector(LinkProxy.step))
+        // (62) WB §4.4：帧率限制消费（开关/档位键见
+        // SettingsStore62B，StageVC 的 DisplayLink 归 WA 同键消费）。
+        FoliaMotion62.applyFrameRate(to: link)
         link.add(to: .main, forMode: .common)
         displayLink = link
+        installThrottleObserversIfNeeded()
+    }
+
+    // MARK: - (62) WB：静态模式 / 后台节流订阅
+
+    private var backgroundThrottled = false
+    private var throttleObserversInstalled = false
+
+    private func installThrottleObserversIfNeeded() {
+        guard !throttleObserversInstalled else { return }
+        throttleObserversInstalled = true
+        NotificationCenter.default.addObserver(
+            forName: .foliaStaticModeChanged, object: nil, queue: .main) { [weak self] _ in
+                guard let self else { return }
+                if SettingsStore.staticModeEnabled {
+                    self.stop()
+                    Breadcrumbs.log("progressDriver62 stopped=staticMode")
+                }
+            }
+        NotificationCenter.default.addObserver(
+            forName: .foliaBackgroundThrottleChanged, object: nil, queue: .main) { [weak self] note in
+                guard let self else { return }
+                if (note.userInfo?["state"] as? String) == "background-aggressive" {
+                    self.backgroundThrottled = true
+                    self.stop()
+                    Breadcrumbs.log("progressDriver62 stopped=backgroundAggressive")
+                } else {
+                    self.backgroundThrottled = false
+                }
+            }
     }
 
     func stop() {
