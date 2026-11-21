@@ -4,11 +4,12 @@ import CoreImage
 
 // 汪汪队开大会 petconcert（3.7 (53) J）：演唱会渲染器。
 //
-// 中央大歌词隐藏：唱词走独唱者头顶气泡（(55) B 第 2 项
-// 覆盖 (54) P+Q 的固定专区＋引导线：气泡锚定当前独唱者
-// 头顶、整行全显不分段、钳制在舞台内、尾巴指向唱者、换
-// 人时系统弹簧移位跟随）+ 底部细提词条兜底（整行、不省
-// 略）。53 只全员上台：静帧
+// 中央大歌词隐藏：唱词呈现两代——(55) B 头顶跟随气泡
+// 已被 (62) 胶囊歌词版取代（Miller 2026-11-21 验收 v2 样
+// 片）：主胶囊固定背景带（当前行逐词扫光 + 下一行预览 +
+// 物种爪印徽记），气泡只余仪式口令/闲聊/告别等非歌词言
+// 语；底部提词条同改小胶囊材质兜底（整行、不省略）。独
+// 唱位另立贴纸风立式麦克风（v2 样片 ×0.7）。53 只全员上台：静帧
 // atlas（首帧缩到 ≤160px，≈5.4MB）+ 动图池 ≤8 只 StickerView
 // （解码成本实测准入、合计 ≤40MB，见 PetConcertConst 红线）。
 // 素材优先级：StickersCutout 抠图版 > 原贴纸（本来就透明底）。
@@ -409,6 +410,19 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     private var sparkleLayers: [CAShapeLayer] = []
     private let teleBar = UIView()
     private let teleLabel = UILabel()
+    /// 提词小胶囊材质（(62) 胶囊版）：模糊 + 白洗，与主胶囊同
+    /// 材质同缩比（480×72 参考 px），替原黑底条。
+    private let teleBlur = UIVisualEffectView(
+        effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
+    private let teleWash = UIView()
+    /// 立式麦克风（(62) 胶囊版）：挂 petField 之上、独唱位。
+    private let micView = PetConcertMicView()
+    /// 主胶囊歌词板 + 上缘闪光（(62) 胶囊版）。
+    private let capsuleView = PetConcertCapsuleView()
+    private let capsuleSparkleView = UIView()
+    private var capsuleSparkleLayers: [CAShapeLayer] = []
+    private var lastCapsuleLineId: Int?
+    private var lastCapsuleSpecies = "cat"
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
@@ -444,7 +458,24 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         rootView.addSubview(lightView)
         petField.isUserInteractionEnabled = false
         rootView.addSubview(petField)
+        // (62) 胶囊版：立麦在宠物之上（独唱者站麦后）、幕布
+        // 之下（侧幕不切麦）；主胶囊在幕布之上（背景带内、
+        // 与幕布无重叠）、气泡之下。
+        rootView.addSubview(micView)
         rootView.addSubview(curtainView)
+        capsuleView.isHidden = true
+        rootView.addSubview(capsuleView)
+        capsuleSparkleView.isUserInteractionEnabled = false
+        capsuleSparkleView.isHidden = true
+        for i in 0..<5 {
+            let star = CAShapeLayer()
+            star.fillColor = (i % 2 == 0
+                ? PetConcertPalette.gold
+                : UIColor.white).cgColor
+            capsuleSparkleView.layer.addSublayer(star)
+            capsuleSparkleLayers.append(star)
+        }
+        rootView.addSubview(capsuleSparkleView)
         singerGlowView.isUserInteractionEnabled = false
         singerGlowView.contentMode = .scaleAspectFit
         singerGlowView.isHidden = true
@@ -467,10 +498,17 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         // 除——气泡直接落独唱者头顶，归属由位置本身表达。
         rootView.addSubview(bubbleView)
         bubbleView.isHidden = true
-        teleBar.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        // (62) 胶囊版：提词条改小胶囊材质（模糊 + 白洗 + 深
+        // 棕字），几何 480×72 参考 px 居中；内容口径不变（当
+        // 前行全文兜底、不截断）。
+        teleBar.backgroundColor = .clear
+        teleBar.clipsToBounds = true
         teleBar.isUserInteractionEnabled = false
-        teleLabel.textColor = StagePalette.contrastClamped(
-            UIColor.white, against: UIColor.black).withAlphaComponent(0.92)
+        teleWash.backgroundColor = UIColor.white.withAlphaComponent(0.22)
+        teleBar.addSubview(teleBlur)
+        teleBar.addSubview(teleWash)
+        teleLabel.textColor = UIColor(
+            red: 62 / 255, green: 45 / 255, blue: 32 / 255, alpha: 1)
         teleLabel.textAlignment = .center
         teleLabel.lineBreakMode = .byWordWrapping
         teleBar.addSubview(teleLabel)
@@ -592,6 +630,7 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
 
         updateBubble(position: position, phase: phase, plan: plan,
                      singerAsset: singerAsset, soloLine: soloLine, size: size)
+        updateCapsule(position: position, plan: plan, size: size)
         updateTeleprompter(position: position, plan: plan, size: size)
     }
 
@@ -1187,9 +1226,6 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     private func updateBubble(position: TimeInterval, phase: ConcertPhase,
                               plan: ConcertPlan, singerAsset: String?,
                               soloLine: Int?, size: CGSize) {
-        let landscape = PetConcertConst.isLandscape(size)
-        let sx = size.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW)
-        let base = (landscape ? PetConcertConst.petBaseL : PetConcertConst.petBase) * sx
         // 队长口令（列队相位，逐字原样）。口令指向队长本人，
         // 现有追光不指向队长，故队长不发光（(54) S 一致处理）。
         if phase == .formation {
@@ -1229,45 +1265,88 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                 stageSize: size)
             return
         }
-        // 轮唱气泡（(55) B 第 2 项）：当前行全文锚定当前独唱
-        // 者头顶，key 按行+唱者粒度——换行/换人当帧即换 key，
-        // 气泡以系统弹簧移位到新唱者头顶，不残留上一行；无
-        // 固定专区、无引导线，尾巴直接指向唱者。
-        if let soloLine,
-           let line = plan.lines.first(where: { $0.id == soloLine }) {
-            let singerActor = singerAsset.flatMap { actors[$0] }
-            let anchor = CGPoint(
-                x: singerActor?.center.x ?? size.width / 2,
-                y: singerActor?.frame.minY ?? size.height * 0.4)
-            bubbleView.showFollowingSinger(
-                key: "lyric-\(soloLine)-\(singerAsset ?? "none")",
-                text: line.text,
-                fontRefPx: PetConcertConst.bubbleFontLyric,
-                stageSize: size, anchor: anchor)
+        // 歌词行（轮唱/群唱）：(62) 胶囊版起不再走头顶气泡
+        // ——歌词统一由主胶囊呈现（updateCapsule：当前行扫
+        // 光 + 下一行预览，固定背景带）；气泡只余仪式口令/
+        // 闲聊/告别等非歌词言语。歌词在唱时气泡收起。
+        if soloLine != nil {
+            bubbleView.hide()
             return
         }
-        // 群唱行气泡（(55) B）：整行锚定独唱位头顶（群唱的
-        // 发声焦点，追光光池同步落此位）；无固定专区、无引
-        // 导线，与轮唱气泡同一跟随求解器。
         if let lineId = currentLine(at: position, plan: plan),
-           plan.chorusLines.contains(lineId),
-           let line = plan.lines.first(where: { $0.id == lineId }) {
-            let soloStage = refToStage(
-                landscape ? CGPoint(x: PetConcertConst.soloXL, y: PetConcertConst.soloYL)
-                    : CGPoint(x: PetConcertConst.soloX, y: PetConcertConst.soloY),
-                size: size, landscape: landscape)
-            let anchor = CGPoint(
-                x: soloStage.x,
-                y: soloStage.y - base
-                    * (landscape ? PetConcertConst.soloScaleL
-                          : PetConcertConst.soloScale) / 2)
-            bubbleView.showFollowingSinger(
-                key: "chorus-\(lineId)", text: line.text,
-                fontRefPx: PetConcertConst.bubbleFontLyric,
-                stageSize: size, anchor: anchor)
+           plan.chorusLines.contains(lineId) {
+            bubbleView.hide()
             return
         }
         bubbleView.hide()
+    }
+
+    /// 主胶囊歌词（(62) 胶囊版）：当前行（独唱或群唱）进胶
+    /// 囊行一逐词扫光、下一行进行二弱化预览；无当前行（仪
+    /// 式/间奏无词段）胶囊隐藏。徽记物种随独唱者（群唱行沿
+    /// 用上一物种），换人弹跳在 CapsuleView.setLine 内。
+    private func updateCapsule(position: TimeInterval, plan: ConcertPlan,
+                               size: CGSize) {
+        let landscape = PetConcertConst.isLandscape(size)
+        let sx = size.width / (landscape ? PetConcertConst.refWL
+                                          : PetConcertConst.refW)
+        guard let lineId = currentLine(at: position, plan: plan),
+              let line = plan.lines.first(where: { $0.id == lineId }) else {
+            capsuleView.isHidden = true
+            capsuleSparkleView.isHidden = true
+            lastCapsuleLineId = nil
+            return
+        }
+        capsuleView.isHidden = false
+        capsuleSparkleView.isHidden = false
+        let next = plan.lines
+            .filter { $0.start > line.start }
+            .min(by: { $0.start < $1.start })
+        let species = plan.singerByLine[lineId]
+            .map { $0.hasPrefix("dog") ? "dog" : "cat" }
+            ?? lastCapsuleSpecies
+        if lineId != lastCapsuleLineId {
+            let speciesChanged = species != lastCapsuleSpecies
+            lastCapsuleLineId = lineId
+            lastCapsuleSpecies = species
+            capsuleView.setLine(
+                current: line.text, next: next?.text,
+                words: line.words, sx: sx, species: species,
+                speciesChanged: speciesChanged,
+                animated: capsuleView.superview != nil)
+            Breadcrumbs.log("concert.capsule line=\(lineId)"
+                + " species=\(species) next=\(next != nil)")
+        }
+        // 扫光进度：有逐字戳走查表（wordProgress 表未就绪回
+        // -1），否则行内时间比例。
+        var progress = capsuleView.wordProgress(
+            words: line.words ?? [], now: position)
+        if progress < 0 {
+            let span = max(0.1, line.end - line.start)
+            progress = min(max((position - line.start) / span, 0), 1)
+        }
+        capsuleView.setProgress(progress)
+        // 上缘闪光：5 颗沿胶囊顶边稀疏分布，位置/明暗由歌曲
+        // 时间确定性驱动（v2 样片 fx 与相位口径）。
+        let frame = capsuleSparkleView.frame
+        let fxs: [CGFloat] = [0.16, 0.36, 0.58, 0.80, 0.93]
+        for (i, layer) in capsuleSparkleLayers.enumerated() {
+            let tw = 0.5 + 0.5 * sin(position * 2.2 + Double(i) * 2.3)
+            let s = (8 + 7 * tw) * sx * 1.6
+            let cx = frame.width * fxs[i]
+            let cy = frame.height / 2 + 3 * sin(position * 1.3
+                                               + Double(i) * 1.7) * sx * 2
+            var path = UIBezierPath()
+            for k in 0..<8 {
+                let ang = Double(k) * Double.pi / 4 - Double.pi / 2
+                let rad = k % 2 == 0 ? s : s * 0.3
+                let p = CGPoint(x: cx + rad * cos(ang), y: cy + rad * sin(ang))
+                if k == 0 { path.move(to: p) } else { path.addLine(to: p) }
+            }
+            path.close()
+            layer.path = path.cgPath
+            layer.opacity = Float(0.35 + 0.6 * tw)
+        }
     }
 
     private func updateTeleprompter(position: TimeInterval,
@@ -1287,7 +1366,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             // 两行（提词条加高），任何情况下不截断、不省略。
             let sx = size.width / (PetConcertConst.isLandscape(size)
                                       ? PetConcertConst.refWL : PetConcertConst.refW)
-            let maxW = size.width - 48 * sx
+            // (62) 胶囊版：可用宽 = 小胶囊 480 参考 px − 两侧
+            // 各 24 留白（原全宽条口径已随几何变更作废）。
+            let maxW = (480 - 48) * sx
             var fontSize = PetConcertConst.teleFontMax * sx
             let minSize = PetConcertConst.teleFontMin * sx
             teleLabel.numberOfLines = 1
@@ -1376,17 +1457,42 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         let sx = bounds.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW)
         let sy = bounds.height / (landscape ? PetConcertConst.refHL : PetConcertConst.refH)
         let twoLines = teleLabel.numberOfLines == 2
-        // (54) U：提词字号按 sx 换算，横屏 sxL(0.444)>syL(0.364)，
-        // 条高若仍按 sy 定会挤压字号行高（17.8pt 字行高 ≈21pt
-        // > 27.7−8pt）——横屏条高改按 sx 换算（76×0.444=33.7pt，
-        // 条底 354.8+33.7=388.5pt 仍在 393pt 内）。
-        let barH = PetConcertConst.teleBarH * (landscape ? sx : sy) * (twoLines ? 1.5 : 1)
+        // (62) 胶囊版：提词小胶囊 480×72 参考 px 居中（v2 样
+        // 片口径，竖屏 y=1798）；高按朝向基准轴换算（横屏按
+        // sx，与 (54) U 条高口径同理），两行兜底 ×1.5 不变；
+        // 圆角 = 高/2 全胶囊形。
+        let barH = 72 * (landscape ? sx : sy) * (twoLines ? 1.5 : 1)
+        let barW = 480 * sx
         teleBar.frame = CGRect(
-            x: 24 * sx,
-            y: (landscape ? PetConcertConst.teleBarYL : PetConcertConst.teleBarY) * sy,
-            width: bounds.width - 48 * sx, height: barH)
-        teleBar.layer.cornerRadius = 20 * sx
+            x: (bounds.width - barW) / 2,
+            y: (landscape ? PetConcertConst.teleBarYL : 1798) * sy,
+            width: barW, height: barH)
+        teleBar.layer.cornerRadius = barH / 2
+        teleBlur.frame = teleBar.bounds
+        teleWash.frame = teleBar.bounds
         teleLabel.frame = teleBar.bounds.insetBy(dx: 12 * sx, dy: 4)
+        // (62) 胶囊版：主胶囊落背景带（竖屏参考 (210,300)
+        // 660×164＝垂幔下沿 ~250 至地板起点 556 之间，不压
+        // 队形；横屏同带口径 (630,140) 660×130）；立麦落独
+        // 唱位（设计空间 110×210，独唱点映射本地 (80,95)）。
+        if landscape {
+            capsuleView.frame = CGRect(x: 630 * sx, y: 140 * sy,
+                                       width: 660 * sx, height: 130 * sy)
+            micView.frame = CGRect(
+                x: (PetConcertConst.soloXL - 80) * sx,
+                y: (PetConcertConst.soloYL - 95) * sy,
+                width: 110 * sx, height: 210 * sy)
+        } else {
+            capsuleView.frame = CGRect(x: 210 * sx, y: 300 * sy,
+                                       width: 660 * sx, height: 164 * sy)
+            micView.frame = CGRect(
+                x: (PetConcertConst.soloX - 80) * sx,
+                y: (PetConcertConst.soloY - 95) * sy,
+                width: 110 * sx, height: 210 * sy)
+        }
+        capsuleSparkleView.frame = capsuleView.frame
+            .insetBy(dx: 0, dy: -24 * sy)
+        capsuleView.setNeedsLayout()
         // (61) WC：提词条衬底——垫在 teleBar 之下、覆盖提词区，
         // 舞台亮部透过提词条 0.45 黑底时再压一层自适应 scrim。
         lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
@@ -1486,5 +1592,372 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             child = parent
         }
         return min(1, Double(covered / (mine.width * mine.height)))
+    }
+}
+
+// MARK: - 立式麦克风（(62) 胶囊版追加，Miller 14:16 定、14:59 缩小）
+//
+// 贴纸风立麦：奶油球形麦头（焦糖格栅）+ 焦糖杆身 + 圆形配
+// 重底座。几何按 v2 样片原稿 ×0.7 缩放（Miller 14:59 定版：
+// 整体七成、麦头高度随缩放自然降低、不再严格对嘴边）；设计
+// 空间 110×210（参考 px），独唱位映射到本地 (80, 95)。视图
+// 挂 petField 之上（样片口径：宠物先画、麦后画，独唱者站麦
+// 后），纯装饰、不吃手势。
+
+final class PetConcertMicView: UIView {
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func draw(_ rect: CGRect) {
+        let ux = bounds.width / 110
+        let uy = bounds.height / 210
+        func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+            CGPoint(x: x * ux, y: y * uy)
+        }
+        let outline = UIColor(red: 110 / 255, green: 74 / 255, blue: 47 / 255, alpha: 1)
+        let caramel = UIColor(red: 176 / 255, green: 128 / 255, blue: 74 / 255, alpha: 1)
+        let caramelDark = UIColor(red: 146 / 255, green: 100 / 255, blue: 54 / 255, alpha: 1)
+        let cream = UIColor(red: 250 / 255, green: 240 / 255, blue: 220 / 255, alpha: 1)
+        // 圆形配重底座（外圈深焦糖 + 内圈焦糖）。
+        let baseRect = CGRect(x: 14.5 * ux, y: 184 * uy, width: 73 * ux, height: 20 * uy)
+        let basePath = UIBezierPath(ovalIn: baseRect)
+        caramelDark.setFill(); basePath.fill()
+        outline.setStroke(); basePath.lineWidth = 3.5 * ux; basePath.stroke()
+        let baseIn = UIBezierPath(ovalIn: CGRect(
+            x: 27 * ux, y: 187 * uy, width: 48 * ux, height: 12 * uy))
+        caramel.setFill(); baseIn.fill()
+        // 杆身（轮廓道 + 内道）。
+        let pole = UIBezierPath()
+        pole.move(to: pt(51, 190)); pole.addLine(to: pt(51, 58))
+        outline.setStroke(); pole.lineWidth = 10 * ux; pole.stroke()
+        let poleIn = UIBezierPath()
+        poleIn.move(to: pt(51, 190)); poleIn.addLine(to: pt(51, 58))
+        caramel.setStroke(); poleIn.lineWidth = 5.5 * ux; poleIn.stroke()
+        //  clutch 领口（奶油圆角块）。
+        let collar = UIBezierPath(
+            roundedRect: CGRect(x: 42 * ux, y: 108 * uy, width: 18 * ux, height: 20 * uy),
+            cornerRadius: 5 * ux)
+        cream.setFill(); collar.fill()
+        outline.setStroke(); collar.lineWidth = 3 * ux; collar.stroke()
+        // 短颈（杆顶斜向麦头）。
+        let neck = UIBezierPath()
+        neck.move(to: pt(51, 60)); neck.addLine(to: pt(53, 48))
+        outline.setStroke(); neck.lineWidth = 10 * ux; neck.stroke()
+        let neckIn = UIBezierPath()
+        neckIn.move(to: pt(51, 60)); neckIn.addLine(to: pt(53, 48))
+        caramel.setStroke(); neckIn.lineWidth = 5 * ux; neckIn.stroke()
+        // 球形麦头：奶油球 + 焦糖格栅弧 + 中央带 + 高光。
+        let head = UIBezierPath(ovalIn: CGRect(
+            x: 31 * ux, y: 7 * uy, width: 44 * ux, height: 44 * uy))
+        cream.setFill(); head.fill()
+        outline.setStroke(); head.lineWidth = 3.5 * ux; head.stroke()
+        caramel.setStroke()
+        for k in [-12, 0, 12] as [CGFloat] {
+            let hw = sqrt(max(1, 22 * 22 - k * k)) - 3
+            let arc = UIBezierPath()
+            arc.move(to: pt(53 - hw, 29 + k))
+            arc.addQuadCurve(to: pt(53 + hw, 29 + k),
+                             controlPoint: pt(53, 29 + k + 6))
+            arc.lineWidth = 2 * ux; arc.stroke()
+        }
+        for k in [-11, 11] as [CGFloat] {
+            let hh = sqrt(max(1, 22 * 22 - k * k)) - 3
+            let arc = UIBezierPath()
+            arc.move(to: pt(53 + k, 29 - hh))
+            arc.addQuadCurve(to: pt(53 + k, 29 + hh),
+                             controlPoint: pt(53 + k + 6, 29))
+            arc.lineWidth = 2 * ux; arc.stroke()
+        }
+        let band = UIBezierPath()
+        band.move(to: pt(34, 29)); band.addLine(to: pt(72, 29))
+        caramelDark.setStroke(); band.lineWidth = 3.5 * ux; band.stroke()
+        let shine = UIBezierPath(ovalIn: CGRect(
+            x: 40 * ux, y: 9 * uy, width: 9 * ux, height: 9 * uy))
+        UIColor.white.setFill(); shine.fill()
+    }
+}
+
+// MARK: - 爪印徽记（胶囊框角，物种切换）
+
+/// 圆徽：奶油底 + 焦糖环 + 爪印（猫＝粉爪无爪尖、狗＝棕爪
+/// 带爪尖，v2 样片 draw_badge/draw_paw_flat 口径）。draw 式
+/// 绘制，species 变化时 setNeedsDisplay。
+final class PetConcertBadgeView: UIView {
+    var species = "cat" { didSet { if species != oldValue { setNeedsDisplay() } } }
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = .clear
+        isUserInteractionEnabled = false
+        contentMode = .redraw
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func draw(_ rect: CGRect) {
+        let s = min(bounds.width, bounds.height)
+        let u = s / 108
+        let center = CGPoint(x: bounds.midX, y: bounds.midY)
+        let circle = UIBezierPath(ovalIn: CGRect(
+            x: center.x - 46 * u, y: center.y - 46 * u,
+            width: 92 * u, height: 92 * u))
+        UIColor(red: 255 / 255, green: 250 / 255, blue: 238 / 255, alpha: 1).setFill()
+        circle.fill()
+        UIColor(red: 196 / 255, green: 150 / 255, blue: 90 / 255, alpha: 1).setStroke()
+        circle.lineWidth = 6 * u; circle.stroke()
+        // 爪印：主垫 + 四趾（相对爪心 (0, +6u) 起，s=44 口径）。
+        let pawColor = species == "dog"
+            ? UIColor(red: 156 / 255, green: 108 / 255, blue: 66 / 255, alpha: 1)
+            : UIColor(red: 238 / 255, green: 138 / 255, blue: 158 / 255, alpha: 1)
+        pawColor.setFill()
+        let pc = CGPoint(x: center.x, y: center.y + 6 * u)
+        let pad = UIBezierPath(ovalIn: CGRect(
+            x: pc.x - 22 * u, y: pc.y - 1 * u, width: 44 * u, height: 32 * u))
+        pad.fill()
+        let toes: [(CGFloat, CGFloat, CGFloat)] = [
+            (-26.4, -17.6, 13.2), (-8.8, -26.4, 14.1),
+            (8.8, -26.4, 14.1), (26.4, -17.6, 13.2)]
+        for (dx, dy, rr) in toes {
+            let toe = UIBezierPath(ovalIn: CGRect(
+                x: pc.x + (dx - rr / 2) * u, y: pc.y + (dy - rr / 2) * u,
+                width: rr * u, height: rr * u))
+            toe.fill()
+            if species == "dog" {
+                let claw = UIBezierPath()
+                let mx = pc.x + dx * u
+                let top = pc.y + (dy - rr / 2) * u
+                claw.move(to: CGPoint(x: mx - 3 * u, y: top + 2 * u))
+                claw.addLine(to: CGPoint(x: mx + 3 * u, y: top + 2 * u))
+                claw.addLine(to: CGPoint(x: mx, y: top - 9 * u))
+                claw.close()
+                claw.fill()
+            }
+        }
+    }
+}
+
+// MARK: - 胶囊歌词板（(62) 胶囊歌词版，v2 样片验收口径）
+//
+// 主胶囊：毛玻璃（背景模糊 + 白洗 + 顶部高光 + 白描边），
+// 固定嵌垂幔下方至地板起点之间的背景带（竖屏参考
+// (210,300) 660×164），不压队形。行一＝当前独唱/群唱行
+// （深棕字 + 逐词扫光：未唱 38% 透明 → 已唱全色，mask 按
+// 词宽前缀推进）；行二＝下一行（同材质弱化）。换行交叉淡
+// 化 0.3s + 胶囊轻脉动 1.03；框角爪印徽记按独唱物种切
+// 换、换人弹跳。上缘 5 颗闪光由渲染器逐 tick 驱动（同文件
+// capsuleSparkleView）。文字不截断：字号 45→30 参考 px 逐
+// 档适配，仍溢出由 adjustsFontSizeToFitWidth 兜底缩放。
+
+final class PetConcertCapsuleView: UIView {
+    private let blurView = UIVisualEffectView(
+        effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
+    private let washView = UIView()
+    private let sheenView = UIView()
+    private let borderLayer = CAShapeLayer()
+    private let row1Dim = UILabel()
+    private let row1Bright = UILabel()
+    private let row1Mask = CALayer()
+    private let row2Label = UILabel()
+    let badgeView = PetConcertBadgeView()
+    private var row1TextWidth: CGFloat = 0
+    private var prefixWidths: [CGFloat] = []
+    private var wordWidths: [CGFloat] = []
+    private var hasNext = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        blurView.clipsToBounds = true
+        addSubview(blurView)
+        washView.backgroundColor = UIColor.white.withAlphaComponent(0.25)
+        addSubview(washView)
+        sheenView.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+        addSubview(sheenView)
+        let textDark = UIColor(red: 62 / 255, green: 45 / 255, blue: 32 / 255, alpha: 1)
+        for label in [row1Dim, row1Bright, row2Label] {
+            label.textAlignment = .center
+            label.numberOfLines = 1
+            label.lineBreakMode = .byClipping
+            addSubview(label)
+        }
+        row1Dim.textColor = textDark.withAlphaComponent(0.38)
+        row1Bright.textColor = textDark
+        row2Label.textColor = textDark.withAlphaComponent(0.72)
+        row1Bright.layer.mask = row1Mask
+        row1Mask.backgroundColor = UIColor.black.cgColor
+        borderLayer.fillColor = UIColor.clear.cgColor
+        borderLayer.strokeColor = UIColor.white.withAlphaComponent(0.85).cgColor
+        layer.addSublayer(borderLayer)
+        addSubview(badgeView)
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let radius = bounds.height / 2
+        blurView.frame = bounds
+        blurView.layer.cornerRadius = radius
+        washView.frame = bounds
+        washView.layer.cornerRadius = radius
+        washView.clipsToBounds = true
+        sheenView.frame = CGRect(x: 6, y: 5, width: bounds.width - 12,
+                                 height: bounds.height / 2)
+        sheenView.layer.cornerRadius = bounds.height / 4
+        sheenView.clipsToBounds = true
+        borderLayer.frame = bounds
+        borderLayer.path = UIBezierPath(
+            roundedRect: bounds.insetBy(dx: 1.5, dy: 1.5),
+            cornerRadius: radius - 1.5).cgPath
+        borderLayer.lineWidth = 2
+        let rowH = bounds.height * 62 / 164
+        if hasNext {
+            row1Dim.frame = CGRect(x: 0, y: bounds.height * 51 / 164 - rowH / 2,
+                                   width: bounds.width, height: rowH)
+            row2Label.frame = CGRect(x: 0, y: bounds.height * 113 / 164 - rowH / 2,
+                                     width: bounds.width, height: rowH)
+        } else {
+            row1Dim.frame = CGRect(x: 0, y: bounds.height / 2 - rowH / 2,
+                                   width: bounds.width, height: rowH)
+            row2Label.frame = .zero
+        }
+        row1Bright.frame = row1Dim.frame
+        let badgeSide = bounds.height * 108 / 164
+        badgeView.frame = CGRect(
+            x: 4 * bounds.width / 660 - badgeSide / 2,
+            y: 2 * bounds.height / 164 - badgeSide / 2,
+            width: badgeSide, height: badgeSide)
+        updateMask(progress: lastProgress)
+    }
+
+    private var lastProgress: Double = 0
+
+    /// 换行装配：字号适配（45→30 参考 px）+ 逐字前缀宽表一
+    /// 次量好；animated 时行文字交叉淡入 + 胶囊轻脉动；物种
+    /// 变化时徽记弹跳切换（系统弹簧口径）。
+    func setLine(current: String, next: String?, words: [LyricWordStamp]?,
+                 sx: CGFloat, species: String, speciesChanged: Bool,
+                 animated: Bool) {
+        hasNext = !(next ?? "").isEmpty
+        row2Label.isHidden = !hasNext
+        let maxW = max(80, bounds.width - 64 * sx)
+        let font = Self.fittedFont(text: current, sx: sx, maxW: maxW)
+        row1Dim.font = font
+        row1Bright.font = font
+        row1Dim.text = current
+        row1Bright.text = current
+        row1Dim.adjustsFontSizeToFitWidth = true
+        row1Dim.minimumScaleFactor = 0.7
+        row1Bright.adjustsFontSizeToFitWidth = true
+        row1Bright.minimumScaleFactor = 0.7
+        row1TextWidth = (current as NSString).size(
+            withAttributes: [.font: font]).width
+        if let next {
+            let f2 = Self.fittedFont(text: next, sx: sx, maxW: maxW)
+            row2Label.font = f2
+            row2Label.text = next
+            row2Label.adjustsFontSizeToFitWidth = true
+            row2Label.minimumScaleFactor = 0.7
+        }
+        // 逐字前缀宽表（与行一字号同口径量宽）。
+        if let words, !words.isEmpty {
+            var prefix: [CGFloat] = [0]
+            var widths: [CGFloat] = []
+            var acc = ""
+            for word in words {
+                widths.append((word.text as NSString).size(
+                    withAttributes: [.font: font]).width)
+                acc += word.text
+                prefix.append((acc as NSString).size(
+                    withAttributes: [.font: font]).width)
+            }
+            prefixWidths = prefix
+            wordWidths = widths
+        } else {
+            prefixWidths = []
+            wordWidths = []
+        }
+        badgeView.species = species
+        setProgress(0)
+        setNeedsLayout()
+        if animated {
+            for label in [row1Dim, row1Bright, row2Label] {
+                label.alpha = 0
+                UIView.animate(withDuration: 0.3) { label.alpha = 1 }
+            }
+            transform = .identity
+            UIView.animate(withDuration: 0.25, animations: {
+                self.transform = CGAffineTransform(scaleX: 1.03, y: 1.03)
+            }, completion: { _ in
+                UIView.animate(withDuration: 0.25) {
+                    self.transform = .identity
+                }
+            })
+            if speciesChanged {
+                badgeView.transform = CGAffineTransform(scaleX: 0.6, y: 0.6)
+                UIView.animate(withDuration: 0.35, delay: 0,
+                               usingSpringWithDamping: 0.55,
+                               initialSpringVelocity: 0.4,
+                               options: []) {
+                    self.badgeView.transform = .identity
+                }
+            }
+        }
+    }
+
+    private static func fittedFont(text: String, sx: CGFloat,
+                                   maxW: CGFloat) -> UIFont {
+        var size = 45 * sx
+        let minSize = 30 * sx
+        while size > minSize {
+            let font = UIFont.systemFont(ofSize: size, weight: .semibold)
+            if (text as NSString).size(withAttributes: [.font: font]).width <= maxW {
+                return font
+            }
+            size -= sx
+        }
+        return UIFont.systemFont(ofSize: minSize, weight: .semibold)
+    }
+
+    /// 逐词进度（查表版）：分子＝已唱前缀宽 + 当前词内插。
+    func wordProgress(words: [LyricWordStamp], now: Double) -> Double {
+        guard row1TextWidth > 0,
+              prefixWidths.count == words.count + 1,
+              wordWidths.count == words.count else {
+            return -1
+        }
+        for (i, word) in words.enumerated() {
+            if now >= word.end { continue }
+            if now >= word.start {
+                let frac = word.end > word.start
+                    ? (now - word.start) / (word.end - word.start) : 0
+                let width = prefixWidths[i] + wordWidths[i] * CGFloat(frac)
+                return min(max(Double(width / row1TextWidth), 0), 1)
+            }
+            return min(max(Double(prefixWidths[i] / row1TextWidth), 0), 1)
+        }
+        return min(max(Double(prefixWidths[words.count] / row1TextWidth), 0), 1)
+    }
+
+    func setProgress(_ progress: Double) {
+        lastProgress = progress
+        updateMask(progress: progress)
+    }
+
+    private func updateMask(progress: Double) {
+        // mask.frame 在被遮标签的本地坐标系：文字居中，扫光
+        // 自文字左缘起按已唱宽推进。
+        let w = row1Bright.bounds.width
+        guard w > 0, row1TextWidth > 0 else {
+            row1Mask.frame = .zero
+            return
+        }
+        let startX = (w - row1TextWidth) / 2
+        row1Mask.frame = CGRect(
+            x: startX, y: 0,
+            width: row1TextWidth * CGFloat(min(max(progress, 0), 1)),
+            height: row1Bright.bounds.height)
     }
 }
