@@ -112,7 +112,7 @@ enum ProviderLoginTransport {
         provider: NativeSessionStore.Provider,
         path: String,
         query: [String: String] = [:],
-        cookie: <redacted>
+        cookie: String? = nil
     ) async throws -> Response {
         var lastError: Error = TransportError.transport
         for base in bases(for: provider) {

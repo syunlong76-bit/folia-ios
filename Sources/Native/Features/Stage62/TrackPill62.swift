@@ -126,9 +126,10 @@ final class TrackPill62: UIView {
                        options: [.beginFromCurrentState]) { self.alpha = 1 }
     }
     func fadeOut() {
-        UIView.animate(withDuration: 0.3, options: [.beginFromCurrentState]) {
-            self.alpha = 0
-        } completion: { _ in if self.alpha == 0 { self.isHidden = true } }
+        UIView.animate(withDuration: 0.3, delay: 0,
+                       options: [.beginFromCurrentState],
+                       animations: { self.alpha = 0 },
+                       completion: { _ in if self.alpha == 0 { self.isHidden = true } })
     }
 }
 

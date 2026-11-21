@@ -1837,7 +1837,7 @@ final class PetConcertCapsuleView: UIView {
     /// 换行装配：字号适配（45→30 参考 px）+ 逐字前缀宽表一
     /// 次量好；animated 时行文字交叉淡入 + 胶囊轻脉动；物种
     /// 变化时徽记弹跳切换（系统弹簧口径）。
-    func setLine(current: String, next: String?, words: [LyricWordStamp]?,
+    func setLine(current: String, next: String?, words: [LyricWord]?,
                  sx: CGFloat, species: String, speciesChanged: Bool,
                  animated: Bool) {
         hasNext = !(next ?? "").isEmpty
@@ -1922,7 +1922,7 @@ final class PetConcertCapsuleView: UIView {
     }
 
     /// 逐词进度（查表版）：分子＝已唱前缀宽 + 当前词内插。
-    func wordProgress(words: [LyricWordStamp], now: Double) -> Double {
+    func wordProgress(words: [LyricWord], now: Double) -> Double {
         guard row1TextWidth > 0,
               prefixWidths.count == words.count + 1,
               wordWidths.count == words.count else {

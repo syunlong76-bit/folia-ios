@@ -3994,7 +3994,7 @@ final class HanabiStageRenderer: LyricStageRenderer {
         // 近似：每行开始时在确定性伪随机位置放一朵小爆（botan
         // 26 星），相位由 StageEnergy62.beatPhase 对齐到行首。
         // 这是节拍近似、非真实鼓点检测（档案口径保留标注）。
-        if !tuning.textOnly, let snapshot, let palette = basePalette {
+        if !tuning.textOnly, let palette = basePalette {
             let unit = Double(min(bounds.width, bounds.height))
             for line in snapshot.lines
             where position >= line.start - 0.05 && position <= line.start + 1.6 {

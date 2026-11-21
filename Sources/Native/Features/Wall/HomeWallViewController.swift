@@ -2545,7 +2545,7 @@ extension HomeWallViewController {
             let strip = StripSurface62()
             strip.translatesAutoresizingMaskIntoConstraints = false
             view.insertSubview(strip, aboveSubview: collectionView)
-            let stripTop = SettingsStore.stripDirection == "bottom"
+            let stripTop = SettingsStore.stripDirection == 1 // (62) 集成修正：WA 键为 Int（0 横/1 纵），WD 布局以 1 作贴下锚定（纵向侧边形态未实现，见交付报告）
                 ? strip.bottomAnchor.constraint(
                     equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -64)
                 : strip.topAnchor.constraint(

@@ -282,7 +282,7 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
 
     private func registerFolder(url: URL) {
         guard let bookmark = try? url.bookmarkData(
-            options: .withSecurityScope,
+            options: [], // iOS 无 withSecurityScope（macOS 专有），空选项 + startAccessing 兜底
             includingResourceValuesForKeys: nil, relativeTo: nil)
         else { return }
         if folders.contains(where: { $0.displayName == url.lastPathComponent }) { return }
@@ -309,7 +309,7 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
             for folder in snapshot {
                 var stale = false
                 guard let url = try? URL(resolvingBookmarkData: folder.bookmark,
-                                         options: .withSecurityScope, relativeTo: nil,
+                                         options: [], // iOS 无 withSecurityScope（macOS 专有），空选项 + startAccessing 兜底 relativeTo: nil,
                                          bookmarkDataIsStale: &stale) else { continue }
                 let scoped = url.startAccessingSecurityScopedResource()
                 added += await self.importFolderContents(url: url)

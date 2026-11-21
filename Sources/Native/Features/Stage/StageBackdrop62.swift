@@ -261,7 +261,7 @@ private final class StageBackdropHost62 {
                 anim.duration = 0.55 + Double(index % 7) * 0.09
                 anim.autoreverses = true
                 anim.repeatCount = .infinity
-                anim.timingFunction = CAMediaTimingFunction(name: .easeInOut)
+                anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 bar.layer.add(anim, forKey: "spectrum62")
             }
         }

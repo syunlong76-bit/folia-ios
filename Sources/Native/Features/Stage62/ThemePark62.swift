@@ -25,8 +25,8 @@ final class ThemeParkViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1)
         title = "主题乐园"
         navigationItem.leftBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .close,
-            primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+            barButtonSystemItem: .close, target: self,
+            action: #selector(folia62CloseTapped))
         navigationItem.rightBarButtonItem = UIBarButtonItem(
             title: "恢复默认",
             primaryAction: UIAction { [weak self] _ in
@@ -225,8 +225,8 @@ final class VisPlaygroundViewController: UIViewController {
         view.backgroundColor = UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1)
         title = "样式工作台"
         navigationItem.leftBarButtonItem = UIBarButtonItem(
-            barButtonSystemItem: .close,
-            primaryAction: UIAction { [weak self] _ in self?.dismiss(animated: true) })
+            barButtonSystemItem: .close, target: self,
+            action: #selector(folia62CloseTapped))
 
         previewContainer.backgroundColor = .black
         previewContainer.layer.cornerRadius = 12
@@ -396,4 +396,12 @@ final class VisPlaygroundViewController: UIViewController {
         nav.modalPresentationStyle = .pageSheet
         host.present(nav, animated: true)
     }
+}
+
+
+/// (62) 集成修正：UIBarButtonItem(barButtonSystemItem:primaryAction:)
+/// 在本工具链下参数标签解析异常（'__barButtonSystemItem'），两面
+/// 关闭钮改走经典 target/action 口径，动作即关闭本面。
+extension UIViewController {
+    @objc func folia62CloseTapped() { dismiss(animated: true) }
 }

@@ -67,10 +67,10 @@ final class StripSurface62: UIView {
     /// glass（毛玻璃，缺省）/ solid（实色）/ clear（全透）；
     /// stripAlwaysTransparent 恒全透（压过 style）。
     private func applyStyle() {
-        if SettingsStore.stripAlwaysTransparent || SettingsStore.stripStyle == "clear" {
+        if SettingsStore.stripAlwaysTransparent || SettingsStore.stripStyle == 2 { // (62) 集成修正：WA 键为 Int 码（0 毛玻璃/1 实色/2 全透），WD 原按字符串码消费
             backgroundView.isHidden = true
             backgroundColor = .clear
-        } else if SettingsStore.stripStyle == "solid" {
+        } else if SettingsStore.stripStyle == 1 {
             backgroundView.isHidden = true
             backgroundColor = UIColor(white: 0.08, alpha: 0.92)
         } else {
