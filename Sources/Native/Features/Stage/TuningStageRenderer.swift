@@ -354,6 +354,8 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
     private let rootView = LyricStageRootView()
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var currentView: TuningLineView?
     private var nextView: TuningLineView?
@@ -379,6 +381,9 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
     func mount(context: LyricStageContext) { self.context = context }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         if snapshot.track?.id != builtTrackId || snapshot.lines.count != builtLineCount {
             builtTrackId = snapshot.track?.id
@@ -640,6 +645,9 @@ final class TuningStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         // 尺寸变化重建（3.7 (53) 工作流 K）：旧版 performLayout
         // 只重定中心，行视图字号仍按建成时根宽适配——横屏建
         // 行（可用宽大、字号大）转竖屏后整行恒溢出，直到下

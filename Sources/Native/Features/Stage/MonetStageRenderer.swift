@@ -446,6 +446,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     private let railView = UIView()
 
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var context: LyricStageContext?
     private var isActive = false
     private var lines: [LyricLine] = []
@@ -562,6 +564,9 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         let newTrackID = snapshot.track?.id
         if newTrackID != trackID {
@@ -730,14 +735,14 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         case .waiting:
             let d = max(abs(offset), 1)
             return Tone(
-                opacity: CGFloat(min(max(0.72 - Double(d - 1) * 0.18, 0.36), 0.72)),
+                opacity: CGFloat(min(max(0.72 - Double(d - 1) * 0.18, 0.45), 0.72)), // (61) WC：waiting 下限 0.36→0.45
                 scale: CGFloat(min(max(Double(m.inactiveScale) * pow(0.9, Double(d - 1)), 0.68), 0.92)),
                 blur: d == 1 ? 0.7 : CGFloat(1.8 + Double(d - 2) * 0.8),
                 baseAlpha: 0.46)
         case .passed:
             let d = max(abs(offset), 1)
             return Tone(
-                opacity: CGFloat(min(max(0.52 - Double(d - 1) * 0.12, 0.28), 0.52)),
+                opacity: CGFloat(min(max(0.52 - Double(d - 1) * 0.12, 0.45), 0.52)), // (61) WC：passed 下限 0.28→0.45
                 scale: CGFloat(min(max(Double(m.inactiveScale) * pow(0.9, Double(d - 1)), 0.68), 0.92)),
                 blur: CGFloat(1.1 + Double(d - 1) * 0.7),
                 baseAlpha: 0.36)
@@ -759,6 +764,9 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 1)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         bgContainer.frame = bounds

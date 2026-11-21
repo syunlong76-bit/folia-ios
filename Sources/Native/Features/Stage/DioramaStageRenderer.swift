@@ -145,6 +145,8 @@ final class DioramaStageRenderer: LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
 
     // MARK: 走廊状态
@@ -282,6 +284,9 @@ final class DioramaStageRenderer: LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         if snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount {
@@ -367,6 +372,9 @@ final class DioramaStageRenderer: LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         scnView.frame = rootView.bounds
     }
 
@@ -592,12 +600,14 @@ final class DioramaStageRenderer: LyricStageRenderer {
 
     /// resolveNeighborLineOpacity 逐值移植。
     private static func neighborOpacity(offset: Int) -> Double {
+        // (61) WC：非当前行不透明下限 0.45——原逐值（0.3/0.1/
+        // 0.34/0.16/0.06）逐个抬到下限，纵深改由缩放/雾化表达。
         switch offset {
-        case -1: return 0.3
-        case -2: return 0.1
-        case 1: return 0.34
-        case 2: return 0.16
-        case 3: return 0.06
+        case -1: return 0.45
+        case -2: return 0.45
+        case 1: return 0.45
+        case 2: return 0.45
+        case 3: return 0.45
         default: return 0
         }
     }

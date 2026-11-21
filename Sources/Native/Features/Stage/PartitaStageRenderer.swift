@@ -254,6 +254,8 @@ final class PartitaStageRenderer: LyricStageRenderer {
     private var currentProfile: StageLineProfile?
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var activeLineId: Int? = nil
     private var builtTrackId: String? = nil
@@ -284,6 +286,9 @@ final class PartitaStageRenderer: LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         // 布局依赖视口（行数按视口高、字号按短边）：视口变
         // （旋转）时缓存与当前行一并失效重建。
@@ -772,6 +777,9 @@ final class PartitaStageRenderer: LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
         floatView.frame = bounds

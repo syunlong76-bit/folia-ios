@@ -56,6 +56,8 @@ final class StillStageRenderer: NSObject, LyricStageRenderer {
     private var slotLabels: [UILabel] = []
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     /// 网页 effectiveIndex：冻结语义见头部注释。
     private var effectiveIndex = 0
@@ -104,6 +106,9 @@ final class StillStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         if snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount {
@@ -211,7 +216,7 @@ final class StillStageRenderer: NSObject, LyricStageRenderer {
             ]
             label.attributedText = NSAttributedString(
                 string: lines[lineIndex].text, attributes: attributes)
-            label.alpha = isCurrent ? 1 : 0.3
+            label.alpha = isCurrent ? 1 : StagePalette.nonCurrentAlphaFloor // (61) WC：非当前行 0.3→0.45
             label.isHidden = false
         }
         contentDirty = false
@@ -220,6 +225,9 @@ final class StillStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         vignetteLayer.frame = bounds

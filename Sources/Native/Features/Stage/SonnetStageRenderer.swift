@@ -210,6 +210,8 @@ final class SonnetStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
 
     // 镜头程序（按 track.id + 行数编译一次，旋转时只重排版）。
@@ -278,6 +280,9 @@ final class SonnetStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         if snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount {
@@ -1677,6 +1682,9 @@ final class SonnetStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 1)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         backdropView.frame = bounds

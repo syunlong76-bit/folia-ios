@@ -545,6 +545,8 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var activeLineId: Int? = nil
     private var currentPrepared: CadenzaPreparedState?
@@ -579,6 +581,9 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         // 准备态缓存上下文（网页 preparedStateContextKey 的
         // 原生子集）：曲目/行数/视口/强调色任一变化即全清。
@@ -1340,6 +1345,9 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
         lineLayer.frame = bounds

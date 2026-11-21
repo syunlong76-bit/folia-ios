@@ -456,6 +456,8 @@ final class TemperaTuningPanelViewController: UIViewController {
     }
 
     private func buildViews() {
+        // (61) WC：歌词对比保护说明行（全样式统一文案）。
+        stack.addArrangedSubview(LyricContrastProtectionNote.makeLabel())
         scrollView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(scrollView)
         stack.axis = .vertical

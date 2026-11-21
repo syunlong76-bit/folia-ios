@@ -93,7 +93,7 @@ private struct CorridorSlotGeometry {
 
 private let corridorSlots: [CorridorSlotGeometry] = [
     // 0 上一行 / 1 当前行 / 2 下一行 / 3 下二行
-    CorridorSlotGeometry(z: 140, scale: 1.06, yFactor: 1.7, rotateXDegrees: -7, alpha: 0.30, blurRadius: 6),
+    CorridorSlotGeometry(z: 140, scale: 1.06, yFactor: 1.7, rotateXDegrees: -7, alpha: 0.45, blurRadius: 6), // (61) WC：上一行 alpha 0.30→0.45 下限
     CorridorSlotGeometry(z: 0, scale: 1.0, yFactor: 0, rotateXDegrees: 0, alpha: 1.0, blurRadius: 0),
     CorridorSlotGeometry(z: -160, scale: 0.78, yFactor: -1.35, rotateXDegrees: 9, alpha: 0.75, blurRadius: 3),
     CorridorSlotGeometry(z: -300, scale: 0.58, yFactor: -2.4, rotateXDegrees: 13, alpha: 0.45, blurRadius: 5),
@@ -114,6 +114,8 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
     private let snapshotCache = LineSnapshotCache()
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     /// 在场内容：行下标（lines 数组序）→ 内容视图。
     private var contents: [Int: CorridorLineView] = [:]
@@ -153,6 +155,9 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
     func mount(context: LyricStageContext) { self.context = context }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         let trackChanged = snapshot.track?.id != builtTrackId
         self.snapshot = snapshot
         if trackChanged || snapshot.lines.count != builtLineCount {
@@ -704,6 +709,9 @@ final class CorridorStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         perspectiveView.frame = bounds
