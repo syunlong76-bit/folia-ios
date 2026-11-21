@@ -55,3 +55,10 @@
 - 相机到边为硬停（无橡皮回弹）：有限场语义取舍，若 Miller 真机觉得生硬，后续可加边缘回弹包单独处理。
 - 展开块文案底距以帧高 10% 近似 port-spec 的 bottom 152px（那是桌面 CSS 语境值），手机帧下按比例取，未逐字对齐。
 - 设置自检：本包无新键、无删行（分段行换图卡行、同键），自检记名行集合不变；真机首启 settings.selfcheck 以 Miller 日志为准。
+
+## CI 与验包（事后补记）
+
+- 首轮 run **44908116838 failure**：唯一错误 QueueLatticeViewController.swift:737 `UILabel` 无 `shadowRadius`（应走 layer），修复提交 eef81a86；第二轮 run **44908352270 success**（head eef81a86）。
+- IPA：`~/workspace/folia-deploy/Folia-3.7-71-unsigned.ipa`，47,391,067 字节。流式自验：CFBundleVersion=71／短版本 3.7 ✓；贴纸 53（Stickers/ 主目录 53 PNG，与 (70) 同口径）✓；入场母带 entry-v5-faststart.mp4 md5 `8aed0fb4a5e9a0f500184f8a7dae45a9`、7,848,834 字节 ✓；二进制新增面检出（QueueLatticeViewController／QueueLatticeCell／LatticeChromeView／finiteQueueMode／navigate-lattice／lattice.focus 字面量在）✓。
+- 未确认一项：`lattice.snap` 整段字面未在二进制明文检出——同 (67) sync.snd、(68) widebar、(70) seek.guard 的 byte-check caveat（插值拼接字符串分段存储），以真机日志是否出现 lattice.snap 为准。
+- 本包未上传，停手待主聊天独立验包。
