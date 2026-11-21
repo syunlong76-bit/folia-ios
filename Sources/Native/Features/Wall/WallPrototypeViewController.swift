@@ -3035,11 +3035,18 @@ final class WallPrototypeViewController: UIViewController,
         let instance = wallLayout.instances[indexPath.item]
         Breadcrumbs.log("wall tap item=\(indexPath.item) queueIndex=\(instance.queueIndex)")
         // 突变前先清被点卡的按压态（bounce 0.96 的 transform/
-        // 动画），展开弹簧从干净态起步。（(62) 尾波第 6 组：
-        // 此处原 hero 快照采集已随 hero 摘除一并删除。）
+        // 动画），展开弹簧从干净态起步。
         let sourceCell = collectionView.cellForItem(at: indexPath) as? WallPosterCell
         sourceCell?.contentView.layer.removeAllAnimations()
         sourceCell?.contentView.transform = .identity
+        // hero 共享放大（3.7 (67) D 组）：突变前采被点卡快照
+        // 与帧（VC 视图坐标），飞行层与布局弹簧同曲线把封面
+        // 从原位长大到展开位（收起反向）；采集不到（cell 不
+        // 在场）传 nil 走无飞行回退，展开本体不变。
+        let heroSnapshot = sourceCell?.snapshotView(afterScreenUpdates: false)
+        let heroSourceFrame = sourceCell.map {
+            collectionView.convert($0.frame, to: view)
+        }
         // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
         // 被点卡在原地长大、同块卡让位，镜头不动。
         if wallLayout.expandedInstanceId == instance.instanceId {
@@ -3075,21 +3082,24 @@ final class WallPrototypeViewController: UIViewController,
             }
             prefetchExpandedNeighbors(queueIndex: instance.queueIndex)
         }
-        animateHeroExpansion(heroSnapshot: nil,
-                             sourceFrame: nil,
+        animateHeroExpansion(heroSnapshot: heroSnapshot,
+                             sourceFrame: heroSourceFrame,
                              targetInstanceId: instance.instanceId)
     }
 
-    /// 展开/收起衔接（(62) 尾波第 6 组：hero 快照飞行层已按
-    /// Miller 口径摘除——点封面不再先放大图片再回归正常）。
-    /// 恒走原非 hero 回退路径，即展开动画本体：身份变化
-    /// reloadData、身份不变走布局 animator（0.45s / damping
-    /// 0.86）弹簧重排（其余卡让位、展开帧落位），随后刷播放
-    /// 态控件归属。签名保留旧形（heroSnapshot/sourceFrame 已
-    /// 弃用、三处调用点恒传 nil），各调用点 completion 链不
-    /// 变。按压 bounce 0.96（WallPosterCell.applyPressTransform）
-    /// 与定位落点强调（emphasizeLocateLanding）是另两套代码，
-    /// 不在此列、保留不动。
+    /// 展开/收起衔接（3.7 (67) D 组重建 hero 共享放大）：
+    /// 点封面时飞行层（被点卡快照）与布局弹簧共用同一条
+    /// UIViewPropertyAnimator（0.45s / damping 0.86）——封面
+    /// 从原位平滑长大到展开位、其余卡同曲线让位；收起反向。
+    /// 围栏（(61)/(62) 旧失败模式）：①飞行层是纯叠加动画，
+    /// 不碰实例集与 worldOrigin——展开态 rebase＋展开实例钉
+    /// 入（WallLayout (62) 尾波第 2 组已落地）原样保留，飞
+    /// 行中继续平移也不会与实例集脱节；②身份变化路径先
+    /// reloadData＋layoutIfNeeded 落定最终帧再起飞，目标帧
+    /// 恒取刷新后属性帧，不存在飞向空位/纯黑页；③采集不到
+    /// 快照（另两处定位落点调用恒传 nil）走原无飞行路径，
+    /// 展开本体一字不变。按压 bounce 0.96 与定位落点强调
+    /// 是另两套代码，不在此列、保留不动。
     private func animateHeroExpansion(heroSnapshot: UIView?,
                                       sourceFrame: CGRect?,
                                       targetInstanceId: String?,
@@ -3097,12 +3107,21 @@ final class WallPrototypeViewController: UIViewController,
         // 身份判定改用 refreshInstances 返回值（展开/收起只换
         // expandedRects、实例序列不变）。
         let identityChanged = wallLayout.refreshInstances()
+        if identityChanged {
+            collectionView.reloadData()
+            // hero 目标帧须以落定布局为准：身份变化时先强制
+            // 一次布局（无 hero 的旧路径靠后续系统布局收尾，
+            // 此处提前一帧不改变最终呈现）。
+            collectionView.layoutIfNeeded()
+        }
+        let flight = makeHeroFlight67(
+            snapshot: heroSnapshot, sourceFrame: sourceFrame,
+            targetInstanceId: targetInstanceId)
         if !identityChanged {
             if FoliaMotion62.reduced(.queueCollage) {
-                // (62) 集成对账：WB 的 C1 减动效判定原挂在
-                // hero 分支的 guard 上，hero 摘除后改挂本回退
-                // 路径——减动效时布局重排不走 animator、直接
-                // 落位，口径不变。
+                // (62) 集成对账：减动效时布局重排不走 animator、
+                // 直接落位；飞行层同口径不建（makeHeroFlight67
+                // 内已按减动效返回 nil）。
                 wallLayout.invalidateLayout()
                 collectionView.layoutIfNeeded()
             } else {
@@ -3110,13 +3129,76 @@ final class WallPrototypeViewController: UIViewController,
                     self.wallLayout.invalidateLayout()
                     self.collectionView.layoutIfNeeded()
                 }
+                if let flight {
+                    animator.addAnimations { flight.fly() }
+                    animator.addCompletion { _ in flight.finish() }
+                }
                 animator.startAnimation()
             }
-        } else {
-            collectionView.reloadData()
+        } else if let flight {
+            // 身份变化路径布局已瞬时落定：飞行层自带同一条
+            // 弹簧曲线独飞，与新布局的终点帧严丝合缝。
+            let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
+                flight.fly()
+            }
+            animator.addCompletion { _ in flight.finish() }
+            animator.startAnimation()
         }
         refreshVisiblePlaybackUI()
         completion?()
+    }
+
+    /// hero 飞行层装配：目标帧 = 目标实例刷新后的最终属性
+    /// 帧（CV 坐标→VC 视图坐标）；源/目标是同一张卡（展开与
+    /// 收起都然，实例身份不变、下标不变），飞行期间藏真卡
+    /// 防双影、落定复原。任一输入缺失/减动效/源=目标时返回
+    /// nil（走无飞行路径）。
+    private func makeHeroFlight67(snapshot: UIView?,
+                                  sourceFrame: CGRect?,
+                                  targetInstanceId: String?) -> HeroFlight67? {
+        guard let snapshot, let sourceFrame, let targetInstanceId,
+              !FoliaMotion62.reduced(.queueCollage),
+              let targetIndex = wallLayout.instances.firstIndex(
+                where: { $0.instanceId == targetInstanceId }),
+              let attrs = wallLayout.layoutAttributesForItem(
+                at: IndexPath(item: targetIndex, section: 0))
+        else { return nil }
+        let targetFrame = collectionView.convert(attrs.frame, to: view)
+        guard targetFrame != sourceFrame else { return nil }
+        let flight = HeroFlight67(snapshot: snapshot, targetFrame: targetFrame)
+        flight.view.frame = sourceFrame
+        view.addSubview(flight.view)
+        if let cell = collectionView.cellForItem(
+            at: IndexPath(item: targetIndex, section: 0)) {
+            cell.alpha = 0
+            flight.hiddenCell = cell
+        }
+        Breadcrumbs.log("wall.hero from=\(Int(sourceFrame.width))x\(Int(sourceFrame.height))"
+            + " to=\(Int(targetFrame.width))x\(Int(targetFrame.height))")
+        return flight
+    }
+}
+
+/// hero 飞行层（3.7 (67) D 组）：被点卡的快照视图，从源帧
+/// 飞到目标帧（与布局弹簧同一 animator 曲线）；落定摘层并
+/// 复原被藏的真卡。纯叠加动画，不持有任何布局状态。
+private final class HeroFlight67 {
+    let view: UIView
+    private let targetFrame: CGRect
+    weak var hiddenCell: UICollectionViewCell?
+
+    init(snapshot: UIView, targetFrame: CGRect) {
+        view = snapshot
+        self.targetFrame = targetFrame
+    }
+
+    func fly() {
+        view.frame = targetFrame
+    }
+
+    func finish() {
+        view.removeFromSuperview()
+        hiddenCell?.alpha = 1
     }
 }
 
