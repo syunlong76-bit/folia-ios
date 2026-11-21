@@ -185,10 +185,13 @@ extension SettingsStore {
 
     // MARK: - 播放页
 
-    /// 播放后进入的视图：0 舞台（默认，现行为）/ 1 播放详情 / 2 留在当前页。
+    /// 播放后进入的视图：0 可视化（舞台，默认）/ 1 播放详情 /
+    /// 2 留在原处 / 3 Lattice（队列拼贴，3.7 (71) 补档——网页版
+    /// PlaybackEntryView 三值 player/lattice/stay 中的 lattice；
+    /// 值位只许追加不许重排，既有 0/1/2 语义不变、无迁移）。
     static var playbackEntryView: Int {
-        get { int62(Key62A.playbackEntryView, default: 0, range: 0...2) }
-        set { setInt62(newValue, Key62A.playbackEntryView, range: 0...2) }
+        get { int62(Key62A.playbackEntryView, default: 0, range: 0...3) }
+        set { setInt62(newValue, Key62A.playbackEntryView, range: 0...3) }
     }
     static var latticeVignetteEnabled: Bool {
         get { bool62(Key62A.latticeVignetteEnabled, default: true) }

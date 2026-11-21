@@ -133,20 +133,26 @@ final class TrackPill62: UIView {
     }
 }
 
-/// 播放后进入的视图（(62) §4.2）：三段设置的路由帮助，供 HomeWall
+/// 播放后进入的视图（(62) §4.2）：设置的路由帮助，供 HomeWall
 /// 点歌路由与他簇调用。返回值语义：
-/// - .stage： present StageViewController（默认，现行为）
+/// - .stage： present StageViewController（默认，现行为；网页版
+///   PlaybackEntryView 的 player「可视化」）
 /// - .detail：播放详情——原生无独立详情 VC，等价落点为舞台开台后
 ///   立即打开播放面板（PlaybackPanelViewController），调用方在
 ///   stage presented 后调 openPanelOnPresentedStage(from:)。
-/// - .stay：留在当前页（只起播不开台），调用方跳过 present。
+///   网页版无此值，是原生对 player 的细分页（(71) 图卡化时保留）。
+/// - .stay：留在原处（只起播不开台），调用方跳过 present
+///   （网页版 stay「留在原处」）。
+/// - .lattice：Lattice（队列拼贴）——present
+///   QueueLatticeViewController（(71) 补档，网页版 lattice）。
 enum PlaybackEntry62 {
-    enum Entry { case stage, detail, stay }
+    enum Entry { case stage, detail, stay, lattice }
 
     static var current: Entry {
         switch SettingsStore.playbackEntryView {
         case 1: return .detail
         case 2: return .stay
+        case 3: return .lattice
         default: return .stage
         }
     }

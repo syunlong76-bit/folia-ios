@@ -68,6 +68,19 @@ final class WallLayout: UICollectionViewLayout {
     var worldOrigin = CGPoint(x: 34, y: 80)
     /// 当前展开的实例 id（nil = 无展开）。
     var expandedInstanceId: String?
+
+    /// 有限队列模式（3.7 (71) Lattice 队列拼贴，port-spec 第一节）：
+    /// true 时实例集走有限有序网格——内容 i → 行主序第 i 格
+    /// （128 方块、pitch 136），一曲一实例、无周期拷贝，窗口集
+    /// 是内容↔窗口槽位映射（枚举按格索引裁剪、支持 >400 首）。
+    /// 仅 QueueLatticeViewController 置 true；主页墙/曲目墙恒
+    /// false，其指纹（dataVersion/计数/缩放/尺寸类别/展开态、
+    /// 不含 worldOrigin）与 rebase 纪律一字不变。播放头
+    /// currentIndex 严禁入本类：VC 只对受影响 tile 定向刷牌。
+    var finiteQueueMode = false
+    /// 有限网格最近一次计算的列数/场矩形（VC 定位与相机钳制用）。
+    private(set) var finiteColumns = 0
+    private(set) var finiteFieldRect = WallRectD(x: 0, y: 0, width: 0, height: 0)
     /// 条目身份代指（(58)）：VC 在数据变更点（与 totalEntries
     /// 同批赋值处）递增；实例集缓存键据此失效——条目被替换
     /// （同计数换内容）时实例的 queueIndex→条目映射随之作废。
@@ -104,7 +117,77 @@ final class WallLayout: UICollectionViewLayout {
 
     /// 一个单元的视图尺寸（断点/scale 变化时 VC 据此重对齐 offset）。
     var cellViewSize: CGSize {
-        CGSize(width: geometry.cellWidth * cameraScale, height: geometry.cellHeight * cameraScale)
+        if finiteQueueMode, let collectionView {
+            let field = finiteGrid(viewSize: collectionView.bounds.size).field
+            // 短队列场小于视口时单元按视口兜底：contentSize 恒
+            // ≥bounds，折叠中心不被滚动视图的偏移钳制顶偏（场
+            // 本身的居中由 VC 相机钳制负责，与单元尺寸无关）。
+            return CGSize(width: max(field.width * cameraScale,
+                                     Double(collectionView.bounds.width)),
+                          height: max(field.height * cameraScale,
+                                      Double(collectionView.bounds.height)))
+        }
+        return CGSize(width: geometry.cellWidth * cameraScale, height: geometry.cellHeight * cameraScale)
+    }
+
+    // MARK: - 有限队列网格（(71)，纯函数：计数×视口比 → 列/行/场）
+
+    /// 列数按场目标宽高比（视口世界宽高比、钳 0.45–2.4）取
+    /// ceil(sqrt(计数×比))；场 = cols×rows 格的外缘（尾格不带
+    /// gap）。旋转时尺寸类别变化触发重算、网格随新比再排。
+    private func finiteGrid(viewSize: CGSize) -> (cols: Int, rows: Int, field: WallRectD) {
+        let count = max(0, totalEntries)
+        guard count > 0 else { return (0, 0, WallRectD(x: 0, y: 0, width: 0, height: 0)) }
+        var aspect = 1.0
+        if viewSize.width > 0, viewSize.height > 0 {
+            aspect = min(max(Double(viewSize.width / viewSize.height), 0.45), 2.4)
+        }
+        var cols = max(1, Int((Double(count) * aspect).squareRoot().rounded(.up)))
+        cols = min(cols, count)
+        let rows = Int(ceil(Double(count) / Double(cols)))
+        let field = WallRectD(
+            x: 0, y: 0,
+            width: Double(cols) * metrics.pitch - metrics.gap,
+            height: Double(rows) * metrics.pitch - metrics.gap)
+        return (cols, rows, field)
+    }
+
+    /// 有限模式：给定视口尺寸下的场矩形（VC 相机钳制/首帧定心用，
+    /// 不依赖实例集是否已算）。
+    func finiteField(viewSize: CGSize) -> WallRectD {
+        finiteGrid(viewSize: viewSize).field
+    }
+
+    /// 有限模式：内容下标 → 世界矩形（未入窗也算得出，供定位
+    /// 当前曲换算目标原点）。
+    func finiteRect(forIndex index: Int, viewSize: CGSize) -> WallRectD? {
+        guard finiteQueueMode, index >= 0, index < totalEntries else { return nil }
+        let grid = finiteGrid(viewSize: viewSize)
+        guard grid.cols > 0 else { return nil }
+        let col = index % grid.cols, row = index / grid.cols
+        return WallRectD(x: Double(col) * metrics.pitch, y: Double(row) * metrics.pitch,
+                         width: metrics.cellSize, height: metrics.cellSize)
+    }
+
+    /// 有限模式展开块：原格中心放大为 2 pitch − gap 的方块、
+    /// 钳进场内（场更小时居中溢出）。网页 Lattice 展开是原位
+    /// 放大＋大阴影（port-spec 第一节），不做邻块让位重排。
+    static func finiteGrownRect(active: WallRectD, field: WallRectD,
+                                metrics: WallMetrics) -> WallRectD {
+        let side = 2 * metrics.pitch - metrics.gap
+        var x = active.x + active.width / 2 - side / 2
+        var y = active.y + active.height / 2 - side / 2
+        if field.width >= side {
+            x = min(max(x, field.x), field.x + field.width - side)
+        } else {
+            x = field.x + (field.width - side) / 2
+        }
+        if field.height >= side {
+            y = min(max(y, field.y), field.y + field.height - side)
+        } else {
+            y = field.y + (field.height - side) / 2
+        }
+        return WallRectD(x: x, y: y, width: side, height: side)
     }
 
     override var collectionViewContentSize: CGSize {
@@ -155,6 +238,7 @@ final class WallLayout: UICollectionViewLayout {
     /// (57) 前行为一致、接受）。每次调用 latticeComputeCount+1。
     private func computeInstanceSet(anchor: CGPoint)
         -> (list: [QueueInstance], rects: [String: WallRectD], overscan: Double) {
+        if finiteQueueMode { return computeFiniteInstanceSet(anchor: anchor) }
         guard let collectionView else { return ([], [:], 900) }
         let viewSize = collectionView.bounds.size
         var overscan = 2400.0
@@ -203,6 +287,68 @@ final class WallLayout: UICollectionViewLayout {
             )
             attrs.zIndex = (instance.instanceId == expandedInstanceId) ? 1 : 0
             return attrs
+        }
+    }
+
+    /// 有限队列模式的实例集（(71)）：窗口 = 锚点可见域 ±overscan
+    /// （port-spec OVERSCAN 500；枚举触顶 400 时降档 300/150）。
+    /// 枚举按格索引行列裁剪——内容↔窗口映射是索引算术，不随
+    /// 队列长度线性变贵（千首队列同价）。展开块走原位放大矩形。
+    private func computeFiniteInstanceSet(anchor: CGPoint)
+        -> (list: [QueueInstance], rects: [String: WallRectD], overscan: Double) {
+        guard let collectionView, totalEntries > 0 else {
+            finiteColumns = 0
+            finiteFieldRect = WallRectD(x: 0, y: 0, width: 0, height: 0)
+            return ([], [:], 500)
+        }
+        let viewSize = collectionView.bounds.size
+        let grid = finiteGrid(viewSize: viewSize)
+        finiteColumns = grid.cols
+        finiteFieldRect = grid.field
+        let viewWorld = WallRectD(
+            x: Double(anchor.x), y: Double(anchor.y),
+            width: Double(viewSize.width) / cameraScale,
+            height: Double(viewSize.height) / cameraScale)
+        var overscan = 500.0
+        while true {
+            latticeComputeCount += 1
+            let view = WallRectD(
+                x: viewWorld.x - overscan, y: viewWorld.y - overscan,
+                width: viewWorld.width + overscan * 2,
+                height: viewWorld.height + overscan * 2)
+            let pitch = metrics.pitch
+            var list: [QueueInstance] = []
+            let fromCol = max(0, Int((view.left / pitch).rounded(.down)))
+            let toCol = min(grid.cols - 1, Int((view.right / pitch).rounded(.down)))
+            let fromRow = max(0, Int((view.top / pitch).rounded(.down)))
+            let toRow = min(grid.rows - 1, Int((view.bottom / pitch).rounded(.down)))
+            if grid.cols > 0, fromCol <= toCol, fromRow <= toRow {
+                outer: for row in fromRow...toRow {
+                    for col in fromCol...toCol {
+                        let index = row * grid.cols + col
+                        guard index < totalEntries else { continue }
+                        let rect = WallRectD(
+                            x: Double(col) * pitch, y: Double(row) * pitch,
+                            width: metrics.cellSize, height: metrics.cellSize)
+                        guard rect.overlaps(view) else { continue }
+                        list.append(QueueInstance(
+                            instanceId: "q\(index)", queueIndex: index,
+                            cellSlot: index, repeatX: col, repeatY: row, rect: rect))
+                        if list.count >= WallGeometry.maxRenderedInstances { break outer }
+                    }
+                }
+            }
+            if list.count >= WallGeometry.maxRenderedInstances, overscan > 150 {
+                overscan = overscan == 500 ? 300 : 150
+                continue
+            }
+            var rects: [String: WallRectD] = [:]
+            if let expandedId = expandedInstanceId,
+               let active = list.first(where: { $0.instanceId == expandedId }) {
+                rects[expandedId] = Self.finiteGrownRect(
+                    active: active.rect, field: grid.field, metrics: metrics)
+            }
+            return (list, rects, overscan)
         }
     }
 
@@ -286,9 +432,16 @@ final class WallLayout: UICollectionViewLayout {
                !newList.contains(where: { $0.instanceId == expandedId }),
                let pinned = instances.first(where: { $0.instanceId == expandedId }) {
                 newList.append(pinned)
-                newRects = WallGeometry.layoutExpandedBlock(
-                    geometry: geometry, totalEntries: totalEntries,
-                    active: pinned, metrics: metrics)
+                if finiteQueueMode {
+                    // (71) 有限模式：展开矩形走原位放大，不走周期
+                    // 块让位表（layoutExpandedBlock 是平铺几何专用）。
+                    newRects = [expandedId: Self.finiteGrownRect(
+                        active: pinned.rect, field: finiteFieldRect, metrics: metrics)]
+                } else {
+                    newRects = WallGeometry.layoutExpandedBlock(
+                        geometry: geometry, totalEntries: totalEntries,
+                        active: pinned, metrics: metrics)
+                }
                 Breadcrumbs.log("wall.cache rebase pin expanded=\(expandedId)")
             }
             instances = newList

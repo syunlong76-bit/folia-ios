@@ -2283,13 +2283,17 @@ final class HomeWallViewController: UIViewController,
 
     /// (62) 播放后进入的视图路由：点歌起播后按 playbackEntryView
     /// 决定去向——stage 开台（默认）、detail 开台后打开播放面板、
-    /// stay 留在当前页。仅点歌路径（探段直点起播）走本路由；
+    /// stay 留在当前页、lattice 打开队列拼贴（(71) 补档）。仅点歌路径（探段直点起播）走本路由；
     /// 迷你台双击/回到播放页/后台点入等显式导航仍走
     /// openNativeStageFromHome 原路、不受本设置管辖。
     private func routeAfterPlayback62() {
         switch PlaybackEntry62.current {
         case .stay:
             Breadcrumbs.log("entry62 route=stay")
+        case .lattice:
+            // (71) Lattice 档：起播后 present 队列拼贴墙。
+            Breadcrumbs.log("entry62 route=lattice")
+            QueueLatticeViewController.present(from: self)
         case .detail:
             Breadcrumbs.log("entry62 route=detail")
             openNativeStageFromHome()
@@ -2672,6 +2676,12 @@ extension HomeWallViewController {
         toolbar.setLayoutMode(grid: seamGridMode)
         toolbar.onSegmentChanged = { [weak self] segment in
             self?.seamSegmentSelected(segment)
+        }
+        // (71)「拼」格：present 队列拼贴墙（与 .lattice 路由档、
+        // 命令面板 navigate-lattice 共用同一落点）。
+        toolbar.onLatticeTapped = { [weak self] in
+            guard let self else { return }
+            QueueLatticeViewController.present(from: self)
         }
         toolbar.onAvatarTapped = { [weak self] in self?.seamAvatarTapped() }
         toolbar.onSearchTapped = { [weak self] in

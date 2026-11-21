@@ -325,6 +325,15 @@ final class CommandPaletteViewController: UIViewController {
                         top.present(browse, animated: true)
                     })
                 }),
+                // (71) 与网页版 command-palette 同名命令
+                // navigate-lattice：整条队列铺成海报墙。
+                Command(id: "navigate-lattice", title: "队列拼贴", subtitle: "Lattice · 整条播放队列铺墙",
+                        icon: "square.grid.3x3.fill", isEnabled: true, action: { host in
+                    host.finish(id: "navigate-lattice", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        QueueLatticeViewController.present(from: top)
+                    })
+                }),
             ]),
             Section(title: "面板", commands: [
                 Command(id: "panel.open", title: "打开播放面板", subtitle: "封面页签",

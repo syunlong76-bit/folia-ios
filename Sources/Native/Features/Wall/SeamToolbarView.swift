@@ -51,6 +51,9 @@ enum SeamSegment: Int, CaseIterable {
 final class SeamToolbarView: UIView {
 
     var onSegmentChanged: ((SeamSegment) -> Void)?
+    /// (71) 数据段尾「拼」格（队列拼贴）：动作格非数据段——
+    /// 点按走本回调 present 队列墙，选中态立即回弹当前数据段。
+    var onLatticeTapped: (() -> Void)?
     var onAvatarTapped: (() -> Void)?
     var onSearchTapped: (() -> Void)?
     var onSettingsTapped: (() -> Void)?
@@ -68,8 +71,9 @@ final class SeamToolbarView: UIView {
     private let avatarImageView = UIImageView()
     /// 头像加载防串图键（当前 URL 串；回调落地前比对，照侧栏同款）。
     private var avatarLoadKey: String?
+    /// 数据段三段 + (71)「拼」动作格（队列拼贴入口）。
     private let segmentControl = UISegmentedControl(
-        items: SeamSegment.allCases.map { $0.title })
+        items: SeamSegment.allCases.map { $0.title } + ["拼"])
     private let searchButton = UIButton(type: .system)
     private let settingsButton = UIButton(type: .system)
     private let layoutButton = UIButton(type: .system)
@@ -179,7 +183,7 @@ final class SeamToolbarView: UIView {
 
             segmentControl.leadingAnchor.constraint(equalTo: avatarButton.trailingAnchor, constant: 8),
             segmentControl.centerYAnchor.constraint(equalTo: centerYAnchor),
-            segmentControl.widthAnchor.constraint(equalToConstant: 108),
+            segmentControl.widthAnchor.constraint(equalToConstant: 132),
             segmentControl.heightAnchor.constraint(equalToConstant: 30),
 
             searchButton.leadingAnchor.constraint(equalTo: segmentControl.trailingAnchor, constant: 4),
@@ -396,6 +400,16 @@ final class SeamToolbarView: UIView {
     // MARK: - 动作
 
     @objc private func segmentChanged() {
+        // (71)「拼」格（下标 = 数据段数）：动作格——选中态回弹
+        // 当前数据段（程序赋值不触发 .valueChanged、无递归），
+        // 只分发 present 回调，数据段状态一字不动。
+        if segmentControl.selectedSegmentIndex == SeamSegment.allCases.count {
+            segmentControl.selectedSegmentIndex = segment.rawValue
+            noteToolbarInteraction()
+            Breadcrumbs.log("seam.lattice")
+            onLatticeTapped?()
+            return
+        }
         guard let selected = SeamSegment(rawValue: segmentControl.selectedSegmentIndex) else { return }
         segment = selected
         noteToolbarInteraction()

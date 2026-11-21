@@ -141,6 +141,74 @@ enum Settings62ClusterA {
         return row
     }
 
+    // MARK: - (71) 播放后进入的视图 · 图卡四选
+
+    /// 一卡的静态定义：值位（SettingsStore.playbackEntryView）
+    /// + 网页版同名标题 + 说明 + 示意图种类。顺序见 buildPlayer
+    /// 注释（网页版 OPTIONS 序 + detail 插在 player 之后）。
+    private struct EntryCardSpec {
+        let value: Int
+        let title: String
+        let detail: String
+        let art: EntryCardArtView.Kind
+    }
+
+    private static let entryCardSpecs: [EntryCardSpec] = [
+        EntryCardSpec(value: 0, title: "可视化",
+                      detail: "单曲视图，多种歌词动画与背景搭配",
+                      art: .player),
+        EntryCardSpec(value: 1, title: "播放详情",
+                      detail: "打开播放器并直接展开播放面板",
+                      art: .detail),
+        EntryCardSpec(value: 3, title: "Lattice（队列拼贴）",
+                      detail: "整条播放队列铺成海报墙，正在播放的那首会被放大",
+                      art: .lattice),
+        EntryCardSpec(value: 2, title: "留在原处",
+                      detail: "点击播放只开始播放，不跳转",
+                      art: .stay),
+    ]
+
+    /// 图卡行：标题 + 2×2 卡片格。点卡即写
+    /// SettingsStore.playbackEntryView（值位见上）并发
+    /// .foliaSettings62AChanged，与原分段行同一写盘口径。
+    private static func entryViewCardsRow(_ host: SettingsViewController) -> UIStackView {
+        let row = UIStackView()
+        row.axis = .vertical
+        row.spacing = 10
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
+        row.addArrangedSubview(titleLabel(host, "播放后进入的视图"))
+
+        var cards: [EntryChoiceCardView] = []
+        func select(_ value: Int) {
+            SettingsStore.playbackEntryView = value
+            post(SettingsStore.Key62A.playbackEntryView)
+            for card in cards { card.setSelected(card.value == value) }
+        }
+        let grid = UIStackView()
+        grid.axis = .vertical
+        grid.spacing = 10
+        grid.distribution = .fillEqually
+        for pairStart in stride(from: 0, to: entryCardSpecs.count, by: 2) {
+            let pair = UIStackView()
+            pair.axis = .horizontal
+            pair.spacing = 10
+            pair.distribution = .fillEqually
+            for spec in entryCardSpecs[pairStart..<min(pairStart + 2, entryCardSpecs.count)] {
+                let card = EntryChoiceCardView(
+                    value: spec.value, title: spec.title,
+                    detail: spec.detail, art: spec.art, host: host)
+                card.onTap = { select(spec.value) }
+                card.setSelected(SettingsStore.playbackEntryView == spec.value)
+                cards.append(card)
+                pair.addArrangedSubview(card)
+            }
+            grid.addArrangedSubview(pair)
+        }
+        row.addArrangedSubview(grid)
+        return row
+    }
+
     private static func buttonRow(_ host: SettingsViewController, _ title: String,
                                   detail: String? = nil,
                                   action: @escaping () -> Void) -> UIStackView {
@@ -283,12 +351,15 @@ enum Settings62ClusterA {
         host.beginCheckGroup("播放页·62A")
 
         let entry = group(host, into: stack, tab: 1, header: "进入视图", reg: reg)
-        addRow(host, to: entry, segmentedRow(host, "播放后进入的视图",
-            items: ["舞台", "播放详情", "留在当前页"],
-            selected: SettingsStore.playbackEntryView) { idx in
-            SettingsStore.playbackEntryView = idx
-            post(SettingsStore.Key62A.playbackEntryView)
-        }, hairline: false)
+        // (71) 图卡化四选（H2）：替换原分段行，四卡带示意图、
+        // 命名与网页版 PlaybackEntryViewOptions 一致——网页版
+        // 三值 player/lattice/stay 对应「可视化」「Lattice
+        // （队列拼贴）」「留在原处」；原生既有「播放详情」是
+        // player 的细分页（开台＋播放面板），网页版无此值，
+        // 保留为第二卡不删既有能力。卡序按网页版 OPTIONS 序
+        // （player→lattice→stay）插入 detail 于 player 之后；
+        // 值位不动（0 可视化/1 详情/2 留在原处/3 Lattice）。
+        addRow(host, to: entry, entryViewCardsRow(host), hairline: false)
         addRow(host, to: entry, switchRow(host, "Lattice 边缘暗角",
             isOn: SettingsStore.latticeVignetteEnabled) { on in
             SettingsStore.latticeVignetteEnabled = on
@@ -714,4 +785,222 @@ final class VideoLayerPicker62: NSObject, PHPickerViewControllerDelegate {
             }
         }
     }
+}
+
+// MARK: - (71) 图卡构件（文件级，供 Settings62ClusterA 图卡行使用）
+
+/// 进入视图示意图（照网页版 playbackEntryViewArt 的 SVG 构图
+/// 以色块复刻：160×100 viewBox 等比缩放居中）：player=大封面+
+/// 歌词行+电平条；detail=播放器+底部面板片（原生细分页）；
+/// lattice=4×3 海报格+焦点块放大 accent；stay=卡片格+一张
+/// accent 卡带暂停字形。
+final class EntryCardArtView: UIView {
+
+    enum Kind { case player, detail, lattice, stay }
+
+    private let kind: Kind
+    private let frameView = UIView()
+    private var blocks: [UIView] = []
+    private var blockSpecs: [BlockSpec] = []
+
+    init(kind: Kind) {
+        self.kind = kind
+        super.init(frame: .zero)
+        backgroundColor = .clear
+        // 外框（SVG FRAME_PROPS：描边 currentColor 18%）。
+        frameView.backgroundColor = .clear
+        frameView.layer.borderWidth = 1.5
+        frameView.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
+        frameView.layer.cornerRadius = 6
+        addSubview(frameView)
+        blockSpecs = Self.specs(for: kind)
+        for spec in blockSpecs {
+            let block = UIView()
+            block.backgroundColor = Self.color(for: spec.role)
+            block.layer.cornerRadius = spec.corner
+            addSubview(block)
+            blocks.append(block)
+        }
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private struct BlockSpec {
+        let rect: CGRect // 160×100 viewBox 坐标
+        let role: Role
+        let corner: CGFloat
+    }
+
+    private enum Role { case accent, faint, line, sheet, ink }
+
+    private static func color(for role: Role) -> UIColor {
+        switch role {
+        case .accent: return ThemeSystem62.currentAccent
+        case .faint: return UIColor.white.withAlphaComponent(0.16)
+        case .line: return UIColor.white.withAlphaComponent(0.25)
+        case .sheet: return UIColor.white.withAlphaComponent(0.12)
+        case .ink: return UIColor(white: 0.08, alpha: 1)
+        }
+    }
+
+    private static func specs(for kind: Kind) -> [BlockSpec] {
+        switch kind {
+        case .player:
+            var specs = [
+                BlockSpec(rect: CGRect(x: 16, y: 20, width: 44, height: 44), role: .accent, corner: 3),
+                BlockSpec(rect: CGRect(x: 72, y: 24, width: 62, height: 6), role: .line, corner: 3),
+                BlockSpec(rect: CGRect(x: 72, y: 38, width: 52, height: 7), role: .accent, corner: 3),
+                BlockSpec(rect: CGRect(x: 72, y: 53, width: 58, height: 6), role: .line, corner: 3),
+            ]
+            let heights: [CGFloat] = [6, 12, 8, 16, 10, 17, 9, 14, 7, 13, 10, 5]
+            for (index, height) in heights.enumerated() {
+                specs.append(BlockSpec(
+                    rect: CGRect(x: 16 + CGFloat(index) * 11, y: 84 - height,
+                                 width: 5, height: height),
+                    role: .line, corner: 2))
+            }
+            return specs
+        case .detail:
+            return [
+                BlockSpec(rect: CGRect(x: 16, y: 14, width: 30, height: 30), role: .accent, corner: 3),
+                BlockSpec(rect: CGRect(x: 56, y: 18, width: 88, height: 6), role: .line, corner: 3),
+                BlockSpec(rect: CGRect(x: 56, y: 30, width: 64, height: 6), role: .line, corner: 3),
+                BlockSpec(rect: CGRect(x: 10, y: 56, width: 140, height: 36), role: .sheet, corner: 5),
+                BlockSpec(rect: CGRect(x: 20, y: 66, width: 90, height: 5), role: .line, corner: 2),
+                BlockSpec(rect: CGRect(x: 20, y: 78, width: 120, height: 4), role: .accent, corner: 2),
+            ]
+        case .lattice:
+            var specs: [BlockSpec] = []
+            for row in 0..<3 {
+                for col in 0..<4 {
+                    let x = 11 + CGFloat(col) * 36
+                    let y = 11 + CGFloat(row) * 28
+                    if row == 1 && col == 1 {
+                        specs.append(BlockSpec(
+                            rect: CGRect(x: x - 4, y: y - 4, width: 38, height: 30),
+                            role: .accent, corner: 3))
+                    } else {
+                        specs.append(BlockSpec(
+                            rect: CGRect(x: x, y: y, width: 30, height: 22),
+                            role: .faint, corner: 2))
+                    }
+                }
+            }
+            return specs
+        case .stay:
+            var specs: [BlockSpec] = []
+            for index in 0..<6 {
+                let col = index % 3, row = index / 3
+                let x = 14 + CGFloat(col) * 47
+                let y = 13 + CGFloat(row) * 41
+                let playing = index == 1
+                specs.append(BlockSpec(
+                    rect: CGRect(x: x, y: y, width: 38, height: 32),
+                    role: playing ? .accent : .faint, corner: 3))
+                if playing {
+                    specs.append(BlockSpec(
+                        rect: CGRect(x: x + 24, y: y + 19, width: 3, height: 8),
+                        role: .ink, corner: 1))
+                    specs.append(BlockSpec(
+                        rect: CGRect(x: x + 29, y: y + 19, width: 3, height: 8),
+                        role: .ink, corner: 1))
+                }
+            }
+            return specs
+        }
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let scale = min(bounds.width / 160, bounds.height / 100)
+        let originX = (bounds.width - 160 * scale) / 2
+        let originY = (bounds.height - 100 * scale) / 2
+        frameView.frame = CGRect(x: originX + 1 * scale, y: originY + 1 * scale,
+                                 width: 158 * scale, height: 98 * scale)
+        for (block, spec) in zip(blocks, blockSpecs) {
+            block.frame = CGRect(
+                x: originX + spec.rect.minX * scale,
+                y: originY + spec.rect.minY * scale,
+                width: spec.rect.width * scale,
+                height: spec.rect.height * scale)
+        }
+    }
+}
+
+/// 进入视图单卡：示意图 + 标题 + 说明；选中态 accent 描边。
+final class EntryChoiceCardView: UIView {
+
+    let value: Int
+    var onTap: (() -> Void)?
+    private let artView: EntryCardArtView
+
+    init(value: Int, title: String, detail: String,
+         art: EntryCardArtView.Kind, host: SettingsViewController) {
+        self.value = value
+        self.artView = EntryCardArtView(kind: art)
+        super.init(frame: .zero)
+        backgroundColor = UIColor.white.withAlphaComponent(0.06)
+        layer.cornerRadius = 12
+        layer.borderWidth = 1
+        layer.borderColor = UIColor.white.withAlphaComponent(0.12).cgColor
+
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 6
+        stack.alignment = .center
+        stack.isLayoutMarginsRelativeArrangement = true
+        stack.layoutMargins = UIEdgeInsets(top: 10, left: 8, bottom: 10, right: 8)
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        artView.translatesAutoresizingMaskIntoConstraints = false
+        stack.addArrangedSubview(artView)
+
+        let titleLabel = UILabel()
+        titleLabel.text = FoliaLanguage62.rowTitle(title)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.textAlignment = .center
+        titleLabel.numberOfLines = 2
+        host.track(titleLabel)
+        stack.addArrangedSubview(titleLabel)
+
+        let detailLabel = UILabel()
+        detailLabel.text = detail
+        detailLabel.font = .systemFont(ofSize: 10.5)
+        detailLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        detailLabel.textAlignment = .center
+        detailLabel.numberOfLines = 3
+        host.track(detailLabel)
+        stack.addArrangedSubview(detailLabel)
+
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: topAnchor),
+            stack.bottomAnchor.constraint(equalTo: bottomAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor),
+            artView.widthAnchor.constraint(equalToConstant: 96),
+            artView.heightAnchor.constraint(equalToConstant: 60),
+        ])
+
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        accessibilityLabel = title
+        addGestureRecognizer(UITapGestureRecognizer(target: self, action: #selector(tapped)))
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setSelected(_ selected: Bool) {
+        layer.borderWidth = selected ? 1.5 : 1
+        layer.borderColor = selected
+            ? ThemeSystem62.currentAccent.cgColor
+            : UIColor.white.withAlphaComponent(0.12).cgColor
+        backgroundColor = UIColor.white.withAlphaComponent(selected ? 0.10 : 0.06)
+        accessibilityTraits = selected ? [.button, .selected] : .button
+    }
+
+    @objc private func tapped() { onTap?() }
 }
