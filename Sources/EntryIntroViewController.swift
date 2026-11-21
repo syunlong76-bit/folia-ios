@@ -207,6 +207,36 @@ enum EntryPosterArt {
 ///   首帧已可显示的首个时刻），与 entry poster presented
 ///   / entry video readyForDisplay 同为 Breadcrumbs 写行时
 ///   的 ISO8601 时钟、三点间隔可直接对账。
+/// - 丝滑化（3.7 (57) 工作流 A，Miller (55) 录屏逐帧实测）：
+///   录屏 t=1.933s 单帧（YAVG 48.2、邻帧 91.8/91.2）经抽帧
+///   复核不是「同画面变暗」，是播放器内容以横屏帧条出现在
+///   画面上部、下部约 55% 纯黑的几何瞬变帧；faststart 母带
+///   同时段亮度连续（0–3s 最低 97.4）、无此帧。已证实的结
+///   构缺口：(53) 交接在首帧确认即把 veil 与 VC 内海报层双
+///   双摘除，播放器层 isOpaque=false＋clear 背景，此后整段
+///   播放期层下无任何不透明垫底——几何/合成任一帧间隙都直
+///   接露黑/露墙。修法三件：①横屏几何请求提前到 present
+///   之前发出（veil 已同步垫窗、旋转在油画遮盖下先行），
+///   播放期不再叠几何变更，present 完成后的原请求保留作双
+///   保险；②海报层交接后不摘除，降为整段播放期的垫底（位
+///   于播放器层之下、帧恒满 view.bounds），叠化/循环溶出
+///   时与视频层同段淡出、不作中间层独占；③首帧确认后播
+///   放器层翻为 isOpaque＋海报主色背景，单帧内容冲刷只露
+///   油画色。退场侧：(23) 的串行时序（淡出→dismiss→才发
+///   竖屏请求→系统旋转）使墙以横屏布局静止示人约 0.8s 后
+///   猛地正过来（录屏 9.17–9.97s 亮度恒 75.1、转正仅约
+///   0.13s），违反「淡出遮住旋转」定版——改：退场开始即
+///   动态解锁本 VC 方向（exitOrientationUnlocked＋
+///   setNeedsUpdateOfSupportedInterfaceOrientations，iOS
+///   17 目标可用）并同刻发竖屏请求，旋转与整面淡出并行、
+///   在油画覆盖下完成；dismiss 完成后的原请求保留作兜底，
+///   PortraitRestore 加在飞守卫防双请求打断旋转动画；需
+///   旋转时跳过墙面 1.02 落位变换（防变换与旋转冲突）。
+///   新增面包屑：entry rotate landscape request /
+///   entry rotate transition begin / entry rotate landed /
+///   entry rotate unlock / entry rotate portrait request /
+///   entry rotate portrait landed / entry poster handoff /
+///   entry poster removed，与录屏时间轴逐点对账。
 
 /// 入场播放器预热仓（3.7 (54) 工作流 O）：所有权与生命
 /// 周期——本枚举静态持有预热的 AVPlayer/AVPlayerItem；
@@ -409,6 +439,25 @@ enum EntryIntroPresenter {
 
         // 推迟一帧再呈现，确保 presenter 已进窗口层级
         DispatchQueue.main.async {
+            // 横屏几何请求提前（3.7 (57) 工作流 A）：原时序在
+            // present 完成后才发请求，冷启主线程繁忙（墙首轮
+            // 加载并发）时旋转可迟到视频起播后约 0.66s 才落
+            // 地，旋转重排播放器层的那一帧无垫底即露黑（(55)
+            // 录屏 t=1.933s 单帧实锤）。改：present 之前先发
+            // ——此刻顶层是全向掩码的主页墙、请求可被受理，
+            // 且 window 已同步垫好 veil（不透明油画），旋转
+            // 全程在油画遮盖下进行；VC 呈现时界面已横屏或正
+            // 在转，播放器层自始生于横屏 bounds、播放期不再
+            // 叠几何变更。present 完成后的原请求保留作双保险
+            // （已横屏时为无操作）。两处请求均落面包屑，落
+            // 地时刻由 VC 的 viewWillTransition 完成回调落
+            // entry rotate landed，三点与录屏时间轴对账。
+            Breadcrumbs.log("entry rotate landscape request src=pre-present")
+            window.windowScene?.requestGeometryUpdate(
+                .iOS(interfaceOrientations: .landscapeRight)
+            ) { error in
+                NSLog("[EntryIntro] requestGeometryUpdate landscape (pre-present) failed: \(error.localizedDescription)")
+            }
             let vc = EntryIntroViewController(url: url)
             vc.exitVeil = veil
             // overFullScreen（3.7 (23) 直溶前提）：呈现方（主页
@@ -419,6 +468,7 @@ enum EntryIntroPresenter {
             current = vc
             presenter.present(vc, animated: false) {
                 // 呈现后再补一次几何请求，双保险把界面转到横屏
+                Breadcrumbs.log("entry rotate landscape request src=present-done")
                 window.windowScene?.requestGeometryUpdate(
                     .iOS(interfaceOrientations: .landscapeRight)
                 ) { error in
@@ -516,9 +566,59 @@ final class EntryIntroViewController: UIViewController {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override var supportedInterfaceOrientations: UIInterfaceOrientationMask { .landscape }
+    /// 退场方向解锁（3.7 (57) 工作流 A）：播放期恒横屏专属
+    /// （与原写死 .landscape 一致）；退场开始置位后改全向
+    /// （与 Info.plist 应用掩码同集），配合
+    /// setNeedsUpdateOfSupportedInterfaceOrientations 让竖屏
+    /// 请求在 VC 仍压顶时即可被受理、旋转与淡出并行（见
+    /// dismissIntro）。置位只发生在 isDismissing 已封口的退
+    /// 场路径上，无回滚场景。
+    private var exitOrientationUnlocked = false
+
+    override var supportedInterfaceOrientations: UIInterfaceOrientationMask {
+        exitOrientationUnlocked
+            ? [.portrait, .landscapeLeft, .landscapeRight]
+            : .landscape
+    }
     override var preferredInterfaceOrientationForPresentation: UIInterfaceOrientation { .landscapeRight }
     override var prefersStatusBarHidden: Bool { true }
+
+    /// 几何变更对账（3.7 (57) 工作流 A）：本 VC 在场期间的
+    /// 每次界面旋转（进场转横屏、退场解锁后转竖屏）都经此
+    /// 回调——起跑落 entry rotate transition begin（带目标
+    /// 尺寸），协调器完成落 entry rotate landed（带落地后
+    /// 场景实际方向）。与 entry rotate landscape request /
+    /// entry rotate portrait request 的发出时刻三点对账，
+    /// 即可判定旋转落在起播前、播放中还是退场段（(55) 录
+    /// 屏暗闪帧定级所缺的正是这组时刻）。
+    override func viewWillTransition(to size: CGSize,
+                                     with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        Breadcrumbs.log("entry rotate transition begin size=\(Int(size.width))x\(Int(size.height))")
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self else { return }
+            let orientation = self.view.window?.windowScene?.interfaceOrientation
+            let name: String
+            switch orientation {
+            case .portrait: name = "portrait"
+            case .portraitUpsideDown: name = "portraitUpsideDown"
+            case .landscapeLeft: name = "landscapeLeft"
+            case .landscapeRight: name = "landscapeRight"
+            default: name = "unknown"
+            }
+            Breadcrumbs.log("entry rotate landed orient=\(name)")
+        }
+    }
+
+    /// 退场方向解锁（3.7 (57) 工作流 A，dismissIntro 调用）：
+    /// 置旗标后通知系统重估本 VC 的方向掩码（iOS 16+ API，
+    /// 本工程目标 iOS 17 可用）。幂等：重复调用无操作。
+    private func unlockOrientationsForExit() {
+        guard !exitOrientationUnlocked else { return }
+        exitOrientationUnlocked = true
+        setNeedsUpdateOfSupportedInterfaceOrientations()
+        Breadcrumbs.log("entry rotate unlock")
+    }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -727,24 +827,30 @@ final class EntryIntroViewController: UIViewController {
         clearEntryPoster()
     }
 
-    /// 海报交接（3.7 (53) 工作流 I）：首帧渲染确认后执行一
-    /// 次——window 层 veil 即撤（entry.veil.cleared 沿用既有
-    /// 面包屑名），VC 内海报层 0.25s 淡出后移除：此刻播放
-    /// 器层已绘出真帧，淡出只是海报→视频的同内容交接（海
-    /// 报本就是母带帧），不存在黑窗。曲线 easeOut 与退场段
-    /// 同族。
+    /// 海报交接（3.7 (53) 工作流 I 立、(57) 工作流 A 改垫底
+    /// 生命周期）：首帧渲染确认后执行一次——window 层 veil
+    /// 即撤（entry.veil.cleared 沿用既有面包屑名）；VC 内海
+    /// 报层不再淡出移除，降为整段播放期的垫底：(55) 录屏
+    /// 实锤交接后播放器层（isOpaque=false＋clear 背景）之下
+    /// 无任何不透明层，几何/合成任一帧间隙直接露黑。垫底
+    /// 恒满 view.bounds、位于播放器层之下，正常播放时被视
+    /// 频帧完全盖住（零视觉变化、零卡帧回归——它不在播放
+    /// 器层之上）；间隙帧露出的是油画本身。同时把播放器
+    /// 层翻为不透明＋海报主色背景：层帧内单帧内容冲刷只露
+    /// 油画色，与垫底构成双层防线。垫底的真正摘除在退场：
+    /// 叠化/循环溶出时与视频层同段淡出（不作中间层独占，
+    /// (23) 两段式教训不回退），整面淡出路径随 view 一并淡
+    /// 出，最终随 teardown 落 entry poster removed。
     private func clearEntryPoster() {
         guard !veilCleared else { return }
         veilCleared = true
         exitVeil?.removeFromSuperview()
         exitVeil = nil
         Breadcrumbs.log("entry veil cleared")
-        UIView.animate(withDuration: 0.25, delay: 0,
-                       options: [.curveEaseOut], animations: {
-            self.posterView.alpha = 0
-        }, completion: { [weak self] _ in
-            self?.posterView.removeFromSuperview()
-        })
+        playerView.playerLayer.isOpaque = true
+        playerView.playerLayer.backgroundColor = EntryPosterArt.dominantColor.cgColor
+        playerView.isOpaque = true
+        Breadcrumbs.log("entry poster handoff backing=kept")
     }
 
     /// 引擎在播时静音入场（3.7 (23)，幂等）：起播判定与在播
@@ -765,9 +871,10 @@ final class EntryIntroViewController: UIViewController {
     /// 在叠化窗内迟到（剩余已不足 1.0）以剩余时长补溶、下
     /// 限 0.3s 防一闪而过。.loading 不起（播完按既有口径循
     /// 环掩盖，下一轮再判）；.failed 不起（退场落墙失败态）。
-    /// 溶出对象 = 视频层本身：VC 背景透明、其下即主页墙
-    /// （海报垫起播时已撤），溶完画面就是墙本身；旋转回正
-    /// 在 dismiss 完成后由 PortraitRestore 处理。
+    /// 溶出对象 = 视频层＋其下海报垫底（(57) 起垫底整段在
+    /// 场）：两者同段同曲线淡出，溶完画面就是墙本身，垫底
+    /// 不作中间层独占；旋转回正自 (57) 起在 dismissIntro 开
+    /// 始即与淡出并行发出（PortraitRestore 在飞守卫兜底）。
     private func checkDissolveGate() {
         guard dissolveArmed, !isDismissing, !dissolveBegan, let player,
               let duration = player.currentItem?.duration.seconds,
@@ -782,6 +889,7 @@ final class EntryIntroViewController: UIViewController {
         UIView.animate(withDuration: dissolveDuration, delay: 0,
                        options: [.curveEaseInOut], animations: {
             self.playerView.alpha = 0
+            self.posterView.alpha = 0
         })
     }
 
@@ -807,6 +915,7 @@ final class EntryIntroViewController: UIViewController {
         UIView.animate(withDuration: 0.6, delay: 0,
                        options: [.curveEaseInOut], animations: {
             self.playerView.alpha = 0
+            self.posterView.alpha = 0
         }, completion: { [weak self] _ in
             guard let self else { return }
             if EntryIntroPresenter.currentDataState == .ready {
@@ -816,6 +925,8 @@ final class EntryIntroViewController: UIViewController {
                 self.dissolveBegan = false
                 self.playerView.layer.removeAllAnimations()
                 self.playerView.alpha = 1
+                self.posterView.layer.removeAllAnimations()
+                self.posterView.alpha = 1
             }
         })
     }
@@ -845,11 +956,15 @@ final class EntryIntroViewController: UIViewController {
             dismissIntro(reason: "data-failed", animated: true)
         case .loading:
             // 叠化已起跑但状态翻回加载（门控后数据状态变化）：
-            // 先恢复视频层不透明再循环，不许透着墙重播。
+            // 先恢复视频层不透明再循环，不许透着墙重播。海报
+            // 垫底（(57) 起与视频层同段淡出）同步恢复，续播期
+            // 间继续作垫底在场。
             if dissolveBegan {
                 dissolveBegan = false
                 playerView.layer.removeAllAnimations()
                 playerView.alpha = 1
+                posterView.layer.removeAllAnimations()
+                posterView.alpha = 1
             }
             loopCount += 1
             Breadcrumbs.log("entry loop round=\(loopCount)")
@@ -889,9 +1004,12 @@ final class EntryIntroViewController: UIViewController {
         EntryIntroPresenter.suppressNext()
 
         // 退场收尾（两路共用）：拆播放器 → 提交 dismiss → 落
-        // done 面包屑 → 方向恢复（(23)：请求移到 dismiss 完
-        // 成后发，彼时横屏专属的本 VC 已离顶层，请求可被受
-        // 理；墙 viewDidAppear 另有兜底同路）→ 墙帧提交确认。
+        // done 面包屑 → 方向恢复兜底（(57)：主发点已提前到
+        // 下方 animated 路径的淡出开始；此处 dismiss 完成后
+        // 的调用保留作兜底——旋转已落地时为无操作、旋转在
+        // 飞时被 PortraitRestore 在飞守卫挡下、旋转未起时按
+        // (23) 原路补发；墙 viewDidAppear 另有同路兜底）→
+        // 墙帧提交确认。
         let finishDismiss = {
             Breadcrumbs.log("entry transition commit reason=\(reason)")
             if let presenter {
@@ -912,10 +1030,28 @@ final class EntryIntroViewController: UIViewController {
         }
 
         guard animated else {
-            // 播放失败：立即放行，不等转场
+            // 播放失败：立即放行，不等转场（方向恢复走
+            // finishDismiss 的兜底原路，(23) 时机不变）。
             teardownPlayer()
             finishDismiss()
             return
+        }
+
+        // 退场旋转并行（3.7 (57) 工作流 A）：(23) 的串行时序
+        // （淡出→dismiss→才发竖屏请求→系统旋转）使墙以横屏
+        // 布局静止示人约 0.8s 后猛地正过来（(55) 录屏实测），
+        // 违反定版「退出转回竖屏须淡出遮住、不许露硬转」。
+        // (23) 当年把请求压到 dismiss 后，是因为本 VC 写死横
+        // 屏专属、压顶时请求必被拒——(57) 先动态解锁本 VC
+        // 方向（unlockOrientationsForExit），请求即可在淡出
+        // 开始同刻发出：系统旋转动画（约 0.4s）与整面淡出
+        // （0.15–0.4s）＋dismiss 并行重叠，旋转全程有油画
+        // （视频/海报垫底同属本 VC、随整面淡出）覆盖，墙被
+        // 揭开时已竖屏或正在平滑旋转中，不再横倒静止示人。
+        let sceneIsLandscape = view.window?.windowScene?.interfaceOrientation.isLandscape ?? false
+        if let presenter {
+            unlockOrientationsForExit()
+            PortraitRestore.requestIfLandscape(from: presenter, source: "dismiss-start")
         }
 
         // 退场衔接（3.7 (23) 直溶版）：整面淡出直接落到主页墙
@@ -924,8 +1060,9 @@ final class EntryIntroViewController: UIViewController {
         // 弹簧回 1.00）；总时长 ≤0.6s 不变。尾段叠化已起跑
         // 时视频层已溶尽，本段只清关闭按钮与整面残余，时长
         // 压到 0.15（合并去重，不重新引入任何中间层独占）。
-        // 旋转回正不在本段发请求——见 finishDismiss 的 (23)
-        // 时机修正。
+        // (57) 补：需要旋转回正时跳过墙面落位——1.02 变换挂
+        // 在正在旋转的墙 view 上与系统旋转变换同帧竞争，是
+        // 「猛地正过来」的嫌疑共犯；旋转本身即落位动势。
         let fast = reason == "closed"
         let fadeDuration = fast ? 0.3 : (dissolveBegan ? 0.15 : 0.4)
         Breadcrumbs.log("entry video alpha fade dur=\(String(format: "%.2f", fadeDuration)) dissolve=\(dissolveBegan)")
@@ -934,7 +1071,11 @@ final class EntryIntroViewController: UIViewController {
                 self.closeButton.alpha = 0
             })
         }
-        Self.beginWallSettle(wallView: presenter?.view, fast: fast)
+        if sceneIsLandscape {
+            Breadcrumbs.log("entry wall settle skipped reason=rotation-parallel")
+        } else {
+            Self.beginWallSettle(wallView: presenter?.view, fast: fast)
+        }
         UIView.animate(withDuration: fadeDuration, delay: 0, options: [.curveEaseOut], animations: {
             self.view.alpha = 0
         }, completion: { [weak self] _ in
@@ -957,6 +1098,11 @@ final class EntryIntroViewController: UIViewController {
     }
 
     private func teardownPlayer() {
+        // 海报垫底摘除时刻（3.7 (57) 工作流 A）：(57) 起垫底
+        // 整段播放期在场，其摘除点即 teardown（退场两路共用
+        // 的唯一拆解点，每呈现恰一次）——与 entry poster
+        // handoff 成对落痕，垫底在场区间可与录屏对账。
+        Breadcrumbs.log("entry poster removed")
         if let timeObserver, let player {
             player.removeTimeObserver(timeObserver)
         }
@@ -1007,19 +1153,33 @@ final class EntryIntroViewController: UIViewController {
 /// 请求落空后全 App 零重试，墙又是全向掩码，系统永不主动
 /// 回正，只能等设备物理转动。本类口径：
 /// - 只在当前确实横屏时发请求（竖屏时无操作，天然幂等）；
-///   调用点两处——入场 dismiss 完成（EntryIntro）与墙
-///   viewDidAppear 兜底（HomeWall），双触发以 0.3s 去重窗
-///   合并为一次。
+///   调用点 (23) 时两处——入场 dismiss 完成（EntryIntro）
+///   与墙 viewDidAppear 兜底（HomeWall），双触发以 0.3s 去
+///   重窗合并为一次；(57) 起主发点提前为入场退场开始
+///   （dismiss-start，VC 已动态解锁方向、请求可被受理，
+///   旋转与淡出并行），原两处降为兜底，并加在飞守卫防重
+///   复请求打断旋转动画。
 /// - 发后 0.2s（转场动画量级）校验实际方向：仍横屏重试一
 ///   次；最终结果落面包屑，失败时带顶层 VC 的 supported
 ///   mask 与 error，不再只 NSLog 无从对账。
 enum PortraitRestore {
 
     private static var lastRequestAt: CFTimeInterval = 0
+    /// 旋转在飞守卫（3.7 (57) 工作流 A）：一次竖屏请求已发
+    /// 出、落地校验未落定期间为真。此间任何来源的重复请求
+    /// （dismiss 完成兜底、墙 viewDidAppear 兜底）一律挡下
+    /// 并落痕——旋转动画中途再发几何请求会打断插值、把平
+    /// 滑旋转打成跳变，正是 (55) 录屏「猛地正过来」的嫌疑
+    /// 机制之一。落地（校验见竖屏）或最终失败时清零。
+    private static var requestInFlight = false
 
     static func requestIfLandscape(from vc: UIViewController, source: String) {
         guard let scene = vc.view.window?.windowScene else { return }
         guard scene.interfaceOrientation.isLandscape else { return }
+        if requestInFlight {
+            Breadcrumbs.log("entry rotate portrait skipped source=\(source) reason=in-flight")
+            return
+        }
         let now = CACurrentMediaTime()
         guard now - lastRequestAt > 0.3 else { return }
         lastRequestAt = now
@@ -1027,10 +1187,16 @@ enum PortraitRestore {
     }
 
     private static func attempt(scene: UIWindowScene, source: String, tryCount: Int) {
+        requestInFlight = true
+        // 请求发出时刻（3.7 (57) 工作流 A 新增）：与 VC 的
+        // entry rotate landed（实际生效）成对，间隔即系统旋
+        // 转耗时，可与录屏时间轴逐帧对账。
+        Breadcrumbs.log("entry rotate portrait request source=\(source) attempt=\(tryCount)")
         scene.requestGeometryUpdate(
             .iOS(interfaceOrientations: .portrait)
         ) { error in
             // errorHandler 只在失败时回调，error 为非 Optional。
+            requestInFlight = false
             Breadcrumbs.log("entry rotate portrait error source=\(source) attempt=\(tryCount) \(failureContext(scene: scene)) error=\(error.localizedDescription)")
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -1038,10 +1204,13 @@ enum PortraitRestore {
                 if tryCount < 2 {
                     PortraitRestore.attempt(scene: scene, source: source, tryCount: tryCount + 1)
                 } else {
+                    requestInFlight = false
                     Breadcrumbs.log("entry rotate portrait failed source=\(source) \(failureContext(scene: scene))")
                 }
             } else {
+                requestInFlight = false
                 Breadcrumbs.log("entry rotate portrait ok source=\(source) attempt=\(tryCount)")
+                Breadcrumbs.log("entry rotate portrait landed source=\(source) attempt=\(tryCount)")
             }
         }
     }
