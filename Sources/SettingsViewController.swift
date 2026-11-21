@@ -164,12 +164,12 @@ final class SettingsViewController: UIViewController {
 
     // MARK: - 自检记账
 
-    private func beginCheckGroup(_ name: String) {
+    func beginCheckGroup(_ name: String) {
         checkNames.append(name)
         checkLabels.append([])
     }
 
-    private func track(_ label: UILabel) {
+    func track(_ label: UILabel) {
         guard !checkLabels.isEmpty else { return }
         checkLabels[checkLabels.count - 1].append(label)
     }
@@ -593,11 +593,12 @@ final class SettingsViewController: UIViewController {
 
         // (55) 其余页签与每签未接入清单（同文件扩展段建）。
         buildExtraTabs(into: cardStack)
+        build62Tabs(into: cardStack)
         applyTabVisibility()
     }
 
     /// 分组卡容器：深灰底、16 圆角，内部纵向堆行
-    private func makeGroupCard() -> UIStackView {
+    func makeGroupCard() -> UIStackView {
         let group = UIStackView()
         group.axis = .vertical
         group.spacing = 0
@@ -608,7 +609,7 @@ final class SettingsViewController: UIViewController {
     }
 
     /// 分节标题：直挂 UILabel（自检记账随当前分组）。
-    private func makeSectionHeader(_ title: String) -> UILabel {
+    func makeSectionHeader(_ title: String) -> UILabel {
         let label = UILabel()
         label.text = title
         label.font = .systemFont(ofSize: 13, weight: .semibold)
@@ -617,7 +618,7 @@ final class SettingsViewController: UIViewController {
         return label
     }
 
-    private func makeHairline() -> UIView {
+    func makeHairline() -> UIView {
         let line = UIView()
         line.backgroundColor = FoliaUI.hairline
         line.heightAnchor.constraint(equalToConstant: 1).isActive = true
@@ -636,7 +637,7 @@ final class SettingsViewController: UIViewController {
     /// 信息行（(53) 改横向）：小灰标题左 + 值右，同处一个横
     /// 向行内——与开关行同构造族（旧版纵向堆叠直挂为诊断
     /// B-1 的失效集合构造，不再复刻）。
-    private func makeInfoRow(title: String, valueLabel: UILabel) -> UIView {
+    func makeInfoRow(title: String, valueLabel: UILabel) -> UIView {
         let row = UIStackView()
         row.axis = .horizontal
         row.alignment = .center
@@ -660,7 +661,7 @@ final class SettingsViewController: UIViewController {
     }
 
     /// 开关行：标题 UILabel + 开关，同处一个横向行内。
-    private func makeSwitchRow(_ title: String, _ toggle: UISwitch,
+    func makeSwitchRow(_ title: String, _ toggle: UISwitch,
                                _ action: Selector) -> UIStackView {
         let row = UIStackView()
         row.axis = .horizontal
@@ -683,7 +684,7 @@ final class SettingsViewController: UIViewController {
 
     /// 说明行（(53) 改直挂）：UILabel 直挂带边距的堆叠行，
     /// 不再用空 UIView 包裹（旧构造为诊断 B-1 的失效集合）。
-    private func makeHintRow(_ text: String) -> UIStackView {
+    func makeHintRow(_ text: String) -> UIStackView {
         let row = UIStackView()
         row.axis = .vertical
         row.isLayoutMarginsRelativeArrangement = true
@@ -926,7 +927,7 @@ final class SettingsViewController: UIViewController {
 extension SettingsViewController {
 
     /// 页签注册：把顶层组视图记入对应页签，切换时整组显隐。
-    private func reg(_ view: UIView, tab: Int) {
+    func reg(_ view: UIView, tab: Int) {
         tabGroups[tab].append(view)
     }
 
@@ -970,7 +971,7 @@ extension SettingsViewController {
     }
 
     /// 分段行：标题 + 分段控件（纵向，与循环模式行同构造）。
-    private func makeSegmentedRow(_ title: String,
+    func makeSegmentedRow(_ title: String,
                                   _ control: UISegmentedControl,
                                   _ action: Selector) -> UIStackView {
         let row = UIStackView()
@@ -991,7 +992,7 @@ extension SettingsViewController {
     }
 
     /// 组内整宽按钮行（与网易云账号按钮同构造）。
-    private func makeGroupButton(_ title: String, _ action: Selector) -> UIView {
+    func makeGroupButton(_ title: String, _ action: Selector) -> UIView {
         let wrap = UIView()
         let button = UIButton(type: .system)
         button.setTitle(title, for: .normal)
@@ -1218,7 +1219,7 @@ extension SettingsViewController {
              ("底部组件高度与拖动调整", "点播台高度两档写死"),
              ("隐藏底部控制条 / 字幕层 / 右侧按钮", "无对应设置面，字幕层本体未迁"),
              ("播放页顶栏模糊背景", "无此设置")],
-            [("资料库界面（网格 / Bravais 墙）", "只有 Bravais 墙一种界面"),
+            [("资料库界面（网格 / Bravais 墙）", "网格已落地（工具条布局钮切换）；设置层界面选择项未迁"),
              ("顶部胶囊入口显隐（总开关与 5 个页签）", "侧栏分区恒显，无显隐控制"),
              ("歌单卡片样式与网格卡片项（5 项）", "无网格视图本体"),
              ("记住主页卡片位置", "墙面位置不记忆"),
@@ -1493,5 +1494,21 @@ final class BridgeLogViewController: UIViewController {
 
     @objc private func close() {
         dismiss(animated: true)
+    }
+}
+
+// MARK: - 3.7 (62) 全量迁移接线（四簇设置行构建入口，集成基座预置）
+// 各簇在自己的新文件里实现 Settings62Cluster<X>.build(host:into:reg:)；
+// 行工厂（makeGroupCard/makeSwitchRow 等）已去私有化供扩展文件调用；
+// 控件一律用 UIAction 闭包接线，不依赖宿主存储属性。
+extension SettingsViewController {
+    func build62Tabs(into cardStack: UIStackView) {
+        let regFn: (UIView, Int) -> Void = { [weak self] view, tab in
+            self?.reg(view, tab: tab)
+        }
+        Settings62ClusterA.build(host: self, into: cardStack, reg: regFn)
+        Settings62ClusterB.build(host: self, into: cardStack, reg: regFn)
+        Settings62ClusterC.build(host: self, into: cardStack, reg: regFn)
+        Settings62ClusterD.build(host: self, into: cardStack, reg: regFn)
     }
 }
