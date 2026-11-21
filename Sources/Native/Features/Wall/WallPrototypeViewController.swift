@@ -104,6 +104,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 展开卡打点去重：组串未变时跳过重复 log。
     private var lastExpandedCellCrumb: String?
     private let wallLayout = WallLayout()
+    /// 滚动帧统计（(58) 定稿③）：逐秒 wall.scroll 面包屑。
+    private let scrollMetrics = WallScrollMetrics(wallName: "tracks")
+    /// 旋转代际（(58) 补旋转冻结，与主页墙同款）：中途反向再
+    /// 转时只有最新一代的 completion 才收尾解冻。
+    private var wallRotationGeneration = 0
     private var collectionView: UICollectionView!
     // 顶部行动胶囊已整段撤除（3.7 (54) 工作流 L）：原 statusLabel
     // 及其 showStatusNotice/statusTapped 一并删除——未登录入口归
@@ -1604,7 +1609,6 @@ final class WallPrototypeViewController: UIViewController,
     @objc private func locateTick(_ link: CADisplayLink) {
         let raw = min((link.timestamp - locateStartTime) / locateDuration, 1)
         let eased = Self.locateSpringProgress(raw)
-        let before = setIdentity()
         wallLayout.worldOrigin = CGPoint(
             x: locateStartOrigin.x + (locateTargetOrigin.x - locateStartOrigin.x) * CGFloat(eased),
             y: locateStartOrigin.y + (locateTargetOrigin.y - locateStartOrigin.y) * CGFloat(eased))
@@ -1618,8 +1622,9 @@ final class WallPrototypeViewController: UIViewController,
             collectionView.transform = CGAffineTransform(scaleX: 1 + 0.03 * bell,
                                                          y: 1 + 0.03 * bell)
         }
-        wallLayout.refreshInstances()
-        if setIdentity() != before { collectionView.reloadData() }
+        // (58)：身份判定改用 refreshInstances 返回值（全序列
+        // 对比，代指旧 setIdentity 首/尾/计数口径）。
+        if wallLayout.refreshInstances() { collectionView.reloadData() }
         if raw >= 1 {
             link.invalidate()
             locateLink = nil
@@ -1632,6 +1637,43 @@ final class WallPrototypeViewController: UIViewController,
             let done = locateCompletion
             locateCompletion = nil
             done?()
+        }
+    }
+
+    /// 旋转冻结（3.7 (58) 定稿③补：曲目墙此前从不置冻结，旋转
+    /// 期间每中间 bounds 都触发全量重算——与主页墙 (57) A2 同款
+    /// 口径）：旋转开始即冻结（动画期间零重算、保留落定前最后
+    /// 一套实例/属性随系统变换呈现），coordinator completion
+    /// 一次性解冻收尾；中途反向再转只有最新一代 completion
+    /// 收尾（代际守卫同主页墙）。
+    override func viewWillTransition(to size: CGSize,
+        with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        guard viewIfLoaded != nil, collectionView != nil else { return }
+        let fromSize = view.bounds.size
+        guard size != fromSize else { return }
+        wallRotationGeneration += 1
+        let generation = wallRotationGeneration
+        wallLayout.setRotationFrozen(true)
+        Breadcrumbs.log("wall.rotate freeze gen=\(generation) wall=tracks"
+            + " from=\(Int(fromSize.width))x\(Int(fromSize.height))"
+            + " to=\(Int(size.width))x\(Int(size.height))")
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self else { return }
+            guard generation == self.wallRotationGeneration else {
+                Breadcrumbs.log("wall.rotate superseded gen=\(generation) wall=tracks")
+                return
+            }
+            self.wallLayout.setRotationFrozen(false)
+            self.wallLayout.invalidateLayout()
+            // prepare 若因尺寸类别变化换了实例集，同步 reload。
+            if self.wallLayout.lastIdentityChanged {
+                self.collectionView.reloadData()
+            }
+            Breadcrumbs.log("wall.rotate landed gen=\(generation) wall=tracks"
+                + " size=\(Int(size.width))x\(Int(size.height))"
+                + " instances=\(self.wallLayout.instances.count)"
+                + " latticeComputes=\(self.wallLayout.latticeComputeCount)")
         }
     }
 
@@ -1807,6 +1849,9 @@ final class WallPrototypeViewController: UIViewController,
                     self.allTrackIds = detail.trackIds
                     self.entries = seed
                     self.wallLayout.totalEntries = total
+                    // 数据变更点（(58)）：条目身份代指递增，实例
+                    // 集缓存随之失效重算（与 totalEntries 同批）。
+                    self.wallLayout.dataVersion += 1
                     // 提示条/胶囊均已删（(53) L 组删条、(54) L
                     // 撤胶囊）：种子落地无任何上屏文案，背板退场、
                     // 墙面即反馈。
@@ -1953,24 +1998,26 @@ final class WallPrototypeViewController: UIViewController,
             x: scrollView.contentOffset.x - center.x,
             y: scrollView.contentOffset.y - center.y)
         guard delta.x != 0 || delta.y != 0 else { return }
+        // 滚动统计（(58) 定稿③）：本回调耗时计入逐秒 wall.scroll。
+        let scrollStart = CACurrentMediaTime()
         isWrapping = true
-        let before = setIdentity()
         wallLayout.worldOrigin = CGPoint(
             x: wallLayout.worldOrigin.x + delta.x / CGFloat(wallLayout.cameraScale),
             y: wallLayout.worldOrigin.y + delta.y / CGFloat(wallLayout.cameraScale))
         scrollView.contentOffset = center
-        wallLayout.refreshInstances()
-        if setIdentity() != before {
+        // (58)：同键滚动只平移帧、身份不变 → 不 reload；身份
+        // 变化（rebase/键变）才 reload（计数入 wall.scroll）。
+        let identityChanged = wallLayout.refreshInstances()
+        if identityChanged {
+            scrollMetrics.noteIdentityChanged()
             collectionView.reloadData()
+            scrollMetrics.noteReloadData()
         }
         isWrapping = false
+        scrollMetrics.noteScrollActivity(
+            layout: wallLayout,
+            didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000)
         updateLyricOverlayFrame()
-    }
-
-    /// 实例集身份指纹：判断下标→实例的映射是否还成立。
-    private func setIdentity() -> String {
-        let list = wallLayout.instances
-        return "\(list.first?.instanceId ?? "-")/\(list.last?.instanceId ?? "-")/\(list.count)"
     }
 
     // MARK: - 数据源
@@ -2578,7 +2625,6 @@ final class WallPrototypeViewController: UIViewController,
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
         Breadcrumbs.log("wall tap item=\(indexPath.item) queueIndex=\(instance.queueIndex)")
-        let before = setIdentity()
         // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
         // 被点卡在原地长大、同块卡让位，镜头不动。
         if wallLayout.expandedInstanceId == instance.instanceId {
@@ -2614,8 +2660,10 @@ final class WallPrototypeViewController: UIViewController,
             }
             prefetchExpandedNeighbors(queueIndex: instance.queueIndex)
         }
-        wallLayout.refreshInstances()
-        if setIdentity() == before {
+        // (58)：身份判定改用 refreshInstances 返回值（展开/收起
+        // 只换 expandedRects、实例序列不变 → 走动画路径）。
+        let identityChanged = wallLayout.refreshInstances()
+        if !identityChanged {
             let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
                 self.wallLayout.invalidateLayout()
                 collectionView.layoutIfNeeded()

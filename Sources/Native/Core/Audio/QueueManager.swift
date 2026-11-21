@@ -198,6 +198,16 @@ final class QueueManager: ObservableObject {
     /// 启动回填（init 内、首激活判定之前）：快照未过期才恢
     /// 复；只回填队列与下标，不调 engine.load、不发声。
     private func restoreQueueSnapshotIfNeeded() {
+        // (58) 掉帧量测：冷启恢复约 290 条是嫌疑#2，整段耗时
+        // 登记进 EntryCallbackTimings，入场 teardown 汇总 top3
+        // 与 >50ms 帧间隔对位（恢复在入场呈现前跑、登记保留
+        // 到首次入场汇总）。
+        let timingStart = CACurrentMediaTime()
+        defer {
+            EntryCallbackTimings.record(
+                "queue.restore",
+                ms: (CACurrentMediaTime() - timingStart) * 1000)
+        }
         guard let data = UserDefaults.standard.data(forKey: Self.snapshotKey),
               let snapshot = try? JSONDecoder().decode(QueueSnapshot.self, from: data)
         else { return }

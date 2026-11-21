@@ -280,6 +280,15 @@ final class PetIslandLayer: UIView {
     }
 
     private func refrontIfNeeded(logged: Bool) {
+        // (58) 掉帧量测：本守护是嫌疑#3（入场期被 SceneDelegate
+        // 反复触发），整段耗时登记进 EntryCallbackTimings，
+        // 入场 teardown 汇总 top3 与 >50ms 帧间隔对位。
+        let timingStart = CACurrentMediaTime()
+        defer {
+            EntryCallbackTimings.record(
+                "island.refront",
+                ms: (CACurrentMediaTime() - timingStart) * 1000)
+        }
         guard let window = hostWindow else { return }
         var repaired = false
         // ① graft 守护：petRootLayer 必须仍直属 window.layer

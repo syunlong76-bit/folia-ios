@@ -360,6 +360,24 @@ enum EntryIntroPresenter {
     private static var suppressNextPresent = false
     private static weak var current: EntryIntroViewController?
 
+    /// 几何请求单发看门狗（3.7 (58) 定稿②）：(57) 的双发请求
+    /// （present 前＋present 后）在日志里与系统纠正轮叠成开场
+    /// 1.4s 两轮旋转。(58) 收敛为单一发点（present 前）＋看门
+    /// 狗：第一发后 200ms 未见任何 rotate transition begin，
+    /// 才补发一次（封顶一次，src=watchdog-retry）；补后仍无
+    /// 则不再发——由 VC 的起播门 300ms 超时放行 play 收口，
+    /// 不许看门狗自己变成第二套双保险。
+    private static var rotateTransitionBegan = false
+    private static var rotateWatchdog: DispatchWorkItem?
+
+    /// VC 的 viewWillTransition 起跑时调：本次呈现已见旋转
+    /// 过渡开始，看门狗作废。
+    static func noteRotateTransitionBegan() {
+        rotateTransitionBegan = true
+        rotateWatchdog?.cancel()
+        rotateWatchdog = nil
+    }
+
     /// 本次呈现的数据状态快照（3.7 (21)）：present 时由呈现方
     /// （HomeWall）把自家状态闭包交进来、按呈现隔离读取——
     /// (20) 用全局静态登记，后建实例覆盖先建实例，并行加载时
@@ -390,6 +408,9 @@ enum EntryIntroPresenter {
         isPresenting = false
         current = nil
         activeDataStateProvider = nil
+        rotateWatchdog?.cancel()
+        rotateWatchdog = nil
+        rotateTransitionBegan = false
     }
 
     /// 由主页墙进入页触发：在 presenter 之上呈现入场视频。
@@ -408,6 +429,9 @@ enum EntryIntroPresenter {
         guard let window = presenter.view.window else { return false }
         isPresenting = true
         activeDataStateProvider = dataState
+        rotateTransitionBegan = false
+        rotateWatchdog?.cancel()
+        rotateWatchdog = nil
         // 叠化门控武装前置（3.7 (23)）：present 前先强制目标墙
         // 完成布局——直溶要求视频层之下就是已布局、首帧将就
         // 绪的主页墙，不许溶到一张还没排版的墙上。
@@ -439,25 +463,37 @@ enum EntryIntroPresenter {
 
         // 推迟一帧再呈现，确保 presenter 已进窗口层级
         DispatchQueue.main.async {
-            // 横屏几何请求提前（3.7 (57) 工作流 A）：原时序在
-            // present 完成后才发请求，冷启主线程繁忙（墙首轮
-            // 加载并发）时旋转可迟到视频起播后约 0.66s 才落
-            // 地，旋转重排播放器层的那一帧无垫底即露黑（(55)
-            // 录屏 t=1.933s 单帧实锤）。改：present 之前先发
-            // ——此刻顶层是全向掩码的主页墙、请求可被受理，
-            // 且 window 已同步垫好 veil（不透明油画），旋转
-            // 全程在油画遮盖下进行；VC 呈现时界面已横屏或正
-            // 在转，播放器层自始生于横屏 bounds、播放期不再
-            // 叠几何变更。present 完成后的原请求保留作双保险
-            // （已横屏时为无操作）。两处请求均落面包屑，落
-            // 地时刻由 VC 的 viewWillTransition 完成回调落
-            // entry rotate landed，三点与录屏时间轴对账。
+            // 横屏几何请求（3.7 (57) 工作流 A 提前到 present
+            // 之前发、(58) 定稿②收敛为单一发点）：(57) 在
+            // present 前后各发一发（双保险），日志实证与系统
+            // 纠正轮叠成开场两轮旋转、首帧落在翻转中间。(58)
+            // 只发这一发：此刻顶层是全向掩码的主页墙、请求可
+            // 被受理，且 window 已同步垫好 veil（不透明油
+            // 画），旋转全程在油画遮盖下进行。发送后武装
+            // 200ms 看门狗：未见任何 rotate transition begin
+            // 才补发一次（封顶，src=watchdog-retry）；补后仍
+            // 无则不再发，由 VC 起播门超时放行收口。落地时刻
+            // 由 VC 的 viewWillTransition 完成回调落 entry
+            // rotate landed，与录屏时间轴对账。
             Breadcrumbs.log("entry rotate landscape request src=pre-present")
             window.windowScene?.requestGeometryUpdate(
                 .iOS(interfaceOrientations: .landscapeRight)
             ) { error in
                 NSLog("[EntryIntro] requestGeometryUpdate landscape (pre-present) failed: \(error.localizedDescription)")
             }
+            let watchdog = DispatchWorkItem {
+                guard isPresenting, !rotateTransitionBegan else { return }
+                guard window.windowScene?.interfaceOrientation != .landscapeRight
+                else { return }
+                Breadcrumbs.log("entry rotate landscape request src=watchdog-retry")
+                window.windowScene?.requestGeometryUpdate(
+                    .iOS(interfaceOrientations: .landscapeRight)
+                ) { error in
+                    NSLog("[EntryIntro] requestGeometryUpdate landscape (watchdog-retry) failed: \(error.localizedDescription)")
+                }
+            }
+            rotateWatchdog = watchdog
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: watchdog)
             let vc = EntryIntroViewController(url: url)
             vc.exitVeil = veil
             // overFullScreen（3.7 (23) 直溶前提）：呈现方（主页
@@ -467,17 +503,11 @@ enum EntryIntroPresenter {
             vc.modalPresentationStyle = .overFullScreen
             current = vc
             presenter.present(vc, animated: false) {
-                // 呈现后再补一次几何请求，双保险把界面转到横屏
-                Breadcrumbs.log("entry rotate landscape request src=present-done")
-                window.windowScene?.requestGeometryUpdate(
-                    .iOS(interfaceOrientations: .landscapeRight)
-                ) { error in
-                    NSLog("[EntryIntro] requestGeometryUpdate landscape failed: \(error.localizedDescription)")
-                }
                 // 墙首帧提交确认（3.7 (23)）：一笔空事务的完成
                 // 回调在墙首帧提交到渲染服务后触发——落面包屑
                 // 并武装叠化门控（门控未武装不起叠化，防溶到
-                // 未就绪的墙）。
+                // 未就绪的墙）。（(58)：原在此处的第二发几何请
+                // 求已删，见上方单发点注释。）
                 CATransaction.begin()
                 CATransaction.setCompletionBlock {
                     Breadcrumbs.log("entry wall firstframe")
@@ -594,9 +624,17 @@ final class EntryIntroViewController: UIViewController {
     override func viewWillTransition(to size: CGSize,
                                      with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
+        // (58)：通知 Presenter 已见旋转过渡开始（单发看门狗
+        // 作废）；落地后由下方完成回调放行起播门。
+        EntryIntroPresenter.noteRotateTransitionBegan()
         Breadcrumbs.log("entry rotate transition begin size=\(Int(size.width))x\(Int(size.height))")
         coordinator.animate(alongsideTransition: nil) { [weak self] _ in
             guard let self else { return }
+            // 横屏落地放行起播门（3.7 (58) 定稿②）：首帧不再
+            // 落在翻转中间；竖屏落地（退场轮）不放行。
+            if self.view.window?.windowScene?.interfaceOrientation.isLandscape == true {
+                self.releasePlaybackGate(reason: "landed")
+            }
             let orientation = self.view.window?.windowScene?.interfaceOrientation
             let name: String
             switch orientation {
@@ -674,6 +712,8 @@ final class EntryIntroViewController: UIViewController {
         ])
 
         startPlayback()
+        // (58) 掉帧探针自呈现起跑、teardown 时汇总落日志。
+        startFrameProbe()
     }
 
     override func viewDidLayoutSubviews() {
@@ -789,16 +829,119 @@ final class EntryIntroViewController: UIViewController {
             queue: .main
         ) { [weak self] _ in
             guard let self else { return }
-            if !self.veilCleared, self.playerView.playerLayer.isReadyForDisplay {
-                self.handleVideoReadyForDisplay()
+            // (58) 掉帧量测：本观察者是嫌疑#1，逐 tick 耗时经
+            // EntryCallbackTimings 登记最大值，teardown 汇总
+            // 进 entry framedrops summary 的 top3 caller。
+            EntryCallbackTimings.measure("entry.timeObserver") {
+                if !self.veilCleared, self.playerView.playerLayer.isReadyForDisplay {
+                    self.handleVideoReadyForDisplay()
+                }
+                self.noteFirstFrameIfNeeded()
+                self.checkDissolveGate()
+                self.checkLoopDataReadyExit()
             }
-            self.noteFirstFrameIfNeeded()
-            self.checkDissolveGate()
-            self.checkLoopDataReadyExit()
         }
 
+        armPlaybackGate()
+    }
+
+    // MARK: - 起播门与掉帧量测（3.7 (58) 定稿②）
+
+    /// 起播门：play 推迟到横屏旋转 landed 之后——(57) 日志
+    /// 实证 firstframe 落在翻转中间、播放期叠几何变更正是
+    /// 周期掉帧的竞速候选。放行三路：已横屏（already-
+    /// landscape）／旋转落地（landed，viewWillTransition 完
+    /// 成回调）／300ms 超时（timeout-300ms，请求被系统吞掉
+    /// 时不许挂死海报）。放行点落 entry playback gate
+    /// released，验收按「firstframe 晚于放行点」判读。
+    private var playbackGateReleased = false
+    private var playbackGateWorkItem: DispatchWorkItem?
+
+    private func armPlaybackGate() {
+        guard !playbackGateReleased else { return }
+        if view.window?.windowScene?.interfaceOrientation.isLandscape == true {
+            releasePlaybackGate(reason: "already-landscape")
+            return
+        }
+        let work = DispatchWorkItem { [weak self] in
+            self?.releasePlaybackGate(reason: "timeout-300ms")
+        }
+        playbackGateWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: work)
+    }
+
+    private func releasePlaybackGate(reason: String) {
+        guard !playbackGateReleased, !isDismissing else { return }
+        playbackGateReleased = true
+        playbackGateWorkItem?.cancel()
+        playbackGateWorkItem = nil
+        Breadcrumbs.log("entry playback gate released reason=\(reason)")
         scheduleWatchdog()
-        player.play()
+        player?.play()
+    }
+
+    /// 掉帧量测探针：CADisplayLink 逐帧记间隔。>50ms 的逐次
+    /// 落 entry framedrops gap（t=相对首 tick 秒数，与录屏逐
+    /// 帧对位定责）；逐秒落 entry framedrops sec（帧数/最大
+    /// 间隔/>50ms 次数）；teardown 落 summary（总 gap 数＋
+    /// 最大间隔＋嫌疑回调耗时 top3）。Pro 判据：落地后重复
+    /// 帧 ≤2/秒、退场期 ≤3/秒——录屏与本探针逐秒对位复核。
+    private var frameLink: CADisplayLink?
+    private var frameLinkStart: CFTimeInterval = 0
+    private var frameLinkLast: CFTimeInterval = 0
+    private var frameSecondIndex = -1
+    private var frameSecondCount = 0
+    private var frameSecondMaxMs: Double = 0
+    private var frameSecondGaps = 0
+    private var frameGapTotal = 0
+    private var frameGapMaxMs: Double = 0
+
+    private func startFrameProbe() {
+        guard frameLink == nil else { return }
+        let link = CADisplayLink(target: self, selector: #selector(frameProbeTick(_:)))
+        link.add(to: .main, forMode: .common)
+        frameLink = link
+    }
+
+    @objc private func frameProbeTick(_ link: CADisplayLink) {
+        let now = link.timestamp
+        if frameLinkStart == 0 {
+            frameLinkStart = now
+            frameLinkLast = now
+            frameSecondIndex = 0
+            return
+        }
+        let intervalMs = (now - frameLinkLast) * 1000
+        frameLinkLast = now
+        let second = Int(now - frameLinkStart)
+        if second != frameSecondIndex {
+            if frameSecondIndex >= 0 { logFrameSecond() }
+            frameSecondIndex = second
+            frameSecondCount = 0
+            frameSecondMaxMs = 0
+            frameSecondGaps = 0
+        }
+        frameSecondCount += 1
+        if intervalMs > frameSecondMaxMs { frameSecondMaxMs = intervalMs }
+        if intervalMs > 50 {
+            frameSecondGaps += 1
+            frameGapTotal += 1
+            if intervalMs > frameGapMaxMs { frameGapMaxMs = intervalMs }
+            Breadcrumbs.log("entry framedrops gap t=\(String(format: "%.2f", now - frameLinkStart))s interval=\(String(format: "%.1f", intervalMs))ms")
+        }
+    }
+
+    private func logFrameSecond() {
+        Breadcrumbs.log("entry framedrops sec=\(frameSecondIndex) frames=\(frameSecondCount) maxGap=\(String(format: "%.1f", frameSecondMaxMs))ms gaps50=\(frameSecondGaps)")
+    }
+
+    private func stopFrameProbe() {
+        guard let link = frameLink else { return }
+        frameLink = nil
+        link.invalidate()
+        if frameSecondIndex >= 0 { logFrameSecond() }
+        Breadcrumbs.log("entry framedrops summary gaps50=\(frameGapTotal) maxGap=\(String(format: "%.1f", frameGapMaxMs))ms topcallers \(EntryCallbackTimings.top3Description())")
+        EntryCallbackTimings.reset()
     }
 
     /// 首帧真播时刻（3.7 (54) 工作流 O）：rate>0（真在播、
@@ -1076,12 +1219,40 @@ final class EntryIntroViewController: UIViewController {
         } else {
             Self.beginWallSettle(wallView: presenter?.view, fast: fast)
         }
-        UIView.animate(withDuration: fadeDuration, delay: 0, options: [.curveEaseOut], animations: {
-            self.view.alpha = 0
-        }, completion: { [weak self] _ in
-            self?.teardownPlayer()
+
+        // 退场提交等竖屏落地（3.7 (58) 定稿②）：(57) 淡出
+        // （0.15–0.4s）短于旋转耗时，提交时墙可能还在转——
+        // 露出旋转中的墙正是 (55) 录屏横倒冻结/黑角帧的竞速
+        // 源。(58)：横屏退场时淡出延长到 0.6s 覆盖全程，
+        // 提交（teardown＋dismiss）等 PortraitRestore 的
+        // landed 通知（entry rotate portrait landed）先到则
+        // 收短淡出立即提交；0.6s 超时兜底提交，不许挂死。
+        // 验收按日志时序判读：landed 必须早于 dismiss done。
+        // 竖屏退场无旋转、照旧淡出完即提交。
+        var proceedFired = false
+        let proceed = {
+            guard !proceedFired else { return }
+            proceedFired = true
+            self.teardownPlayer()
             finishDismiss()
-        })
+        }
+        if sceneIsLandscape {
+            UIView.animate(withDuration: 0.6, delay: 0, options: [.curveEaseOut], animations: {
+                self.view.alpha = 0
+            }, completion: { _ in proceed() })
+            PortraitRestore.whenPortraitLanded(from: self) {
+                guard !proceedFired else { return }
+                self.view.layer.removeAllAnimations()
+                UIView.animate(withDuration: 0.12, delay: 0, options: [.curveEaseOut], animations: {
+                    self.view.alpha = 0
+                }, completion: { _ in proceed() })
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { proceed() }
+        } else {
+            UIView.animate(withDuration: fadeDuration, delay: 0, options: [.curveEaseOut], animations: {
+                self.view.alpha = 0
+            }, completion: { _ in proceed() })
+        }
     }
 
     /// 墙面落位（3.7 (21) 沿用、(23) 去海报段）：退场开始即调
@@ -1098,6 +1269,11 @@ final class EntryIntroViewController: UIViewController {
     }
 
     private func teardownPlayer() {
+        // (58) 掉帧探针收口（汇总落日志后摘链）＋起播门残留
+        // 放行任务取消（退场后迟到的超时放行不许再 play）。
+        stopFrameProbe()
+        playbackGateWorkItem?.cancel()
+        playbackGateWorkItem = nil
         // 海报垫底摘除时刻（3.7 (57) 工作流 A）：(57) 起垫底
         // 整段播放期在场，其摘除点即 teardown（退场两路共用
         // 的唯一拆解点，每呈现恰一次）——与 entry poster
@@ -1173,6 +1349,31 @@ enum PortraitRestore {
     /// 机制之一。落地（校验见竖屏）或最终失败时清零。
     private static var requestInFlight = false
 
+    /// 竖屏落地一次性等待者（3.7 (58) 定稿②）：退场提交需要
+    /// 等墙转回竖屏落地才露墙（否则露正在转的墙面＝(55) 录屏
+    /// 的横倒冻结/黑角帧）。attempt 的任一终局（确认落地/
+    /// 两轮放弃/请求报错）都触发全部等待者——等待方自带
+    /// 0.6s 超时兜底，失败也触发、不许双等挂死。
+    private static var portraitLandedWaiters: [() -> Void] = []
+
+    /// 登记一次竖屏落地等待；调用时界面已竖屏则下一轮
+    /// runloop 即回调（不等请求轮次）。
+    static func whenPortraitLanded(from vc: UIViewController,
+                                   _ waiter: @escaping () -> Void) {
+        guard let scene = vc.view.window?.windowScene,
+              scene.interfaceOrientation.isLandscape else {
+            DispatchQueue.main.async(execute: waiter)
+            return
+        }
+        portraitLandedWaiters.append(waiter)
+    }
+
+    private static func firePortraitLandedWaiters() {
+        let waiters = portraitLandedWaiters
+        portraitLandedWaiters = []
+        for waiter in waiters { waiter() }
+    }
+
     static func requestIfLandscape(from vc: UIViewController, source: String) {
         guard let scene = vc.view.window?.windowScene else { return }
         guard scene.interfaceOrientation.isLandscape else { return }
@@ -1198,6 +1399,7 @@ enum PortraitRestore {
             // errorHandler 只在失败时回调，error 为非 Optional。
             requestInFlight = false
             Breadcrumbs.log("entry rotate portrait error source=\(source) attempt=\(tryCount) \(failureContext(scene: scene)) error=\(error.localizedDescription)")
+            firePortraitLandedWaiters()
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
             if scene.interfaceOrientation.isLandscape {
@@ -1206,11 +1408,13 @@ enum PortraitRestore {
                 } else {
                     requestInFlight = false
                     Breadcrumbs.log("entry rotate portrait failed source=\(source) \(failureContext(scene: scene))")
+                    firePortraitLandedWaiters()
                 }
             } else {
                 requestInFlight = false
                 Breadcrumbs.log("entry rotate portrait ok source=\(source) attempt=\(tryCount)")
                 Breadcrumbs.log("entry rotate portrait landed source=\(source) attempt=\(tryCount)")
+                firePortraitLandedWaiters()
             }
         }
     }

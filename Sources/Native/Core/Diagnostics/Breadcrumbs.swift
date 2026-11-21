@@ -75,3 +75,47 @@ enum Breadcrumbs {
         return Int(info.phys_footprint / 1_048_576)
     }
 }
+
+/// 回调耗时登记表（3.7 (58) 定稿②）：入场掉帧量测的嫌疑回调
+/// 耗时收集点——各嫌疑点（入场 0.1s 周期观察者、island.
+/// refront、queue.restore 冷启恢复）经 measure/record 登记
+/// 本入场周期内的最大耗时，入场 teardown 时由
+/// EntryIntroViewController 汇总为 entry framedrops summary
+/// 的 top3 caller（与 >50ms 帧间隔逐次记录对位定罪）。只记
+/// 最大值不记分布（判读只问「谁能打出 50ms 级尖峰」）。全
+/// 局静态＋锁：登记点跨模块（Core/Features）且调用线程不尽
+/// 相同，入口一律加锁。
+enum EntryCallbackTimings {
+
+    private static var maximaMs: [String: Double] = [:]
+    private static let lock = NSLock()
+
+    static func record(_ name: String, ms: Double) {
+        lock.lock()
+        if ms > (maximaMs[name] ?? 0) { maximaMs[name] = ms }
+        lock.unlock()
+    }
+
+    static func measure<T>(_ name: String, _ body: () -> T) -> T {
+        let start = CACurrentMediaTime()
+        let result = body()
+        record(name, ms: (CACurrentMediaTime() - start) * 1000)
+        return result
+    }
+
+    /// 耗时最大的前三名（name=ms 串），无登记时返回 "none"。
+    static func top3Description() -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        let top = maximaMs.sorted { $0.value > $1.value }.prefix(3)
+        if top.isEmpty { return "none" }
+        return top.map { "\($0.key)=\(String(format: "%.1f", $0.value))ms" }
+            .joined(separator: " ")
+    }
+
+    static func reset() {
+        lock.lock()
+        maximaMs = [:]
+        lock.unlock()
+    }
+}

@@ -23,6 +23,26 @@ import UIKit
 /// 属性帧 = (世界坐标 − worldOrigin) × scale + contentOffset——视觉
 /// 位置与 contentOffset 相消，滚动时由 VC 的绕回逻辑成对调整
 /// contentOffset 与 worldOrigin，画面不跳。
+///
+/// 滚动平移化（3.7 (58) 定稿③，DS Pro 对账）：(57) 前指纹含
+/// worldOrigin，滚动每事件指纹必变 → 全量 layoutLattice 重算＋
+/// ≤400 属性重建、间或 reloadData，是滚动卡顿的架构主因。(58)
+/// 改为：缓存键剔除 worldOrigin（原点只决定帧平移、不决定实例
+/// 集），实例集按（dataVersion=条目身份代指/计数/缩放/尺寸类别/
+/// 展开态）缓存于 anchorOrigin；同键下滚动只按帧公式重建属性
+/// 帧——全集帧恒为同一刚体平移，与「容器 transform 平移」等价
+/// （UICollectionView 无可变换的内容容器，帧算术即其落点），
+/// lattice 零重算、实例身份零变化。漂移（worldOrigin 相对锚点）
+/// 超过缓存覆盖（cacheOverscan − 安全边距）且未展开时，同帧
+/// rebase：以当前原点为新锚全量重算一次（计数落 wall.cache
+/// rebase、逐秒入 wall.scroll）。展开态禁 rebase（展开卡须视觉
+/// 静止、其相邻 tile 不回收——定稿口径）。缓存 overscan 自适应
+/// 放大（2400 起、枚举触顶 400 则降档 1600/900）：实测密度下
+/// （pitch=136、单元 9792×5440）周期平铺的真周期是整个单元、
+/// 远大于 overscan，逐 tile 回收不成立，覆盖深度即回收上限，
+/// 按定稿「按实际 lattice 密度核定、不许静默超限」落此实现；
+/// 标准验收 fling（≥1200pt/s×1.5s ≈ 2300 世界单位）全程在
+/// 2400 覆盖内、零 rebase。
 final class WallLayout: UICollectionViewLayout {
 
     var totalEntries: Int = 0
@@ -33,16 +53,30 @@ final class WallLayout: UICollectionViewLayout {
     var worldOrigin = CGPoint(x: 34, y: 80)
     /// 当前展开的实例 id（nil = 无展开）。
     var expandedInstanceId: String?
+    /// 条目身份代指（(58)）：VC 在数据变更点（与 totalEntries
+    /// 同批赋值处）递增；实例集缓存键据此失效——条目被替换
+    /// （同计数换内容）时实例的 queueIndex→条目映射随之作废。
+    var dataVersion: Int = 0
 
     private(set) var instances: [QueueInstance] = []
     private var attributesCache: [UICollectionViewLayoutAttributes] = []
-    /// 输入指纹（变了才重算）：数据量/原点/尺寸类别/缩放/展开。
-    private var lastFingerprint: String?
+    /// 实例集缓存键（(58)：不含 worldOrigin，见类头注）。
+    private var lastKey: String?
+    /// 当前实例集的锚点原点（计算该集时的 worldOrigin）。
+    private var anchorOrigin = CGPoint(x: 34, y: 80)
+    /// 当前实例集计算时用的 overscan（覆盖深度，世界单位）。
+    private var cacheOverscan: Double = 900
     /// layoutLattice 全量重算累计次数（面包屑对账用，只增不减）。
     private(set) var latticeComputeCount = 0
+    /// 同帧 rebase 累计次数（(58)：覆盖耗尽时的锚点重置）。
+    private(set) var rebaseCount = 0
+    /// 最近一次 refreshInstances 的实例身份（instanceId 序列）
+    /// 是否变化；prepare() 驱动的变化由 VC 在旋转收尾等点位
+    /// 经此旗标补读（滚动路径直接用 refreshInstances 返回值）。
+    private(set) var lastIdentityChanged = false
     /// 旋转冻结（(57) A2）：true 时不失效、不重算，保留落定前
-    /// 最后一套实例/属性供系统旋转动画变换呈现；仅主页墙在
-    /// viewWillTransition 期间置位，曲目墙从不置位、恒 false。
+    /// 最后一套实例/属性供系统旋转动画变换呈现；(58) 起主页墙
+    /// 与曲目墙都在 viewWillTransition 期间置位。
     private var isRotationFrozen = false
 
     func setRotationFrozen(_ frozen: Bool) {
@@ -86,51 +120,44 @@ final class WallLayout: UICollectionViewLayout {
         return "\(orient)\(shortBucket)-\(longBucket)"
     }
 
-    /// 实例集的指纹：只含决定「窗口里有哪些实例」的输入（不含
-    /// contentOffset——平移只移帧不换集，集不变数据源计数就合法；
-    /// 不含 bounds 原始 W/H——只含尺寸类别，见 sizeClass：指纹
-    /// 只决定「何时重算」，实例/帧的计算函数本身不因类别改变，
-    /// 同类别内复用的实例集覆盖新可见域、逐帧公式不变）。
-    private func setFingerprint() -> String {
+    /// 实例集缓存键（(58)）：只含决定「窗口里有哪些实例」的
+    /// 输入——条目身份（dataVersion）/计数/缩放/尺寸类别/展开
+    /// 态。**不含 worldOrigin**：原点只决定帧平移、不决定集
+    /// （(57) 前含原点，滚动每事件必变、全量重算，定稿③主因）。
+    private func cacheKey() -> String {
         guard let collectionView else { return "" }
-        return [totalEntries, worldOrigin.x, worldOrigin.y,
-                cameraScale].map { "\($0)" }.joined(separator: "|")
+        return [dataVersion, totalEntries].map { "\($0)" }.joined(separator: "|")
+            + "|" + "\(cameraScale)"
             + "#" + sizeClass(for: collectionView.bounds.size)
             + "#" + (expandedInstanceId ?? "-")
     }
 
     private var expandedRects: [String: WallRectD] = [:]
 
-    /// 重算实例集（指纹变了才算）并重建属性帧（每帧都建，成本是
-    /// ≤400 个矩形映射）。数据源计数与实例集的同步由 VC 在集变化
-    /// 的事件点（绕回/展开/数据到达）调 reloadData 保证。
-    func refreshInstances() {
-        guard let collectionView, totalEntries > 0 else {
-            instances = []
-            attributesCache = []
-            expandedRects = [:]
-            lastFingerprint = nil
-            return
-        }
-        // 旋转冻结（(57) A2）：保留既有实例/属性整套不动，等
-        // 落地解冻后的一次 invalidate 收尾。首算守卫：lastFingerprint
-        // 为 nil（冷启首排/数据清零后）时不冻——首排必算，不许
-        // 被冻结误挡成空墙。
-        if isRotationFrozen, lastFingerprint != nil { return }
-        let fp = setFingerprint()
-        if fp != lastFingerprint {
-            lastFingerprint = fp
+    /// 以给定锚点全量计算实例集（自适应 overscan：2400 起，
+    /// 枚举触顶 maxRenderedInstances 时 layoutLattice 按行主序
+    /// 截断、覆盖变不对称，降档 1600/900 重试；900 档触顶与
+    /// (57) 前行为一致、接受）。每次调用 latticeComputeCount+1。
+    private func computeInstanceSet(anchor: CGPoint)
+        -> (list: [QueueInstance], rects: [String: WallRectD], overscan: Double) {
+        guard let collectionView else { return ([], [:], 900) }
+        let viewSize = collectionView.bounds.size
+        var overscan = 2400.0
+        while true {
             latticeComputeCount += 1
-            let viewSize = collectionView.bounds.size
             let worldBounds = WallRectD(
-                x: Double(worldOrigin.x), y: Double(worldOrigin.y),
+                x: Double(anchor.x), y: Double(anchor.y),
                 width: Double(viewSize.width) / cameraScale,
                 height: Double(viewSize.height) / cameraScale
             )
             let list = WallGeometry.layoutLattice(
                 geometry: geometry, totalEntries: totalEntries,
-                bounds: worldBounds, overscan: 900, metrics: metrics
+                bounds: worldBounds, overscan: overscan, metrics: metrics
             )
+            if list.count >= WallGeometry.maxRenderedInstances, overscan > 900 {
+                overscan = overscan == 2400 ? 1600 : 900
+                continue
+            }
             var rects: [String: WallRectD] = [:]
             if let expandedId = expandedInstanceId,
                let active = list.first(where: { $0.instanceId == expandedId }) {
@@ -139,9 +166,16 @@ final class WallLayout: UICollectionViewLayout {
                     active: active, metrics: metrics
                 )
             }
-            instances = list
-            expandedRects = rects
+            return (list, rects, overscan)
         }
+    }
+
+    /// 按当前实例集与当前 worldOrigin/contentOffset 重建属性
+    /// 帧（≤400 个矩形映射，纯算术）。滚动同键路径只走这里：
+    /// 全集帧相对上一帧恒为同一刚体平移（帧公式对 worldOrigin
+    /// 与 contentOffset 均线性），即定稿③的「平移」步。
+    private func rebuildAttributes() {
+        guard let collectionView else { attributesCache = []; return }
         let offset = collectionView.contentOffset
         attributesCache = instances.enumerated().map { index, instance in
             let rect = expandedRects[instance.instanceId] ?? instance.rect
@@ -155,6 +189,75 @@ final class WallLayout: UICollectionViewLayout {
             attrs.zIndex = (instance.instanceId == expandedInstanceId) ? 1 : 0
             return attrs
         }
+    }
+
+    /// 刷新实例集。返回实例身份（instanceId 序列）本次是否
+    /// 变化——VC 据此决定 reloadData（身份不变不许 reload：
+    /// 下标→实例映射仍成立、帧已由本方法更新）。三条路径：
+    /// 键变 → 全量重算（数据/类别/展开/缩放事件，非滚动期）；
+    /// 同键但漂移超覆盖且未展开 → 同帧 rebase（全量重算到新
+    /// 锚，rebaseCount+1）；同键其余 → 纯帧平移（零 lattice
+    /// 重算、零身份变化）。数据源计数与实例集的同步由 VC 在
+    /// 身份变化点调 reloadData 保证。
+    @discardableResult
+    func refreshInstances() -> Bool {
+        guard let collectionView, totalEntries > 0 else {
+            let changed = !instances.isEmpty
+            instances = []
+            attributesCache = []
+            expandedRects = [:]
+            lastKey = nil
+            lastIdentityChanged = changed
+            return changed
+        }
+        // 旋转冻结（(57) A2）：保留既有实例/属性整套不动，等
+        // 落地解冻后的一次 invalidate 收尾。首算守卫：lastKey
+        // 为 nil（冷启首排/数据清零后）时不冻——首排必算，不许
+        // 被冻结误挡成空墙。
+        if isRotationFrozen, lastKey != nil {
+            lastIdentityChanged = false
+            return false
+        }
+        let key = cacheKey()
+        if key != lastKey {
+            let oldIds = instances.map(\.instanceId)
+            let result = computeInstanceSet(anchor: worldOrigin)
+            instances = result.list
+            expandedRects = result.rects
+            anchorOrigin = worldOrigin
+            cacheOverscan = result.overscan
+            lastKey = key
+            Breadcrumbs.log("wall.cache compute overscan=\(Int(result.overscan)) instances=\(result.list.count)")
+            rebuildAttributes()
+            let changed = oldIds != instances.map(\.instanceId)
+            lastIdentityChanged = changed
+            return changed
+        }
+        // 同键：覆盖检查。漂移 = 当前原点相对锚点的位移；缓存
+        // 集覆盖锚点可见窗 ±cacheOverscan，留 120 世界单位安
+        // 全边距（布局查询rect 恒为可见域本身，边距只防浮点
+        // 与档内尺寸微差）。展开态禁 rebase：展开实例可能已
+        // 不在新窗内、重算会让展开块凭空消失（定稿口径）。
+        let driftX = abs(worldOrigin.x - anchorOrigin.x)
+        let driftY = abs(worldOrigin.y - anchorOrigin.y)
+        let limit = CGFloat(cacheOverscan - 120)
+        if expandedInstanceId == nil, driftX > limit || driftY > limit {
+            let oldIds = instances.map(\.instanceId)
+            let result = computeInstanceSet(anchor: worldOrigin)
+            instances = result.list
+            expandedRects = result.rects
+            anchorOrigin = worldOrigin
+            cacheOverscan = result.overscan
+            rebaseCount += 1
+            Breadcrumbs.log("wall.cache rebase n=\(rebaseCount) overscan=\(Int(result.overscan)) instances=\(result.list.count)")
+            rebuildAttributes()
+            let changed = oldIds != instances.map(\.instanceId)
+            lastIdentityChanged = changed
+            return changed
+        }
+        rebuildAttributes()
+        lastIdentityChanged = false
+        return false
     }
 
     override func prepare() {
@@ -183,5 +286,119 @@ final class WallLayout: UICollectionViewLayout {
         // 依赖 bounds），此处不失效不丢帧；档内尺寸微调同理，
         // 覆盖论证见 sizeClass。
         return sizeClass(for: newBounds.size) != sizeClass(for: collectionView.bounds.size)
+    }
+}
+
+/// 滚动帧统计（3.7 (58) 定稿③）：逐秒汇总面包屑 wall.scroll——
+/// 帧间隔 p95/p99/max、hitch（>16.7ms）占比、scrollViewDidScroll
+/// 单次耗时 max、窗口内 lattice 重算/rebase/reloadData 增量、
+/// 身份变化旗标。VC 在滚动回调里 noteScrollActivity 喂入（首
+/// 次喂入启动 CADisplayLink 与统计窗）；末次活动 2s 后冲刷尾
+/// 窗并自停。基线口径：(57) 无此面包屑，其同口径基线为「每滚
+/// 动事件 lattice 重算 1 次、reloadData 随身份变化间或」——
+/// (58) 真机判读以本行 lattice=0（滚动窗内）/reload ≤1 次每
+/// 10s 与 p99 ≤ max(16.7ms, 基线p99/2) 的绝对线为准（见交付
+/// 报告判读指南）。
+final class WallScrollMetrics: NSObject {
+
+    private let wallName: String
+    private weak var layout: WallLayout?
+    private var displayLink: CADisplayLink?
+    private var lastTickTimestamp: CFTimeInterval = 0
+    private var windowStart: CFTimeInterval = 0
+    private var intervalsMs: [Double] = []
+    private var didScrollMaxMs: Double = 0
+    private var reloadCount = 0
+    private var identityChangedInWindow = false
+    private var latticeAtWindowStart = 0
+    private var rebaseAtWindowStart = 0
+    private var lastActivityAt: CFTimeInterval = 0
+    private var active = false
+
+    init(wallName: String) {
+        self.wallName = wallName
+        super.init()
+    }
+
+    /// 滚动回调每次调：登记活动与本次回调耗时；首次调启动
+    /// 统计窗（快照 lattice/rebase 计数为窗口基线）。
+    func noteScrollActivity(layout: WallLayout, didScrollMs: Double) {
+        let now = CACurrentMediaTime()
+        lastActivityAt = now
+        if didScrollMs > didScrollMaxMs { didScrollMaxMs = didScrollMs }
+        guard !active else { return }
+        active = true
+        self.layout = layout
+        windowStart = now
+        latticeAtWindowStart = layout.latticeComputeCount
+        rebaseAtWindowStart = layout.rebaseCount
+        intervalsMs = []
+        lastTickTimestamp = 0
+        let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+        link.add(to: .main, forMode: .common)
+        displayLink = link
+    }
+
+    /// 滚动路径上的 reloadData 计数（数据到达等非滚动期
+    /// reload 不经此口、不计）。
+    func noteReloadData() {
+        if active { reloadCount += 1 }
+    }
+
+    /// 滚动窗内发生过实例身份变化（refreshInstances 返回 true）。
+    func noteIdentityChanged() {
+        if active { identityChangedInWindow = true }
+    }
+
+    @objc private func tick(_ link: CADisplayLink) {
+        let now = link.timestamp
+        if lastTickTimestamp > 0 {
+            intervalsMs.append((now - lastTickTimestamp) * 1000)
+        }
+        lastTickTimestamp = now
+        if now - windowStart >= 1.0 {
+            flush()
+        }
+        if now - lastActivityAt > 2.0 {
+            if now - windowStart >= 0.5, !intervalsMs.isEmpty {
+                flush()
+            }
+            displayLink?.invalidate()
+            displayLink = nil
+            active = false
+        }
+    }
+
+    private func flush() {
+        guard let layout else { return }
+        let sorted = intervalsMs.sorted()
+        func pct(_ p: Double) -> Double {
+            guard !sorted.isEmpty else { return 0 }
+            let idx = min(sorted.count - 1, Int((p * Double(sorted.count)).rounded(.up)))
+            return sorted[idx]
+        }
+        let hitch = intervalsMs.isEmpty
+            ? 0
+            : Double(intervalsMs.filter { $0 > 16.7 }.count) / Double(intervalsMs.count) * 100
+        Breadcrumbs.log("wall.scroll wall=\(wallName)"
+            + " didScrollMax=\(Self.fmt(didScrollMaxMs))ms"
+            + " p95=\(Self.fmt(pct(0.95)))ms p99=\(Self.fmt(pct(0.99)))ms"
+            + " max=\(Self.fmt(sorted.last ?? 0))ms"
+            + " hitch=\(Self.fmt(hitch))%"
+            + " lattice=\(layout.latticeComputeCount - latticeAtWindowStart)"
+            + " rebase=\(layout.rebaseCount - rebaseAtWindowStart)"
+            + " reload=\(reloadCount)"
+            + " identityChanged=\(identityChangedInWindow ? 1 : 0)")
+        windowStart = CACurrentMediaTime()
+        intervalsMs = []
+        didScrollMaxMs = 0
+        reloadCount = 0
+        identityChangedInWindow = false
+        latticeAtWindowStart = layout.latticeComputeCount
+        rebaseAtWindowStart = layout.rebaseCount
+    }
+
+    private static func fmt(_ v: Double) -> String {
+        String(format: "%.1f", v)
     }
 }

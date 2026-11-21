@@ -19,6 +19,8 @@ final class HomeWallViewController: UIViewController,
     private var entries: [WallPrototypeViewController.Entry] = []
     private var playlistIds: [String] = []
     private let wallLayout = WallLayout()
+    /// 滚动帧统计（(58) 定稿③）：逐秒 wall.scroll 面包屑。
+    private let scrollMetrics = WallScrollMetrics(wallName: "home")
     private var collectionView: UICollectionView!
     // 顶部行动胶囊已整段撤除（3.7 (54) 工作流 L）：原 statusLabel
     // 及其 showStatusNotice/statusTapped 一并删除——未登录入口归
@@ -204,6 +206,13 @@ final class HomeWallViewController: UIViewController,
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        // 冷启初始几何自证（(58) 未决清单 #5）：(57) 入场日志里
+        // 首轮旋转 from=852x393（冷启瞬间场景横屏尺寸）成因静态
+        // 不可推进——此处落墙安装时刻的 bounds 与场景方向，
+        // 与 entry rotate 各行对账即可判读初始几何从哪来。
+        let sceneOrientation = view.window?.windowScene?.interfaceOrientation
+        Breadcrumbs.log("wall.geom.init bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
+            + " orient=\(sceneOrientation.map { "\($0.rawValue)" } ?? "nil")")
         // 入场黑帧缝（3.7 (53) I 组定级）：窗口首帧先渲染本视图，
         // 入场 veil 在 viewDidAppear present 时才就位——底色用海报
         // 主色（EntryPosterArt），1~2 帧露出也是油画色域而非黑。
@@ -574,6 +583,12 @@ final class HomeWallViewController: UIViewController,
             //    安全线内）时指纹不变、lattice 零重算，只重建
             //    一次属性帧；类别变了才全量重算一次。
             self.wallLayout.invalidateLayout()
+            // (58)：prepare 若因类别变化换了实例集，数据源须
+            // 同步 reload（旧版靠后续事件兜底、映射错位窗口
+            // 存在）；身份未变则不动。
+            if self.wallLayout.lastIdentityChanged {
+                self.collectionView.reloadData()
+            }
             // ② 迷你台/点播台：宽度按新 bounds 重断言（口径与
             //    viewDidLayoutSubviews 同：min(宽,高)−24，纯旋
             //    转时值不变、横竖屏同宽居中）；台身 centerX/
@@ -736,22 +751,26 @@ final class HomeWallViewController: UIViewController,
             x: scrollView.contentOffset.x - center.x,
             y: scrollView.contentOffset.y - center.y)
         guard delta.x != 0 || delta.y != 0 else { return }
+        // 滚动统计（(58) 定稿③）：本回调耗时计入逐秒 wall.scroll。
+        let scrollStart = CACurrentMediaTime()
         isWrapping = true
-        let before = setIdentity()
         wallLayout.worldOrigin = CGPoint(
             x: wallLayout.worldOrigin.x + delta.x / CGFloat(wallLayout.cameraScale),
             y: wallLayout.worldOrigin.y + delta.y / CGFloat(wallLayout.cameraScale))
         scrollView.contentOffset = center
-        wallLayout.refreshInstances()
-        if setIdentity() != before {
+        // (58)：同键滚动只平移帧、身份不变 → 不 reload；身份
+        // 变化（rebase/键变）才 reload（reloadData 只许在身份
+        // 变化点发生，计数入 wall.scroll）。
+        let identityChanged = wallLayout.refreshInstances()
+        if identityChanged {
+            scrollMetrics.noteIdentityChanged()
             collectionView.reloadData()
+            scrollMetrics.noteReloadData()
         }
         isWrapping = false
-    }
-
-    private func setIdentity() -> String {
-        let list = wallLayout.instances
-        return "\(list.first?.instanceId ?? "-")/\(list.last?.instanceId ?? "-")/\(list.count)"
+        scrollMetrics.noteScrollActivity(
+            layout: wallLayout,
+            didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000)
     }
 
     // MARK: - 数据源
@@ -2241,6 +2260,9 @@ extension HomeWallViewController {
             }
         }
         wallLayout.totalEntries = entries.count
+        // 数据变更点（(58)）：条目身份代指递增，实例集缓存随之
+        // 失效重算（与 totalEntries 同批，此外无第二处赋值）。
+        wallLayout.dataVersion += 1
         wallLayout.refreshInstances()
         collectionView.reloadData()
         gridCollectionView?.reloadData()

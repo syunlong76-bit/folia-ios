@@ -23,6 +23,23 @@ import UIKit
 // playlist/radio/albums/local/explore）。原生侧形态按触屏
 // 改为左缘把手抽屉，构成与入口一一对应：歌单/电台/搜索/
 // 专辑/本地 + 头像账户区 + 设置入口。
+//
+// (58) 定稿①（幽灵头像钮根治，DS Pro 对账定稿）：(54)/(55)/
+// (56) 三轮修复都被真机证伪——静态逐路径推演在「animator
+// completion 必达＋手势终结事件必达」前提下全收敛到藏，但真
+// 机落定开态下 avatarButton 与 handleView 双双可见。三候选机
+// 制（取证排序）：第三机制（layoutSubviews 在 transform≠
+// identity 时重设 frame → 视觉满开而 presentation.tx 不达
+// 标 → 落定对账永不触发）＞ B′（拖动终结被吞、拖动态卡死）
+// ＞ A（animator completion 不交付＋presentation 冻结）。
+// 本版不再押任何单一收口路径，改单一呈现状态机为唯一事实
+// 源：chrome 显隐只由状态机经 applyChrome 派生；面板几何写
+// 入收敛到 updateGeometry 单通道、按 generation 校验；拖动
+// 态加 500ms 看门狗（与手势真实状态交叉核对）；落定双核
+// （状态＋面板实际右缘 model 读法）；不变式自愈带 Pro 门控；
+// 每次 chrome 写入落 workbench.chrome.audit 自证面包屑（字
+// 段含 gestureRawState/animatorGeneration/animatorIdentity/
+// stackHash 与 panelOpenGeom），复现一次即可从日志定罪。
 
 final class WorkbenchOverlayHostView: UIView {
 
@@ -35,9 +52,74 @@ final class WorkbenchOverlayHostView: UIView {
     /// false/true 严格配平（(55) 工作流 A）。
     var onSidebarVisibilityChanged: ((Bool) -> Void)?
 
-    private(set) var isSidebarOpen = false
-    private var isDraggingSidebar = false
+    /// 意图开关（旧 isSidebarOpen 语义沿用：开/关发起即翻转、
+    /// 拖动期保持拖前值、落定后与状态机一致）。真实呈现态以
+    /// sidebarState 为准，本旗标只供旧调用点的意图判读。
+    var isSidebarOpen: Bool { intentOpen }
+    private var intentOpen = false
+
+    // MARK: - 呈现状态机（(58) 定稿①）
+
+    /// 侧栏呈现状态：唯一事实源。closed/open 为落定态，
+    /// dragging 为手势跟手期，settling 为 animator 收口期
+    /// （generation 代次＋目标向）。
+    private enum SidebarState: Equatable {
+        case closed
+        case open
+        case dragging
+        case settling(generation: Int, targetOpen: Bool)
+    }
+
+    private var sidebarState: SidebarState = .closed
+    /// 代次：每次开/关发起或拖动接管递增；旧 animator 的
+    /// completion 与几何写入凭代次失效（见 updateGeometry）。
+    private var sidebarGeneration = 0
     private var sidebarAnimator: UIViewPropertyAnimator?
+    /// 在途 animator 的身份与代次（audit 字段）：无 animator
+    /// 时 identity="-"、generation=-1。
+    private var animatorIdentity = "-"
+    private var animatorGeneration = -1
+    /// 当前面板进度（0=关闭位、1=满开位）：progressTransit
+    /// 每次写入时更新；动画途中为 model 终点值（与旧版
+    /// transform.tx 口径一致）。
+    private var currentProgress: CGFloat = 0
+    /// 最近一次状态迁移（beginTransition/拖动接管）开始时刻：
+    /// 不变式自愈的 300ms 门控据此计时。
+    private var lastTransitionBeginAt: CFTimeInterval = 0
+    /// 最近一次手势事件时刻（拖动态看门狗的 idle 判定）。
+    private var lastGestureEventAt: CFTimeInterval = 0
+    /// 最近一次手势回调的真实状态名（audit 的 gestureRawState
+    /// 在无活跃识别器时回退到此值）。
+    private var lastGestureRawState = "possible"
+    /// 当前拖动的所属识别器（双指边缘防抢）：dragging 期间
+    /// 只有 owner 识别器的回调能推进/终结本次拖动。
+    private var dragOwner: ObjectIdentifier?
+    /// 拖动态看门狗（500ms idle 强制迁出，防 B′ 卡死）。
+    private var dragWatchdog: Timer?
+    /// 看门狗「按住静止」audit 只落一次/拖（防刷屏）。
+    private var watchdogHoldLogged = false
+    /// 拖动态 audit 节流（20Hz 上限）：写入照常、落行采样——
+    /// 落定点位与拖动始终点全量落行，定罪信息不靠拖动中段
+    /// 的高频采样。
+    private var lastDragAuditAt: CFTimeInterval = 0
+    /// 上次 layout 的 bounds 尺寸：面板 frame 只在尺寸变化时
+    /// 写（见 layoutSubviews），同尺寸 pass 零 frame 写入。
+    private var lastSidebarSize: CGSize = .zero
+
+    private var isDraggingSidebar: Bool {
+        if case .dragging = sidebarState { return true }
+        return false
+    }
+
+    private var sidebarStateName: String {
+        switch sidebarState {
+        case .closed: return "closed"
+        case .open: return "open"
+        case .dragging: return "dragging"
+        case .settling: return "settling"
+        }
+    }
+
     /// 最近一次经 onSidebarVisibilityChanged 实际报出的可见态；
     /// 发送对账的唯一依据，初值与关闭态一致（false）。
     private var reportedSidebarVisible = false
@@ -47,6 +129,12 @@ final class WorkbenchOverlayHostView: UIView {
     private let handleView = UIView()
     private let handleChevron = UIImageView()
     private let avatarButton = WorkbenchAvatarView()
+
+    /// 手势识别器引用（audit 的 gestureRawState 实时读源＋
+    /// 看门狗交叉核对）：build 时各存一份。
+    private var handlePanGesture: UIPanGestureRecognizer?
+    private var sidebarPanGesture: UIPanGestureRecognizer?
+    private var scrimPanGesture: UIPanGestureRecognizer?
 
     // 侧栏内件
     private let sidebarAvatar = WorkbenchAvatarView()
@@ -72,10 +160,32 @@ final class WorkbenchOverlayHostView: UIView {
         buildScrimAndSidebar()
         buildHandleAndAvatarButton()
         refreshAccountUI()
+        // 强制点位（(58) 定稿①）：回前台时按状态机核对一次
+        // 不变式——后台期间被系统搅动的呈现残局在此收口。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(appDidBecomeActive),
+            name: UIApplication.didBecomeActiveNotification, object: nil)
         Breadcrumbs.log("workbench.host.install")
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        dragWatchdog?.invalidate()
+    }
+
+    @objc private func appDidBecomeActive() {
+        auditChrome(caller: "didBecomeActive")
+        enforceInvariant(caller: "didBecomeActive")
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        // 强制点位（(58) 定稿①）：入窗时核对一次。
+        auditChrome(caller: "didMoveToWindow")
+        enforceInvariant(caller: "didMoveToWindow")
+    }
 
     // MARK: - 构建
 
@@ -85,8 +195,9 @@ final class WorkbenchOverlayHostView: UIView {
         scrimView.isHidden = true
         scrimView.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(scrimTapped)))
-        scrimView.addGestureRecognizer(
-            UIPanGestureRecognizer(target: self, action: #selector(sidebarPanned(_:))))
+        let scrimPan = UIPanGestureRecognizer(target: self, action: #selector(sidebarPanned(_:)))
+        scrimView.addGestureRecognizer(scrimPan)
+        scrimPanGesture = scrimPan
         addSubview(scrimView)
 
         sidebarView.backgroundColor = WorkbenchTheme.background
@@ -94,8 +205,9 @@ final class WorkbenchOverlayHostView: UIView {
         sidebarView.layer.shadowOpacity = 0.45
         sidebarView.layer.shadowRadius = 24
         sidebarView.layer.shadowOffset = CGSize(width: 6, height: 0)
-        sidebarView.addGestureRecognizer(
-            UIPanGestureRecognizer(target: self, action: #selector(sidebarPanned(_:))))
+        let sidebarPan = UIPanGestureRecognizer(target: self, action: #selector(sidebarPanned(_:)))
+        sidebarView.addGestureRecognizer(sidebarPan)
+        sidebarPanGesture = sidebarPan
         addSubview(sidebarView)
 
         // —— 账户头（点按进登录页：未登录去登录、已登录去管理）——
@@ -258,8 +370,9 @@ final class WorkbenchOverlayHostView: UIView {
         handleView.isAccessibilityElement = true
         handleView.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(handleTapped)))
-        handleView.addGestureRecognizer(
-            UIPanGestureRecognizer(target: self, action: #selector(handlePanned(_:))))
+        let handlePan = UIPanGestureRecognizer(target: self, action: #selector(handlePanned(_:)))
+        handleView.addGestureRecognizer(handlePan)
+        handlePanGesture = handlePan
         addSubview(handleView)
         handleChevron.image = UIImage(systemName: "chevron.right")
         handleChevron.tintColor = UIColor.white.withAlphaComponent(0.85)
@@ -281,52 +394,53 @@ final class WorkbenchOverlayHostView: UIView {
             UITapGestureRecognizer(target: self, action: #selector(avatarTapped)))
     }
 
-    // MARK: - 布局（安全区/横竖屏：frame 全在 layoutSubviews 按当前 bounds 重算）
+    // MARK: - 布局（安全区/横竖屏）
 
     override func layoutSubviews() {
         super.layoutSubviews()
         scrimView.frame = bounds
-        let width = panelWidth
-        sidebarView.frame = CGRect(x: 0, y: 0, width: width, height: bounds.height)
-        sidebarView.layer.shadowPath = UIBezierPath(rect: sidebarView.bounds).cgPath
-        // 非拖动/非动画时把关闭态位移对齐当前宽度（旋转后宽度变了要跟上）。
-        if !isSidebarOpen, !isDraggingSidebar, sidebarAnimator == nil {
-            sidebarView.transform = CGAffineTransform(translationX: -width, y: 0)
-        } else if isSidebarOpen, !isDraggingSidebar, sidebarAnimator == nil {
+        // 面板 frame（尺寸）只在宿主 bounds 尺寸变化时写，且写
+        // 时先卸 transform、写完经 updateGeometry 按状态机现
+        // 态恢复位移——(57) 前每个 layout pass 都在 transform
+        // ≠identity 时重设 frame（UIKit 明示此用法未定义），
+        // 是第三机制（视觉满开而 presentation.tx 不达标）的
+        // 头号嫌疑源；(58) 从写入通道上根除：同尺寸 pass 对
+        // 面板 frame/transform 零写入。
+        let sizeChanged = bounds.size != lastSidebarSize
+        if sizeChanged {
+            lastSidebarSize = bounds.size
+            let width = panelWidth
+            let savedTransform = sidebarView.transform
             sidebarView.transform = .identity
+            sidebarView.frame = CGRect(x: 0, y: 0, width: width, height: bounds.height)
+            sidebarView.transform = savedTransform
+            sidebarView.layer.shadowPath = UIBezierPath(rect: sidebarView.bounds).cgPath
+            // 宽度可能变了：按现态进度以新宽重申位移（关闭
+            // −width、满开 0、途中 −width×(1−progress)）。
+            let tx: CGFloat
+            switch sidebarState {
+            case .closed: tx = -width
+            case .open: tx = 0
+            case .dragging, .settling: tx = -width * (1 - currentProgress)
+            }
+            updateGeometry(tx: tx, generation: sidebarGeneration, caller: "layout")
         }
         handleView.frame = CGRect(x: 0, y: bounds.height * 0.36, width: 18, height: 80)
         let avatarSize: CGFloat = 40
         avatarButton.frame = CGRect(
             x: 10, y: safeAreaInsets.top + 50, width: avatarSize, height: avatarSize)
-        // 关闭态 chrome（把手/头像）是叠在 sidebarView 之上的
-        // 兄弟视图（后加装、层级更高），侧栏落定打开时必须硬藏，
-        // 不能只靠动画里的 alpha——alpha 没被驱动到 0 的任何一帧
-        // 它都会浮在登录状态行上（(53) 截图：淡圆圈压网易云行、
-        // 绿点飘进 QQ 音乐字里，(54) 工作流 N 修）。
-        // (56) 热修——旧版这一支只在「无 animator、非拖动」时
-        // 单向藏 chrome：开栏 animator 的 completion 一旦没有
-        // 交付落定收口（被旋转/入场退场搅动时可发生），animator
-        // 引用残留、这一支在后续每次 layout 都进不来，头像钮
-        // 就永久浮在面板上（(55) 真机录屏实证：横屏开栏后跨
-        // 旋转全程不消失）。改为落定对账：未拖动时，只要面板
-        // 呈现位已到达当前落定目标位（或已无 animator），就
-        // 按 isSidebarOpen 双向落实 chrome 显隐。动画途中呈现
-        // 位未到目标位，不触发，淡入淡出不受影响。
-        if !isDraggingSidebar {
-            let targetTx: CGFloat = isSidebarOpen ? 0 : -panelWidth
-            let presentedTx = sidebarView.layer.presentation()?.transform.m41
-                ?? sidebarView.transform.tx
-            if sidebarAnimator == nil || abs(presentedTx - targetTx) <= 0.5 {
-                applySettledChrome()
-            }
+        if sizeChanged {
+            // 旋转强制点位（(58) 定稿①）：宿主 bounds 尺寸变
+            // 化即旋转/分屏落点，在此核对不变式＋落 audit。
+            auditChrome(caller: "layout-resize")
+            enforceInvariant(caller: "layout-resize")
         }
     }
 
     // MARK: - 命中仲裁（DS 结论 2/3）
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        if isSidebarOpen || isDraggingSidebar || sidebarAnimator != nil {
+        if sidebarState != .closed {
             // 展开（含动画/拖动中）：宿主整层接管——面板内走
             // super 分发，面板外落 scrim（点按关闭），墙与迷你
             // 台在此期间点不到（且墙交互已由回调禁用）。
@@ -342,72 +456,235 @@ final class WorkbenchOverlayHostView: UIView {
         return nil
     }
 
-    // MARK: - 开合（系统弹簧）
+    // MARK: - 几何读数（落定双核的几何核，Pro 读法）
 
-    @objc private func handleTapped() {
-        setSidebarOpen(true, animated: true, reason: "handle-tap")
+    /// CATransform3D → CGAffineTransform（2D 分量）。
+    private func affine(from t: CATransform3D) -> CGAffineTransform {
+        CGAffineTransform(a: CGFloat(t.m11), b: CGFloat(t.m12),
+                          c: CGFloat(t.m21), d: CGFloat(t.m22),
+                          tx: CGFloat(t.m41), ty: CGFloat(t.m42))
     }
 
-    @objc private func scrimTapped() {
-        setSidebarOpen(false, animated: true, reason: "scrim-tap")
+    /// 面板右缘（model）：center.x − bounds.width/2 +
+    /// bounds.applying(model transform).maxX。纯平移下恒等于
+    /// panelWidth + tx——audit 的 geomOK 字段逐行自检此恒等
+    /// 式（读法写错时 geomOK=0 立即可见，Pro 施工约束）。
+    private func panelModelRightEdge() -> CGFloat {
+        let w = sidebarView.bounds.width
+        return sidebarView.center.x - w / 2
+            + sidebarView.bounds.applying(sidebarView.transform).maxX
     }
 
-    @objc private func handlePanned(_ gesture: UIPanGestureRecognizer) {
-        guard !isSidebarOpen else { return }
-        dragSidebar(gesture, opening: true)
+    /// 面板右缘（presentation：在途动画的呈现值；无呈现层
+    /// 时回退 model）。与 model 分家即第三机制的实锤字段。
+    private func panelPresentationRightEdge() -> CGFloat {
+        let w = sidebarView.bounds.width
+        guard let pres = sidebarView.layer.presentation() else {
+            return panelModelRightEdge()
+        }
+        return pres.position.x - w / 2
+            + sidebarView.bounds.applying(affine(from: pres.transform)).maxX
     }
 
-    @objc private func sidebarPanned(_ gesture: UIPanGestureRecognizer) {
-        guard isSidebarOpen else { return }
-        dragSidebar(gesture, opening: false)
+    private func panelOpenGeom() -> Bool {
+        panelModelRightEdge() >= panelWidth - 0.5
     }
 
-    /// 跟手拖动：把手右拖开、面板/遮罩左拖关；松手按速度与
-    /// 进度用系统弹簧收口到开/关。
-    private func dragSidebar(_ gesture: UIPanGestureRecognizer, opening: Bool) {
-        let width = panelWidth
-        switch gesture.state {
-        case .began:
-            interruptSidebarAnimator()
-            isDraggingSidebar = true
-            scrimView.isHidden = false
-            if opening { emitSidebarVisibility(true, source: "drag-began") }
-        case .changed:
-            let translation = gesture.translation(in: self).x
-            let base: CGFloat = opening ? -width : 0
-            let tx = min(max(base + translation, -width), 0)
-            applySidebarProgress(tx: tx)
-        case .ended, .cancelled, .failed:
-            isDraggingSidebar = false
-            let velocity = gesture.velocity(in: self).x
-            let tx = sidebarView.transform.tx
-            let progress = 1 + tx / width
-            let targetOpen: Bool
-            if velocity > 350 { targetOpen = true }
-            else if velocity < -350 { targetOpen = false }
-            else { targetOpen = progress > 0.45 }
-            setSidebarOpen(targetOpen, animated: true, reason: "drag",
-                           initialVelocityX: velocity)
-        default:
-            break
+    // MARK: - 自证面包屑（workbench.chrome.audit）
+
+    private static func fmt(_ v: CGFloat) -> String {
+        String(format: "%.2f", Double(v))
+    }
+
+    /// 调用栈返回地址的 FNV-1a 哈希（audit 的 stackHash）：
+    /// 只取地址不符号化，成本可忽略；同一写入点的哈希恒定，
+    /// 判读时按哈希归组即可定位是哪条代码路径在写 chrome。
+    private func stackHash() -> String {
+        var hash: UInt64 = 0xcbf29ce484222325
+        for address in Thread.callStackReturnAddresses {
+            hash ^= UInt64(address.uintValue)
+            hash &*= 0x100000001b3
+        }
+        return String(format: "%08x", UInt32(truncatingIfNeeded: hash))
+    }
+
+    private static func gestureStateName(_ state: UIGestureRecognizer.State) -> String {
+        switch state {
+        case .possible: return "possible"
+        case .began: return "began"
+        case .changed: return "changed"
+        case .ended: return "ended"
+        case .cancelled: return "cancelled"
+        case .failed: return "failed"
+        @unknown default: return "unknown"
         }
     }
 
-    private func applySidebarProgress(tx: CGFloat) {
-        let width = panelWidth
-        sidebarView.transform = CGAffineTransform(translationX: tx, y: 0)
-        let progress = width > 0 ? 1 + tx / width : 0
-        scrimView.alpha = 0.5 * progress
-        let chromeAlpha = 1 - progress
-        handleView.alpha = chromeAlpha
-        avatarButton.alpha = chromeAlpha
+    /// 手势真实状态：任一 pan 识别器处活跃态（began/changed）
+    /// 时报其实时值；否则报最近一次回调记录的终结态。
+    private func gestureRawStateDescription() -> String {
+        let pans: [(String, UIPanGestureRecognizer?)] = [
+            ("handle", handlePanGesture),
+            ("sidebar", sidebarPanGesture),
+            ("scrim", scrimPanGesture)
+        ]
+        for (name, pan) in pans {
+            if let pan, pan.state == .began || pan.state == .changed {
+                return "\(name):\(Self.gestureStateName(pan.state))"
+            }
+        }
+        return lastGestureRawState
     }
 
-    /// 可见态发送对账（(55) 工作流 A）：与最近一次实际报出值
-    /// 相同则不重发。这样拖动 .began 抢先报的 (true)、
-    /// setSidebarOpen 开栏报的 (true)、收口补报的 (false)
-    /// 无论哪条路径先到，回调都只发一次，false/true 配平、
-    /// 末态恒与面板实际开关态一致。
+    /// chrome 自证面包屑（(58) 定稿①）：每一次 chrome 写入后
+    /// 落一行（拖动中段节流 20Hz，见 applyChrome）。字段全集
+    /// ＝定罪映射：modelRight 与 presRight 分家→第三机制；
+    /// drag=1 恒久而 gesture 已终结→B′；anim 非空且 gen 停
+    /// 滞→A；落定末行 avatarHidden/handleHidden/panelOpenGeom
+    /// 三者须与真机截图逐条对得上（验收判据）。
+    private func auditChrome(caller: String, progress: CGFloat? = nil) {
+        let modelTx = sidebarView.transform.tx
+        let presTx = sidebarView.layer.presentation()
+            .map { CGFloat($0.transform.m41) } ?? modelTx
+        let modelRight = panelModelRightEdge()
+        let presRight = panelPresentationRightEdge()
+        Breadcrumbs.log("workbench.chrome.audit"
+            + " caller=\(caller) stack=\(stackHash())"
+            + " state=\(sidebarStateName) gen=\(sidebarGeneration)"
+            + " anim=\(animatorIdentity) animGen=\(animatorGeneration)"
+            + " drag=\(isDraggingSidebar ? 1 : 0)"
+            + " gesture=\(gestureRawStateDescription())"
+            + (progress.map { " progress=\(Self.fmt($0))" } ?? "")
+            + " avatarHidden=\(avatarButton.isHidden ? 1 : 0)"
+            + " avatarAlpha=\(Self.fmt(avatarButton.alpha))"
+            + " handleHidden=\(handleView.isHidden ? 1 : 0)"
+            + " handleAlpha=\(Self.fmt(handleView.alpha))"
+            + " modelTx=\(Self.fmt(modelTx)) presTx=\(Self.fmt(presTx))"
+            + " modelRight=\(Self.fmt(modelRight)) presRight=\(Self.fmt(presRight))"
+            + " panelOpenGeom=\(modelRight >= panelWidth - 0.5 ? 1 : 0)"
+            + " geomOK=\(abs(modelRight - (panelWidth + modelTx)) <= 0.5 ? 1 : 0)")
+    }
+
+    // MARK: - chrome 写入唯一通道（applyChrome）
+
+    private enum ChromeMode {
+        /// 途中型：只写 alpha（恒可见），供拖动/动画插值。
+        case transient(CGFloat)
+        /// 落定型：按状态机落定态硬藏/恢复（仅 open/closed 态
+        /// 调用；其余态无操作但仍落 audit）。
+        case settled
+    }
+
+    /// chrome（把手/头像的 isHidden/alpha）写入的唯一通道
+    /// （(58) 定稿① Pro 补正：手势回调与 animator 一律不许
+    /// 直写 chrome）。每次写入后落 audit（拖动中段 caller=
+    /// drag 时节流到 20Hz：写入本身不节流、只采样落行）。
+    private func applyChrome(caller: String, mode: ChromeMode) {
+        switch mode {
+        case .transient(let progress):
+            handleView.isHidden = false
+            avatarButton.isHidden = false
+            let alpha = 1 - progress
+            handleView.alpha = alpha
+            avatarButton.alpha = alpha
+            if caller == "drag" {
+                let now = CACurrentMediaTime()
+                guard now - lastDragAuditAt >= 0.05 else { return }
+                lastDragAuditAt = now
+            }
+            auditChrome(caller: caller, progress: progress)
+        case .settled:
+            switch sidebarState {
+            case .open:
+                handleView.isHidden = true
+                avatarButton.isHidden = true
+            case .closed:
+                handleView.isHidden = false
+                avatarButton.isHidden = false
+                handleView.alpha = 1
+                avatarButton.alpha = 1
+            case .dragging, .settling:
+                break
+            }
+            auditChrome(caller: caller)
+        }
+    }
+
+    // MARK: - 几何写入唯一通道（updateGeometry）
+
+    /// 面板几何（transform）写入的唯一通道（(58) 定稿① Pro
+    /// 补正）：按 generation 校验，过期代次的写入一律丢弃并
+    /// 落 geomdrop 痕——旧 animator 即使残留引用也写不动面板。
+    private func updateGeometry(tx: CGFloat, generation: Int, caller: String) {
+        guard generation == sidebarGeneration else {
+            Breadcrumbs.log("workbench.chrome.geomdrop caller=\(caller) gen=\(generation) current=\(sidebarGeneration)")
+            return
+        }
+        sidebarView.transform = CGAffineTransform(translationX: tx, y: 0)
+    }
+
+    /// 面板进度唯一入口（(58) 定稿①，代旧 applySidebarProgress）：
+    /// 手势回调与 animator 只许经此推进——内部依次写面板几
+    /// 何（updateGeometry 按当前代次）、scrim alpha、chrome
+    /// 途中型 alpha，全部派生自同一 progress。
+    private func progressTransit(to progress: CGFloat, caller: String) {
+        let clamped = min(max(progress, 0), 1)
+        currentProgress = clamped
+        updateGeometry(tx: -panelWidth * (1 - clamped),
+                       generation: sidebarGeneration, caller: caller)
+        scrimView.alpha = 0.5 * clamped
+        applyChrome(caller: caller, mode: .transient(clamped))
+    }
+
+    // MARK: - 不变式自愈（Pro 门控）
+
+    /// 不变式自愈（(58) 定稿①）：落定态下 chrome 显隐必须由
+    /// 状态机唯一决定。启用门控（Pro 补正，三条齐备）：状态
+    /// ∈{open,closed}、无在途 animator 正在写（或 model 位移
+    /// 已达目标 0.5 内）、距最近迁移开始 ≥300ms。违规分两
+    /// 型：chrome 型（显隐/alpha 与状态不符）→ 按落定型硬纠
+    /// 正；几何型（面板 model 位移偏离落定位）→ 经
+    /// updateGeometry 拉回。纠正必落 invariant.violation。
+    private func enforceInvariant(caller: String) {
+        guard sidebarState == .open || sidebarState == .closed else { return }
+        let targetTx: CGFloat = sidebarState == .open ? 0 : -panelWidth
+        let modelTx = sidebarView.transform.tx
+        if sidebarAnimator != nil, abs(modelTx - targetTx) > 0.5 { return }
+        guard CACurrentMediaTime() - lastTransitionBeginAt >= 0.3 else { return }
+        // 几何型违规：落定态面板不在落定位（无 animator 在写
+        // 的前提下到不了位，即写入通道外的改动/残局）。
+        if abs(modelTx - targetTx) > 0.5 {
+            Breadcrumbs.log("invariant.violation caller=\(caller) kind=geometry"
+                + " state=\(sidebarStateName) modelTx=\(Self.fmt(modelTx))"
+                + " targetTx=\(Self.fmt(targetTx)) panelOpenGeom=\(panelOpenGeom() ? 1 : 0)")
+            currentProgress = sidebarState == .open ? 1 : 0
+            updateGeometry(tx: targetTx, generation: sidebarGeneration,
+                           caller: "invariant-heal")
+        }
+        // chrome 型违规：显隐/alpha 与落定态派生值不符。
+        let chromeViolated: Bool
+        if sidebarState == .open {
+            chromeViolated = !avatarButton.isHidden || !handleView.isHidden
+        } else {
+            chromeViolated = avatarButton.isHidden || handleView.isHidden
+                || avatarButton.alpha != 1 || handleView.alpha != 1
+        }
+        if chromeViolated {
+            Breadcrumbs.log("invariant.violation caller=\(caller) kind=chrome"
+                + " state=\(sidebarStateName)"
+                + " avatarHidden=\(avatarButton.isHidden ? 1 : 0)"
+                + " handleHidden=\(handleView.isHidden ? 1 : 0)"
+                + " panelOpenGeom=\(panelOpenGeom() ? 1 : 0)")
+            applyChrome(caller: "invariant-heal", mode: .settled)
+        }
+    }
+
+    // MARK: - 可见态发送对账（(55) 工作流 A 沿用）
+
+    /// 与最近一次实际报出值相同则不重发。这样拖动 .began 抢
+    /// 先报的 (true)、setSidebarOpen 开栏报的 (true)、收口补
+    /// 报的 (false) 无论哪条路径先到，回调都只发一次，
+    /// false/true 配平、末态恒与面板实际开关态一致。
     private func emitSidebarVisibility(_ visible: Bool, source: String) {
         guard reportedSidebarVisible != visible else {
             Breadcrumbs.log("workbench.sidebar.visibility dedup visible=\(visible) source=\(source)")
@@ -418,88 +695,49 @@ final class WorkbenchOverlayHostView: UIView {
         onSidebarVisibilityChanged?(visible)
     }
 
-    /// 打断在途 animator 且不丢 completion 语义（(55) 工作流 A）：
-    /// stopAnimation(true) 会连 completion 一起丢弃（旧版两处
-    /// 这么停，开栏收口的硬藏与关栏的 (false) 随之蒸发）；
-    /// 改走 stopAnimation(false) 保留 completion、再
-    /// finishAnimation(at: .current) 在当前位置交付 completion
-    /// （position == .current → finish 只记打断、不做落定收口，
-    /// 收口由接管的拖动/新动画负责）。
-    private func interruptSidebarAnimator() {
+    // MARK: - 状态迁移（开/关发起与落定）
+
+    /// 停掉在途 animator 并同步交付其 completion：走
+    /// stopAnimation(false) 保留 completion、再
+    /// finishAnimation(at: .current) 在当前位置交付——
+    /// completion 凭「代次已递增或位置非 .end」自判失效、
+    /// 只落 audit、不写 chrome/几何/状态（(55) A 的语义在本
+    /// 版由状态机收编）。调用方须在本方法后递增代次或迁
+    /// 状态，使旧 completion 的代次判据成立。
+    private func stopCurrentAnimator() {
         guard let animator = sidebarAnimator else { return }
         sidebarAnimator = nil
+        animatorIdentity = "-"
+        animatorGeneration = -1
         animator.stopAnimation(false)
         animator.finishAnimation(at: .current)
     }
 
-    /// 守卫命中时的补收口（(55) 工作流 A）：目标态已同值且
-    /// 面板已在目标位，不等于「什么都不用做」——在途 animator
-    /// 可能刚被拖动打断、其 completion 已丢，硬藏 chrome 与
-    /// (false) 发送全押在那次 completion 上。此处先按保留语义
-    /// 打断残余 animator，再把面板钉到目标位并走一次落定收口，
-    /// 保证 chrome 显隐与墙交互回调必达末态。
-    private func reconcileSettledSidebar(open: Bool, reason: String) {
-        interruptSidebarAnimator()
-        let targetTx: CGFloat = open ? 0 : -panelWidth
-        Breadcrumbs.log("workbench.sidebar.reconcile open=\(open) reason=\(reason)")
-        applySidebarProgress(tx: targetTx)
-        finishSidebarAnimation(open: open, completed: true)
-        // 对账函数本身负责 chrome 落定（(56) 热修）：不单押
-        // finish 内部的现态一致性检查——它跳过时这里按
-        // isSidebarOpen 现态再落实一次，末态必达。
-        applySettledChrome()
-    }
-
-    /// 落定态 chrome 显隐的唯一权威（(56) 热修）：由
-    /// isSidebarOpen 现态推导、不认调用方传的 open 参数。
-    /// 落定为开 ⇒ 把手/头像硬藏（isHidden，命中随之关闭）；
-    /// 落定为关 ⇒ 恢复可见且 alpha 归 1。全部收口点（动画
-    /// completion、守卫对账、layout 落定对账）都经它落实，
-    /// 任何一条路径、任何冗余调用之后末态都收敛一致；
-    /// 过期收口（open 参数与现态不符）也不会把 chrome 写反。
-    private func applySettledChrome() {
-        if isSidebarOpen {
-            handleView.isHidden = true
-            avatarButton.isHidden = true
-        } else {
-            handleView.isHidden = false
-            avatarButton.isHidden = false
-            handleView.alpha = 1
-            avatarButton.alpha = 1
-        }
-    }
-
-    func setSidebarOpen(_ open: Bool, animated: Bool, reason: String,
-                        initialVelocityX: CGFloat = 0) {
-        // 守卫：目标态已落定且面板已在目标位才算同值；但同值
-        // 不许整段 return 吞掉收口——先补一次落定收口再返回
-        // （(55) 工作流 A 定案：在途 animator 被拖动打断时
-        // completion 已丢，硬藏 chrome 与 (false) 发送全押在
-        // 收口上，吞掉即冻屏/冻墙）。拖动松手时 isSidebarOpen
-        // 可能与目标同值但面板还在途中，则不走守卫、继续收口。
-        let targetTx: CGFloat = open ? 0 : -panelWidth
-        guard open != isSidebarOpen
-            || abs(sidebarView.transform.tx - targetTx) > 0.5 else {
-            reconcileSettledSidebar(open: open, reason: reason)
-            return
-        }
-        isSidebarOpen = open
-        Breadcrumbs.log("workbench.sidebar.\(open ? "open" : "close") reason=\(reason)")
+    /// 开/关发起（唯一入口）：停旧 animator → 代次递增 →
+    /// 状态迁 settling → 按需建新弹簧 animator（或无动画直
+    /// 达落定）。animator 的 animations 只经 progressTransit
+    /// 写，completion 凭代次＋位置双判据落定。
+    private func beginTransition(toOpen open: Bool, animated: Bool,
+                                 reason: String, initialVelocityX: CGFloat) {
+        stopCurrentAnimator()
+        sidebarGeneration += 1
+        let gen = sidebarGeneration
+        intentOpen = open
+        sidebarState = .settling(generation: gen, targetOpen: open)
+        lastTransitionBeginAt = CACurrentMediaTime()
+        Breadcrumbs.log("workbench.sidebar.\(open ? "open" : "close") reason=\(reason) gen=\(gen)")
         if open {
-            // 动画期间 chrome 靠 applySidebarProgress 的 alpha
-            // 淡出，先确保它们没被上一轮落定的 isHidden 藏死。
-            handleView.isHidden = false
-            avatarButton.isHidden = false
-            refreshAccountUI()
             scrimView.isHidden = false
+            refreshAccountUI()
             emitSidebarVisibility(true, source: "set-open")
         }
-        interruptSidebarAnimator()
+        let targetProgress: CGFloat = open ? 1 : 0
+        let targetTx = -panelWidth * (1 - targetProgress)
         let currentTx = sidebarView.transform.tx
         guard animated, !UIAccessibility.isReduceMotionEnabled,
               abs(targetTx - currentTx) > 0.5 else {
-            applySidebarProgress(tx: targetTx)
-            finishSidebarAnimation(open: open, completed: true)
+            progressTransit(to: targetProgress, caller: "settle-immediate")
+            settleSidebar(generation: gen, targetOpen: open, caller: "immediate")
             return
         }
         let distance = targetTx - currentTx
@@ -510,56 +748,238 @@ final class WorkbenchOverlayHostView: UIView {
             initialVelocity: CGVector(dx: relativeVelocity, dy: 0))
         let animator = UIViewPropertyAnimator(duration: 0.55, timingParameters: timing)
         animator.addAnimations { [weak self] in
-            self?.applySidebarProgress(tx: targetTx)
+            self?.progressTransit(to: targetProgress, caller: "animator")
         }
         animator.addCompletion { [weak self] position in
             guard let self else { return }
+            guard gen == self.sidebarGeneration else {
+                // 过期代次的 completion：只落 audit 定罪，不许
+                // 写 chrome/几何/状态（定稿①代次失效）。
+                self.auditChrome(caller: "animator-completion-stale")
+                return
+            }
             self.sidebarAnimator = nil
-            self.finishSidebarAnimation(open: open, completed: position == .end)
+            self.animatorIdentity = "-"
+            self.animatorGeneration = -1
+            if position == .end {
+                self.settleSidebar(generation: gen, targetOpen: open,
+                                   caller: "animator-completion")
+            } else {
+                // 被打断（.current/.start）：接管方（拖动/新迁
+                // 移）负责后续，本处只记账。
+                self.auditChrome(caller: "animator-completion-interrupted")
+            }
         }
         sidebarAnimator = animator
+        animatorIdentity = "\(ObjectIdentifier(animator).hashValue)"
+        animatorGeneration = gen
         animator.startAnimation()
     }
 
-    private func finishSidebarAnimation(open: Bool, completed: Bool) {
-        // 被打断的 completion（position == .current）只记账、
-        // 不落定：面板还在拖动/新动画途中，此时藏 chrome、
-        // 藏 scrim 或发 (false) 都会与接管方打架。落定收口
-        // 只走 completed == true 的路径（自然播完、无动画
-        // 直达、守卫补收口三处）。
-        guard completed else {
-            Breadcrumbs.log("workbench.sidebar.finish interrupted open=\(open)")
+    /// 落定（唯一收口）：状态迁 open/closed → scrim 收尾 →
+    /// chrome 落定型派生 → 可见态补报 → 落定 audit ＋
+    /// +300ms 双通道自证 → 不变式核对。代次不符的落定一律
+    /// 丢弃（过期收口不许动任何东西）。
+    private func settleSidebar(generation gen: Int, targetOpen open: Bool, caller: String) {
+        guard gen == sidebarGeneration else {
+            auditChrome(caller: "settle-stale")
             return
         }
-        // 只认与现态一致的收口：落定值与现态不符的是过期
-        // 收口，不许它再动 scrim/把手/墙交互（防「开到一半
-        // 被关、scrim 被旧收口藏掉」）。
+        sidebarState = open ? .open : .closed
         if open {
-            if isSidebarOpen {
-                scrimView.isHidden = false
-                // 落定硬藏关闭态 chrome（与 layoutSubviews 同口径，
-                // 不许只剩 alpha=0 的隐形视图压在状态行上）。
-                handleView.isHidden = true
-                avatarButton.isHidden = true
-                // 对账补报：正常路径 (true) 已在开栏时发出、
-                // 此处被去重吞掉；仅当前面发送丢失时在此补齐。
-                emitSidebarVisibility(true, source: "finish-open")
-            }
-        } else if !isSidebarOpen {
+            scrimView.isHidden = false
+            // 对账补报：正常路径 (true) 已在开栏时发出、此处
+            // 被去重吞掉；仅当前面发送丢失时在此补齐。
+            emitSidebarVisibility(true, source: "finish-open")
+        } else {
             scrimView.isHidden = true
             scrimView.alpha = 0
-            handleView.isHidden = false
-            avatarButton.isHidden = false
-            handleView.alpha = 1
-            avatarButton.alpha = 1
-            // 关闭落定才恢复墙交互；经对账发送，与守卫补
-            // 收口、动画 completion 哪条先到都只发一次。
+            // 关闭落定才恢复墙交互；经对账发送，与守卫补收
+            // 口、动画 completion 哪条先到都只发一次。
             emitSidebarVisibility(false, source: "finish-close")
         }
-        // chrome 落定不单押上面的现态一致性分支（(56) 热修）：
-        // 分支因过期收口被整段跳过时，按 isSidebarOpen 现态
-        // 统一再落实一次，显隐必达末态。
-        applySettledChrome()
+        applyChrome(caller: "settle-\(caller)", mode: .settled)
+        scheduleSettleAudits()
+        enforceInvariant(caller: "settle-\(caller)")
+    }
+
+    /// 落定自证双通道（(58) 定稿①）：落定行之外，下一
+    /// runloop 一行＋300ms 后一行——主线程卡死吞掉定时行时，
+    /// 「定时行迟到/缺失」本身即证据；+300ms 行同时再核一次
+    /// 不变式（此时 300ms 门控必已满足）。
+    private func scheduleSettleAudits() {
+        DispatchQueue.main.async { [weak self] in
+            self?.auditChrome(caller: "settle+runloop")
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
+            guard let self else { return }
+            self.auditChrome(caller: "settle+300ms")
+            self.enforceInvariant(caller: "settle+300ms")
+        }
+    }
+
+    /// 守卫命中时的补收口：目标态已落定且面板已在目标位，
+    /// 不等于「什么都不用做」——把面板按现态再钉一次并走
+    /// 落定收口，保证 chrome 显隐与墙交互回调必达末态
+    /// （(55) A 定案在本版的落点）。
+    private func reconcileSettledSidebar(open: Bool, reason: String) {
+        stopCurrentAnimator()
+        Breadcrumbs.log("workbench.sidebar.reconcile open=\(open) reason=\(reason)")
+        progressTransit(to: open ? 1 : 0, caller: "reconcile")
+        settleSidebar(generation: sidebarGeneration, targetOpen: open, caller: "reconcile")
+    }
+
+    func setSidebarOpen(_ open: Bool, animated: Bool, reason: String,
+                        initialVelocityX: CGFloat = 0) {
+        // 守卫：目标态已落定且面板已在目标位才算同值；同值
+        // 不许整段 return 吞掉收口——先补一次落定收口再返回
+        // （(55) 工作流 A 定案：在途 animator 被拖动打断时
+        // completion 已丢，硬藏 chrome 与 (false) 发送全押在
+        // 收口上，吞掉即冻屏/冻墙）。拖动松手时面板还在途
+        // 中（状态为 dragging），不走守卫、继续收口。
+        let targetTx: CGFloat = open ? 0 : -panelWidth
+        let settledTarget: SidebarState = open ? .open : .closed
+        if sidebarState == settledTarget,
+           abs(sidebarView.transform.tx - targetTx) <= 0.5 {
+            reconcileSettledSidebar(open: open, reason: reason)
+            return
+        }
+        // 已在向同一目标 settling：不重启（防重复请求叠代次、
+        // 把在途弹簧打断成跳变）。
+        if case .settling(_, let target) = sidebarState, target == open {
+            return
+        }
+        beginTransition(toOpen: open, animated: animated,
+                        reason: reason, initialVelocityX: initialVelocityX)
+    }
+
+    // MARK: - 开合手势
+
+    @objc private func handleTapped() {
+        setSidebarOpen(true, animated: true, reason: "handle-tap")
+    }
+
+    @objc private func scrimTapped() {
+        setSidebarOpen(false, animated: true, reason: "scrim-tap")
+    }
+
+    @objc private func handlePanned(_ gesture: UIPanGestureRecognizer) {
+        // 把手只从关闭侧起拖（与旧版 guard !isSidebarOpen 等
+        // 价）：已开/正在开途中不受理。
+        switch sidebarState {
+        case .open, .settling(_, true):
+            return
+        case .closed, .dragging, .settling(_, false):
+            break
+        }
+        dragSidebar(gesture, opening: true)
+    }
+
+    @objc private func sidebarPanned(_ gesture: UIPanGestureRecognizer) {
+        // 面板/遮罩只从打开侧起拖（与旧版 guard isSidebarOpen
+        // 等价）：已关/正在关途中不受理。
+        switch sidebarState {
+        case .closed, .settling(_, false):
+            return
+        case .open, .dragging, .settling(_, true):
+            break
+        }
+        dragSidebar(gesture, opening: false)
+    }
+
+    /// 跟手拖动：把手右拖开、面板/遮罩左拖关；松手按速度与
+    /// 进度用系统弹簧收口到开/关。.began 时停旧 animator、
+    /// 代次递增、状态迁 dragging 并启动看门狗；终结（ended/
+    /// cancelled/failed 同路）经 beginTransition 收口——手势
+    /// cancel 也是定稿①的强制点位（走同一落定路径）。
+    private func dragSidebar(_ gesture: UIPanGestureRecognizer, opening: Bool) {
+        let width = panelWidth
+        // 双指边缘防抢：dragging 期间只有 owner 识别器能推进/
+        // 终结本次拖动（另一识别器的 .began 直接忽略）。
+        if case .dragging = sidebarState,
+           gesture.state != .possible,
+           dragOwner != nil, dragOwner != ObjectIdentifier(gesture) {
+            return
+        }
+        lastGestureRawState = "\(opening ? "handle" : "panel"):\(Self.gestureStateName(gesture.state))"
+        switch gesture.state {
+        case .began:
+            lastGestureEventAt = CACurrentMediaTime()
+            watchdogHoldLogged = false
+            dragOwner = ObjectIdentifier(gesture)
+            stopCurrentAnimator()
+            sidebarGeneration += 1
+            sidebarState = .dragging
+            lastTransitionBeginAt = CACurrentMediaTime()
+            scrimView.isHidden = false
+            if opening { emitSidebarVisibility(true, source: "drag-began") }
+            auditChrome(caller: "drag-began")
+            startDragWatchdog()
+        case .changed:
+            lastGestureEventAt = CACurrentMediaTime()
+            let translation = gesture.translation(in: self).x
+            let base: CGFloat = opening ? -width : 0
+            let tx = min(max(base + translation, -width), 0)
+            progressTransit(to: width > 0 ? 1 + tx / width : 0, caller: "drag")
+        case .ended, .cancelled, .failed:
+            lastGestureEventAt = CACurrentMediaTime()
+            dragOwner = nil
+            stopDragWatchdog()
+            let velocity = gesture.velocity(in: self).x
+            let targetOpen: Bool
+            if velocity > 350 { targetOpen = true }
+            else if velocity < -350 { targetOpen = false }
+            else { targetOpen = currentProgress > 0.45 }
+            auditChrome(caller: "drag-end")
+            beginTransition(toOpen: targetOpen, animated: true,
+                            reason: "drag", initialVelocityX: velocity)
+        default:
+            break
+        }
+    }
+
+    // MARK: - 拖动态看门狗（500ms，Pro 补正）
+
+    private func startDragWatchdog() {
+        stopDragWatchdog()
+        let timer = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
+            self?.dragWatchdogTick()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        dragWatchdog = timer
+    }
+
+    private func stopDragWatchdog() {
+        dragWatchdog?.invalidate()
+        dragWatchdog = nil
+    }
+
+    /// 看门狗 tick（100ms）：与手势真实状态交叉核对——任一
+    /// 识别器仍处 began/changed（用户按住面板静止不动也是
+    /// 合法拖动）时绝不迁出、只落一行 audit（每次拖一行）；
+    /// 全部识别器已终结/未始且 500ms 无手势事件，即终结事
+    /// 件被吞（B′ 形态、状态机还卡在 dragging、自愈在拖动态
+    /// 又被禁用）——强制迁出 settling 并落 invariant.drag.idle。
+    private func dragWatchdogTick() {
+        guard case .dragging = sidebarState else {
+            stopDragWatchdog()
+            return
+        }
+        guard CACurrentMediaTime() - lastGestureEventAt >= 0.5 else { return }
+        let anyActive = [handlePanGesture, sidebarPanGesture, scrimPanGesture]
+            .contains { $0?.state == .began || $0?.state == .changed }
+        if anyActive {
+            if !watchdogHoldLogged {
+                watchdogHoldLogged = true
+                auditChrome(caller: "watchdog-hold")
+            }
+            return
+        }
+        Breadcrumbs.log("invariant.drag.idle progress=\(Self.fmt(currentProgress)) gesture=\(gestureRawStateDescription())")
+        stopDragWatchdog()
+        dragOwner = nil
+        beginTransition(toOpen: currentProgress > 0.45, animated: true,
+                        reason: "drag-watchdog", initialVelocityX: 0)
     }
 
     // MARK: - 账户区（B 组 ProviderSessionStatusQuery，签名见报告）
