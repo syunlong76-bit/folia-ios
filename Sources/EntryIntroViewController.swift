@@ -778,16 +778,9 @@ final class EntryIntroViewController: UIViewController {
             // 加）。目标尺寸为横屏形（宽>高）才是本 VC 几何
             // 真落地；场景方向只留在下方 landed 面包屑对账。
             if size.width > size.height {
-                // 淡入 landed 凭据（(59) 硬要求）：起播门若已
-                // 被 timeout-300ms 兜底放行，releasePlaybackGate
-                // 会直接返回——凭据与淡入合流须在此独立补记，
-                // 迟到的横屏落地照样能起跑淡入（黑场等它）。
-                if self.fadeGateSource == nil {
-                    self.fadeGateSource = "landed"
-                    self.seqLandedMs = Self.seqNowMs()
-                }
-                self.releasePlaybackGate(reason: "landed")
-                self.beginOpeningFadeIfReady()
+                // 淡入 landed 凭据（(59) 硬要求）：发放收敛
+                // 到 noteFadeCredential（(66) 热修案 A）。
+                self.noteFadeCredential("landed")
             }
             let orientation = self.view.window?.windowScene?.interfaceOrientation
             let name: String
@@ -799,6 +792,23 @@ final class EntryIntroViewController: UIViewController {
             default: name = "unknown"
             }
             Breadcrumbs.log("entry rotate landed orient=\(name)")
+        }
+    }
+
+    /// (66) 入场黑屏热修（案 A）：呈现完成后的第一个窗口
+    /// 有效时刻复查凭据。(65) 把呈现挪到旋转落地之后，
+    /// viewWillTransition 永不再来；armPlaybackGate 又只在
+    /// viewDidLoad 查一次、彼时 view.window 为 nil 必然落
+    /// 空——两张凭据无人发放，淡入死在 guard、黑场挂死
+    /// （取证 forensics-2026-11-21-entry65-black）。此处
+    /// 场景已横屏且凭据未立时以 already-landscape 发放；
+    /// 仍竖屏（600ms 超时回退路径）则不发，继续由过渡
+    /// 回调的 landed 承重，与 (64) 行为一致。
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !isDismissing, fadeGateSource == nil else { return }
+        if view.window?.windowScene?.interfaceOrientation.isLandscape == true {
+            noteFadeCredential("already-landscape")
         }
     }
 
@@ -1025,15 +1035,30 @@ final class EntryIntroViewController: UIViewController {
     private var playbackGateReleased = false
     private var playbackGateWorkItem: DispatchWorkItem?
 
+    /// (66) 入场黑屏热修（案 A）：淡入凭据发放收敛为一处。
+    /// 置凭据＋记 entry.fade.seq 的 land 时刻，随后放行起
+    /// 播门并显式补调一次淡入合流——补调不可省：起播门已
+    /// 被 timeout-300ms 放行时 releasePlaybackGate 会在
+    /// guard 处直接返回、其内含的合流调用不会执行，此时
+    /// videoReady 若已先置真，全场再无人触发淡入。
+    private func noteFadeCredential(_ source: String) {
+        if fadeGateSource == nil {
+            fadeGateSource = source
+            seqLandedMs = Self.seqNowMs()
+        }
+        releasePlaybackGate(reason: source)
+        beginOpeningFadeIfReady()
+    }
+
     private func armPlaybackGate() {
         guard !playbackGateReleased else { return }
         if view.window?.windowScene?.interfaceOrientation.isLandscape == true {
             // 开场即横屏：无旋转可等，淡入凭据同刻成立
             // （(59)：与 landed 同级，区别只在日志来源名）。
-            // (65) 起 present 已前置等落地，本路径为常态。
-            fadeGateSource = "already-landscape"
-            seqLandedMs = Self.seqNowMs()
-            releasePlaybackGate(reason: "already-landscape")
+            // 注：本函数在 viewDidLoad 调用、彼时 view.window
+            // 尚为 nil，此分支历来落空；(66) 起常态发放点
+            // 是 viewDidAppear 的同名复查（案 A）。
+            noteFadeCredential("already-landscape")
             return
         }
         let work = DispatchWorkItem { [weak self] in
