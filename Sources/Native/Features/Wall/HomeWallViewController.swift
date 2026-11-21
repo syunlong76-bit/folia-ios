@@ -766,11 +766,23 @@ final class HomeWallViewController: UIViewController,
             scrollMetrics.noteIdentityChanged()
             collectionView.reloadData()
             scrollMetrics.noteReloadData()
+        } else {
+            // 平移呈现（3.7 (59) 工作流一）：refreshInstances
+            // 只把新帧写进 attributesCache，而 CV 对已可见
+            // cell 的帧只在布局失效/reload 时才重读——(58) 同
+            // 键路径两者皆无，画面冻结至 rebase 才整屏瞬移
+            // （真机证伪）。同键路径在此显式失效布局：CV 本
+            // 回合布局 pass 重读全部可见属性帧、只换帧不重
+            // 配 cell，位移同帧上屏；prepare 内的二次
+            // refreshInstances 是同键纯帧重建（lattice 恒 0、
+            // 幂等）。跟手第一性优先于省这一趟算术。
+            wallLayout.invalidateLayout()
         }
         isWrapping = false
         scrollMetrics.noteScrollActivity(
             layout: wallLayout,
-            didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000)
+            didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000,
+            panDelta: delta)
     }
 
     // MARK: - 数据源

@@ -237,6 +237,27 @@ enum EntryPosterArt {
 ///   entry rotate unlock / entry rotate portrait request /
 ///   entry rotate portrait landed / entry poster handoff /
 ///   entry poster removed，与录屏时间轴逐点对账。
+/// - 开场黑场淡入（3.7 (59) 工作流二，Miller (58) 真机点名
+///   后按其原话定版：「点进去你可以黑，但是黑一下之后画
+///   面慢慢淡入进来，这样显得丝滑」）：(58) 前的开场是海
+///   画先行——window 层 veil 是海报图、VC 内垫首帧图，点开
+///   先闪一帧油画画面再进视频，且旋转落地瞬间（录屏
+///   1.63–1.77s）有约 130ms 停顿＋一记跳变。改：点开后第
+///   一帧就是纯黑（window 垫与 VC 底同为黑、海报层与视频
+///   层 alpha 皆 0），几何请求维持 (58) 单发＋看门狗、旋
+///   转全程在黑场之下完成；横屏真实落地（landed 凭据，
+///   起播门的 timeout-300ms 兜底只放播放、不放淡入——
+///   (58) 日志实锤其先播竖屏约 0.19s 即录屏一顿）且首帧
+///   已可显示后，视频层以 1.0s curveEaseOut（iOS 系统缓
+///   动、非线性匀速）从黑场淡入，期间视频已在播（起播门
+///   放行时即从第 0 帧 play、边播边淡入），淡入中无亮度
+///   跳变。海报垫底随之改制：开场不再抢第一帧，仅
+///   在淡入完成时恢复为播放期垫底（(57) 防线不变）；退场
+///   沿用 (58)（等墙的 portrait landed、0.6s 上限、淡出盖
+///   住），开/退场视觉语言一致（都经黑/淡过渡）。新增面
+///   包屑 entry fadein begin / entry fadein done dur=1.0；
+///   母带每 5 帧垫一帧是源文件自带（25fps 凑 30fps，主聊
+///   天实测 60/299），播放器侧无解、不在本包范围。
 
 /// 入场播放器预热仓（3.7 (54) 工作流 O）：所有权与生命
 /// 周期——本枚举静态持有预热的 AVPlayer/AVPlayerItem；
@@ -436,26 +457,19 @@ enum EntryIntroPresenter {
         // 完成布局——直溶要求视频层之下就是已布局、首帧将就
         // 绪的主页墙，不许溶到一张还没排版的墙上。
         presenter.view.layoutIfNeeded()
-        // 海报垫同步就位（3.7 (53) 工作流 I）：原实现把 veil
-        // 的创建放进下面 present 的异步回合，且图走
-        // UIImage(contentsOfFile:) 惰性解码——墙露面到 veil
-        // 真正绘出之间隔着一回合 + 首绘解码，黑墙从这条缝漏
-        // 出。改：present 受理即在同步段把预解码海报
-        // （EntryPosterArt）垫进 window 并落 entry.poster.
-        // presented；VC 的呈现仍走原异步回合，时序语义不变。
-        // veil 仍是起播前占位（垫在入场 VC 之下、主页墙之
-        // 上），VC 首帧确认后即撤除（见 clearEntryPoster），
-        // 退场直溶不经它。不拦截触摸：哪怕残留也不会挡住墙
-        // 交互（退场另有兜底移除）。
-        let veil = UIImageView(frame: window.bounds)
-        veil.backgroundColor = EntryPosterArt.dominantColor
-        if let poster = EntryPosterArt.image() {
-            veil.image = poster
-        } else {
-            NSLog("[EntryIntro] entry-poster.jpg missing, veil falls back to poster color")
-        }
-        veil.contentMode = .scaleAspectFill
-        veil.clipsToBounds = true
+        // 黑场垫同步就位（3.7 (53) 工作流 I 立同步垫制、
+        // (59) 工作流二改黑）：present 受理即在同步段把垫层
+        // 放进 window 并落 entry.poster.presented（面包屑名
+        // 沿用、日志口径连续），VC 的呈现仍走原异步回合，
+        // 时序语义不变。(53)/(57) 时代 veil 是海报图——点开
+        // 先闪一帧油画再进视频，正是 (59) 点名要除的闪屏；
+        // 按 Miller 原话规格改纯黑垫：黑场即入场第一帧，VC
+        // 呈现后由其自身黑底接管（见 VC viewDidLoad），旋
+        // 转在黑下完成、视频就绪后 1.0s 淡入（见 VC
+        // beginOpeningFadeIfReady，彼时撤垫）。不拦截触摸：
+        // 哪怕残留也不会挡住墙交互（退场另有兜底移除）。
+        let veil = UIView(frame: window.bounds)
+        veil.backgroundColor = .black
         veil.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         veil.isUserInteractionEnabled = false
         window.addSubview(veil)
@@ -468,8 +482,8 @@ enum EntryIntroPresenter {
             // present 前后各发一发（双保险），日志实证与系统
             // 纠正轮叠成开场两轮旋转、首帧落在翻转中间。(58)
             // 只发这一发：此刻顶层是全向掩码的主页墙、请求可
-            // 被受理，且 window 已同步垫好 veil（不透明油
-            // 画），旋转全程在油画遮盖下进行。发送后武装
+            // 被受理，且 window 已同步垫好 veil（(59) 起为不
+            // 透明黑场），旋转全程在黑场遮盖下进行。发送后武装
             // 200ms 看门狗：未见任何 rotate transition begin
             // 才补发一次（封顶，src=watchdog-retry）；补后仍
             // 无则不再发，由 VC 起播门超时放行收口。落地时刻
@@ -557,10 +571,24 @@ final class EntryIntroViewController: UIViewController {
     /// 提交后由 Presenter 调用 armDissolveGate 置位；未武装
     /// 时 checkDissolveGate 不起叠化。
     private var dissolveArmed = false
-    /// 海报已交接（3.7 (23) 立、(53) 改触发）：首帧渲染确认
-    /// （readyForDisplay）后 veil＋VC 内海报层一并交接，只
-    /// 执行一次；退场先行时由 dismissIntro 置位封口。
-    private var veilCleared = false
+    /// 首帧已可显示（3.7 (59) 工作流二）：readyForDisplay
+    /// 确认后置位，是开场淡入的双条件之一（另一为起播门放
+    /// 行）；只置一次，退场后迟到回调由 isDismissing 封口。
+    private var videoReady = false
+    /// 开场淡入已起跑/已完成（3.7 (59) 工作流二）：起跑后
+    /// 不许重入；完成时海报垫底恢复、view 底色回透明。
+    private var openingFadeBegan = false
+    private var openingFadeDone = false
+    /// 淡入的横屏落地凭据（3.7 (59) 硬要求，(58) 桥日志定
+    /// 案）：与起播门分开记账——(58) 实测起播门被
+    /// timeout-300ms 兜底放行（35.051）、firstframe 落在竖
+    /// 屏几何（35.053），横屏 landed 迟至 35.245，视频在竖
+    /// 屏下先播约 0.19s 再转横，即录屏「切横屏卡一顿」。
+    /// 故：超时兜底只许放行播放（保时间轴/音频），不许放
+    /// 行淡入；本凭据只在真实横屏落地（landed）或开场即横
+    /// 屏（already-landscape）时置位，淡入凭它起跑、日志
+    /// 注明 gate=<来源>。
+    private var fadeGateSource: String?
     /// 本入场激活过音频会话（3.7 (23) 双声纪律）：引擎播放
     /// 中进墙时入场不碰会话（归引擎），此旗标为假；teardown
     /// 只在旗标为真且引擎未播放时才 setActive(false)。
@@ -579,8 +607,10 @@ final class EntryIntroViewController: UIViewController {
         dissolveArmed = true
     }
 
-    /// VC 内海报层（3.7 (53) 工作流 I）：垫在播放器层之下，
-    /// 首帧渲染确认前恒显油画海报，确认后淡出移除。
+    /// VC 内海报层（3.7 (53) 工作流 I 立、(59) 改制）：垫
+    /// 在播放器层之下；(59) 前是开场占位（首帧确认前恒显
+    /// 油画、确认后交接），(59) 起开场让位黑场淡入，本层初
+    /// 始 alpha=0、仅在淡入完成时恢复为播放期垫底。
     private let posterView = UIImageView()
     private let playerView = PlayerLayerView()
     private let closeButton = UIButton(type: .custom)
@@ -633,7 +663,13 @@ final class EntryIntroViewController: UIViewController {
             // 横屏落地放行起播门（3.7 (58) 定稿②）：首帧不再
             // 落在翻转中间；竖屏落地（退场轮）不放行。
             if self.view.window?.windowScene?.interfaceOrientation.isLandscape == true {
+                // 淡入 landed 凭据（(59) 硬要求）：起播门若已
+                // 被 timeout-300ms 兜底放行，releasePlaybackGate
+                // 会直接返回——凭据与淡入合流须在此独立补记，
+                // 迟到的横屏落地照样能起跑淡入（黑场等它）。
+                if self.fadeGateSource == nil { self.fadeGateSource = "landed" }
                 self.releasePlaybackGate(reason: "landed")
+                self.beginOpeningFadeIfReady()
             }
             let orientation = self.view.window?.windowScene?.interfaceOrientation
             let name: String
@@ -660,28 +696,26 @@ final class EntryIntroViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        // 透明背景（3.7 (23) 直溶）：视频层溶出/整面淡出时其
-        // 下直接是主页墙（overFullScreen 保墙在层级内）；起播
-        // 前的空窗由海报垫（window 层、VC 之下）盖住，不靠黑
-        // 底。closeButton 等子视图不受影响。
-        view.backgroundColor = .clear
-        // 海报层（3.7 (53) 工作流 I）：VC 内、播放器层之下的
-        // 油画海报——原设计只有 window 层 veil 一张海报，而
-        // AVPlayerLayer 未出帧时呈不透明黑、又位于 veil 之
-        // 上，海报从未盖住黑窗（(52) 日志 entry show→首帧约
-        // 46ms 全黑即此）。海报改垫进 VC 本层：viewDidLoad
-        // 同步就位（图已由 Presenter 预解码），播放器层背景
-        // 改透明，首帧渲染确认（readyForDisplay）前画面恒为
-        // 海报，确认后淡出交接（见 clearEntryPoster）。
-        // 垫底图 = 视频首帧同图（3.7 (54) 工作流 O）：原海
-        // 报是母带 2.0s 帧、与首帧不同图，交接瞬间内容跳变
-        // 即卡帧观感；改用首帧提取图（缺失才回退海报）。
+        // 黑底开场（3.7 (59) 工作流二）：viewDidLoad 同步即
+        // 黑——黑场就是入场第一帧，其下 window 黑垫（
+        // Presenter）与本底同色无缝；旋转在黑下完成，视频
+        // 就绪后淡入（beginOpeningFadeIfReady）。淡入完成时
+        // 本底改回 .clear，复原 (23) 直溶退场前提（视频层
+        // 溶出/整面淡出时其下直接是主页墙，overFullScreen
+        // 保墙在层级内）。closeButton 等子视图不受影响。
+        view.backgroundColor = .black
+        // 海报层（3.7 (53) 工作流 I 立、(59) 改制）：仍垫在
+        // 播放器层之下、图仍用视频首帧同图（(54) 工作流
+        // O），但开场不再抢第一帧——初始 alpha=0，只在开场
+        // 淡入完成时恢复 alpha=1 降为播放期垫底（(57) 防
+        // 线：播放器层间隙帧露油画不露黑，口径不变）。
         posterView.image = EntryPosterArt.firstFrameImage() ?? EntryPosterArt.image()
         posterView.backgroundColor = EntryPosterArt.dominantColor
         posterView.contentMode = .scaleAspectFill
         posterView.clipsToBounds = true
         posterView.frame = view.bounds
         posterView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        posterView.alpha = 0
         view.addSubview(posterView)
         playerView.playerLayer.videoGravity = .resizeAspectFill
         playerView.playerLayer.backgroundColor = UIColor.clear.cgColor
@@ -690,6 +724,9 @@ final class EntryIntroViewController: UIViewController {
         playerView.isOpaque = false
         playerView.frame = view.bounds
         playerView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        // 视频层初始 alpha=0：自黑场淡入（1.0s，见
+        // beginOpeningFadeIfReady），起播门放行前恒黑。
+        playerView.alpha = 0
         view.addSubview(playerView)
 
         // 关闭按钮：横屏安全区右上角，入场开始即显示；点按 = 立即结束入场。
@@ -763,8 +800,9 @@ final class EntryIntroViewController: UIViewController {
         // 原 veil 撤除挂在周期观察者的 timeControlStatus ==
         // .playing 轮询上，playing 可早于帧真绘出、且轮询有
         // ≤0.1s 迟滞。改 KVO 直达：置真即落 entry.video.
-        // readyForDisplay 并交接海报（clearEntryPoster）；周
-        // 期观察者保留同信号兜底（防 KVO 漏拍）。
+        // readyForDisplay 并尝试起跑开场淡入（(59)：与起播
+        // 门放行双条件合流，见 beginOpeningFadeIfReady）；
+        // 周期观察者保留同信号兜底（防 KVO 漏拍）。
         readyForDisplayObservation = playerView.playerLayer.observe(
             \.isReadyForDisplay, options: [.new]
         ) { [weak self] layer, _ in
@@ -833,7 +871,7 @@ final class EntryIntroViewController: UIViewController {
             // EntryCallbackTimings 登记最大值，teardown 汇总
             // 进 entry framedrops summary 的 top3 caller。
             EntryCallbackTimings.measure("entry.timeObserver") {
-                if !self.veilCleared, self.playerView.playerLayer.isReadyForDisplay {
+                if !self.videoReady, self.playerView.playerLayer.isReadyForDisplay {
                     self.handleVideoReadyForDisplay()
                 }
                 self.noteFirstFrameIfNeeded()
@@ -854,12 +892,18 @@ final class EntryIntroViewController: UIViewController {
     /// 成回调）／300ms 超时（timeout-300ms，请求被系统吞掉
     /// 时不许挂死海报）。放行点落 entry playback gate
     /// released，验收按「firstframe 晚于放行点」判读。
+    /// (59) 分工：本门只管播放；开场淡入另认 fadeGateSource
+    /// 凭据（只认 landed/already-landscape），超时放行不
+    /// 起跑淡入——黑场宁可多等落地，不许竖屏先亮画面。
     private var playbackGateReleased = false
     private var playbackGateWorkItem: DispatchWorkItem?
 
     private func armPlaybackGate() {
         guard !playbackGateReleased else { return }
         if view.window?.windowScene?.interfaceOrientation.isLandscape == true {
+            // 开场即横屏：无旋转可等，淡入凭据同刻成立
+            // （(59)：与 landed 同级，区别只在日志来源名）。
+            fadeGateSource = "already-landscape"
             releasePlaybackGate(reason: "already-landscape")
             return
         }
@@ -878,6 +922,11 @@ final class EntryIntroViewController: UIViewController {
         Breadcrumbs.log("entry playback gate released reason=\(reason)")
         scheduleWatchdog()
         player?.play()
+        // 开场淡入合流（(59)）：本方法只管播放放行；淡入另
+        // 认 fadeGateSource 凭据——timeout-300ms 兜底走到这
+        // 里时凭据未立、本调用为空转，淡入等迟到的 landed
+        // 回调补记凭据后合流（黑场等它，不抢跑）。
+        beginOpeningFadeIfReady()
     }
 
     /// 掉帧量测探针：CADisplayLink 逐帧记间隔。>50ms 的逐次
@@ -962,38 +1011,65 @@ final class EntryIntroViewController: UIViewController {
 
     /// 首帧已可显示（3.7 (53) 工作流 I）：readyForDisplay 的
     /// KVO 与周期观察者兜底共用入口，一次性——落
-    /// entry.video.readyForDisplay 后交接海报。退场已开始时
-    /// 不再触发（防 dismiss 后迟到回调落孤儿面包屑/淡出）。
+    /// entry.video.readyForDisplay 后尝试起跑开场淡入。退场
+    /// 已开始时不再触发（防 dismiss 后迟到回调落孤儿面包
+    /// 屑/淡出）。
     private func handleVideoReadyForDisplay() {
-        guard !veilCleared, !isDismissing else { return }
+        guard !videoReady, !isDismissing else { return }
+        videoReady = true
         Breadcrumbs.log("entry video readyForDisplay")
-        clearEntryPoster()
+        beginOpeningFadeIfReady()
     }
 
-    /// 海报交接（3.7 (53) 工作流 I 立、(57) 工作流 A 改垫底
-    /// 生命周期）：首帧渲染确认后执行一次——window 层 veil
-    /// 即撤（entry.veil.cleared 沿用既有面包屑名）；VC 内海
-    /// 报层不再淡出移除，降为整段播放期的垫底：(55) 录屏
-    /// 实锤交接后播放器层（isOpaque=false＋clear 背景）之下
-    /// 无任何不透明层，几何/合成任一帧间隙直接露黑。垫底
-    /// 恒满 view.bounds、位于播放器层之下，正常播放时被视
-    /// 频帧完全盖住（零视觉变化、零卡帧回归——它不在播放
-    /// 器层之上）；间隙帧露出的是油画本身。同时把播放器
-    /// 层翻为不透明＋海报主色背景：层帧内单帧内容冲刷只露
-    /// 油画色，与垫底构成双层防线。垫底的真正摘除在退场：
-    /// 叠化/循环溶出时与视频层同段淡出（不作中间层独占，
-    /// (23) 两段式教训不回退），整面淡出路径随 view 一并淡
-    /// 出，最终随 teardown 落 entry poster removed。
-    private func clearEntryPoster() {
-        guard !veilCleared else { return }
-        veilCleared = true
+    /// 开场淡入（3.7 (59) 工作流二，Miller 原话规格「点进
+    /// 去你可以黑，黑一下之后画面慢慢淡入进来」）：双条件
+    /// 齐备才起跑——横屏落地凭据已成立（fadeGateSource，
+    /// 只认 landed/already-landscape；起播门的
+    /// timeout-300ms 兜底放行不算数——它只放播放，(58) 日
+    /// 志实锤超时放行后视频在竖屏几何先播约 0.19s 即录屏
+    /// 的切横屏一顿）且首帧已可显示（videoReady）。两侧到
+    /// 达顺序不定，handleVideoReadyForDisplay、起播门放行
+    /// 与 viewWillTransition 的 landed 回调各调一次本方法
+    /// 合流。
+    /// 起跑段（同步）：撤 window 黑垫（entry veil cleared
+    /// 沿用既有面包屑名——VC 黑底已接管整屏，垫无须再留）
+    /// ＋播放器层翻不透明＋海报主色背景（(57) 防线：层帧
+    /// 内单帧冲刷只露油画色）；落 entry fadein begin 并注
+    /// 明 gate=<凭据来源>。
+    /// 动画段：视频层 alpha 0→1、时长 1.0s、curveEaseOut
+    /// （iOS 系统缓动，禁线性匀速）；期间视频已在播——起
+    /// 播门放行时已从第 0 帧 play、边播边淡入，淡入只改
+    /// alpha 不碰播放时钟，中途无亮度跳变。
+    /// 完成段（finished 且未退场）：海报层恢复 alpha=1 降
+    /// 为播放期垫底（(57) 口径：恒满 bounds、位于播放器
+    /// 层之下，正常播放被视频帧完全盖住，间隙帧露油画；
+    /// 退场叠化/溶出时与视频层同段淡出、不作中间层独
+    /// 占），view 底色回 .clear 复原 (23) 直溶前提；落
+    /// entry poster handoff backing=kept 与 entry fadein
+    /// done dur=1.0。被退场打断（finished=false 或
+    /// isDismissing）不落 done，收尾归 teardown。
+    private func beginOpeningFadeIfReady() {
+        guard let gate = fadeGateSource, videoReady,
+              !openingFadeBegan, !isDismissing else { return }
+        openingFadeBegan = true
         exitVeil?.removeFromSuperview()
         exitVeil = nil
         Breadcrumbs.log("entry veil cleared")
         playerView.playerLayer.isOpaque = true
         playerView.playerLayer.backgroundColor = EntryPosterArt.dominantColor.cgColor
         playerView.isOpaque = true
-        Breadcrumbs.log("entry poster handoff backing=kept")
+        Breadcrumbs.log("entry fadein begin dur=1.0 gate=\(gate)")
+        UIView.animate(withDuration: 1.0, delay: 0,
+                       options: [.curveEaseOut], animations: {
+            self.playerView.alpha = 1
+        }, completion: { [weak self] finished in
+            guard let self, finished, !self.isDismissing else { return }
+            self.openingFadeDone = true
+            self.posterView.alpha = 1
+            self.view.backgroundColor = .clear
+            Breadcrumbs.log("entry poster handoff backing=kept")
+            Breadcrumbs.log("entry fadein done dur=1.0")
+        })
     }
 
     /// 引擎在播时静音入场（3.7 (23)，幂等）：起播判定与在播
@@ -1136,11 +1212,12 @@ final class EntryIntroViewController: UIViewController {
 
         // 先把退出要用的对象都摘出来，动画回调里不依赖 self 存活
         let presenter = presentingViewController
-        // 海报垫若还在（起播未确认就退场，如播放失败）：直接
-        // 撤除——(23) 起它只是起播前占位，不参与退场衔接。
-        // (53) 补：置 veilCleared 封住 readyForDisplay 迟到交
-        // 接，防退场后海报淡出/面包屑孤儿触发。
-        veilCleared = true
+        // 黑场垫若还在（淡入未起跑就退场，如播放失败）：直
+        // 接撤除——它只是开场占位，不参与退场衔接。迟到的
+        // readyForDisplay/淡入合流由 isDismissing 在
+        // handleVideoReadyForDisplay 与
+        // beginOpeningFadeIfReady 的 guard 处封口（(59) 起
+        // 代替原 veilCleared 旗标），不落孤儿面包屑。
         exitVeil?.removeFromSuperview()
         exitVeil = nil
         // 本次退场引发的墙露面不重播入场（同一次进墙事件）。

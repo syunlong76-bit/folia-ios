@@ -49,7 +49,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "58"
+        CFBundleVersion: "59"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (53) I 组：启动屏直接垫油画海报图 + 海报主色，冷启第一帧

@@ -1624,7 +1624,14 @@ final class WallPrototypeViewController: UIViewController,
         }
         // (58)：身份判定改用 refreshInstances 返回值（全序列
         // 对比，代指旧 setIdentity 首/尾/计数口径）。
-        if wallLayout.refreshInstances() { collectionView.reloadData() }
+        // (59) 工作流一同修：飞行逐 tick 只写 attributesCache
+        // 时 CV 不重读、画面冻在起点（与滚动同病），身份未变
+        // 时显式失效布局让本 tick 的帧上屏。
+        if wallLayout.refreshInstances() {
+            collectionView.reloadData()
+        } else {
+            wallLayout.invalidateLayout()
+        }
         if raw >= 1 {
             link.invalidate()
             locateLink = nil
@@ -1632,6 +1639,7 @@ final class WallPrototypeViewController: UIViewController,
             // 不留钟形缩放残值给后续展开/歌词锚定。
             wallLayout.worldOrigin = locateTargetOrigin
             wallLayout.refreshInstances()
+            wallLayout.invalidateLayout()
             collectionView.transform = .identity
             Breadcrumbs.log("locate flight spring end")
             let done = locateCompletion
@@ -2012,11 +2020,18 @@ final class WallPrototypeViewController: UIViewController,
             scrollMetrics.noteIdentityChanged()
             collectionView.reloadData()
             scrollMetrics.noteReloadData()
+        } else {
+            // 平移呈现（3.7 (59) 工作流一，与主页墙同修）：同
+            // 键新帧只写进 attributesCache、CV 不重读即冻结，
+            // 须显式失效布局让本回合布局 pass 把帧换上屏
+            // （只换帧不重配 cell，lattice 恒 0）。
+            wallLayout.invalidateLayout()
         }
         isWrapping = false
         scrollMetrics.noteScrollActivity(
             layout: wallLayout,
-            didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000)
+            didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000,
+            panDelta: delta)
         updateLyricOverlayFrame()
     }
 

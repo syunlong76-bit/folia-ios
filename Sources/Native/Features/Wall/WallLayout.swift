@@ -43,6 +43,21 @@ import UIKit
 /// 按定稿「按实际 lattice 密度核定、不许静默超限」落此实现；
 /// 标准验收 fling（≥1200pt/s×1.5s ≈ 2300 世界单位）全程在
 /// 2400 覆盖内、零 rebase。
+///
+/// 呈现通路纠正（3.7 (59) 工作流一，(58) 真机证伪）：(58) 注释
+/// 曾断言「同键只重建 attributesCache、帧算术即平移落点」——
+/// 真机录屏证伪：主页墙静止约 4.5s 后一次性瞬移。定案机制：
+/// UICollectionView 对已可见 cell 的属性帧只在布局失效
+/// （invalidateLayout）或 reloadData 时才重读；同键路径既不
+/// 失效也不 reload（身份恒不变），attributesCache 写得再新也
+/// 没人读——画面冻结，直到漂移超限触发 rebase＋身份变化＋
+/// reloadData 才整屏跳到当前位。(57) 是靠指纹含 worldOrigin、
+/// 每事件重算滑窗集、首/尾/计数频繁变化带来的频繁 reloadData
+/// 掩盖了这一点（代价是每事件全量 lattice 的卡顿）。(59) 修
+/// 法：帧重建照旧（零 lattice），呈现改由 VC 滚动回调在同键
+/// 路径显式 invalidateLayout() 承担——CV 本回合布局pass重读
+/// 全部可见属性帧、只换帧不重配 cell（无 reloadData、无图
+/// 像重载），位移同帧上屏；身份变化路径仍走 reloadData。
 final class WallLayout: UICollectionViewLayout {
 
     var totalEntries: Int = 0
@@ -193,7 +208,10 @@ final class WallLayout: UICollectionViewLayout {
 
     /// 刷新实例集。返回实例身份（instanceId 序列）本次是否
     /// 变化——VC 据此决定 reloadData（身份不变不许 reload：
-    /// 下标→实例映射仍成立、帧已由本方法更新）。三条路径：
+    /// 下标→实例映射仍成立、帧已由本方法更新；但帧更新只是
+    /// 写进 attributesCache，VC 在同键滚动路径还须
+    /// invalidateLayout 让 CV 重读上屏，见类头 (59) 注）。
+    /// 三条路径：
     /// 键变 → 全量重算（数据/类别/展开/缩放事件，非滚动期）；
     /// 同键但漂移超覆盖且未展开 → 同帧 rebase（全量重算到新
     /// 锚，rebaseCount+1）；同键其余 → 纯帧平移（零 lattice
@@ -238,6 +256,15 @@ final class WallLayout: UICollectionViewLayout {
         // 全边距（布局查询rect 恒为可见域本身，边距只防浮点
         // 与档内尺寸微差）。展开态禁 rebase：展开实例可能已
         // 不在新窗内、重算会让展开块凭空消失（定稿口径）。
+        // 呈现位不变式（(59) 代码级保证）：rebase 只换锚点与
+        // 实例集，不写 worldOrigin、不写 contentOffset；而属
+        // 性帧是（tile 世界矩形, worldOrigin, contentOffset）
+        // 的纯函数（见 rebuildAttributes），故 rebase 前后同
+        // 时在集内的 tile 帧逐位相同、屏幕位置不动；当前可见
+        // tile 恒在新锚可见窗 ±900（最小 overscan 档）之内，
+        // 必留集内——rebase 只增删不可见的预取实例，绝不移动
+        // 任何可见内容。身份变化引发的 reloadData 因此只是换
+        // 数据源映射，不是视觉跳变。
         let driftX = abs(worldOrigin.x - anchorOrigin.x)
         let driftY = abs(worldOrigin.y - anchorOrigin.y)
         let limit = CGFloat(cacheOverscan - 120)
@@ -299,6 +326,14 @@ final class WallLayout: UICollectionViewLayout {
 /// (58) 真机判读以本行 lattice=0（滚动窗内）/reload ≤1 次每
 /// 10s 与 p99 ≤ max(16.7ms, 基线p99/2) 的绝对线为准（见交付
 /// 报告判读指南）。
+/// 平移连续性采样（3.7 (59) 工作流一）：同窗另落一行
+/// wall.pan——窗口内 pan 事件数与折叠位移增量（屏幕点，
+/// |dx|/|dy| 分轴累计）。折叠位移即本秒内经帧公式＋
+/// invalidateLayout 实际呈现的内容位移：持续拖动时应逐秒
+/// 都有 events>0 且位移平滑累积；(58) 的故障形态（事件在
+/// 记、画面冻结后瞬移）在本行呈「多秒位移记账正常但
+/// wall.scroll 的 max 间隔巨大」之外，更直接的对照是真机
+/// 录屏——本行与 wall.scroll 同秒对读，证位移连续非阶梯。
 final class WallScrollMetrics: NSObject {
 
     private let wallName: String
@@ -314,6 +349,12 @@ final class WallScrollMetrics: NSObject {
     private var rebaseAtWindowStart = 0
     private var lastActivityAt: CFTimeInterval = 0
     private var active = false
+    /// 平移采样（(59)）：窗口内 pan 事件数与折叠位移增量
+    /// （屏幕点，分轴绝对值累计），随 flush 与 wall.scroll
+    /// 同批落 wall.pan 并清零。
+    private var panEventCount = 0
+    private var panAbsDx: Double = 0
+    private var panAbsDy: Double = 0
 
     init(wallName: String) {
         self.wallName = wallName
@@ -321,11 +362,17 @@ final class WallScrollMetrics: NSObject {
     }
 
     /// 滚动回调每次调：登记活动与本次回调耗时；首次调启动
-    /// 统计窗（快照 lattice/rebase 计数为窗口基线）。
-    func noteScrollActivity(layout: WallLayout, didScrollMs: Double) {
+    /// 统计窗（快照 lattice/rebase 计数为窗口基线）。panDelta
+    /// 是本次回调折叠的位移（屏幕点，offset 复位前的值）——
+    /// (59) 起计入 wall.pan 采样（窗口未启动时也先累计，首
+    /// 次喂入启动窗口后不清零、本窗一并落账）。
+    func noteScrollActivity(layout: WallLayout, didScrollMs: Double, panDelta: CGPoint) {
         let now = CACurrentMediaTime()
         lastActivityAt = now
         if didScrollMs > didScrollMaxMs { didScrollMaxMs = didScrollMs }
+        panEventCount += 1
+        panAbsDx += abs(Double(panDelta.x))
+        panAbsDy += abs(Double(panDelta.y))
         guard !active else { return }
         active = true
         self.layout = layout
@@ -389,6 +436,10 @@ final class WallScrollMetrics: NSObject {
             + " rebase=\(layout.rebaseCount - rebaseAtWindowStart)"
             + " reload=\(reloadCount)"
             + " identityChanged=\(identityChangedInWindow ? 1 : 0)")
+        Breadcrumbs.log("wall.pan wall=\(wallName)"
+            + " events=\(panEventCount)"
+            + " dx=\(Self.fmt(panAbsDx))"
+            + " dy=\(Self.fmt(panAbsDy))")
         windowStart = CACurrentMediaTime()
         intervalsMs = []
         didScrollMaxMs = 0
@@ -396,6 +447,9 @@ final class WallScrollMetrics: NSObject {
         identityChangedInWindow = false
         latticeAtWindowStart = layout.latticeComputeCount
         rebaseAtWindowStart = layout.rebaseCount
+        panEventCount = 0
+        panAbsDx = 0
+        panAbsDy = 0
     }
 
     private static func fmt(_ v: Double) -> String {
