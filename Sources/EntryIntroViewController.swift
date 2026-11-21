@@ -710,7 +710,10 @@ final class EntryIntroViewController: UIViewController {
         // 淡入完成时恢复 alpha=1 降为播放期垫底（(57) 防
         // 线：播放器层间隙帧露油画不露黑，口径不变）。
         posterView.image = EntryPosterArt.firstFrameImage() ?? EntryPosterArt.image()
-        posterView.backgroundColor = EntryPosterArt.dominantColor
+        // (61) 第 2 条：底色改纯黑（原 dominantColor 橄榄绿
+        // #6A7342 在图缺位/未铺满时即平绿画布）——垫底只认海
+        // 报图本体，图外一律黑，与 (59) 黑场第一帧同口径。
+        posterView.backgroundColor = .black
         posterView.contentMode = .scaleAspectFill
         posterView.clipsToBounds = true
         posterView.frame = view.bounds
@@ -806,8 +809,14 @@ final class EntryIntroViewController: UIViewController {
         readyForDisplayObservation = playerView.playerLayer.observe(
             \.isReadyForDisplay, options: [.new]
         ) { [weak self] layer, _ in
-            guard layer.isReadyForDisplay else { return }
-            DispatchQueue.main.async { self?.handleVideoReadyForDisplay() }
+            if layer.isReadyForDisplay {
+                DispatchQueue.main.async { self?.handleVideoReadyForDisplay() }
+            } else {
+                // (61) 第 2 条判别面包屑：readyForDisplay 跌落
+                // （解码迟滞/帧缺位）逐次落 entry gap 行，与循
+                // 环 seek 的 gap 行同窗对账绿窗来源。
+                DispatchQueue.main.async { self?.noteEntryGapStallIfNeeded() }
+            }
         }
         if playerView.playerLayer.isReadyForDisplay {
             handleVideoReadyForDisplay()
@@ -1021,6 +1030,16 @@ final class EntryIntroViewController: UIViewController {
         beginOpeningFadeIfReady()
     }
 
+    /// 帧缺位判别面包屑（3.7 (61) 第 2 条）：readyForDisplay
+    /// 曾置真后跌回 false = 播放中途帧缺位（解码迟滞/预热仓
+    /// 接管竞态），逐次跌落落一行 entry gap reason=stall；
+    /// 从未置真过（起播前）的 false 不算 gap、不落。videoReady
+    /// 锁存不复位（淡入门控口径不动），本方法只记日志。
+    private func noteEntryGapStallIfNeeded() {
+        guard videoReady, !isDismissing else { return }
+        Breadcrumbs.log("entry gap reason=stall ready=0")
+    }
+
     /// 开场淡入（3.7 (59) 工作流二，Miller 原话规格「点进
     /// 去你可以黑，黑一下之后画面慢慢淡入进来」）：双条件
     /// 齐备才起跑——横屏落地凭据已成立（fadeGateSource，
@@ -1033,9 +1052,10 @@ final class EntryIntroViewController: UIViewController {
     /// 合流。
     /// 起跑段（同步）：撤 window 黑垫（entry veil cleared
     /// 沿用既有面包屑名——VC 黑底已接管整屏，垫无须再留）
-    /// ＋播放器层翻不透明＋海报主色背景（(57) 防线：层帧
-    /// 内单帧冲刷只露油画色）；落 entry fadein begin 并注
-    /// 明 gate=<凭据来源>。
+    /// ＋播放器层翻不透明＋纯黑背景（(61) 第 2 条改口径：
+    /// 原 (57) 海报主色 dominantColor #6A7342 在循环 seek/
+    /// 帧缺位时露出成平绿画布，改纯黑、垫底只认海报图本
+    /// 体）；落 entry fadein begin 并注明 gate=<凭据来源>。
     /// 动画段：视频层 alpha 0→1、时长 1.0s、curveEaseOut
     /// （iOS 系统缓动，禁线性匀速）；期间视频已在播——起
     /// 播门放行时已从第 0 帧 play、边播边淡入，淡入只改
@@ -1056,7 +1076,9 @@ final class EntryIntroViewController: UIViewController {
         exitVeil = nil
         Breadcrumbs.log("entry veil cleared")
         playerView.playerLayer.isOpaque = true
-        playerView.playerLayer.backgroundColor = EntryPosterArt.dominantColor.cgColor
+        // (61) 第 2 条：纯黑（不再 dominantColor）；isOpaque=true
+        // 与纯黑不透明底自洽，帧缺位时露黑不露绿。
+        playerView.playerLayer.backgroundColor = UIColor.black.cgColor
         playerView.isOpaque = true
         Breadcrumbs.log("entry fadein begin dur=1.0 gate=\(gate)")
         UIView.animate(withDuration: 1.0, delay: 0,
@@ -1188,6 +1210,10 @@ final class EntryIntroViewController: UIViewController {
             loopCount += 1
             Breadcrumbs.log("entry loop round=\(loopCount)")
             scheduleWatchdog()
+            // (61) 第 2 条判别面包屑：每轮循环 seek 回零各落一
+            // 行 entry gap reason=seek——seek 窗口即帧缺位窗，
+            // 与绿窗时刻同窗出现即坐实 playerLayer 底色来源。
+            Breadcrumbs.log("entry gap reason=seek ready=0")
             player?.seek(to: .zero) { [weak self] _ in
                 guard let self, !self.isDismissing else { return }
                 self.player?.play()
