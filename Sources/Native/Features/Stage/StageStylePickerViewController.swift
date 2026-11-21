@@ -39,7 +39,7 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         header.font = .systemFont(ofSize: 17, weight: .semibold)
         header.textColor = .white
         let note = UILabel()
-        note.text = "标「网页版」的样式会打开网页舞台，样式以网页版当前设置为准。"
+        note.text = "网页样式已全部原生化；带「调参」的样式点右侧按钮打开其专属调参面板。"
         note.font = .systemFont(ofSize: 12)
         note.textColor = UIColor.white.withAlphaComponent(0.55)
         note.numberOfLines = 0
@@ -158,18 +158,52 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         badge.clipsToBounds = true
         badge.sizeToFit()
         let badgeWidth = badge.bounds.width
-        let wrapWidth = badgeWidth + (isActive ? 26 : 0)
+        // 逐样式调参入口（3.7 (57)）：有调参面板的样式在徽章
+        // 左侧加一颗「调参」钮，点按呈现该样式的专属面板
+        // （面板本体由各样式 Tuning 文件提供，本选择器只呈现）。
+        let hasTuning = style.tuningPanelFactory != nil
+        let tuningWidth: CGFloat = hasTuning ? 46 : 0
+        let wrapWidth = tuningWidth + badgeWidth + (isActive ? 26 : 0)
         let wrap = UIView(frame: CGRect(x: 0, y: 0, width: wrapWidth, height: 24))
-        badge.frame = CGRect(x: 0, y: 1, width: badgeWidth, height: 22)
+        if hasTuning {
+            let tuningButton = UIButton(type: .system)
+            tuningButton.setTitle("调参", for: .normal)
+            tuningButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .medium)
+            tuningButton.setTitleColor(UIColor(red: 0.55, green: 0.9, blue: 0.65, alpha: 1), for: .normal)
+            tuningButton.tag = indexPath.row
+            tuningButton.addTarget(self, action: #selector(handleTuningTap(_:)), for: .touchUpInside)
+            tuningButton.frame = CGRect(x: 0, y: 0, width: 40, height: 24)
+            wrap.addSubview(tuningButton)
+        }
+        badge.frame = CGRect(x: tuningWidth, y: 1, width: badgeWidth, height: 22)
         wrap.addSubview(badge)
         if isActive {
             let check = UIImageView(image: UIImage(systemName: "checkmark"))
             check.tintColor = .white
-            check.frame = CGRect(x: badgeWidth + 6, y: 3, width: 18, height: 18)
+            check.frame = CGRect(x: tuningWidth + badgeWidth + 6, y: 3, width: 18, height: 18)
             wrap.addSubview(check)
         }
         cell.accessoryView = wrap
         return cell
+    }
+
+    /// 调参面板呈现（3.7 (57)）：面板自身无关闭钮，统一以
+    /// 导航控制器包裹并给出「完成」——点按即写存储，关掉即
+    /// 回选择器，舞台重挂样式时新参数生效。
+    @objc private func handleTuningTap(_ sender: UIButton) {
+        let style = styles[sender.tag]
+        guard let makePanel = style.tuningPanelFactory else { return }
+        let panel = makePanel()
+        panel.title = style.displayName + "调参"
+        let nav = UINavigationController(rootViewController: panel)
+        panel.navigationItem.rightBarButtonItem = UIBarButtonItem(
+            barButtonSystemItem: .done, target: self,
+            action: #selector(handleTuningDone))
+        present(nav, animated: true)
+    }
+
+    @objc private func handleTuningDone() {
+        dismiss(animated: true)
     }
 
     // MARK: UITableViewDelegate

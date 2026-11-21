@@ -232,42 +232,58 @@ struct LyricStageStyleInfo {
     let styleVersion: Int
     let isNativeAvailable: Bool
     let factory: (() -> LyricStageRenderer)?
+    /// 逐样式调参面板工厂（3.7 (57) 接线）：非空时选择器在该
+    /// 样式行给出「调参」入口。只增字段（默认 nil），不属渲
+    /// 染方冻结面（渲染器不消费本结构体），故不递增协议版本。
+    let tuningPanelFactory: (() -> UIViewController)? = nil
 
     var sourceTag: String { "stage.\(id)" }
 }
 
-/// 样式注册表（已迁 8：classic、partita（(26)）与 cadenza、fume、
-/// tilt、claddagh、cappella、still（(33) A 档全量）；另加原创
-/// 三稿 tuning/corridor/afterglow（(40)，styleVersion 1）；其余
-/// 9 个只登记元数据，供选择器全量展示与「网页版」跳转）。选择器
+/// 样式注册表（网页 17 样式已全量原生化：classic、partita（(26)）
+/// 与 cadenza、fume、tilt、claddagh、cappella、still（(33) A 档）
+/// 为早期迁移，(57) 补齐 sonnet/tempera/lumiere/hanabi/machi/
+/// nebbia/pendolo/diorama 八样式并为六个仿写样式（cadenza/
+/// partita/fume/tilt/claddagh/cappella）按网页源码重对齐
+/// （styleVersion 3）；另加原创三稿 tuning/corridor/afterglow
+/// （(40)）与 petconcert（(53)）。各样式逐样式调参面板经
+/// tuningPanelFactory 挂选择器。选择器
 /// （StageStylePickerViewController）与 StageStyleStore 均直接
 /// 读本表，StageViewController 经 info.factory 分发渲染器，三
 /// 处无需另行登记。
 enum LyricStageRegistry {
     static let allStyles: [LyricStageStyleInfo] = [
-        .init(id: "sonnet",   displayName: "商籁", order: 10,  styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "tempera",  displayName: "凝彩", order: 20,  styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "lumiere",  displayName: "绘光", order: 25,  styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "hanabi",   displayName: "花火", order: 26,  styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "machi",    displayName: "町景", order: 27,  styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "nebbia",   displayName: "雾笺", order: 29,  styleVersion: 1, isNativeAvailable: false, factory: nil),
+        .init(id: "sonnet",   displayName: "商籁", order: 10,  styleVersion: 1, isNativeAvailable: true,
+              factory: { SonnetStageRenderer() }, tuningPanelFactory: { SonnetTuning.makePanel() }),
+        .init(id: "tempera",  displayName: "凝彩", order: 20,  styleVersion: 1, isNativeAvailable: true,
+              factory: { TemperaStageRenderer() }, tuningPanelFactory: { TemperaTuning.makePanel() }),
+        .init(id: "lumiere",  displayName: "绘光", order: 25,  styleVersion: 1, isNativeAvailable: true,
+              factory: { LumiereStageRenderer() }, tuningPanelFactory: { LumiereTuning.makePanel() }),
+        .init(id: "hanabi",   displayName: "花火", order: 26,  styleVersion: 1, isNativeAvailable: true,
+              factory: { HanabiStageRenderer() }, tuningPanelFactory: { HanabiTuning.makePanel() }),
+        .init(id: "machi",    displayName: "町景", order: 27,  styleVersion: 1, isNativeAvailable: true,
+              factory: { MachiStageRenderer() }, tuningPanelFactory: { MachiTuning.makePanel() }),
+        .init(id: "nebbia",   displayName: "雾笺", order: 29,  styleVersion: 1, isNativeAvailable: true,
+              factory: { NebbiaStageRenderer() }, tuningPanelFactory: { NebbiaTuning.makePanel() }),
         .init(id: "classic",  displayName: "流光", order: 30,  styleVersion: 2, isNativeAvailable: true,
               factory: { ClassicStageRenderer() }),
-        .init(id: "cadenza",  displayName: "心象", order: 40,  styleVersion: 2, isNativeAvailable: true,
-              factory: { CadenzaStageRenderer() }),
-        .init(id: "partita",  displayName: "云阶", order: 50,  styleVersion: 2, isNativeAvailable: true,
-              factory: { PartitaStageRenderer() }),
-        .init(id: "fume",     displayName: "浮名", order: 60,  styleVersion: 2, isNativeAvailable: true,
-              factory: { FumeStageRenderer() }),
-        .init(id: "tilt",     displayName: "倾诉", order: 70,  styleVersion: 2, isNativeAvailable: true,
-              factory: { TiltStageRenderer() }),
-        .init(id: "claddagh", displayName: "回环", order: 80,  styleVersion: 2, isNativeAvailable: true,
-              factory: { CladdaghStageRenderer() }),
+        .init(id: "cadenza",  displayName: "心象", order: 40,  styleVersion: 3, isNativeAvailable: true,
+              factory: { CadenzaStageRenderer() }, tuningPanelFactory: { CadenzaTuning.makePanel() }),
+        .init(id: "partita",  displayName: "云阶", order: 50,  styleVersion: 3, isNativeAvailable: true,
+              factory: { PartitaStageRenderer() }, tuningPanelFactory: { PartitaTuning.makePanel() }),
+        .init(id: "fume",     displayName: "浮名", order: 60,  styleVersion: 3, isNativeAvailable: true,
+              factory: { FumeStageRenderer() }, tuningPanelFactory: { FumeTuning.makePanel() }),
+        .init(id: "tilt",     displayName: "倾诉", order: 70,  styleVersion: 3, isNativeAvailable: true,
+              factory: { TiltStageRenderer() }, tuningPanelFactory: { TiltTuning.makePanel() }),
+        .init(id: "claddagh", displayName: "回环", order: 80,  styleVersion: 3, isNativeAvailable: true,
+              factory: { CladdaghStageRenderer() }, tuningPanelFactory: { CladdaghTuning.makePanel() }),
         .init(id: "monet",    displayName: "莫奈", order: 90,  styleVersion: 1, isNativeAvailable: true,  factory: { MonetStageRenderer() }),
-        .init(id: "pendolo",  displayName: "时计", order: 100, styleVersion: 1, isNativeAvailable: false, factory: nil),
-        .init(id: "cappella", displayName: "群唱", order: 110, styleVersion: 2, isNativeAvailable: true,
-              factory: { CappellaStageRenderer() }),
-        .init(id: "diorama",  displayName: "镜台", order: 120, styleVersion: 1, isNativeAvailable: false, factory: nil),
+        .init(id: "pendolo",  displayName: "时计", order: 100, styleVersion: 1, isNativeAvailable: true,
+              factory: { PendoloStageRenderer() }, tuningPanelFactory: { PendoloTuning.makePanel() }),
+        .init(id: "cappella", displayName: "群唱", order: 110, styleVersion: 3, isNativeAvailable: true,
+              factory: { CappellaStageRenderer() }, tuningPanelFactory: { CappellaTuning.makePanel() }),
+        .init(id: "diorama",  displayName: "镜台", order: 120, styleVersion: 1, isNativeAvailable: true,
+              factory: { DioramaStageRenderer() }, tuningPanelFactory: { DioramaTuning.makePanel() }),
         .init(id: "still",    displayName: "静止", order: 130, styleVersion: 2, isNativeAvailable: true,
               factory: { StillStageRenderer() }),
         .init(id: "tuning",   displayName: "调频", order: 140, styleVersion: 1, isNativeAvailable: true,
