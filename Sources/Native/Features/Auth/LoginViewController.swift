@@ -280,7 +280,7 @@ final class LoginViewController: UIViewController {
                       status.loggedIn else { return }
                 NativeSessionStore.shared.saveProfile(
                     provider: .netease, accountId: status.userId,
-                    displayName: status.nickname, avatarURLString: nil)
+                    displayName: status.nickname, avatarURLString: status.avatarURL)
             case .qq:
                 guard let cookie = NativeSessionStore.shared.qqCookieString(),
                       let profile = try? await self.qqClient.fetchLoginStatus(cookie: cookie)
@@ -486,6 +486,18 @@ final class LoginViewController: UIViewController {
         Breadcrumbs.log("login.qr.success len=\(value.count) hash=\(NativeSessionStore.hash8(value))")
         await MainActor.run {
             NativeDataClient.shared.adoptNativeSession(value)
+        }
+        // (61) WA 4②：扫码落盘即补真资料（含 avatarUrl），不再
+        // 等下次打开登录页 enrich——失败静默，会话已收编、成功
+        // 语义不变，资料下次 enrichProfile 再补。
+        if let status = try? await NativeDataClient.shared.fetchLoginStatus(),
+           status.loggedIn {
+            NativeSessionStore.shared.saveProfile(
+                provider: .netease, accountId: status.userId,
+                displayName: status.nickname, avatarURLString: status.avatarURL)
+            Breadcrumbs.log("login.qr.profile avatar=\(status.avatarURL != nil ? 1 : 0)")
+        }
+        await MainActor.run {
             self.handleLoginSuccess(gen: gen)
         }
         return .done
