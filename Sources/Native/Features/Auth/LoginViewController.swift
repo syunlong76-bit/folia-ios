@@ -265,7 +265,10 @@ final class LoginViewController: UIViewController {
                 }
             }
         }
-        if status.isLoggedIn && status.displayName == nil {
+        // (62) 尾波第 3 组：门控放宽——昵称或头像任一缺失都补。
+        // 旧门控只看 displayName，存量用户昵称非空时 enrich 永
+        // 不触发、资料缓存的 avatarURL 键永不回填（avatar=0 定因）。
+        if status.isLoggedIn && (status.displayName == nil || status.avatarURL == nil) {
             enrichProfile(for: provider)
         }
     }
@@ -730,6 +733,13 @@ final class LoginViewController: UIViewController {
             return .fatal
         }
         Breadcrumbs.log("login.kugou.success len=\(value.count) hash=\(NativeSessionStore.hash8(value))")
+        // (62) 尾波第 3 组：saveProfile 已改合并语义（nil=不改
+        // 字段），新会话先显式全清旧资料再只存 accountId，防上
+        // 一账号的昵称/头像在 detail 复核失败时残留串号（旧整
+        // 表覆盖写时代靠覆盖顺带清，此处改显式）。
+        NativeSessionStore.shared.saveProfile(
+            provider: .kugou, accountId: nil, displayName: nil,
+            avatarURLString: nil)
         NativeSessionStore.shared.saveProfile(
             provider: .kugou, accountId: userId, displayName: nil,
             avatarURLString: nil)

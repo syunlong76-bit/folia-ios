@@ -63,6 +63,10 @@ private final class SweepLyricLineView: UIView {
     private let dimLabel = UILabel()
     private let brightLabel = UILabel()
     private let maskLayer = CALayer()
+    /// 整行文本宽缓存（(62) 尾波第 4 组）：setText 时一次量
+    /// 好，updateMask 与逐字进度逐帧只读——旧实现每帧约 4 次
+    /// 整行 NSString shaping/量宽，是歌词条拖动卡帧主因之一。
+    private(set) var cachedTextWidth: CGFloat = 0
     var progress: Double = 0 {
         didSet { if progress != oldValue { updateMask() } }
     }
@@ -98,6 +102,15 @@ private final class SweepLyricLineView: UIView {
     func setText(_ attributed: NSAttributedString) {
         dimLabel.attributedText = attributed
         brightLabel.attributedText = attributed
+        // 整行宽一次量好缓存（量宽口径与旧 updateMask 逐帧量
+        // 宽逐字一致：同一属性集、ceil 取整）。
+        if attributed.length > 0 {
+            let attrs = attributed.attributes(at: 0, effectiveRange: nil)
+            cachedTextWidth = ceil((attributed.string as NSString)
+                .size(withAttributes: attrs).width)
+        } else {
+            cachedTextWidth = 0
+        }
         updateMask()
     }
 
@@ -113,6 +126,12 @@ private final class SweepLyricLineView: UIView {
         super.layoutSubviews()
         dimLabel.frame = bounds
         brightLabel.frame = bounds
+        // (62) 尾波第 4 组：阴影给静态路径——歌词条拖动跟随时
+        // 标签 frame 逐帧变，无 shadowPath 的阴影须逐帧离屏重
+        // 栅格；bounds 即阴影形状（整行矩形），布局时设一次。
+        let path = UIBezierPath(rect: bounds).cgPath
+        dimLabel.layer.shadowPath = path
+        brightLabel.layer.shadowPath = path
         updateMask()
     }
 
@@ -122,8 +141,7 @@ private final class SweepLyricLineView: UIView {
             maskLayer.frame = .zero
             return
         }
-        let attrs = text.attributes(at: 0, effectiveRange: nil)
-        let textWidth = ceil((text.string as NSString).size(withAttributes: attrs).width)
+        let textWidth = cachedTextWidth
         let span = min(textWidth, bounds.width)
         let startX = textWidth >= bounds.width ? 0 : (bounds.width - textWidth) / 2
         maskLayer.frame = CGRect(x: startX, y: 0,
@@ -175,6 +193,13 @@ final class LyricWindowView: UIView {
     /// 当前行逐字戳（YRC 派生，3.7 (19)）：非 nil 时扫光按逐字
     /// 真戳推进；nil = 行级 LRC 路径，维持线性插值。
     private var sweepWords: [LyricWordStamp]?
+    /// 逐字前缀宽表（(62) 尾波第 4 组）：renderLyricWindow 时
+    /// 按当前逐字戳一次算好——sweepPrefixWidths[i] = 前 i 个
+    /// 词拼串的宽（[0]=0、共 words.count+1 项），sweepWord-
+    /// Widths[i] = 第 i 词自身宽。逐帧进度只查表做乘法，量
+    /// 宽次数从每帧约 3 次降到每行渲染 1 轮。
+    private var sweepPrefixWidths: [CGFloat] = []
+    private var sweepWordWidths: [CGFloat] = []
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -331,6 +356,24 @@ final class LyricWindowView: UIView {
                 label.alpha = alphas[row]
             }
         }
+        // 逐字前缀宽表随本次渲染一并算好（量宽口径与旧逐帧
+        // 路径一致：前缀整体量宽而非逐字累加，避免字距重复
+        // 计入）。字号随宽度变化重渲染时表自动重建。
+        if let words = sweepWords, !words.isEmpty {
+            var prefix: [CGFloat] = [0]
+            var widths: [CGFloat] = []
+            var acc = ""
+            for word in words {
+                widths.append(lyricSweepView.measuredWidth(of: word.text))
+                acc += word.text
+                prefix.append(lyricSweepView.measuredWidth(of: acc))
+            }
+            sweepPrefixWidths = prefix
+            sweepWordWidths = widths
+        } else {
+            sweepPrefixWidths = []
+            sweepWordWidths = []
+        }
     }
 
     /// Songti 排版（唱片内页感）：当前行粗体 + 字距 1.2，邻行细体
@@ -387,13 +430,38 @@ final class LyricWindowView: UIView {
         if p >= 1 { stopSweep() }
     }
 
-    /// 逐字进度：已唱前缀按扫光行同一字体属性量宽（前缀整体
-    /// 量宽而非逐字累加，避免字距重复计入），当前字按时长
-    /// 比例折算；分母为整行文本宽，与 mask 的 span 口径一致。
+    /// 逐字进度：已唱前缀宽＋当前字按时长比例折算，占整行
+    /// 文本宽的比例即 mask 进度（分母与 mask 的 span 口径一
+    /// 致）。(62) 尾波第 4 组：分子分母全走缓存表（整行宽在
+    /// SweepLyricLineView.setText 量好、前缀/词宽在 render-
+    /// LyricWindow 量好），逐帧零量宽；表与当前戳不齐（极端
+    /// 时序下表未建）时回落旧逐帧量宽路径，口径不变。
     private func wordSweepProgress(words: [LyricWordStamp], now: Double) -> Double {
-        let fullText = lyricTexts.count > 2 ? lyricTexts[2] : ""
-        let total = lyricSweepView.measuredWidth(of: fullText)
+        let total = lyricSweepView.cachedTextWidth
         guard total > 0 else { return 0 }
+        guard sweepPrefixWidths.count == words.count + 1,
+              sweepWordWidths.count == words.count else {
+            return wordSweepProgressMeasured(words: words, now: now, total: total)
+        }
+        for (i, word) in words.enumerated() {
+            if now >= word.start + word.duration { continue }
+            if now >= word.start {
+                let frac = (now - word.start) / word.duration
+                let width = sweepPrefixWidths[i]
+                    + sweepWordWidths[i] * CGFloat(frac)
+                return min(max(Double(width / total), 0), 1)
+            }
+            // now 还没到本词：已唱即前 i 词前缀。
+            return min(max(Double(sweepPrefixWidths[i] / total), 0), 1)
+        }
+        // 全部唱完：分子＝全词拼串宽（表中末项）。
+        return min(max(Double(sweepPrefixWidths[words.count] / total), 0), 1)
+    }
+
+    /// 逐字进度的逐帧量宽回落路径（旧实现，口径基准）：只在
+    /// 前缀宽表未建时用。
+    private func wordSweepProgressMeasured(words: [LyricWordStamp], now: Double,
+                                           total: CGFloat) -> Double {
         var sung = ""
         for word in words {
             if now >= word.start + word.duration {
@@ -457,7 +525,12 @@ final class LyricWindowView: UIView {
             let frame = CGRect(x: 0, y: CGFloat(row) * lyricLineHeight,
                                width: clipWidth, height: lyricLineHeight)
             if row == 2 { lyricSweepView.frame = frame }
-            else { lyricPlainLabels[row]?.frame = frame }
+            else if let label = lyricPlainLabels[row] {
+                label.frame = frame
+                // (62) 尾波第 4 组：邻行标签阴影同样给静态路
+                // 径（整行矩形），免拖动跟随时逐帧离屏重栅格。
+                label.layer.shadowPath = UIBezierPath(rect: label.bounds).cgPath
+            }
         }
     }
 

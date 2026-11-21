@@ -172,6 +172,8 @@ final class QueueManager: ObservableObject {
 
     /// 当前队列处于「冷启恢复态」（已回填、未装载）。
     private(set) var hasRestoredQueue = false
+    /// 队列来源歌单 id（(62) 尾波第 5 组，setQueue 覆写）。
+    private(set) var sourcePlaylistId: String?
 
     /// 队列变更边沿调用：写快照；空队列清键。
     private func persistQueueSnapshot() {
@@ -387,13 +389,19 @@ final class QueueManager: ObservableObject {
 
     /// source（DS26 丙路线最小埋点）：队列变更来源标记，进桥日志，
     /// 日后若真出现队列竞争，凭来源/时序即可判责，不必再猜。
-    func setQueue(_ tracks: [FoliaTrack], startingAt index: Int = 0, source: String = "core") {
+    /// sourcePlaylistId（(62) 尾波第 5 组）：仅歌单墙起播时由
+    /// WallPrototype 传入，其余来源恒 nil（每次 setQueue 覆写、
+    /// 不传即清）——主页墙封面单击「回封面播放页」靠它找当前
+    /// 曲的来源歌单，不可知时定位放弃（locate-miss）。
+    func setQueue(_ tracks: [FoliaTrack], startingAt index: Int = 0, source: String = "core",
+                  sourcePlaylistId: String? = nil) {
         runOnMain { [weak self] in
             guard let self else { return }
             FoliaBridgeLogStore.shared.write(
                 level: "info", module: "queue",
                 message: "setQueue source=\(source) count=\(tracks.count) start=\(index)")
             Breadcrumbs.log("setQueue n=\(tracks.count) at=\(index) src=\(source)")
+            self.sourcePlaylistId = sourcePlaylistId
             // 真实点播接管：恢复态作废（本入口自会装载）。
             self.hasRestoredQueue = false
             self.queue = tracks
