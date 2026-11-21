@@ -1216,7 +1216,7 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
     switch kind {
     case "kiku":
         let core = Int((Double(n) * 0.2).rounded())
-        let main = n - core
+        let main = max(0, n - core)
         let k = 3.2
         for i in 0..<main {
             let (dx, dy, dz) = sphere(i, main)
@@ -1239,7 +1239,7 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
         flash(0, 0, 0, R * 1.1, c0, 0.36)
     case "botan":
         let core = Int((Double(n) * 0.22).rounded())
-        let main = n - core
+        let main = max(0, n - core)
         let k = 3.6
         for i in 0..<main {
             let (dx, dy, dz) = sphere(i, main, 0.12)
@@ -1313,7 +1313,7 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
         let k = 3.4
         let outer = Int((Double(n) * 0.7).rounded())
         let inner = Int((Double(n) * 0.2).rounded())
-        let core = n - outer - inner
+        let core = max(0, n - outer - inner)
         func ringOf(_ count: Int, _ reach: Double, _ color: Int,
                     _ size: Double, _ lifeLow: Double) {
             for i in 0..<count {
@@ -1367,7 +1367,7 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
                 trail: 0.04 + trailK * 0.1, segments: 1, fadeTail: 0.25,
                 twinkle: twinkleK))
         }
-        let core = n - outline
+        let core = max(0, n - outline)
         for i in 0..<core {
             let (dx, dy, dz) = sphere(i, max(1, core))
             let speed = R * k * 0.15
@@ -1468,7 +1468,7 @@ private func hanabiPlanBurst(event: HanabiBurstEvent, palette: HanabiPaletteData
         flash(0, 0, 0, R * 0.6, silver, 0.24)
     case "willow-ring":
         let inner = Int((Double(n) * 0.35).rounded())
-        let outer = n - inner
+        let outer = max(0, n - inner)
         let gold = hanabiMixColor(c1, HANABI_GOLD, 0.7)
         for i in 0..<inner {
             let (dx, dy) = planar(cos(hanabiTAU * Double(i) / Double(max(inner, 1))),
@@ -3895,7 +3895,7 @@ final class HanabiStageRenderer: LyricStageRenderer {
                                            mode: tuning.colorMode)
         if let basePalette { backdropHex = hanabiBackdropOf(basePalette) }
         updateSky(tuning: tuning)
-        let key = snapshot.track?.id ?? "" + "|"
+        let key = (snapshot.track?.id ?? "") + "|"
             + snapshot.lines.map { "\($0.id):\($0.start)" }.joined(separator: ",")
         if key != programKey {
             programKey = key
