@@ -717,9 +717,7 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         // 行自身的 presentation 层 y 与模型 y 差 <0.5pt 首次达
         // 成（审查修复：原判定读 focusIndex 行，与 pending 行
         // 不保证同行、会系统性偏早）。
-        if let pending = probeUpPending67,
-           lineViews.indices.contains(pending) {
-            let pendingView = lineViews[pending]
+        if let pending = probeUpPending67, let pendingView = lineViews[pending] {
             let presented = pendingView.layer.presentation()?.position.y
                 ?? pendingView.layer.position.y
             if abs(presented - pendingView.layer.position.y) < 0.5 {
