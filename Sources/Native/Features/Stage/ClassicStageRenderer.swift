@@ -100,6 +100,10 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
         }
         let idx = Self.activeIndex(in: snapshot.lines, at: position)
         if idx != activeLineId {
+            // §0 呈现侧（3.7 (67) B 组）：直达型样式提交即收敛，
+            // flip.cmt/flip.up 同点落盘作零追赶基线。
+            Breadcrumbs.log("flip.cmt style=classic idx=\(idx ?? -1) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+            Breadcrumbs.log("flip.up style=classic idx=\(idx ?? -1) judge=\(SyncProbe67.fmt(position))")
             transitionLine(to: idx, position: position)
         }
         for word in wordViews { word.update(position: position) }

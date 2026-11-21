@@ -126,6 +126,17 @@ final class StageViewController: UIViewController {
     private var context: LyricStageContext!
     private var renderer: LyricStageRenderer?
     private var activeStyleId: String = LyricStageRegistry.defaultStyleId
+    /// 网页运行嵌入态（3.7 (67) A2/A4）：当前以网页运行呈现
+    /// 的样式 id（nil=原生呈现）；webBackingRenderer 是淡换期
+    /// 间垫底的旧原生渲染器，回执/超时淡换完成后才拆。
+    private var webEmbedStyleId: String?
+    private weak var webBackingRenderer: LyricStageRenderer?
+    private var webSwapGeneration = 0
+    private var webFadeWorkItem: DispatchWorkItem?
+    /// §0 量测节流（3.7 (67) B 组）：tick.pos 每 30 帧一行、
+    /// sync.per5 每 5 秒一行。
+    private var syncProbeTickCount = 0
+    private var lastSyncPer5At: CFTimeInterval = 0
     private var anchor = PlaybackAnchor(
         trackId: "", positionAtAnchor: 0,
         wallTimeAtAnchor: CACurrentMediaTime(), rate: 0, anchorSeq: 0)
@@ -359,7 +370,11 @@ final class StageViewController: UIViewController {
         guard let info = LyricStageRegistry.info(for: draw.styleId) else { return }
         StageStyleStore.currentStyleId = draw.styleId
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        showStyleCycleToast(name: info.displayName)
+        // 网页运行标注不丢（3.7 (67) A3）：袋中网页运行样式
+        // 在轮换浮签上同样明示。
+        let toastName = info.displayName
+            + (StageRuntimeStore.isWeb(draw.styleId) ? " · 网页运行" : "")
+        showStyleCycleToast(name: toastName)
         Breadcrumbs.log("style.cycle.switch source=\(source) from=\(from) to=\(draw.styleId)"
             + " round=\(draw.round) remaining=\(draw.remaining)")
         if info.isNativeAvailable {
@@ -467,6 +482,10 @@ final class StageViewController: UIViewController {
         // 样式三击轮换（3.7 (61) 第 6 条）：rendererContainer
         // 三击切特效；（54) 的 5 秒长按已退役。
         installStyleCycleRecognizers()
+        // 网页运行首帧回执（3.7 (67) A4）：桥转交本台处理淡换。
+        WebEffectBridge.shared.onStyleFrame = { [weak self] styleId in
+            self?.handleWebStyleFrame(styleId)
+        }
         context = LyricStageContext(
             sendCommand: { [weak self] command in self?.handleCommand(command) },
             currentAnchor: { [weak self] in
@@ -631,6 +650,9 @@ final class StageViewController: UIViewController {
         settleTimer?.invalidate()
         settleTimer = nil
         settleReanchorAt = nil
+        // 网页运行嵌入收尾（3.7 (67) A2）：WebView 摘回桥侧
+        // （页面不销毁，全屏网页舞台仍可复用同一实例）。
+        detachWebEmbed()
         lyricsTask?.cancel()
         backdropTask?.cancel()
         renderer?.setLifecycle(.destroyed, active: false)
@@ -1031,6 +1053,12 @@ final class StageViewController: UIViewController {
     }
 
     private func mountRenderer(styleId: String) {
+        // 网页运行（3.7 (67) A2）：运行位为网页的样式不建原生
+        // 渲染器，WebView 常驻进 rendererContainer 同级呈现。
+        if StageRuntimeStore.isWeb(styleId) {
+            mountWebRenderer(styleId: styleId)
+            return
+        }
         guard let info = LyricStageRegistry.info(for: styleId),
               let factory = info.factory else {
             // 已迁样式却拿不到工厂 = 装配异常，走回退不硬撑。
@@ -1099,6 +1127,11 @@ final class StageViewController: UIViewController {
         styleProofFramesOK = false
         styleProofLyricsApplied =
             currentTrackId.flatMap { linesCache[$0] } != nil
+        // §0 估算器来源（3.7 (67) B 组）：浮名/回环/莫奈三式
+        // 绕开统一 singingRatio 收口走私有估算（plan §0 定性），
+        // 其余原生样式走统一收口；判读按本行分组。
+        let privateEstimators: Set<String> = ["fume", "claddagh", "monet"]
+        Breadcrumbs.log("est.src style=\(styleId) est=\(privateEstimators.contains(styleId) ? "private" : "unified")")
     }
 
     /// 防卡死守卫证明结算（3.7 (45) R-4）：三路证明共用此
@@ -1124,6 +1157,17 @@ final class StageViewController: UIViewController {
         // phase=ready 为常规换装；出口落 swap.done 对位。
         Breadcrumbs.logSync("swap.begin phase=\(asmPhase63)"
             + " from=\(activeStyleId) to=\(styleId)")
+        // 网页运行分流（3.7 (67) A2）：目标式运行位为网页时走
+        // 嵌入淡换（旧帧垫底、首帧回执放行），不走原生换装链。
+        if StageRuntimeStore.isWeb(styleId) {
+            swapToWebRenderer(styleId: styleId)
+            refreshStyleButton()
+            Breadcrumbs.log("swap.done phase=\(asmPhase63) to=\(styleId)")
+            return
+        }
+        // 网页运行 → 原生：原生层在网页层之上装配（既有转场），
+        // 落定后摘网页层（detachWebEmbed 延后一拍执行）。
+        let leavingWebEmbed = webEmbedStyleId != nil
         // (62) INT-13：样式切换转场接线（WD StyleSwapTransition62
         // 帮助类）——旧层快照淡出 + 新层首帧淡入（系统弹簧）。
         let swapTransition = StyleSwapTransition62(container: rendererContainer)
@@ -1135,14 +1179,135 @@ final class StageViewController: UIViewController {
         activeStyleId = styleId
         mountRenderer(styleId: styleId)
         swapTransition.finish(newView: renderer?.view)
+        if leavingWebEmbed {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                self?.detachWebEmbed()
+            }
+        }
         refreshStyleButton()
         Breadcrumbs.log("stage gate style switch to=\(styleId)")
         Breadcrumbs.log("swap.done phase=\(asmPhase63) to=\(styleId)")
     }
 
+    // MARK: 网页运行嵌入（3.7 (67) A2/A4）
+
+    /// 开台初始装配·网页运行：无旧帧垫底，WebView 先藏（alpha
+    /// 0），首帧回执或超时后淡入——与换装淡换同一出口。
+    private func mountWebRenderer(styleId: String) {
+        embedWebView()
+        WebEffectBridge.shared.webView.alpha = 0
+        webEmbedStyleId = styleId
+        WebEffectBridge.shared.isEmbeddedInStage = true
+        WebEffectBridge.shared.pushSnapshot()
+        WebEffectBridge.shared.pushVisual(lyricMode: styleId, backgroundMode: nil)
+        armWebFade(backing: nil)
+        Breadcrumbs.log("webfx.mount style=\(styleId) via=initial \(StyleOpenTrace.memoryFields())")
+        Breadcrumbs.log("est.src style=\(styleId) est=web")
+    }
+
+    /// 换装·网页运行：原生→网页时旧渲染器留作垫底（淡换完成
+    /// 才拆）；网页→网页时页面自切（WebView 已在台面、alpha
+    /// 保持），回执只作量测与留痕。
+    private func swapToWebRenderer(styleId: String) {
+        if webEmbedStyleId == styleId {
+            WebEffectBridge.shared.pushVisual(lyricMode: styleId, backgroundMode: nil)
+            return
+        }
+        let backing = renderer
+        activeStyleId = styleId
+        embedWebView()
+        if backing != nil {
+            WebEffectBridge.shared.webView.alpha = 0
+        }
+        webEmbedStyleId = styleId
+        WebEffectBridge.shared.isEmbeddedInStage = true
+        WebEffectBridge.shared.pushSnapshot()
+        WebEffectBridge.shared.pushVisual(lyricMode: styleId, backgroundMode: nil)
+        armWebFade(backing: backing)
+        Breadcrumbs.log("webfx.mount style=\(styleId) via=swap \(StyleOpenTrace.memoryFields())")
+        Breadcrumbs.log("est.src style=\(styleId) est=web")
+    }
+
+    /// WebView 嵌入 rendererContainer（与原生渲染器同级）：
+    /// 交互全关——手势穿透回原生台面（三击轮换等识别器挂在
+    /// container 上，照常收触）。
+    private func embedWebView() {
+        let webView = WebEffectBridge.shared.webView
+        if webView.superview !== rendererContainer {
+            webView.removeFromSuperview()
+            rendererContainer.addSubview(webView)
+            webView.frame = rendererContainer.bounds
+            webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        }
+        webView.isUserInteractionEnabled = false
+        rendererContainer.bringSubviewToFront(webView)
+    }
+
+    /// 淡换武装：回执（handleWebStyleFrame）或 1.8 秒超时任一
+    /// 先到即淡换。超时取 1.8s 而非审计的 600ms：网页侧慢样式
+    /// 首帧等待上限 FIRST_FRAME_LIMIT_MS=1500ms，600ms 会在
+    /// 浮名等慢样式上抢跑露空档；旧帧全程垫底、不黑等。
+    private func armWebFade(backing: LyricStageRenderer?) {
+        webBackingRenderer = backing
+        webSwapGeneration += 1
+        let generation = webSwapGeneration
+        webFadeWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, generation == self.webSwapGeneration else { return }
+            Breadcrumbs.log("webfx.ackto style=\(self.webEmbedStyleId ?? "-")")
+            self.completeWebFade(generation: generation, via: "timeout")
+        }
+        webFadeWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: work)
+    }
+
+    private func handleWebStyleFrame(_ styleId: String) {
+        guard styleId == webEmbedStyleId, webFadeWorkItem != nil else { return }
+        completeWebFade(generation: webSwapGeneration, via: "ack")
+    }
+
+    /// 淡换出口：网页层 0.35s easeOut 淡入，完成后拆垫底的
+    /// 原生渲染器（汪汪队迁移等生命周期随 unmount 自然结算）。
+    private func completeWebFade(generation: Int, via: String) {
+        guard generation == webSwapGeneration, webEmbedStyleId != nil else { return }
+        webFadeWorkItem?.cancel()
+        webFadeWorkItem = nil
+        Breadcrumbs.log("webfx.fade via=\(via) style=\(webEmbedStyleId ?? "-")")
+        let webView = WebEffectBridge.shared.webView
+        UIView.animate(withDuration: 0.35, delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState]) {
+            webView.alpha = 1
+        } completion: { [weak self] _ in
+            guard let self, generation == self.webSwapGeneration,
+                  let old = self.webBackingRenderer else { return }
+            self.webBackingRenderer = nil
+            old.setLifecycle(.destroyed, active: false)
+            old.unmount()
+            old.view.removeFromSuperview()
+            if self.renderer === old { self.renderer = nil }
+        }
+    }
+
+    /// 摘嵌：WebView 回桥侧待命（页面不销毁），嵌入态清零。
+    private func detachWebEmbed() {
+        webFadeWorkItem?.cancel()
+        webFadeWorkItem = nil
+        webSwapGeneration += 1
+        webBackingRenderer = nil
+        guard webEmbedStyleId != nil else { return }
+        let webView = WebEffectBridge.shared.webView
+        if webView.superview === rendererContainer {
+            webView.removeFromSuperview()
+        }
+        WebEffectBridge.shared.isEmbeddedInStage = false
+        webEmbedStyleId = nil
+    }
+
     private func refreshStyleButton() {
         let name = LyricStageRegistry.info(for: activeStyleId)?.displayName ?? activeStyleId
-        styleButton.setTitle("样式 · \(name)", for: .normal)
+        // 网页运行标注（3.7 (67) A3）：胶囊明示当前式在网页运行。
+        let suffix = StageRuntimeStore.isWeb(activeStyleId) ? " · 网页运行" : ""
+        styleButton.setTitle("样式 · \(name)\(suffix)", for: .normal)
         view.setNeedsLayout()
     }
 
@@ -1283,6 +1448,11 @@ final class StageViewController: UIViewController {
             // 两处一致才算管线全通）。
             let wordLines = lines.filter { $0.words != nil }.count
             Breadcrumbs.log("stage lrc parsed track=\(trackId) lines=\(lines.count) source=\(entry.source) wordLines=\(wordLines)")
+            // §0 扫光相位来源（3.7 (67) B 组）：无戳行的词分布
+            // 由 r（singingRatio）合成——相位误差的来源点在此
+            // 记账（r 值＋wordSrc 分组），与 sync.probe sweep50
+            // 的实测过线时刻对位判读。
+            Breadcrumbs.log("sweep.ph src=parser track=\(trackId) r=\(SyncProbe67.fmt(entry.singingRatio)) src=\(SyncProbe67.wordSource(of: lines)) lines=\(lines.count)")
             self.noteStyleProofLyricsApplied()
             self.pushSnapshot()
             // 贴纸层（3.7 (24)，纯新增钩子）：取词落定。
@@ -1380,6 +1550,10 @@ final class StageViewController: UIViewController {
             rate: engine.isPlaying ? 1 : 0,
             anchorSeq: anchor.anchorSeq + 1)
         Breadcrumbs.log("stage anchor pos=\(String(format: "%.3f", raw)) cacheDelta=\(String(format: "%.3f", raw - engine.currentTime)) seq=\(anchor.anchorSeq)")
+        // §0 出声基准·锚点采样（3.7 (67) B 组）：起播/切歌/播停
+        // 与漂移重锚各一行，route/outLat/ioBuf 与 raw 同行对位。
+        let af0 = SyncProbe67.audioFields()
+        Breadcrumbs.log("sync.snd0 arm=\(armSettle ? 1 : 0) raw=\(SyncProbe67.fmt(raw)) route=\(af0.route) outLat=\(SyncProbe67.fmt(af0.outLat)) ioBuf=\(SyncProbe67.fmt(af0.ioBuf)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
         if armSettle {
             settleRearmCount = 0
             if engine.isPlaying, LyricTiming.settleReanchorEnabled {
@@ -1428,6 +1602,10 @@ final class StageViewController: UIViewController {
         let drift = raw - extrapolated
         reanchor()
         Breadcrumbs.log("stage settle drift=\(String(format: "%.3f", drift)) engine=\(String(format: "%.3f", engine.currentTime)) raw=\(String(format: "%.3f", raw)) extrapolated=\(String(format: "%.3f", extrapolated))")
+        // §0 出声基准·settle 补读（3.7 (67) B 组）：现行 settle
+        // 行同点补 outLat/route，判读恒定偏移时先扣出声延迟。
+        let afS = SyncProbe67.audioFields()
+        Breadcrumbs.log("sync.setl drift=\(SyncProbe67.fmt(drift)) judge=\(SyncProbe67.fmt(extrapolated)) raw=\(SyncProbe67.fmt(raw)) route=\(afS.route) outLat=\(SyncProbe67.fmt(afS.outLat))")
     }
 
     private func positionNow() -> TimeInterval {
@@ -1624,6 +1802,12 @@ final class StageViewController: UIViewController {
                     info, reason: "picker web style \(info.id)")
             }
         }
+        picker.onPickRuntime = { [weak self] styleId in
+            guard let self else { return }
+            self.dismiss(animated: true) { [weak self] in
+                self?.applyNativeStyleSelection(styleId)
+            }
+        }
         picker.onOpenWebStage = { [weak self] in
             guard let self else { return }
             self.dismiss(animated: true) { [weak self] in
@@ -1756,6 +1940,12 @@ final class StageViewController: UIViewController {
             self.dismiss(animated: true) { [weak self] in
                 self?.applyWebStyleSelection(
                     info, reason: "palette web style \(info.id)")
+            }
+        }
+        picker.onPickRuntime = { [weak self] styleId in
+            guard let self else { return }
+            self.dismiss(animated: true) { [weak self] in
+                self?.applyNativeStyleSelection(styleId)
             }
         }
         picker.onOpenWebStage = { [weak self] in
@@ -2554,6 +2744,21 @@ final class StageViewController: UIViewController {
         lastFrameTimestamp = link.timestamp
         let position = positionNow()
         logStageLineIfChanged(position: position)
+        // §0 呈现钟采样（3.7 (67) B 组）：tick.pos 每 30 帧一行
+        // （0.5s@60fps，全量逐 tick 会淹没 2MB 日志环）；sync
+        // .per5 每 5 秒一行判漂移（judge−raw 趋势＋出声读数）。
+        syncProbeTickCount += 1
+        if syncProbeTickCount % 30 == 0 {
+            Breadcrumbs.log("tick.pos pos=\(SyncProbe67.fmt(position)) raw=\(SyncProbe67.fmt(engine.rawPlayhead())) wall=\(SyncProbe67.fmt(link.timestamp)) style=\(activeStyleId)")
+        }
+        if link.timestamp - lastSyncPer5At >= 5 {
+            lastSyncPer5At = link.timestamp
+            let af5 = SyncProbe67.audioFields()
+            let raw5 = engine.rawPlayhead()
+            let src5 = currentTrackId.flatMap { linesCache[$0] }
+                .map { SyncProbe67.wordSource(of: $0) } ?? "none"
+            Breadcrumbs.log("sync.per5 judge=\(SyncProbe67.fmt(position)) raw=\(SyncProbe67.fmt(raw5)) dJudge=\(SyncProbe67.fmt(raw5 - position)) route=\(af5.route) outLat=\(SyncProbe67.fmt(af5.outLat)) src=\(src5) style=\(activeStyleId) wall=\(SyncProbe67.fmt(link.timestamp))")
+        }
         renderer?.frameTick(position: position)
         // (62) 声线追踪：开启时逐帧喂电平近似线（无真实频谱源，见视图头注）。
         if SettingsStore.soundTracingEnabled {
@@ -2670,6 +2875,13 @@ final class StageViewController: UIViewController {
             // wall = CACurrentMediaTime 墙钟戳；两探针的
             // judgeNow − rawPlayhead 差值可比对恒定偏移。
             Breadcrumbs.log("sync.probe kind=judge track=\(track.id) lineIdx=\(idx) lineStart=\(String(format: "%.3f", lines[idx].start)) judgeNow=\(String(format: "%.3f", position)) rawPlayhead=\(String(format: "%.3f", engine.rawPlayhead())) wall=\(String(format: "%.3f", CACurrentMediaTime()))")
+            // §0 出声基准·翻行同帧（3.7 (67) B 组）：judge/raw
+            // 与出声估计 sndEst 同行落盘，dJudge/dSnd 分开判读
+            // （呈现钟偏差 vs 出声链偏差），按 wordSrc 分组。
+            let afF = SyncProbe67.audioFields()
+            let rawF = engine.rawPlayhead()
+            let sndEst = rawF - afF.outLat
+            Breadcrumbs.log("sync.snd idx=\(idx) judge=\(SyncProbe67.fmt(position)) raw=\(SyncProbe67.fmt(rawF)) sndEst=\(SyncProbe67.fmt(sndEst)) dJudge=\(SyncProbe67.fmt(position - lines[idx].start)) dSnd=\(SyncProbe67.fmt(sndEst - lines[idx].start)) route=\(afF.route) outLat=\(SyncProbe67.fmt(afF.outLat)) ioBuf=\(SyncProbe67.fmt(afF.ioBuf)) src=\(SyncProbe67.wordSource(of: lines)) style=\(activeStyleId) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
         }
     }
 

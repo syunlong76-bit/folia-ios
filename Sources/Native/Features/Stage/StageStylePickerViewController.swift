@@ -15,6 +15,9 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
 
     var onPickNative: ((String) -> Void)?
     var onPickWeb: ((LyricStageStyleInfo) -> Void)?
+    /// 运行位切换后且切换的是当前样式（3.7 (67) A3）：舞台据此
+    /// 立即按新运行位重呈现；非当前样式只落存储、选择器自刷新。
+    var onPickRuntime: ((String) -> Void)?
     var onOpenWebStage: (() -> Void)?
     var onPickCustomBackground: (() -> Void)?
     var onClearCustomBackground: (() -> Void)?
@@ -39,7 +42,7 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         header.font = .systemFont(ofSize: 17, weight: .semibold)
         header.textColor = .white
         let note = UILabel()
-        note.text = "网页样式已全部原生化；带「调参」的样式点右侧按钮打开其专属调参面板。"
+        note.text = "网页样式可逐式切换运行方式：「网页运行」＝在原生台面内嵌网页原版特效，点样式名即以当前运行方式打开；带「调参」的样式点右侧按钮打开其专属调参面板。"
         note.font = .systemFont(ofSize: 12)
         note.textColor = UIColor.white.withAlphaComponent(0.55)
         note.numberOfLines = 0
@@ -174,14 +177,19 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         cell.selectionStyle = locked ? .none : .default
         cell.isUserInteractionEnabled = true
         let isActive = style.id == activeStyleId && !locked
+        // 运行位徽标（3.7 (67) A3）：网页 17 式按当前运行位标
+        // 「原生」/「网页运行」；自有样式恒「原生」。
+        let isWebRuntime = StageRuntimeStore.isWeb(style.id)
         let badge = UILabel()
-        badge.text = locked ? " 锁 " : (style.isNativeAvailable ? " 原生 " : " 网页版 ")
+        badge.text = locked ? " 锁 " : (isWebRuntime ? " 网页运行 " : (style.isNativeAvailable ? " 原生 " : " 网页版 "))
         badge.font = .systemFont(ofSize: 11, weight: .medium)
         badge.textColor = locked
             ? UIColor.white.withAlphaComponent(0.45)
-            : (style.isNativeAvailable
-                ? UIColor(red: 0.55, green: 0.9, blue: 0.65, alpha: 1)
-                : UIColor.white.withAlphaComponent(0.55))
+            : (isWebRuntime
+                ? UIColor(red: 1.0, green: 0.78, blue: 0.42, alpha: 1)
+                : (style.isNativeAvailable
+                    ? UIColor(red: 0.55, green: 0.9, blue: 0.65, alpha: 1)
+                    : UIColor.white.withAlphaComponent(0.55)))
         badge.layer.borderWidth = 1
         badge.layer.borderColor = badge.textColor.cgColor
         badge.layer.cornerRadius = 7
@@ -194,8 +202,22 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
         // (60) 第 4 条：锁定样式的调参入口一并禁用（置灰不可点）。
         let hasTuning = style.tuningPanelFactory != nil
         let tuningWidth: CGFloat = hasTuning ? 46 : 0
-        let wrapWidth = tuningWidth + badgeWidth + (isActive ? 26 : 0)
+        // 运行位切换钮（3.7 (67) A3）：仅网页 17 式且未锁定才有；
+        // 钮面写目标运行方式（当前原生→「网页」，当前网页→「原生」）。
+        let hasRuntimeToggle = style.hasWebRuntime && !locked
+        let runtimeWidth: CGFloat = hasRuntimeToggle ? 40 : 0
+        let wrapWidth = runtimeWidth + tuningWidth + badgeWidth + (isActive ? 26 : 0)
         let wrap = UIView(frame: CGRect(x: 0, y: 0, width: wrapWidth, height: 24))
+        if hasRuntimeToggle {
+            let runtimeButton = UIButton(type: .system)
+            runtimeButton.setTitle(isWebRuntime ? "原生" : "网页", for: .normal)
+            runtimeButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .medium)
+            runtimeButton.setTitleColor(UIColor(red: 1.0, green: 0.78, blue: 0.42, alpha: 1), for: .normal)
+            runtimeButton.tag = indexPath.row
+            runtimeButton.addTarget(self, action: #selector(handleRuntimeTap(_:)), for: .touchUpInside)
+            runtimeButton.frame = CGRect(x: 0, y: 0, width: 40, height: 24)
+            wrap.addSubview(runtimeButton)
+        }
         if hasTuning {
             let tuningButton = UIButton(type: .system)
             tuningButton.setTitle("调参", for: .normal)
@@ -205,19 +227,34 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
             tuningButton.isEnabled = !locked
             tuningButton.tag = indexPath.row
             tuningButton.addTarget(self, action: #selector(handleTuningTap(_:)), for: .touchUpInside)
-            tuningButton.frame = CGRect(x: 0, y: 0, width: 40, height: 24)
+            tuningButton.frame = CGRect(x: runtimeWidth, y: 0, width: 40, height: 24)
             wrap.addSubview(tuningButton)
         }
-        badge.frame = CGRect(x: tuningWidth, y: 1, width: badgeWidth, height: 22)
+        badge.frame = CGRect(x: runtimeWidth + tuningWidth, y: 1, width: badgeWidth, height: 22)
         wrap.addSubview(badge)
         if isActive {
             let check = UIImageView(image: UIImage(systemName: "checkmark"))
             check.tintColor = .white
-            check.frame = CGRect(x: tuningWidth + badgeWidth + 6, y: 3, width: 18, height: 18)
+            check.frame = CGRect(x: runtimeWidth + tuningWidth + badgeWidth + 6, y: 3, width: 18, height: 18)
             wrap.addSubview(check)
         }
         cell.accessoryView = wrap
         return cell
+    }
+
+    /// 运行位切换（3.7 (67) A3）：落 StageRuntimeStore 持久化；
+    /// 切的是当前样式时经 onPickRuntime 让舞台立即重呈现，其余
+    /// 只刷新本行徽标。
+    @objc private func handleRuntimeTap(_ sender: UIButton) {
+        let style = styles[sender.tag]
+        guard style.hasWebRuntime, !style.isLocked else { return }
+        let next: StageRuntime = StageRuntimeStore.isWeb(style.id) ? .native : .web
+        StageRuntimeStore.setRuntime(next, for: style.id)
+        if style.id == activeStyleId {
+            onPickRuntime?(style.id)
+        } else {
+            tableView.reloadData()
+        }
     }
 
     /// 调参面板呈现（3.7 (57)）：面板自身无关闭钮，统一以

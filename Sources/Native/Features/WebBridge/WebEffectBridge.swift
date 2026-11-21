@@ -86,6 +86,21 @@ struct WebSnapshotDTO: Codable {
         let backgroundMode: String // "web" | "native-scene"
         let palette: [String: String]
     }
+    /// 逐字载荷（3.7 (67) A5，只增字段）：原生已合并的逐行词表，
+    /// 词戳已 rebase 到 LRC 行界，与原生舞台同源同时刻；无 YRC
+    /// 的行 words 为 nil，网页侧按 LRC 同口径合成。旧版网页忽略
+    /// 本字段不报错。
+    struct WordLine: Codable {
+        struct Word: Codable {
+            let s: Double
+            let d: Double
+            let w: String
+        }
+        let t: Double
+        let e: Double
+        let text: String
+        let words: [Word]?
+    }
 
     let track: Track?
     let lrc: String
@@ -109,6 +124,8 @@ struct WebSnapshotDTO: Codable {
     /// 快照采样时刻（epoch 毫秒，与网页 Date.now() 同钟）：网页据此扣除
     /// evaluateJavaScript 的投递延迟，锚点不再系统性慢半拍。
     let epochMs: Double
+    /// 逐字载荷（3.7 (67) A5）：当前曲的逐行词表；未取到/无词时 nil。
+    let wlines: [WordLine]?
 }
 
 // MARK: - 滚动日志（native-arch.md §9 第六批：沙盒 2MB 双文件轮换 + Xcode Console）
@@ -451,6 +468,22 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     private var lastKnownTime: TimeInterval = 0
     /// 歌词缓存（track id -> LRC 文本）；失败也记 ""，避免反复请求。
     private var lyricsCache: [String: String] = [:]
+    /// 逐字载荷缓存（track id -> 逐行词表，3.7 (67) A5）：与
+    /// lyricsCache 同一取词路径（LyricRepository.Entry）填充。
+    private var wordLinesCache: [String: [WebSnapshotDTO.WordLine]] = [:]
+    /// 台面内嵌态（3.7 (67) A2/A6）：网页特效层正嵌在原生舞台
+    /// 台面时为真（StageViewController 装/卸时置位）。进程被杀
+    /// 的看门狗与重载后样式补推都只在嵌入态额外动作。
+    var isEmbeddedInStage = false
+    /// 样式首帧回执回调（3.7 (67) A4）：StageViewController 等
+    /// 淡换时挂，桥收到 styleFrame 消息即转交并落 webfx.frame。
+    var onStyleFrame: ((String) -> Void)?
+    /// 最近一次由原生指定的网页样式（重载后补推用）与下发时刻
+    /// （首帧回执延迟量测用）。
+    private var lastDesignatedWebStyle: String?
+    private var lastVisualPushAt: CFTimeInterval = 0
+    /// §0 网页通路量测节流（webfx.per5 每 5 秒一行）。
+    private var lastBridgePer5At: CFTimeInterval = 0
     /// 上次发给页面的 buffering 值（变化才发）。
     private var lastBufferingState: Bool?
 
@@ -1319,7 +1352,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             queueTotal: window.total,
             queueOffset: window.offset,
             seekSeq: seekSeq,
-            epochMs: Date().timeIntervalSince1970 * 1000)
+            epochMs: Date().timeIntervalSince1970 * 1000,
+            wlines: track.flatMap { wordLinesCache[$0.id] })
         guard let data = try? JSONEncoder().encode(dto),
         let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
             logStore.write(level: "error", module: "bridge", message: "snapshot encode failed")
@@ -1346,6 +1380,16 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             let entry = await LyricRepository.shared.entry(for: track.id)
             DispatchQueue.main.async {
                 self.lyricsCache[track.id] = entry.lrcText
+                // 逐字载荷（3.7 (67) A5）：同一 Entry 的合并行表
+                // 转桥 DTO；wordSrc 口径与仓库判读一致（全行有
+                // 戳=yrc、无戳=uniform、混合=mixed）。
+                let wordLines = Self.wordLines(from: entry, duration: track.duration)
+                self.wordLinesCache[track.id] = wordLines
+                let withWords = entry.lines.filter { $0.words != nil }.count
+                let wordSrc = entry.lines.isEmpty ? "none"
+                    : withWords == 0 ? "uniform"
+                    : withWords == entry.lines.count ? "yrc" : "mixed"
+                Breadcrumbs.log("bridge.wlines n=\(wordLines.count) w=\(withWords) src=\(wordSrc)")
                 if PlaybackEngine.shared.currentTrack?.id == track.id {
                     self.pushLyricsEvent()
                 }
@@ -1376,13 +1420,41 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         ])
     }
 
+    /// Entry 合并行表 → 桥逐字载荷：行尾取下一行行首；末行取
+    /// 词尾与曲长兜底（与网页 parseLRC 的行尾估计同口径域）。
+    private static func wordLines(
+        from entry: LyricRepository.Entry, duration: TimeInterval
+    ) -> [WebSnapshotDTO.WordLine] {
+        let lines = entry.lines
+        return lines.enumerated().map { idx, line in
+            let nextStart = idx + 1 < lines.count ? lines[idx + 1].time : nil
+            let wordsEnd = line.words?.map { $0.start + $0.duration }.max()
+            let end = nextStart ?? wordsEnd ?? max(line.time, duration)
+            return WebSnapshotDTO.WordLine(
+                t: line.time, e: max(end, line.time), text: line.text,
+                words: line.words?.map {
+                    WebSnapshotDTO.WordLine.Word(s: $0.start, d: $0.duration, w: $0.text)
+                })
+        }
+    }
+
     /// 歌词文本变化（歌词后到 / 切换译文时调这个）。
     func pushLyricsEvent() {
         guard let track = PlaybackEngine.shared.currentTrack else { return}
-        dispatchToJS(.lyrics, payload: [
+        var payload: [String: Any] = [
                 "trackId": track.id,
                 "lrc": lyricsProvider?(track) ?? lyricsCache[track.id] ?? "",
-        ])
+        ]
+        if let wordLines = wordLinesCache[track.id] {
+            payload["wlines"] = wordLines.map { line in
+                var dict: [String: Any] = ["t": line.t, "e": line.e, "text": line.text]
+                if let words = line.words {
+                    dict["words"] = words.map { ["s": $0.s, "d": $0.d, "w": $0.w] }
+                }
+                return dict
+            }
+        }
+        dispatchToJS(.lyrics, payload: payload)
     }
 
     /// 主题变化（播放页背景归属切换 web/native-scene 时调这个）。
@@ -1403,6 +1475,13 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         if let lyricMode { payload["lyricMode"] = lyricMode }
         if let backgroundMode { payload["backgroundMode"] = backgroundMode }
         guard !payload.isEmpty else { return }
+        if let lyricMode {
+            // (67) A4/A7 量测与补推账：记最近指定样式与下发时刻，
+            // styleFrame 回执据此算端到端延迟；进程重载后据此补推。
+            lastDesignatedWebStyle = lyricMode
+            lastVisualPushAt = CACurrentMediaTime()
+            Breadcrumbs.log("webfx.push style=\(lyricMode)")
+        }
         dispatchToJS(.visual, payload: payload)
     }
 
@@ -1462,6 +1541,13 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                 "t": time, "rate": currentRate,
                 "epochMs": Date().timeIntervalSince1970 * 1000, "seekSeq": seekSeq,
         ])
+        // §0 网页通路量测（3.7 (67) B 组）：每 5 秒一行桥锚点
+        // 采样——t/epochMs/seekSeq 与网页侧日志对位算投递延迟。
+        let now = CACurrentMediaTime()
+        if now - lastBridgePer5At >= 5 {
+            lastBridgePer5At = now
+            Breadcrumbs.log("webfx.per5 t=\(String(format: "%.3f", time)) seq=\(seekSeq) wall=\(String(format: "%.3f", now))")
+        }
     }
 
     private func queueSummary() -> [WebSnapshotDTO.QueueItem] {
@@ -1707,6 +1793,14 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             // 外观状态以特效面 store 为唯一真源（它自带持久化），原生仅记录、
             // 不回改、不回推 visual 事件，防两边互相覆盖。
             logStore.write(level: "info", module: "bridge", message: "visualChanged (record only)")
+        case "styleFrame":
+            // 样式首帧回执（3.7 (67) A4）：指定样式已画出第一帧，
+            // 原生据此放行台面淡换；dt 为 visual 下发→回执端到端。
+            let styleId = (body["styleId"] as? String) ?? ""
+            let dtMs = lastVisualPushAt > 0
+                ? (CACurrentMediaTime() - lastVisualPushAt) * 1000 : -1
+            Breadcrumbs.log("webfx.frame style=\(styleId) dt=\(String(format: "%.0f", dtMs))")
+            onStyleFrame?(styleId)
         default:
             break
         }
@@ -1794,6 +1888,13 @@ extension WebEffectBridge: WKNavigationDelegate {
         }
         // 恢复统一走全量快照。
         pushSnapshot()
+        // 嵌入台面重载恢复（3.7 (67) A6）：快照不带 visual 指令，
+        // 页面自持久化的样式可能与原生当前指定不一致——嵌入态
+        // 下把最近指定样式补推一次，台面不落回网页上次自选。
+        if isEmbeddedInStage, let designated = lastDesignatedWebStyle {
+            Breadcrumbs.log("webfx.repush style=\(designated)")
+            pushVisual(lyricMode: designated, backgroundMode: nil)
+        }
         // 终止重载的页面：快照之后补发视图恢复（3.6 (4)），把用户带回
         // 被杀前所在的集合页而不是停在首页。延时 0.9 秒等页面 App 挂载
         // 与恢复 hook 注册；桥脚本有暂存兜底，早到也不会丢。
@@ -1839,6 +1940,11 @@ extension WebEffectBridge: WKNavigationDelegate {
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         // M1 阶段 1：导航协调器记账（表面归属不变，恢复链仍走桥侧既有逻辑）。
         NavigationCoordinator.shared.noteWebProcessTerminated()
+        // 嵌入台面看门狗（3.7 (67) A6）：嵌入态被杀单独落屑，
+        // 与既有退避重载链对位判读（重载＋didFinish 补推闭环）。
+        if isEmbeddedInStage {
+            Breadcrumbs.log("webfx.kill style=\(lastDesignatedWebStyle ?? "-")")
+        }
         isPageLoaded = false
         lastSentRenderActive = nil
         unackedEvent = nil

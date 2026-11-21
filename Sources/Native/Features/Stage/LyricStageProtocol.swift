@@ -254,6 +254,14 @@ struct LyricStageStyleInfo {
     /// 流去网页舞台，等于换个地方能用。
     var isLocked: Bool = false
 
+    /// 网页运行位（3.7 (67) A3，只增计算属性）：本样式在网页
+    /// 端有原版实现（网页 17 式），可在原生台面内嵌网页运行
+    /// （运行位由 StageRuntimeStore 按式持久化、缺省原生）。
+    /// 自有样式（原创三稿＋汪汪队）无网页实现，恒原生。
+    var hasWebRuntime: Bool {
+        !["tuning", "corridor", "afterglow", "petconcert"].contains(id)
+    }
+
     var sourceTag: String { "stage.\(id)" }
 }
 

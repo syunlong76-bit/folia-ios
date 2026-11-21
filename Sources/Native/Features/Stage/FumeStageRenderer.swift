@@ -438,6 +438,8 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
     /// mask，不再是混色实线；键为 bgLayers 下标。
     private var bgGradientLayers: [Int: CAGradientLayer] = [:]
     private var lastTickWall: TimeInterval? = nil
+    /// §0 量测（3.7 (67) B 组）：上一帧行号（flip.cmt 记账）。
+    private var probeLine67: Int = -1
     private var lastOverviewRestore: Double = 0
 
     override init() {
@@ -493,6 +495,15 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
         var lineIndex = -1
         for (index, line) in snapshot.lines.enumerated() {
             if line.start <= position { lineIndex = index } else { break }
+        }
+        // §0 呈现侧（3.7 (67) B 组）：翻行提交点。flip.up 未落：
+        // 相机目标在 FumeCameraState.step 内部计算、不对外暴露，
+        // 收敛 ε 判定需改相机模块接口——留待量测判读轮立项。
+        if lineIndex != probeLine67 {
+            probeLine67 = lineIndex
+            if lineIndex >= 0 {
+                Breadcrumbs.log("flip.cmt style=fume idx=\(lineIndex) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+            }
         }
 
         lastOverviewRestore = cameraState.step(

@@ -489,6 +489,8 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     private var prevTickPosition: TimeInterval = -1
     private var focusIndex = 0
     private var activeIndex: Int?
+    /// §0 量测（3.7 (67) B 组）：待收敛的行（flip.up 记账）。
+    private var probeUpPending67: Int? = nil
     private var manualFocus: Int?
     private var appliedPanSteps = 0
     private var lastInteractionAt: CFTimeInterval = 0
@@ -681,6 +683,12 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         }
         var needsLayout = false
         if resolved.active != activeIndex {
+            // §0 呈现侧（3.7 (67) B 组）：翻行提交点；收敛看焦
+            // 点行轨道弹簧 presentation 层落回模型位 ε 内。
+            if let newActive = resolved.active {
+                Breadcrumbs.log("flip.cmt style=monet idx=\(newActive) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+                probeUpPending67 = newActive
+            }
             activeIndex = resolved.active
             needsLayout = true
         }
@@ -705,6 +713,16 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                                incoming: incomingField, duration: 1.0)
         }
         particleView.tick()
+        // §0 呈现侧（3.7 (67) B 组）：轨道弹簧收敛点——焦点行
+        // presentation 层 y 与模型 y 差 <0.5pt 首次达成。
+        if let pending = probeUpPending67, let focusView = lineViews[focusIndex] {
+            let presented = focusView.layer.presentation()?.position.y
+                ?? focusView.layer.position.y
+            if abs(presented - focusView.layer.position.y) < 0.5 {
+                probeUpPending67 = nil
+                Breadcrumbs.log("flip.up style=monet idx=\(pending) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+            }
+        }
         if let current = activeIndex, let lineView = lineViews[current] {
             lineView.updateSweep(position: position, lineEnd: lines[current].end)
         }

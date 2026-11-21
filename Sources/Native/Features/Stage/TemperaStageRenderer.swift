@@ -1290,6 +1290,8 @@ final class TemperaStageRenderer: LyricStageRenderer {
     private var currentShotView: TemperaShotView?
     private var outgoingShotView: TemperaShotView?
     private var currentShotIndex: Int? = nil
+    /// §0 量测（3.7 (67) B 组）：待收敛的 shot（flip.up 记账）。
+    private var probeUpPending67: Int? = nil
     /// 层图（3.7 (62) C4 做真）：layerImages placement 真消费——
     /// 每 shot 按 layerImageFrequency 的种子概率决定是否挂图，
     /// layerImageDepth 决定在 shot 之下（back）/之上（front）；
@@ -1397,6 +1399,12 @@ final class TemperaStageRenderer: LyricStageRenderer {
         creditsView.isHidden = true
         guard let idx else { return }
         if idx != currentShotIndex {
+            // §0 呈现侧（3.7 (67) B 组）：shot 提交点（凝彩的
+            // 行以 shot 为单位）；收敛看本 shot 全部字形 reveal
+            // 完成（revealDone 已在本 tick 下方同式计算，此处
+            // 只记待收敛 shot，判定在 revealDone 算出处）。
+            Breadcrumbs.log("flip.cmt style=tempera idx=\(idx) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+            probeUpPending67 = idx
             transitionToShot(idx, position: position, tuning: tuning)
         }
         if idx != layerImageShotIndex {
@@ -1418,6 +1426,13 @@ final class TemperaStageRenderer: LyricStageRenderer {
         let zoom = shot.camStart.zoom + (shot.camEnd.zoom - shot.camStart.zoom) * amount
         let camRot = shot.camStart.rotation + (shot.camEnd.rotation - shot.camStart.rotation) * amount
         let revealDone = shot.lineSegments.flatMap { $0 }.map { $0.end }.max() ?? shot.start
+        // §0 呈现侧（3.7 (67) B 组）：settle 收敛点——position
+        // 越过本 shot 末字形 reveal 时刻（字形 settle 链的终点
+        // 口径），每 shot 只落一次。
+        if let pending = probeUpPending67, pending == idx, position >= revealDone {
+            probeUpPending67 = nil
+            Breadcrumbs.log("flip.up style=tempera idx=\(pending) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+        }
         let breathWeight = temperaEaseInOutCubic(temperaClamp01((position - revealDone) / 1.2))
         let breath = temperaCameraBreath(time: position, phase: Double(idx) * 1.37)
         let intensity = tuning.cameraIntensity

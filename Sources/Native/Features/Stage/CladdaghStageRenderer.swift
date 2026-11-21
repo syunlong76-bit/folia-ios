@@ -165,6 +165,8 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
     private var renderBaseIndex = -1
     /// 整环自转角（网页 lineOffset MotionValue，目标 = 中心行 × π）。
     private var lineOffsetValue: Double = 0
+    /// §0 量测（3.7 (67) B 组）：待收敛的行（flip.up 记账）。
+    private var probeUpPending67: Int? = nil
     private var lineOffsetVelocity: Double = 0
     private var lineOffsetTarget: Double = 0
     private var hasOffsetBase = false
@@ -279,6 +281,12 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
 
         let rawCenter = LyricParser.currentIndex(in: lines, at: position) ?? -1
         if rawCenter != centerIndex || windowDirty {
+            // §0 呈现侧（3.7 (67) B 组）：翻行提交点；收敛看
+            // 环弹簧 lineOffsetValue 首次进入目标 ε 内。
+            if rawCenter != centerIndex {
+                Breadcrumbs.log("flip.cmt style=claddagh idx=\(rawCenter) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+                probeUpPending67 = rawCenter
+            }
             let previous = centerIndex
             centerIndex = rawCenter
             renderBaseIndex = rawCenter
@@ -293,6 +301,13 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
             windowDirty = false
         }
         integrateSpring()
+        // §0 呈现侧（3.7 (67) B 组）：环弹簧收敛点（|值−目标|
+        // <0.01 rad 首次达成），每行只落一次。
+        if let pending = probeUpPending67,
+           abs(lineOffsetValue - lineOffsetTarget) < 0.01 {
+            probeUpPending67 = nil
+            Breadcrumbs.log("flip.up style=claddagh idx=\(pending) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+        }
         updateGlyphs(position: position)
         updateTranslationRing()
     }

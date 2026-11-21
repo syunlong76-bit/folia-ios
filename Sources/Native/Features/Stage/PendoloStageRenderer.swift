@@ -223,6 +223,8 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
 
     // 棘轮弹簧（framer-motion useSpring 的半隐式积分复刻）。
     private var springValue: Double = 0
+    /// §0 量测（3.7 (67) B 组）：待收敛的行（flip.up 记账）。
+    private var probeUpPending67: Int? = nil
     private var springVelocity: Double = 0
     private var springSnapped = false
     private var currentTarget: Double = 0
@@ -326,6 +328,12 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
         }
         let target = fallbackAnchor(position: position, rawIndex: rawIndex)
         if target != currentTarget || builtTarget == nil {
+            // §0 呈现侧（3.7 (67) B 组）：焦点目标提交点；收敛
+            // 看表盘弹簧 springValue 首次进入目标 ε 内。
+            if target != currentTarget, let rawIndex {
+                Breadcrumbs.log("flip.cmt style=pendolo idx=\(rawIndex) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+                probeUpPending67 = rawIndex
+            }
             currentTarget = target
             rebuildItems(tuning: tuning)
         }
@@ -336,6 +344,12 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
         }
 
         stepSpring(dt: dt, tuning: tuning)
+        // §0 呈现侧（3.7 (67) B 组）：表盘弹簧收敛点，每行一次。
+        if let pending = probeUpPending67,
+           abs(springValue - currentTarget) < 0.01 {
+            probeUpPending67 = nil
+            Breadcrumbs.log("flip.up style=pendolo idx=\(pending) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
+        }
         stepClockwork(dt: dt, paused: context.map { $0.currentAnchor().rate == 0 } ?? false)
         applyFrameTransforms(position: position, tuning: tuning)
     }

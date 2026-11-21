@@ -58,6 +58,8 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
     private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var activeLineId: Int? = nil
+    /// §0 量测（3.7 (67) B 组）：flip.up 每行只落一次的记账。
+    private var probeUpLine67: Int? = nil
     private var visibleSegmentIndex = -1
     private var builtTrackId: String? = nil
     private var builtLineCount = -1
@@ -112,6 +114,8 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
         guard isActive, let snapshot else { return }
         let idx = ClassicStageRenderer.activeIndex(in: snapshot.lines, at: position)
         if idx != activeLineId {
+            // §0 呈现侧（3.7 (67) B 组）：翻行提交点。
+            Breadcrumbs.log("flip.cmt style=tilt idx=\(idx ?? -1) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
             transitionLine(to: idx, position: position)
         }
         guard let layout = currentLayout, let lineIndex = activeLineId,
@@ -135,6 +139,13 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
             for (i, segmentView) in segmentViews.enumerated() {
                 segmentView.setVisible(i <= target, animated: true)
             }
+        }
+        // §0 呈现侧（3.7 (67) B 组）：级联收敛点＝末段亮起的
+        // 那一帧（段尾滞后在此量到），每行只落一次。
+        if target >= 0, target == layout.segments.count - 1,
+           probeUpLine67 != lineIndex {
+            probeUpLine67 = lineIndex
+            Breadcrumbs.log("flip.up style=tilt idx=\(lineIndex) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
         }
         for segmentView in segmentViews {
             segmentView.updatePulse(position: position)
