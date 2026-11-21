@@ -2923,6 +2923,12 @@ extension HomeWallViewController {
         present(login, animated: true)
     }
 
+    /// (62) 追加三：歌单页同款导航台的初始态读口（当前段 +
+    /// 布局模式），歌单墙/歌单详情装配工具条时同步用。
+    var seamToolbarInitialState: (segment: SeamSegment, grid: Bool) {
+        (seamSegment, seamGridMode)
+    }
+
     func seamRefreshAccount() {
         // 同步缓存先行（3.7 (61) 第 1.4 条）：头像 URL 与昵称同
         // 源——ProviderSessionStatusQuery 同步缓存里当前登录平

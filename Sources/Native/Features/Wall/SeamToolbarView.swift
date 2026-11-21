@@ -448,3 +448,117 @@ enum WallMoreMenu {
         host.present(sheet, animated: true)
     }
 }
+
+// MARK: - 歌单页转发（(62) 追加三：导航台进歌单）
+//
+// 歌单墙（WallPrototype）与歌单详情（CollectionView）顶部装
+// 同款 SeamToolbarView。其动作语义与主页逐项一致、且都作用
+// 于主页墙（切段/布局/沉浸是主页墙的状态，搜索/设置/登录是
+// 主页为宿主的呈现）：点按后先关本面回到主页，再调主页既有
+// 的 seam 动作实现，不在歌单面内另造一份行为。
+
+extension UIView {
+    /// 响应链上最近的视图控制器（SwiftUI 宿主定位用）。
+    func nearestViewController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let current = responder {
+            if let vc = current as? UIViewController { return vc }
+            responder = current.next
+        }
+        return nil
+    }
+}
+
+enum SeamToolbarForwarding {
+
+    /// 从呈现链/窗口根定位主页墙。
+    static func findHomeWall(from vc: UIViewController) -> HomeWallViewController? {
+        var cursor: UIViewController? = vc
+        while let current = cursor {
+            if let home = current as? HomeWallViewController { return home }
+            if let home = searchDeep(current.children) { return home }
+            cursor = current.presentingViewController
+        }
+        if let root = vc.view.window?.rootViewController {
+            if let home = root as? HomeWallViewController { return home }
+            return searchDeep([root])
+        }
+        return nil
+    }
+
+    private static func searchDeep(_ vcs: [UIViewController]) -> HomeWallViewController? {
+        for vc in vcs {
+            if let home = vc as? HomeWallViewController { return home }
+            if let found = searchDeep(vc.children) { return found }
+            if let presented = vc.presentedViewController,
+               let found = searchDeep([presented]) { return found }
+        }
+        return nil
+    }
+
+    /// 视图点按入口（SwiftUI 包装层用）：先定位宿主 VC。
+    static func activate(_ action: String, from view: UIView) {
+        guard let host = view.nearestViewController() else {
+            Breadcrumbs.log("seam.forward action=\(action) host=none")
+            return
+        }
+        forward(action, from: host)
+    }
+
+    /// 关本面回主页并执行主页工具条同名动作。关闭走当前面
+    /// 自己的 dismiss 通路（曲目墙的 StageExitGate veto 拦截
+    /// 不被绕过）；关后主页之上若仍有残余呈现层，再补一发
+    /// home.dismiss 清干净后执行。
+    static func forward(_ action: String, from vc: UIViewController) {
+        Breadcrumbs.log("seam.forward action=\(action)"
+            + " from=\(String(describing: type(of: vc)))")
+        guard let home = findHomeWall(from: vc), home !== vc else {
+            vc.dismiss(animated: true)
+            return
+        }
+        vc.dismiss(animated: true) {
+            if home.presentedViewController != nil {
+                home.dismiss(animated: false) {
+                    perform(action, on: home)
+                }
+            } else {
+                perform(action, on: home)
+            }
+        }
+    }
+
+    private static func perform(_ action: String, on home: HomeWallViewController) {
+        switch action {
+        case "segment-songs": home.seamSegmentSelected(.songs)
+        case "segment-recommend": home.seamSegmentSelected(.recommend)
+        case "segment-explore": home.seamSegmentSelected(.explore)
+        case "avatar": home.seamAvatarTapped()
+        case "search":
+            Breadcrumbs.log("wall.seam.search")
+            SearchHostPresenter.presentSearch(from: home)
+        case "settings":
+            Breadcrumbs.log("wall.seam.settings")
+            let settings = SettingsViewController()
+            settings.modalPresentationStyle = .overFullScreen
+            home.present(settings, animated: false)
+        case "layout": home.seamToggleLayout()
+        case "more": home.seamMoreTapped(anchor: home.view)
+        case "fullscreen": home.seamSetImmersive(true)
+        default: break
+        }
+    }
+
+    /// 工具条账户态（与主页 seamRefreshAccount 的同步缓存段
+    /// 同源同口径：ProviderSessionStatusQuery 第一家已登录且
+    /// 有头像者优先）；网络刷新归主页，本面只读缓存。
+    static func applyAccountState(to bar: SeamToolbarView) {
+        let statuses = ProviderSessionStatusQuery.allStatuses()
+        let loggedIn = statuses.filter(\.isLoggedIn)
+        let avatarStatus = loggedIn.first { $0.avatarURL != nil }
+            ?? statuses.first { $0.avatarURL != nil }
+        bar.setAccount(
+            nickname: loggedIn.first?.displayName,
+            loggedIn: !loggedIn.isEmpty,
+            avatarURLString: avatarStatus?.avatarURL?.absoluteString)
+    }
+}

@@ -127,6 +127,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 反馈作用于整件（命中 44pt + 视觉圆 34pt）。
     private var closeChromeView: UIView?
     private var backdrop: LoadingBackdropView?
+    /// (62) 追加三：歌单页同款导航台（缝合工具条）。
+    private var playlistSeamToolbar: SeamToolbarView?
     private var didCenterCamera = false
     private var isWrapping = false
 
@@ -410,6 +412,8 @@ final class WallPrototypeViewController: UIViewController,
             backdropView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
         backdrop = backdropView
+
+        installPlaylistSeamToolbar()
 
         // 转场落定：墙以 1.04 倍入场、viewDidAppear 里收回 1.0。
         collectionView.transform = CGAffineTransform(scaleX: 1.04, y: 1.04)
@@ -1913,6 +1917,67 @@ final class WallPrototypeViewController: UIViewController,
         loadFailed = false
         loadAttempts = 0
         loadEntries()
+    }
+
+    /// 歌单页导航台装配（(62) 追加三，Miller 15:01 定）：与
+    /// 主页同款缝合工具条。几何复核（先量后装、零重叠）：本
+    /// 面既有 chrome——关闭键占 safeArea.top+8 起 44 高（至
+    /// +52）、右缘内 44 宽；设置齿轮占 +8 起 34 高（至
+    /// +42）、左缘 34 宽。工具条整排（主页口径 leading 12 /
+    /// trailing −12 / 高 44）若同高装配必与两者相撞，故落
+    /// 在关闭键行下方一排：top = safeArea.top + 56（与关闭
+    /// 键命中区下沿留 4pt 间隔），纵向与两者零交叠；横向整
+    /// 排与主页一致。动作语义＝转发回主页执行主页同名动作
+    /// （SeamToolbarForwarding：切段即离歌单回对应段主页，
+    /// 搜索/设置/登录/布局/沉浸同主页），不在本面另造行为。
+    /// z 序在拍立得背板之上（加载态亦可见可点），与关闭键
+    /// （背板之下、本条之上行）互不遮挡。
+    private func installPlaylistSeamToolbar() {
+        let toolbar = SeamToolbarView()
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(toolbar)
+        NSLayoutConstraint.activate([
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 56),
+            toolbar.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        if let home = SeamToolbarForwarding.findHomeWall(from: self) {
+            let state = home.seamToolbarInitialState
+            toolbar.setSegment(state.segment)
+            toolbar.setLayoutMode(grid: state.grid)
+        }
+        SeamToolbarForwarding.applyAccountState(to: toolbar)
+        toolbar.onSegmentChanged = { [weak self] segment in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("segment-\(segment.crumbName)", from: self)
+        }
+        toolbar.onAvatarTapped = { [weak self] in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("avatar", from: self)
+        }
+        toolbar.onSearchTapped = { [weak self] in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("search", from: self)
+        }
+        toolbar.onSettingsTapped = { [weak self] in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("settings", from: self)
+        }
+        toolbar.onLayoutTapped = { [weak self] in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("layout", from: self)
+        }
+        toolbar.onMoreTapped = { [weak self] _ in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("more", from: self)
+        }
+        toolbar.onFullscreenTapped = { [weak self] in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("fullscreen", from: self)
+        }
+        playlistSeamToolbar = toolbar
+        Breadcrumbs.log("wall.seam.playlist installed")
     }
 
     @objc private func closeTapped() {

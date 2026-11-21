@@ -1,5 +1,40 @@
 import SwiftUI
 
+/// (62) 追加三：缝合工具条的 SwiftUI 包装（歌单详情页同款
+/// 导航台）。回调点按时经响应链定位宿主 VC，再走
+/// SeamToolbarForwarding 转发（关本面回主页执行同名动作）；
+/// 账户态与主页同源（会话缓存同步读）。
+struct SeamToolbarBridge: UIViewRepresentable {
+    func makeUIView(context: Context) -> SeamToolbarView {
+        let bar = SeamToolbarView()
+        bar.onSegmentChanged = { segment in
+            SeamToolbarForwarding.activate("segment-\(segment.crumbName)", from: bar)
+        }
+        bar.onAvatarTapped = {
+            SeamToolbarForwarding.activate("avatar", from: bar)
+        }
+        bar.onSearchTapped = {
+            SeamToolbarForwarding.activate("search", from: bar)
+        }
+        bar.onSettingsTapped = {
+            SeamToolbarForwarding.activate("settings", from: bar)
+        }
+        bar.onLayoutTapped = {
+            SeamToolbarForwarding.activate("layout", from: bar)
+        }
+        bar.onMoreTapped = { _ in
+            SeamToolbarForwarding.activate("more", from: bar)
+        }
+        bar.onFullscreenTapped = {
+            SeamToolbarForwarding.activate("fullscreen", from: bar)
+        }
+        SeamToolbarForwarding.applyAccountState(to: bar)
+        return bar
+    }
+
+    func updateUIView(_ uiView: SeamToolbarView, context: Context) {}
+}
+
 // CollectionView.swift
 //
 // 集合页：按 port-spec-lattice-collection.md 移植 grid 套件的 GridView
@@ -93,11 +128,21 @@ struct CollectionView: View {
                     }
                 }
                 .padding(.horizontal, 16)
-                .padding(.top, 72)
+                .padding(.top, 116)
                 .padding(.bottom, 32)
             }
 
             capsules
+
+            // (62) 追加三：歌单页同款导航台（缝合工具条）——
+            // 落既有顶部胶囊行（标题/返回/更多，占顶部约 44）
+            // 下方一排（top 52 起、高 44），与胶囊行零重叠；
+            // 内容顶距 72→116 让开本条。动作经宿主 VC 转发
+            // 回主页执行主页同名动作（SeamToolbarForwarding）。
+            SeamToolbarBridge()
+                .frame(height: 44)
+                .padding(.horizontal, 12)
+                .padding(.top, 52)
         }
         .toolbar(.hidden, for: .navigationBar)
         .onReceive(NotificationCenter.default.publisher(for: .foliaStarChanged)) { note in
