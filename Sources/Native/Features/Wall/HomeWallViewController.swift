@@ -508,7 +508,7 @@ final class HomeWallViewController: UIViewController,
         case "dir.rescanLocal":
             LocalLibrary62.shared.rescanFolders()
         case "dir.precache":
-            MediaCache62.shared.precacheQueue()
+            Task { _ = await MediaCache62.shared.precacheQueue() }
         case "theme.park":
             ThemeParkViewController.present(from: self)
         case "dafeiyu.open":
