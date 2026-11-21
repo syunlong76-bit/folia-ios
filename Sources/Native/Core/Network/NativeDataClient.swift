@@ -232,6 +232,9 @@ final class NativeDataClient {
         let loggedIn: Bool
         let userId: String?
         let nickname: String?
+        /// (61) WA 4①：profile["avatarUrl"]——此前解析层丢弃，
+        /// 侧栏/导航台头像永远拿不到网易云头像 URL。
+        let avatarURL: String?
     }
 
     /// 登录态探针：/login/status 的 profile 在就视为已登录
@@ -240,12 +243,13 @@ final class NativeDataClient {
         let root = try await getJSON("/api/netease/login/status")
         let container = NativeJSON.dict(root["data"]) ?? root
         guard let profile = NativeJSON.dict(container["profile"]) else {
-            return LoginStatus(loggedIn: false, userId: nil, nickname: nil)
+            return LoginStatus(loggedIn: false, userId: nil, nickname: nil, avatarURL: nil)
         }
         return LoginStatus(
             loggedIn: true,
             userId: NativeJSON.string(profile["userId"]),
-            nickname: NativeJSON.string(profile["nickname"])
+            nickname: NativeJSON.string(profile["nickname"]),
+            avatarURL: NativeJSON.string(profile["avatarUrl"])
         )
     }
 

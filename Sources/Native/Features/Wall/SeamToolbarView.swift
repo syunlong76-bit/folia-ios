@@ -63,6 +63,11 @@ final class SeamToolbarView: UIView {
         effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
     private let avatarButton = UIButton(type: .system)
     private let avatarInitial = UILabel()
+    /// 头像照片图位（(61) WA 4③）：圆形裁剪、盖在 avatarButton
+    /// 之上；无图时透明，露出按钮自身的首字/人形兜底。
+    private let avatarImageView = UIImageView()
+    /// 头像加载防串图键（当前 URL 串；回调落地前比对，照侧栏同款）。
+    private var avatarLoadKey: String?
     private let segmentControl = UISegmentedControl(
         items: SeamSegment.allCases.map { $0.title })
     private let searchButton = UIButton(type: .system)
@@ -71,8 +76,9 @@ final class SeamToolbarView: UIView {
     private let moreButton = UIButton(type: .system)
     private let fullscreenButton = UIButton(type: .system)
 
-    // 双态（(60) 第 2 条）：grabber 横线 + 全幅命中垫（收起态
-    // 承接点按，44pt 高与本条同高、好按）、闲置收起计时。
+    // 双态（(60) 第 2 条）：grabber 横线 + 命中垫（收起态承接
+    // 点按；(61) WA 由全条 44pt 全宽带收窄到线身＋适度外扩
+    // 76×28 居中，收起态不再吞整条带的墙面点按）、闲置收起计时。
     private let grabberView = UIView()
     private let grabberHitView = UIView()
     private var idleCollapseWorkItem: DispatchWorkItem?
@@ -82,7 +88,7 @@ final class SeamToolbarView: UIView {
 
     /// 全条内容视图组（双态只动这组的 alpha/transform）。
     private var contentViews: [UIView] {
-        [blurView, avatarButton, avatarInitial, segmentControl,
+        [blurView, avatarButton, avatarInitial, avatarImageView, segmentControl,
          searchButton, settingsButton, layoutButton, moreButton,
          fullscreenButton]
     }
@@ -122,6 +128,12 @@ final class SeamToolbarView: UIView {
         avatarButton.tintColor = .white
         avatarButton.addTarget(self, action: #selector(avatarTapped), for: .touchUpInside)
         addSubview(avatarButton)
+        avatarImageView.contentMode = .scaleAspectFill
+        avatarImageView.clipsToBounds = true
+        avatarImageView.layer.cornerRadius = 16
+        avatarImageView.isUserInteractionEnabled = false
+        avatarImageView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(avatarImageView)
         avatarInitial.font = .systemFont(ofSize: 14, weight: .semibold)
         avatarInitial.textColor = .white
         avatarInitial.textAlignment = .center
@@ -160,6 +172,10 @@ final class SeamToolbarView: UIView {
             avatarButton.heightAnchor.constraint(equalToConstant: 32),
             avatarInitial.centerXAnchor.constraint(equalTo: avatarButton.centerXAnchor),
             avatarInitial.centerYAnchor.constraint(equalTo: avatarButton.centerYAnchor),
+            avatarImageView.centerXAnchor.constraint(equalTo: avatarButton.centerXAnchor),
+            avatarImageView.centerYAnchor.constraint(equalTo: avatarButton.centerYAnchor),
+            avatarImageView.widthAnchor.constraint(equalToConstant: 32),
+            avatarImageView.heightAnchor.constraint(equalToConstant: 32),
 
             segmentControl.leadingAnchor.constraint(equalTo: avatarButton.trailingAnchor, constant: 8),
             segmentControl.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -183,7 +199,7 @@ final class SeamToolbarView: UIView {
 
         // grabber 横线（(60) 第 2 条）：36×4pt 白色圆角，居中于
         // 本条（宿主安装在安全区顶下方，位置口径不变）；命中垫
-        // 铺满本条、仅收起态在场，点按即展开。
+        // (61) WA 收窄为 76×28 居中于线身、仅收起态在场，点按即展开。
         grabberView.backgroundColor = UIColor.white.withAlphaComponent(0.85)
         grabberView.layer.cornerRadius = 2
         grabberView.isUserInteractionEnabled = false
@@ -201,10 +217,10 @@ final class SeamToolbarView: UIView {
             grabberView.centerYAnchor.constraint(equalTo: centerYAnchor),
             grabberView.widthAnchor.constraint(equalToConstant: 36),
             grabberView.heightAnchor.constraint(equalToConstant: 4),
-            grabberHitView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            grabberHitView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            grabberHitView.topAnchor.constraint(equalTo: topAnchor),
-            grabberHitView.bottomAnchor.constraint(equalTo: bottomAnchor),
+            grabberHitView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            grabberHitView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            grabberHitView.widthAnchor.constraint(equalToConstant: 76),
+            grabberHitView.heightAnchor.constraint(equalToConstant: 28),
         ])
         // 初始态 = 收起（只剩横线），无动画直接落位。
         applyToolbarState(expanded: false, animated: false, reason: "init")
@@ -275,7 +291,8 @@ final class SeamToolbarView: UIView {
             grabberView.alpha = expanded ? 0 : 1
         }
         let setInteraction = { [self] in
-            for view in contentViews where view !== blurView && view !== avatarInitial {
+            for view in contentViews where view !== blurView && view !== avatarInitial
+                && view !== avatarImageView {
                 view.isUserInteractionEnabled = expanded
             }
         }
@@ -325,7 +342,11 @@ final class SeamToolbarView: UIView {
 
     /// 登录态回填：已登录显示昵称首字，未登录回 person 符号
     /// （与侧栏账户头同一口径：双入口、同一登录态显示）。
-    func setAccount(nickname: String?, loggedIn: Bool) {
+    /// (61) WA 4③：avatarURLString 有值时用 WorkbenchCover
+    /// .loadAvatar 加载真头像（圆形图位盖在兜底之上、带 key
+    /// 防串图，照侧栏同款）；无值/加载未回时回退现行首字/
+    /// person.fill 逻辑。参数带默认值 nil，旧调用点源码兼容。
+    func setAccount(nickname: String?, loggedIn: Bool, avatarURLString: String? = nil) {
         if loggedIn, let first = nickname?.first {
             avatarInitial.text = String(first)
             avatarInitial.isHidden = false
@@ -335,6 +356,18 @@ final class SeamToolbarView: UIView {
             avatarButton.setImage(UIImage(systemName: "person.fill",
                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 13)), for: .normal)
         }
+        let key = (loggedIn ? avatarURLString : nil).flatMap { $0.isEmpty ? nil : $0 }
+        guard key != avatarLoadKey else { return }
+        avatarLoadKey = key
+        guard let key, let url = URL(string: key) else {
+            avatarImageView.image = nil
+            return
+        }
+        let expectedKey = key
+        WorkbenchCover.loadAvatar(url: url, into: avatarImageView) { [weak self] in
+            self?.avatarLoadKey == expectedKey
+        }
+        Breadcrumbs.log("seam.toolbar avatar load")
     }
 
     // MARK: - 动作
@@ -349,9 +382,17 @@ final class SeamToolbarView: UIView {
     @objc private func avatarTapped() { noteToolbarInteraction(); onAvatarTapped?() }
     @objc private func searchTapped() { noteToolbarInteraction(); onSearchTapped?() }
     @objc private func settingsTapped() { noteToolbarInteraction(); onSettingsTapped?() }
-    @objc private func layoutTapped() { noteToolbarInteraction(); onLayoutTapped?() }
+    @objc private func layoutTapped() {
+        noteToolbarInteraction()
+        InteractionTrace.shared.beginAction("layout")
+        onLayoutTapped?()
+    }
     @objc private func moreTapped() { noteToolbarInteraction(); onMoreTapped?(moreButton) }
-    @objc private func fullscreenTapped() { noteToolbarInteraction(); onFullscreenTapped?() }
+    @objc private func fullscreenTapped() {
+        noteToolbarInteraction()
+        InteractionTrace.shared.beginAction("immersive")
+        onFullscreenTapped?()
+    }
 }
 
 /// 「…」菜单（3.7 (55) 工作流 E）：五项——喜欢的音乐 /

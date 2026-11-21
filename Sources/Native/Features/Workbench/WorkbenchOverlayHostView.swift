@@ -6,8 +6,11 @@ import UIKit
 // 1. 不换 root、不建容器 VC——HomeWallViewController 仍是 root，
 //    本视图只是叠在 HomeWall.view 上的浮层（HomeWall 侧仅在
 //    viewDidLoad 末尾加装本宿主，墙画布/入场/点卡 route 零改动）。
-// 2. 关闭态 hitTest 只认把手与头像两个极小命中区，其余全部
+// 2. 关闭态 hitTest 只认把手一个极小命中区，其余全部
 //    返回 nil 穿透给墙（平移/点卡/迷你台/齿轮/搜索照常）。
+//    （(61) WA：侧栏悬浮头像钮整只删除——它与速记簿热区打架
+//    且即 (55)–(58) 幽灵本体；登录入口保留导航台头像＋侧栏内
+//    sidebarAvatar 两处，侧栏开合只靠把手与既有手势。）
 // 3. 开侧栏只经左缘离散把手（点按或在把手上横拖），不用
 //    UIScreenEdgePanGestureRecognizer，不与墙 pan 抢手势；
 //    侧栏展开期间经 onSidebarVisibilityChanged 禁墙平移/点按，
@@ -128,7 +131,6 @@ final class WorkbenchOverlayHostView: UIView {
     private let sidebarView = UIView()
     private let handleView = UIView()
     private let handleChevron = UIImageView()
-    private let avatarButton = WorkbenchAvatarView()
 
     /// 手势识别器引用（audit 的 gestureRawState 实时读源＋
     /// 看门狗交叉核对）：build 时各存一份。
@@ -158,7 +160,7 @@ final class WorkbenchOverlayHostView: UIView {
         super.init(frame: .zero)
         backgroundColor = .clear
         buildScrimAndSidebar()
-        buildHandleAndAvatarButton()
+        buildHandle()
         refreshAccountUI()
         // 强制点位（(58) 定稿①）：回前台时按状态机核对一次
         // 不变式——后台期间被系统搅动的呈现残局在此收口。
@@ -358,7 +360,7 @@ final class WorkbenchOverlayHostView: UIView {
         return button
     }
 
-    private func buildHandleAndAvatarButton() {
+    private func buildHandle() {
         // 左缘离散把手：18×80 的小片，只它自己带手势（点按开、
         // 在把手上横拖跟手），不设全高边缘手势。
         handleView.backgroundColor = UIColor.black.withAlphaComponent(0.45)
@@ -386,12 +388,6 @@ final class WorkbenchOverlayHostView: UIView {
             handleChevron.widthAnchor.constraint(equalToConstant: 10),
             handleChevron.heightAnchor.constraint(equalToConstant: 16)
         ])
-
-        // 命中由本宿主 hitTest 在关闭态直派（点中头像 frame 才
-        // 把事件交回 super 分发落到这个 tap 手势上）。
-        addSubview(avatarButton)
-        avatarButton.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(avatarTapped)))
     }
 
     // MARK: - 布局（安全区/横竖屏）
@@ -426,9 +422,6 @@ final class WorkbenchOverlayHostView: UIView {
             updateGeometry(tx: tx, generation: sidebarGeneration, caller: "layout")
         }
         handleView.frame = CGRect(x: 0, y: bounds.height * 0.36, width: 18, height: 80)
-        let avatarSize: CGFloat = 40
-        avatarButton.frame = CGRect(
-            x: 10, y: safeAreaInsets.top + 50, width: avatarSize, height: avatarSize)
         if sizeChanged {
             // 旋转强制点位（(58) 定稿①）：宿主 bounds 尺寸变
             // 化即旋转/分屏落点，在此核对不变式＋落 audit。
@@ -446,10 +439,7 @@ final class WorkbenchOverlayHostView: UIView {
             // 台在此期间点不到（且墙交互已由回调禁用）。
             return super.hitTest(point, with: event) ?? scrimView
         }
-        // 关闭态：只有头像与把手两个极小命中区，其余穿透给墙。
-        if avatarButton.frame.contains(point) {
-            return super.hitTest(point, with: event)
-        }
+        // 关闭态：只有把手一个极小命中区，其余穿透给墙。
         if handleView.frame.contains(point) {
             return super.hitTest(point, with: event)
         }
@@ -540,8 +530,8 @@ final class WorkbenchOverlayHostView: UIView {
     /// 落一行（拖动中段节流 20Hz，见 applyChrome）。字段全集
     /// ＝定罪映射：modelRight 与 presRight 分家→第三机制；
     /// drag=1 恒久而 gesture 已终结→B′；anim 非空且 gen 停
-    /// 滞→A；落定末行 avatarHidden/handleHidden/panelOpenGeom
-    /// 三者须与真机截图逐条对得上（验收判据）。
+    /// 滞→A；落定末行 handleHidden/panelOpenGeom
+    /// 两者须与真机截图逐条对得上（验收判据）。
     private func auditChrome(caller: String, progress: CGFloat? = nil) {
         let modelTx = sidebarView.transform.tx
         let presTx = sidebarView.layer.presentation()
@@ -555,8 +545,6 @@ final class WorkbenchOverlayHostView: UIView {
             + " drag=\(isDraggingSidebar ? 1 : 0)"
             + " gesture=\(gestureRawStateDescription())"
             + (progress.map { " progress=\(Self.fmt($0))" } ?? "")
-            + " avatarHidden=\(avatarButton.isHidden ? 1 : 0)"
-            + " avatarAlpha=\(Self.fmt(avatarButton.alpha))"
             + " handleHidden=\(handleView.isHidden ? 1 : 0)"
             + " handleAlpha=\(Self.fmt(handleView.alpha))"
             + " modelTx=\(Self.fmt(modelTx)) presTx=\(Self.fmt(presTx))"
@@ -575,7 +563,7 @@ final class WorkbenchOverlayHostView: UIView {
         case settled
     }
 
-    /// chrome（把手/头像的 isHidden/alpha）写入的唯一通道
+    /// chrome（把手的 isHidden/alpha）写入的唯一通道
     /// （(58) 定稿① Pro 补正：手势回调与 animator 一律不许
     /// 直写 chrome）。每次写入后落 audit（拖动中段 caller=
     /// drag 时节流到 20Hz：写入本身不节流、只采样落行）。
@@ -583,10 +571,7 @@ final class WorkbenchOverlayHostView: UIView {
         switch mode {
         case .transient(let progress):
             handleView.isHidden = false
-            avatarButton.isHidden = false
-            let alpha = 1 - progress
-            handleView.alpha = alpha
-            avatarButton.alpha = alpha
+            handleView.alpha = 1 - progress
             if caller == "drag" {
                 let now = CACurrentMediaTime()
                 guard now - lastDragAuditAt >= 0.05 else { return }
@@ -597,12 +582,9 @@ final class WorkbenchOverlayHostView: UIView {
             switch sidebarState {
             case .open:
                 handleView.isHidden = true
-                avatarButton.isHidden = true
             case .closed:
                 handleView.isHidden = false
-                avatarButton.isHidden = false
                 handleView.alpha = 1
-                avatarButton.alpha = 1
             case .dragging, .settling:
                 break
             }
@@ -661,18 +643,17 @@ final class WorkbenchOverlayHostView: UIView {
             updateGeometry(tx: targetTx, generation: sidebarGeneration,
                            caller: "invariant-heal")
         }
-        // chrome 型违规：显隐/alpha 与落定态派生值不符。
+        // chrome 型违规：显隐/alpha 与落定态派生值不符（(61)
+        // WA 删悬浮头像钮后 chrome 只剩把手一件）。
         let chromeViolated: Bool
         if sidebarState == .open {
-            chromeViolated = !avatarButton.isHidden || !handleView.isHidden
+            chromeViolated = !handleView.isHidden
         } else {
-            chromeViolated = avatarButton.isHidden || handleView.isHidden
-                || avatarButton.alpha != 1 || handleView.alpha != 1
+            chromeViolated = handleView.isHidden || handleView.alpha != 1
         }
         if chromeViolated {
             Breadcrumbs.log("invariant.violation caller=\(caller) kind=chrome"
                 + " state=\(sidebarStateName)"
-                + " avatarHidden=\(avatarButton.isHidden ? 1 : 0)"
                 + " handleHidden=\(handleView.isHidden ? 1 : 0)"
                 + " panelOpenGeom=\(panelOpenGeom() ? 1 : 0)")
             applyChrome(caller: "invariant-heal", mode: .settled)
@@ -1022,31 +1003,24 @@ final class WorkbenchOverlayHostView: UIView {
                 : UIColor.white.withAlphaComponent(0.35)
         }
         // 头像：第一家已登录且有头像的；状态点：任一家已登录为亮。
+        // （(61) WA：悬浮头像钮已删，只剩侧栏内 sidebarAvatar 一只；
+        // 取数路径不变——ProviderSessionStatusQuery 同步读资料缓存，
+        // avatarURL 来自 NativeSessionStore.saveProfile 落盘值。）
         let avatarStatus = loggedIn.first { $0.avatarURL != nil } ?? statuses.first { $0.avatarURL != nil }
         let anyLoggedIn = !loggedIn.isEmpty
-        avatarButton.setLoggedIn(anyLoggedIn)
         sidebarAvatar.setLoggedIn(anyLoggedIn)
         // 占位每次刷新都重算（不许挂在头像加载键变化的分支里：
         // 昵称后到、头像 URL 不变时旧版永远不更新占位）。
         let fallbackName = loggedIn.first?.displayName ?? statuses.first?.displayName
-        avatarButton.setFallback(name: fallbackName, hasImage: avatarStatus?.avatarURL != nil)
         sidebarAvatar.setFallback(name: fallbackName, hasImage: avatarStatus?.avatarURL != nil)
         let key = avatarStatus?.avatarURL?.absoluteString
         if key != avatarLoadKey {
             avatarLoadKey = key
             let expectedKey = key
-            WorkbenchCover.loadAvatar(url: avatarStatus?.avatarURL, into: avatarButton.imageView) { [weak self] in
-                self?.avatarLoadKey == expectedKey
-            }
             WorkbenchCover.loadAvatar(url: avatarStatus?.avatarURL, into: sidebarAvatar.imageView) { [weak self] in
                 self?.avatarLoadKey == expectedKey
             }
         }
-    }
-
-    @objc private func avatarTapped() {
-        // 关闭态点头像：直接进登录页（不先开侧栏）。
-        presentLogin()
     }
 
     @objc private func accountTapped() {
