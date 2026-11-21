@@ -304,9 +304,22 @@ final class WorkbenchOverlayHostView: UIView {
         // 不能只靠动画里的 alpha——alpha 没被驱动到 0 的任何一帧
         // 它都会浮在登录状态行上（(53) 截图：淡圆圈压网易云行、
         // 绿点飘进 QQ 音乐字里，(54) 工作流 N 修）。
-        if isSidebarOpen, sidebarAnimator == nil, !isDraggingSidebar {
-            handleView.isHidden = true
-            avatarButton.isHidden = true
+        // (56) 热修——旧版这一支只在「无 animator、非拖动」时
+        // 单向藏 chrome：开栏 animator 的 completion 一旦没有
+        // 交付落定收口（被旋转/入场退场搅动时可发生），animator
+        // 引用残留、这一支在后续每次 layout 都进不来，头像钮
+        // 就永久浮在面板上（(55) 真机录屏实证：横屏开栏后跨
+        // 旋转全程不消失）。改为落定对账：未拖动时，只要面板
+        // 呈现位已到达当前落定目标位（或已无 animator），就
+        // 按 isSidebarOpen 双向落实 chrome 显隐。动画途中呈现
+        // 位未到目标位，不触发，淡入淡出不受影响。
+        if !isDraggingSidebar {
+            let targetTx: CGFloat = isSidebarOpen ? 0 : -panelWidth
+            let presentedTx = sidebarView.layer.presentation()?.transform.tx
+                ?? sidebarView.transform.tx
+            if sidebarAnimator == nil || abs(presentedTx - targetTx) <= 0.5 {
+                applySettledChrome()
+            }
         }
     }
 
@@ -431,6 +444,29 @@ final class WorkbenchOverlayHostView: UIView {
         Breadcrumbs.log("workbench.sidebar.reconcile open=\(open) reason=\(reason)")
         applySidebarProgress(tx: targetTx)
         finishSidebarAnimation(open: open, completed: true)
+        // 对账函数本身负责 chrome 落定（(56) 热修）：不单押
+        // finish 内部的现态一致性检查——它跳过时这里按
+        // isSidebarOpen 现态再落实一次，末态必达。
+        applySettledChrome()
+    }
+
+    /// 落定态 chrome 显隐的唯一权威（(56) 热修）：由
+    /// isSidebarOpen 现态推导、不认调用方传的 open 参数。
+    /// 落定为开 ⇒ 把手/头像硬藏（isHidden，命中随之关闭）；
+    /// 落定为关 ⇒ 恢复可见且 alpha 归 1。全部收口点（动画
+    /// completion、守卫对账、layout 落定对账）都经它落实，
+    /// 任何一条路径、任何冗余调用之后末态都收敛一致；
+    /// 过期收口（open 参数与现态不符）也不会把 chrome 写反。
+    private func applySettledChrome() {
+        if isSidebarOpen {
+            handleView.isHidden = true
+            avatarButton.isHidden = true
+        } else {
+            handleView.isHidden = false
+            avatarButton.isHidden = false
+            handleView.alpha = 1
+            avatarButton.alpha = 1
+        }
     }
 
     func setSidebarOpen(_ open: Bool, animated: Bool, reason: String,
@@ -520,6 +556,10 @@ final class WorkbenchOverlayHostView: UIView {
             // 收口、动画 completion 哪条先到都只发一次。
             emitSidebarVisibility(false, source: "finish-close")
         }
+        // chrome 落定不单押上面的现态一致性分支（(56) 热修）：
+        // 分支因过期收口被整段跳过时，按 isSidebarOpen 现态
+        // 统一再落实一次，显隐必达末态。
+        applySettledChrome()
     }
 
     // MARK: - 账户区（B 组 ProviderSessionStatusQuery，签名见报告）
