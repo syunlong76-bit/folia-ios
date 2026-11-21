@@ -182,6 +182,8 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     /// chrome 占用（3.7 (60) 第 4 条）：宿主 layoutStage 下发；
     /// 表盘构图重心在下部，轮心按 bottom inset 的一半上移避让
@@ -269,6 +271,9 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         let trackChanged = snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount
         self.snapshot = snapshot
@@ -431,6 +436,9 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 结构重建（几何 + 表盘 + 空间变换）
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         guard rootView.bounds.width > 0 else { return }
         if builtSize != rootView.bounds.size, snapshot != nil {
             rebuildStructure(tuning: PendoloTuningStore.valuesCached(
@@ -1188,7 +1196,8 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
             }
             if tuning.hubView, !entry.isActive {
                 let d = max(1, entry.distance)
-                let stand = 0.18 + (1 - 0.18) * (d - 1) / 3
+                // (61) WC：轮心视角非焦点行 alpha 基线 0.18→0.45 下限。
+                let stand = 0.45 + (1 - 0.45) * (d - 1) / 3
                 alpha *= CGFloat(min(1, stand))
                 let edge = max(0, min(1, (75 - abs(entry.angleDeg + wheelDeg)) / 10))
                 alpha *= CGFloat(edge)

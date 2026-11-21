@@ -101,7 +101,9 @@ final class PetConcertBubbleView: UIView {
         shapeLayer.fillColor = PetConcertPalette.bubbleFill.cgColor
         shapeLayer.strokeColor = PetConcertPalette.outline.cgColor
         layer.addSublayer(shapeLayer)
-        label.textColor = PetConcertPalette.bubbleText
+        // (61) WC：气泡字色过对比钳制（against 气泡填充色兜底）。
+        label.textColor = StagePalette.contrastClamped(
+            PetConcertPalette.bubbleText, against: PetConcertPalette.bubbleFill)
         label.textAlignment = .center
         label.numberOfLines = 0
         label.lineBreakMode = .byCharWrapping
@@ -410,6 +412,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var plan: ConcertPlan?
     private var actors: [String: PetConcertActorView] = [:]
@@ -465,7 +469,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         bubbleView.isHidden = true
         teleBar.backgroundColor = UIColor.black.withAlphaComponent(0.45)
         teleBar.isUserInteractionEnabled = false
-        teleLabel.textColor = UIColor.white.withAlphaComponent(0.92)
+        teleLabel.textColor = StagePalette.contrastClamped(
+            UIColor.white, against: UIColor.black).withAlphaComponent(0.92)
         teleLabel.textAlignment = .center
         teleLabel.lineBreakMode = .byWordWrapping
         teleBar.addSubview(teleLabel)
@@ -486,6 +491,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         let trackId = snapshot.track?.id ?? ""
         let firstStart = snapshot.lines.first?.start ?? -1
@@ -1379,6 +1387,11 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             width: bounds.width - 48 * sx, height: barH)
         teleBar.layer.cornerRadius = 20 * sx
         teleLabel.frame = teleBar.bounds.insetBy(dx: 12 * sx, dy: 4)
+        // (61) WC：提词条衬底——垫在 teleBar 之下、覆盖提词区，
+        // 舞台亮部透过提词条 0.45 黑底时再压一层自适应 scrim。
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                            rect: teleBar.frame,
+                            at: rootView.subviews.firstIndex(of: teleBar) ?? 0)
     }
 
     // MARK: (60) 5② concert.probe（横屏半幅未定级取证探针）

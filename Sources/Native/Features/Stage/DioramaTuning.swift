@@ -222,6 +222,8 @@ final class DioramaTuningPanelViewController: UIViewController {
     }
 
     private func buildViews() {
+        // (61) WC：歌词对比保护说明行（全样式统一文案）。
+        stack.addArrangedSubview(LyricContrastProtectionNote.makeLabel())
         let titleLabel = UILabel()
         titleLabel.text = "镜台调参"
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)

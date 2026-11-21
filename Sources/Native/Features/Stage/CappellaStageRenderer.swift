@@ -510,6 +510,8 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
     private let contentView = UIView()
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     /// chrome 占用（3.7 (60) 第 4 条）：宿主 layoutStage 下发；
     /// 消息面板构图重心在下部，面板按 bottom inset 的一半上移
@@ -567,6 +569,9 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         let title = snapshot.track?.title ?? ""
         if snapshot.track?.id != builtTrackId
@@ -1298,6 +1303,9 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
         let panelW = panelWidth()

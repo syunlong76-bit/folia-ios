@@ -72,6 +72,13 @@ private final class SweepLyricLineView: UIView {
         for label in [dimLabel, brightLabel] {
             label.textAlignment = .center
             label.textColor = .white
+            // (61) WC：与非当前行同源阴影保障对齐（黑影 0.85/2pt）——
+            // 此前阴影只在 plain 行标签上（LyricWindowView init），
+            // 扫光行两标签无影，压亮封面时当前行同样被吃。
+            label.layer.shadowColor = UIColor.black.cgColor
+            label.layer.shadowOpacity = 0.85
+            label.layer.shadowRadius = 2
+            label.layer.shadowOffset = .zero
             addSubview(label)
         }
         dimLabel.alpha = 0.38
@@ -313,7 +320,8 @@ final class LyricWindowView: UIView {
     }
 
     private func renderLyricWindow() {
-        let alphas: [CGFloat] = [0.28, 0.45, 1, 0.45, 0.28, 0.28]
+        // (61) WC：非当前行 alpha 下限 0.45（原梯度 0.28/0.45）。
+        let alphas: [CGFloat] = [0.45, 0.45, 1, 0.45, 0.45, 0.45]
         for row in 0..<6 {
             let text = row < lyricTexts.count ? lyricTexts[row] : ""
             if row == 2 {

@@ -3836,6 +3836,8 @@ final class HanabiStageRenderer: LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var programKey = ""
     private var shots: [HanabiShotData] = []
     private var timeline: HanabiTimeline?
@@ -3881,6 +3883,9 @@ final class HanabiStageRenderer: LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         let tuning = HanabiTuningStore.valuesCached(
             now: Date().timeIntervalSince1970)
@@ -4033,6 +4038,9 @@ final class HanabiStageRenderer: LyricStageRenderer {
     // MARK: 布局与时间线
 
     private func layoutLayers() {
+        lyricScrimView.sync(in: root, palette: snapshot?.palette ?? .neutralDark,
+                              rect: root.bounds, at: 2)
+
         let bounds = root.bounds
         skyView.frame = bounds
         skyGradient.frame = bounds

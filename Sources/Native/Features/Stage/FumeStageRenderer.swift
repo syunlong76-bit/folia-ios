@@ -411,6 +411,8 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
     private let worldView = UIView()
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
 
     private let builder = FumeArticleBuilder()
@@ -448,6 +450,9 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         tuning = FumeTuningValues.from(ext: snapshot.ext)
         // 自定义背景让位（3.7 (50)，(47) 挂账①）：浮名唯一全屏
@@ -716,7 +721,9 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
             if blockView.lastStaticKey != key {
                 blockView.lastStaticKey = key
                 blockView.applyStatic(
-                    textColor: palette.primary.withAlphaComponent(timing.waitingOpacity),
+                    textColor: palette.primary.withAlphaComponent(
+                        max(timing.waitingOpacity,
+                            StagePalette.nonCurrentAlphaFloor)),
                     shadowColor: nil, shadowRadius: 0)
             }
             return
@@ -835,7 +842,8 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
             if printed > 0 && globalOffset == printed && !timing.hasPassCutoffReached {
                 return palette.primary.withAlphaComponent(0.82)
             }
-            return palette.primary.withAlphaComponent(timing.waitingOpacity)
+            return palette.primary.withAlphaComponent(
+            max(timing.waitingOpacity, StagePalette.nonCurrentAlphaFloor))
         }
         let range = block.wordRanges[rangeIndex]
         let wordDuration = max(range.wordEnd - range.wordStart, 0.08)
@@ -860,10 +868,13 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
                                 0.18 + CGFloat(trailProgress) * 0.82, alpha: alpha)
         }
         if time < range.wordStart {
-            return palette.primary.withAlphaComponent(timing.waitingOpacity)
+            return palette.primary.withAlphaComponent(
+            max(timing.waitingOpacity, StagePalette.nonCurrentAlphaFloor))
         }
         if time <= trailStart {
-            let alpha = fumeMixF(timing.waitingOpacity, timing.activeOpacity, CGFloat(eased))
+            let alpha = fumeMixF(max(timing.waitingOpacity,
+                                 StagePalette.nonCurrentAlphaFloor),
+                             timing.activeOpacity, CGFloat(eased))
             return fumeMixColor(palette.primary, activeColor,
                                 0.22 + CGFloat(eased) * 0.78, alpha: alpha)
         }
@@ -955,6 +966,9 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         // 世界/背景容器的 bounds 在构建时按文章尺寸设定，变换
         // 每帧由 frameTick 写；根视图尺寸变化只影响快照视口
         // （宿主会重发快照触发重建），此处无额外排版。

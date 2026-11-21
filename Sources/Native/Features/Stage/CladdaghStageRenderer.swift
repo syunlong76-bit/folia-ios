@@ -142,6 +142,8 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
     private var lineViews: [CladdaghRingLineView] = []
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var didPlayEntry = false
 
@@ -209,6 +211,9 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         syncTuning()
         if snapshot.track?.id != builtTrackId
@@ -904,7 +909,8 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
                 let distRatio = min(1, abs(deltaDist) / maxVisibleDist)
                 let focus = activeLineFactor * pow(1 - distRatio, 1.8)
                 let distanceOpacity = 0.68 + 0.32 * pow(depth, 1.9)
-                var opacity = (0.35 + 0.65 * pow(depth, 1.5)
+                // (61) WC：非当前行基础不透明下限 0.35→0.45（权重相应 0.65→0.55）。
+                var opacity = (0.45 + 0.55 * pow(depth, 1.5)
                     * (0.35 + 0.65 * focus)) * distanceOpacity
                 opacity *= Self.clampD(2 - lineDiff, 0, 1)
                 if lineIndex < centerIndex {
@@ -1027,6 +1033,9 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         contentView.frame = bounds

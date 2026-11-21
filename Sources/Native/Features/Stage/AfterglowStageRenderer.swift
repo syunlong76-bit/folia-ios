@@ -45,6 +45,8 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var wordViews: [GlowWordView] = []
     /// 当前行字素布局：(字素, x 起点, 宽, start, end, 所属词视图帧)。
@@ -110,6 +112,9 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
     func mount(context: LyricStageContext) { self.context = context }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         if snapshot.track?.id != builtTrackId || snapshot.lines.count != builtLineCount {
             builtTrackId = snapshot.track?.id
@@ -358,7 +363,7 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
         nextLabel.text = line.text
         nextLabel.font = StageFonts.bold(size: fontSize(for: line) * 0.62)
         nextLabel.textColor = snapshot.palette.primary
-        nextLabel.alpha = 0.3
+        nextLabel.alpha = StagePalette.nonCurrentAlphaFloor // (61) WC：下一行（非当前行）alpha 下限 0.45，原 0.3
         if currentIndex != nil {
             nextLabel.frame = CGRect(
                 x: 32, y: currentLineFrame.maxY + 18,
@@ -690,6 +695,9 @@ final class AfterglowStageRenderer: NSObject, LyricStageRenderer {
     private var lastLayoutSize: CGSize = .zero
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         ghostLayer.frame = bounds

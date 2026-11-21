@@ -331,6 +331,8 @@ final class MachiStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var lifecycleState: LyricStageLifecycleState = .created
 
@@ -427,6 +429,9 @@ final class MachiStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         let tuning = MachiTuningStore.valuesCached(now: CACurrentMediaTime())
         let seed = snapshot.track?.id ?? "machi"
@@ -1264,6 +1269,9 @@ extension MachiStageRenderer {
     // MARK: 布局（横竖屏自适应：相机按 bounds 宽高比重拟合）
 
     func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 0)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         sceneView.frame = bounds

@@ -59,6 +59,8 @@ final class LumiereStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
+    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var activeLineId: Int? = nil
     private var builtTrackId: String? = nil
@@ -128,6 +130,9 @@ final class LumiereStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
+        var snapshot = snapshot
+        snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
         if snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount {
@@ -299,7 +304,9 @@ final class LumiereStageRenderer: NSObject, LyricStageRenderer {
             label.text = snapshot.lines[lineIndex].text
             label.font = neighborFont
             label.textColor = pal.unlit
-            label.alpha = CGFloat(tuning.unlitOpacity)
+            // (61) WC：邻行（非当前行）alpha 下限 0.45（调参值低于下限时按下限）。
+            label.alpha = max(CGFloat(tuning.unlitOpacity),
+                              StagePalette.nonCurrentAlphaFloor)
             label.textAlignment = .center
             label.numberOfLines = 1
             label.lineBreakMode = .byTruncatingTail
@@ -545,6 +552,9 @@ final class LumiereStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局
 
     private func performLayout() {
+        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
+                              rect: rootView.bounds, at: 1)
+
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         darkFieldView.frame = bounds
