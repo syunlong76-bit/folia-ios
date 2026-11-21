@@ -491,9 +491,8 @@ final class HomeWallViewController: UIViewController,
         case "panel.open":
             PlaybackPanelViewController.present(from: self, initialTab: .cover)
         case "nav.search":
-            let search = SearchWorkspaceViewController()
-            search.modalPresentationStyle = .overFullScreen
-            present(search, animated: true)
+            // 与主页墙放大镜同落点（SearchHostPresenter 统一呈现）。
+            SearchHostPresenter.presentSearch(from: self)
         case "nav.settings":
             let settings = SettingsViewController()
             settings.modalPresentationStyle = .overFullScreen
@@ -517,7 +516,7 @@ final class HomeWallViewController: UIViewController,
         case "panel.posterwall":
             LivePosterWall62ViewController.present(from: self)
         case "lyric.checkin":
-            Task { await Scrobble62.neteaseCheckin() }
+            Task { _ = await Scrobble62.shared.performCheckIn() }
         default:
             miniBarPanelCommand()
         }
@@ -845,23 +844,15 @@ final class HomeWallViewController: UIViewController,
         wallLayout.cameraScale = WallPrototypeViewController.cameraScale(
             forWidth: collectionView.bounds.width)
         // (66) 记住墙面位置消费：开时以落盘的 worldOrigin 为
-        // 初始相机（wallCamera62），关时走默认居中。
+        // 初始相机（wallCamera62，CGPoint? 口径），关时默认居中。
         if SettingsStore.rememberCardPositions,
-           let saved = Self.parseWallCamera66(SettingsStore.wallCamera62) {
+           let saved = SettingsStore.wallCamera62 {
             wallLayout.worldOrigin = saved
             Breadcrumbs.log("wall66.camera restored=1")
         }
         let cell = wallLayout.cellViewSize
         collectionView.contentOffset = CGPoint(x: cell.width, y: cell.height)
         wallLayout.invalidateLayout()
-    }
-
-    /// (66) wallCamera62 落盘格式 "x,y" 解析。
-    private static func parseWallCamera66(_ raw: String) -> CGPoint? {
-        let parts = raw.split(separator: ",")
-        guard parts.count == 2,
-              let x = Double(parts[0]), let y = Double(parts[1]) else { return nil }
-        return CGPoint(x: x, y: y)
     }
 
     private var wallCameraSaveWork66: DispatchWorkItem?
@@ -873,8 +864,7 @@ final class HomeWallViewController: UIViewController,
         wallCameraSaveWork66?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
-            let origin = self.wallLayout.worldOrigin
-            SettingsStore.wallCamera62 = "\(origin.x),\(origin.y)"
+            SettingsStore.wallCamera62 = self.wallLayout.worldOrigin
             if let grid = self.gridCollectionView, self.seamGridMode {
                 SettingsStore.wallScrollOriginY = Double(grid.contentOffset.y)
             }

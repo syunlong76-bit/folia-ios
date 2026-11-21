@@ -33,7 +33,7 @@ enum Settings62ClusterC {
 
         // Navidrome（组 L）
         let navi = host.makeGroupCard()
-        navi.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("Navidrome"))
+        navi.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("Navidrome")))
         navi.addArrangedSubview(switchRow(host: host, title: "Navidrome 连接",
             isOn: SettingsStore.navidromeEnabled62) { on in
             SettingsStore.navidromeEnabled62 = on
@@ -75,7 +75,7 @@ enum Settings62ClusterC {
 
         // 同步服务（组 L）
         let sync = host.makeGroupCard()
-        sync.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("同步服务"))
+        sync.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("同步服务")))
         sync.addArrangedSubview(switchRow(host: host, title: "同步服务",
             isOn: SettingsStore.syncEnabled62) { on in
             SettingsStore.syncEnabled62 = on
@@ -112,7 +112,7 @@ enum Settings62ClusterC {
 
         // Discord / scrobble / PlayerCap
         let report = host.makeGroupCard()
-        report.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("播放上报"))
+        report.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("播放上报")))
         report.addArrangedSubview(switchRow(host: host, title: "Discord 播放状态",
             isOn: SettingsStore.discordEnabled62) { on in
             SettingsStore.discordEnabled62 = on
@@ -144,7 +144,7 @@ enum Settings62ClusterC {
         reg(report, 8)
 
         let cap = host.makeGroupCard()
-        cap.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("PlayerCap"))
+        cap.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("PlayerCap")))
         cap.addArrangedSubview(switchRow(host: host, title: "PlayerCap 上报",
             isOn: SettingsStore.playerCapEnabled62) { on in
             SettingsStore.playerCapEnabled62 = on
@@ -185,7 +185,7 @@ enum Settings62ClusterC {
 
         // 直播 / OBS
         let live = host.makeGroupCard()
-        live.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("直播与 OBS"))
+        live.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("直播与 OBS")))
         live.addArrangedSubview(switchRow(host: host, title: "播放页透明背景",
             isOn: SettingsStore.transparentStageBackground62) { on in
             SettingsStore.transparentStageBackground62 = on
@@ -223,7 +223,7 @@ enum Settings62ClusterC {
         host.beginCheckGroup("存储与备份·62C")
 
         let media = host.makeGroupCard()
-        media.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("媒体缓存"))
+        media.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("媒体缓存")))
         media.addArrangedSubview(switchRow(host: host, title: "缓存歌曲（媒体缓存）",
             isOn: SettingsStore.mediaCacheEnabled62) { on in
             SettingsStore.mediaCacheEnabled62 = on
@@ -294,7 +294,7 @@ enum Settings62ClusterC {
         reg(media, 9)
 
         let classify = host.makeGroupCard()
-        classify.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("缓存分类清除"))
+        classify.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("缓存分类清除")))
         let statsLabel = valueLabel(host: host, text: statsText())
         classify.addArrangedSubview(infoRow(host: host, title: "分析数据（听歌统计）",
                                             valueLabel: statsLabel))
@@ -337,7 +337,7 @@ enum Settings62ClusterC {
         reg(classify, 9)
 
         let local = host.makeGroupCard()
-        local.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("本地曲库与歌词"))
+        local.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("本地曲库与歌词")))
         local.addArrangedSubview(switchRow(host: host, title: "自动扫描已导入文件夹",
             isOn: SettingsStore.autoScanImportedFolders62) { on in
             SettingsStore.autoScanImportedFolders62 = on
@@ -389,7 +389,7 @@ enum Settings62ClusterC {
         host.beginCheckGroup("开发者·62C")
 
         let tools = host.makeGroupCard()
-        tools.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("开发者工具"))
+        tools.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("开发者工具")))
         // (66) 运行日志采集总开关（网页 consoleLogCapture）：
         // 关时 FoliaBridgeLogStore 完全不记录。
         tools.addArrangedSubview(switchRow(host: host, title: "运行日志采集",
@@ -411,7 +411,7 @@ enum Settings62ClusterC {
         tools.addArrangedSubview(host.makeHintRow(
             "全量日志＝桥日志双轮换文件（2MB×2）的全部行，查看器内可翻页与导出分享。「运行日志采集」关时不再记录（控制台与落盘都停）；「写入本地文件」关时只进系统控制台、不落盘。"))
         tools.addArrangedSubview(host.makeHairline())
-        tools.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("内存监控"))
+        tools.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("内存监控")))
         let sampler = MemorySampler62.shared
         tools.addArrangedSubview(switchRow(host: host, title: "持续采样",
             isOn: sampler.isRunning) { on in
@@ -463,7 +463,7 @@ enum Settings62ClusterC {
         host.beginCheckGroup("帮助·62C")
 
         let keys = host.makeGroupCard()
-        keys.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("键盘快捷键"))
+        keys.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("键盘快捷键")))
         keys.addArrangedSubview(actionRow(host: host, title: "查看快捷键清单", valueLabel: nil) {
             let page = SettingsTextPageViewController(
                 title: "键盘快捷键",
@@ -485,7 +485,7 @@ enum Settings62ClusterC {
         reg(keys, 11)
 
         let support = host.makeGroupCard()
-        support.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("支持"))
+        support.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("支持")))
         support.addArrangedSubview(actionRow(host: host, title: "AI 帮助（本地问答库）", valueLabel: nil) {
             let ai = AIHelp62ViewController()
             ai.modalPresentationStyle = .overFullScreen
@@ -517,7 +517,7 @@ enum Settings62ClusterC {
         reg(support, 11)
 
         let about = host.makeGroupCard()
-        about.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("关于"))
+        about.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("关于")))
         about.addArrangedSubview(actionRow(host: host,
             title: "发行说明（\(ReleaseNotes62.versionText)）", valueLabel: nil) {
             let page = SettingsTextPageViewController(

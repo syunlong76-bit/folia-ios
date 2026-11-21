@@ -119,6 +119,38 @@ enum BackgroundThrottle62 {
     }
 }
 
+/// (66) 后台节流的活动信号面：OBS 浏览器源客户端在场判
+/// 据——LocalServer 每次服务 /obs 请求时登记时刻，「最近
+/// 12 秒内有拉取」判在场（OBS 页 5 秒自动刷新，两轮未到
+/// 即离场）。消费：MediaCache62 自动回填在节流 aggressive
+/// 且 OBS 在场时推迟；设置行（直播与 OBS 组）状态回显。
+/// （(66) 初版曾另建同名文件致重复声明，已并回本枚举。）
+extension BackgroundThrottle62 {
+
+    private static var lastOBSActivity: Date? {
+        get { UserDefaults.standard.object(forKey: "folia.obs.lastActivity") as? Date }
+        set { UserDefaults.standard.set(newValue, forKey: "folia.obs.lastActivity") }
+    }
+
+    /// LocalServer /obs 路由调用。
+    static func noteOBSActivity() {
+        lastOBSActivity = Date()
+    }
+
+    /// OBS 客户端是否在场（最近 12 秒内拉过 /obs）。
+    static var obsClientActive: Bool {
+        guard let last = lastOBSActivity else { return false }
+        return Date().timeIntervalSince(last) < 12
+    }
+
+    /// 后台工作是否可执行：策略 standard → 恒可；
+    /// aggressive 且 OBS 在场 → 不可（推迟）。
+    static var allowsBackgroundWork: Bool {
+        guard SettingsStore.backgroundThrottlePolicy == "aggressive" else { return true }
+        return !obsClientActive
+    }
+}
+
 /// (62) WB：歌词画布统一口径（§4.4 分辨率做全 + 抗锯齿）。
 ///
 /// - 分辨率：全局键 lyricRenderScale（基座既有）的消费汇聚
