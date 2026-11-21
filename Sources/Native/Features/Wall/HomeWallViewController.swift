@@ -49,6 +49,11 @@ final class HomeWallViewController: UIViewController,
     /// EntryIntro 的 view 级落位叠加。
     private var posterReturnSettlePending = false
     private var didCenterCamera = false
+    /// 旋转冻结代次（3.7 (57) 工作流 A2）：每次
+    /// viewWillTransition +1；coordinator completion 只认自己
+    /// 那一代——旋转中途反向再转时，旧代 completion 迟到不得
+    /// 提前解冻新一代的旋转（见 viewWillTransition）。
+    private var wallRotationGeneration = 0
     /// 入场循环的数据状态答复（3.7 (20)）：loadEntries 各落点
     /// 维护，入场呈现时以闭包快照交给 EntryIntroPresenter（按
     /// 呈现隔离，防并行实例的加载互相污染——(20) 真机出现过
@@ -527,6 +532,75 @@ final class HomeWallViewController: UIViewController,
         cancelMiniIdleTimer()
         miniThemeLayer?.setHostVisible(false)
         Breadcrumbs.log("home disappear")
+    }
+
+    /// 旋转期布局冻结（3.7 (57) 工作流 A2，承 (57) A 报告 §4
+    /// 墙侧改动单）：旧链无本覆写，旋转动画的每一中间 bounds
+    /// 都经 WallLayout.shouldInvalidateLayout(恒 true)+原始
+    /// W/H 指纹触发 layoutLattice 全量重算（≤400 实例），主
+    /// 线程被占满、系统旋转动画无法插值——即入场退场录屏里
+    /// 「墙面横倒冻结约 0.8s 后猛地正过来」的墙侧共犯。本覆
+    /// 写改为：旋转开始即冻结墙布局（动画期间零重算，墙面以
+    /// 落定前最后一套属性随系统旋转变换呈现），coordinator
+    /// completion 里一次性收尾。快照覆盖法不采用：整屏光栅
+    /// 化（≤400 卡）另占 GPU/内存且与宠物/贴纸层级打架，冻结
+    /// 已达成动画期间零重算、风险更低。alongside 段刻意传
+    /// nil——不借旋转动画做任何墙面工作。
+    override func viewWillTransition(to size: CGSize,
+        with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        guard viewIfLoaded != nil, collectionView != nil else { return }
+        let fromSize = view.bounds.size
+        guard size != fromSize else { return }
+        wallRotationGeneration += 1
+        let generation = wallRotationGeneration
+        wallLayout.setRotationFrozen(true)
+        Breadcrumbs.log("wall.rotate freeze gen=\(generation)"
+            + " from=\(Int(fromSize.width))x\(Int(fromSize.height))"
+            + " to=\(Int(size.width))x\(Int(size.height))")
+        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+            guard let self else { return }
+            // 中途反向再转：旧代 completion 只记账不解冻，新
+            // 一代的 completion 才是收尾点（防提前解冻后中间
+            // bounds 又触发重算）。
+            guard generation == self.wallRotationGeneration else {
+                Breadcrumbs.log("wall.rotate superseded gen=\(generation)")
+                return
+            }
+            self.wallLayout.setRotationFrozen(false)
+            // 一次性收尾（逐个点名，此外无其他旋转后重排）：
+            // ① 墙本体：解冻后唯一一次 invalidate → prepare →
+            //    refreshInstances；尺寸类别未变（纯旋转在转置
+            //    安全线内）时指纹不变、lattice 零重算，只重建
+            //    一次属性帧；类别变了才全量重算一次。
+            self.wallLayout.invalidateLayout()
+            // ② 迷你台/点播台：宽度按新 bounds 重断言（口径与
+            //    viewDidLayoutSubviews 同：min(宽,高)−24，纯旋
+            //    转时值不变、横竖屏同宽居中）；台身 centerX/
+            //    bottom 安全区锚点由 AutoLayout 随新 bounds 自
+            //    动落位，无手动帧。
+            if let constraint = self.miniBarWidthConstraint {
+                constraint.constant = min(size.width, size.height) - 24
+            }
+            // ③ 贴纸层：dock/失败/缓冲贴纸是手动帧（缓冲贴纸
+            //    依赖迷你台 frame），按新 bounds 重定位一次。
+            self.stickerLayoutOverlays()
+            // ④ 网格形态：flow 布局按新 bounds 失效一次（与墙
+            //    本体同收尾点；网格隐藏时无可见代价）。
+            self.gridCollectionView?.collectionViewLayout.invalidateLayout()
+            // 其余宿主元素审计结论（不需手动重排）：工作台浮
+            // 层/缝合工具条/速记簿/✕ 关闭键均为 AutoLayout 钉
+            // 边或安全区锚定，系统布局传递随新 bounds 自动落
+            // 位、无自有重算；相机 contentOffset 恒钉中心单元、
+            // contentSize 不随 bounds 变（cellViewSize 只由几
+            // 何+cameraScale 决定），不需重居中——首次居中未
+            // 完成时 viewDidLayoutSubviews 的
+            // centerCameraIfNeeded 仍按最终 bounds 接管。
+            Breadcrumbs.log("wall.rotate landed gen=\(generation)"
+                + " size=\(Int(size.width))x\(Int(size.height))"
+                + " instances=\(self.wallLayout.instances.count)"
+                + " latticeComputes=\(self.wallLayout.latticeComputeCount)")
+        }
     }
 
     // MARK: - 数据
