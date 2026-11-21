@@ -438,6 +438,12 @@ final class StageViewController: UIViewController {
         // (62) WD 墙后画面挂载（WA 预留点，签名任务定死）。
         StageBackdrop62.attach(to: backdrop62Container)
         install62Chrome()
+        // (62) INT-6：触摸光效挂载 + 切歌转场宿主注入（WB 两
+        // 件，WA 未接线、集成补）：光效层挂舞台根视图（内部
+        // 读 touchGlowEnabled 自门控）；转场动画的宿主视图由
+        // 本台提供。
+        TouchGlow62.attach(to: view)
+        TransitionAnim62.hostViewProvider = { [weak self] in self?.view }
         // 自定义背景（3.7 (47)）：槽位有记录则装配并藏起宿主
         // 氛围层；播放由 viewWillAppear/Disappear 钩子管。
         refreshCustomBackground()
@@ -595,6 +601,13 @@ final class StageViewController: UIViewController {
         backdropImageView.contentMode = .scaleAspectFill
         backdropImageView.clipsToBounds = true
         backdropBlur.alpha = 0.55
+        // (62) INT-6：原生毛玻璃背景开关消费（WB 键
+        // stageBackdropBlurEnabled，默认开）——关时 effect 置
+        // nil，模糊层整体不渲染（后续自定义背景的显隐切换只
+        // 动 isHidden、不复活模糊）。
+        if !SettingsStore.stageBackdropBlurEnabled {
+            backdropBlur.effect = nil
+        }
         backdropTint.backgroundColor = palette.background.withAlphaComponent(0.5)
         for v in [backdropImageView, backdropBlur, backdropTint] as [UIView] {
             view.addSubview(v)
@@ -2311,6 +2324,9 @@ final class StageViewController: UIViewController {
         let link = CADisplayLink(target: linkProxy, selector: #selector(DisplayLinkProxy.step(_:)))
         link.add(to: .main, forMode: .common)
         displayLink = link
+        // (62) INT-6：帧率限制消费（WB FoliaMotion62）——设置
+        // 开启时按上限夹 preferredFrameRateRange。
+        FoliaMotion62.applyFrameRate(to: link)
         lastFrameTimestamp = 0
     }
 
