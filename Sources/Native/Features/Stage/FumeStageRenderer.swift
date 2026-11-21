@@ -22,8 +22,9 @@ import QuartzCore
 // 自建 CADisplayLink/Timer。inactive/destroyed 停一切推进。
 //
 // 背景（FumeBackground）：几何图形场景（环/方/十字/星芒）以
-// CAShapeLayer 近似——网页的渐变描边以混色实线代（档案注
-// 明），音频频段缩放因 requiresSpectrum=false 恒 1。
+// CAShapeLayer 近似——渐变描边 (62) 升一档为 CAGradientLayer
+// 掩膜渐变场（星芒仍实线+辉光），音频频段缩放因
+// requiresSpectrum=false 恒 1。
 
 // MARK: - 调参（DEFAULT_FUME_TUNING；以 FumeTuningStore 为
 // 底、宿主快照 ext "fume.*" 覆盖优先，(57) C1 接线。此前
@@ -32,6 +33,9 @@ import QuartzCore
 // 却恒画几何背景——本次一并补齐字段与门控。）
 
 struct FumeTuningValues {
+    /// 画布缩放（(62) C7 做真）：renderScale 数值落点（"global"
+    /// 跟随全局歌词倍率），乘进焦点块栅格化倍率（画布分辨率）。
+    var renderScaleFactor: Double = 1
     var cameraSpeed: Double = 1        // 0.55…1.85
     var stepped: Bool = false          // cameraTrackingMode 默认 smooth
     var glowIntensity: Double = 1      // 0…1.8
@@ -46,6 +50,9 @@ struct FumeTuningValues {
         // 底：调参门面（UserDefaults "folia.tuning.fume."，
         // 缺省 = DEFAULT_FUME_TUNING）。
         let stored = FumeTuningStore.values()
+        values.renderScaleFactor = stored.renderScale == "global"
+            ? SettingsStore.lyricRenderScale
+            : (Double(stored.renderScale) ?? 1)
         values.cameraSpeed = stored.cameraSpeed
         values.stepped = stored.cameraTrackingMode == "stepped"
         values.glowIntensity = stored.glowIntensity
@@ -426,6 +433,10 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
     private var blockViews: [Int: FumeBlockView] = [:]
     private var bgScene: (width: CGFloat, height: CGFloat, shapes: [FumeBgShape])?
     private var bgLayers: [CAShapeLayer] = []
+    /// 几何背景渐变场（(62) 保真一档）：非星芒形状的描边改走
+    /// CAGradientLayer（secondary→accent 双停点）以 shape 层为
+    /// mask，不再是混色实线；键为 bgLayers 下标。
+    private var bgGradientLayers: [Int: CAGradientLayer] = [:]
     private var lastTickWall: TimeInterval? = nil
     private var lastOverviewRestore: Double = 0
 
@@ -533,7 +544,9 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
         guard let focal, let blockView = blockViews[focal] else { return }
         focalBoostBlockIndex = focal
         let tier: CGFloat = scale <= 1.05 ? 1 : min(ceil(scale * 2) / 2, 2.5)
-        blockView.setTextScaleFactor(screenScale * tier)
+        // (62) C7：renderScale 真乘进栅格化倍率（画布缩放消费点）。
+        let renderFactor = CGFloat(tuning.renderScaleFactor)
+        blockView.setTextScaleFactor(screenScale * tier * renderFactor)
     }
 
     func unmount() {
@@ -617,8 +630,25 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
                 layer.shadowRadius = 10
                 layer.shadowOffset = .zero
             } else {
-                layer.strokeColor = gradientApprox.withAlphaComponent(CGFloat(opacity)).cgColor
+                // (62) 渐变场：shape 层转 mask，渐变层承载描边色场
+                // （secondary 起、accent 止，45° 线性），alpha 即
+                // 原实线口径的 opacity，保真度较混色实线升一档。
+                layer.strokeColor = UIColor.white.cgColor
                 layer.lineWidth = max(shape.strokeWidth * 0.92, 0.78)
+                layer.frame = CGRect(x: 0, y: 0, width: shape.width, height: shape.width)
+                let gradient = CAGradientLayer()
+                gradient.colors = [
+                    shapeColor.withAlphaComponent(CGFloat(opacity)).cgColor,
+                    gradientApprox.withAlphaComponent(CGFloat(opacity)).cgColor,
+                ]
+                gradient.startPoint = CGPoint(x: 0, y: 0)
+                gradient.endPoint = CGPoint(x: 1, y: 1)
+                gradient.frame = layer.frame
+                gradient.mask = layer
+                bgWorldView.layer.addSublayer(gradient)
+                bgGradientLayers[bgLayers.count] = gradient
+                bgLayers.append(layer)
+                continue
             }
             layer.frame = CGRect(x: 0, y: 0, width: shape.width, height: shape.width)
             bgWorldView.layer.addSublayer(layer)
@@ -628,6 +658,8 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
 
     private func clearBackground() {
         for layer in bgLayers { layer.removeFromSuperlayer() }
+        for gradient in bgGradientLayers.values { gradient.removeFromSuperlayer() }
+        bgGradientLayers = [:]
         bgLayers = []
         bgScene = nil
     }
@@ -650,10 +682,19 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
             let response = fumeMix(0.58, 1.16, shape.depth)
             let offsetX = (bg.cameraX - bg.centerX) * (1 - response) * 0.72
             let offsetY = (bg.cameraY - bg.centerY) * (1 - response) * 0.72
-            layer.position = CGPoint(x: shape.x + CGFloat(offsetX),
-                                     y: shape.y + CGFloat(offsetY))
-            layer.setAffineTransform(CGAffineTransform(
-                rotationAngle: CGFloat(shape.rotation + position * shape.rotationSpeed)))
+            let shapePosition = CGPoint(x: shape.x + CGFloat(offsetX),
+                                        y: shape.y + CGFloat(offsetY))
+            let shapeTransform = CGAffineTransform(
+                rotationAngle: CGFloat(shape.rotation + position * shape.rotationSpeed))
+            if let gradient = bgGradientLayers[index] {
+                // 渐变承载层定位/旋转；mask（layer）保持渐变局部
+                // 坐标不动（其 position 是相对渐变层的）。
+                gradient.position = shapePosition
+                gradient.setAffineTransform(shapeTransform)
+            } else {
+                layer.position = shapePosition
+                layer.setAffineTransform(shapeTransform)
+            }
         }
     }
 

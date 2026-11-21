@@ -23,6 +23,7 @@ final class KugouLoginClient {
     enum KugouLoginError: Error {
         case transport
         case malformed
+        case failed(message: String)
     }
 
     struct QRCode {
@@ -186,6 +187,74 @@ final class KugouLoginClient {
         let response = try await ProviderLoginTransport.getJSON(
             provider: .kugou, path: "/register/dev")
         captureDfid(from: response.root)
+    }
+
+    // MARK: - (62) 账号密码 / 手机验证码（端点 2026-11-21 线上实测在）
+
+    /// 发验证码：GET /captcha/sent?mobile=（模块 captcha_sent，
+    /// 服务端校验手机号格式并下发短信）。status==1 为成功，
+    /// 否则抛错带回后端文案（如「手机格式不正确」）。
+    func sendCaptcha(mobile: String) async throws {
+        let response = try await ProviderLoginTransport.getJSON(
+            provider: .kugou, path: "/captcha/sent",
+            query: ["mobile": mobile])
+        let root = response.root
+        captureDfid(from: root)
+        if Self.isDeviceVerificationRequired(root) {
+            try await registerDevice()
+            let retry = try await ProviderLoginTransport.getJSON(
+                provider: .kugou, path: "/captcha/sent",
+                query: ["mobile": mobile])
+            guard NativeJSON.int(retry.root["status"]) == 1 else {
+                throw KugouLoginError.failed(
+                    message: Self.backendMessage(retry.root) ?? "验证码发送失败")
+            }
+            return
+        }
+        guard NativeJSON.int(root["status"]) == 1 else {
+            throw KugouLoginError.failed(
+                message: Self.backendMessage(root) ?? "验证码发送失败")
+        }
+    }
+
+    /// 账号密码登录：GET /login?username=&password=（模块
+    /// login.js，密码加密在服务端完成）。成功回包 data 带
+    /// token/userid（secu_params 已由服务端解密合并），cookie
+    /// 组装复用扫码确认的 assembleAuthorized 同口径。
+    func loginByPassword(username: String, password: String) async throws -> CheckResult {
+        let response = try await ProviderLoginTransport.getJSON(
+            provider: .kugou, path: "/login",
+            query: ["username": username, "password": password])
+        captureDfid(from: response.root)
+        return finishCredentialLogin(root: response.root)
+    }
+
+    /// 手机验证码登录：GET /login/cellphone?mobile=&code=
+    /// （模块 login_cellphone.js，加密在服务端完成）。
+    func loginByCellphone(mobile: String, code: String) async throws -> CheckResult {
+        let response = try await ProviderLoginTransport.getJSON(
+            provider: .kugou, path: "/login/cellphone",
+            query: ["mobile": mobile, "code": code])
+        captureDfid(from: response.root)
+        return finishCredentialLogin(root: response.root)
+    }
+
+    private func finishCredentialLogin(root: [String: Any]) -> CheckResult {
+        let data = ProviderLoginTransport.dataObject(of: root)
+        guard NativeJSON.int(root["status"]) == 1 else {
+            return .failed(message: Self.backendMessage(root) ?? "登录失败")
+        }
+        return assembleAuthorized(root: root, data: data)
+    }
+
+    /// 后端失败文案：data 可能是字符串（如「参数错误」）或
+    /// 对象里的 message/msg/error。
+    private static func backendMessage(_ root: [String: Any]) -> String? {
+        if let text = root["data"] as? String, !text.isEmpty { return text }
+        let data = ProviderLoginTransport.dataObject(of: root)
+        return ProviderLoginTransport.stringValue(
+            data, "message", "msg", "error")
+            ?? ProviderLoginTransport.stringValue(root, "message", "msg", "error")
     }
 
     // MARK: - 状态校验与退出

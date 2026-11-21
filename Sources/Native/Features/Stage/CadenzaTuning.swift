@@ -75,9 +75,22 @@ enum CadenzaTuningStore {
         }
     }
 
-    /// render 倍率的数值落点："global" → nil（跟随全局挡位；
-    /// 原生 cadenza 为 UIKit 矢量绘制、无画布缩放消费点，
-    /// 渲染器不消费本值，仅存档对齐，见 C1 报告）。
+    /// 抗锯齿覆盖（(62) C8 做真）：取值 "global"（跟随系统，
+    /// 缺省）/ "off"（关）/ "on"（开）。此前只存于 values 结构
+    /// 类型对齐、无访问器无消费；本批补访问器并接进渲染器
+    /// 词视图图层（CadenzaWordView 的 allowsEdgeAntialiasing）。
+    static var renderAntialias: String {
+        get {
+            let raw = defaults.string(forKey: key("renderAntialias")) ?? "global"
+            return ["global", "off", "on"].contains(raw) ? raw : "global"
+        }
+        set {
+            defaults.set(["global", "off", "on"].contains(newValue)
+                ? newValue : "global", forKey: key("renderAntialias"))
+        }
+    }
+
+    /// render 倍率的数值落点："global" → nil（跟随全局挡位）。
     static var renderScaleValue: Double? {
         let raw = renderScale
         return raw == "global" ? nil : Double(raw)
@@ -119,6 +132,7 @@ enum CadenzaTuningStore {
     static func values() -> CadenzaTuningValues {
         var v = CadenzaTuningValues()
         v.renderScale = renderScale
+        v.renderAntialias = renderAntialias
         v.fontScale = fontScale
         v.widthRatio = widthRatio
         v.motionAmount = motionAmount
@@ -129,6 +143,7 @@ enum CadenzaTuningStore {
 
     static func apply(_ values: CadenzaTuningValues) {
         renderScale = values.renderScale
+        renderAntialias = values.renderAntialias
         fontScale = values.fontScale
         widthRatio = values.widthRatio
         motionAmount = values.motionAmount

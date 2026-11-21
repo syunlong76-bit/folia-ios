@@ -821,11 +821,17 @@ final class GlowWordView: UIView {
 enum StageBreathingFloat {
     private static let key = "stage.breathingFloat"
 
-    static func start(on view: UIView) {
+    static func start(on view: UIView) { start(on: view, amplitude: 1) }
+
+    /// 幅度过载（(62) classic 调参消费）：y 位移与 scale 偏差按
+    /// amplitude 缩放（0 = 静止、1 = 网页原值、2 = 双倍）。
+    static func start(on view: UIView, amplitude: CGFloat) {
         guard view.layer.animation(forKey: key) == nil else { return }
         let duration: CFTimeInterval = 7
-        let ys: [CGFloat] = [0, -14, 0, 6.3, 0]
-        let scales: [CGFloat] = [1, 1.01, 1, 0.995, 1]
+        let ys: [CGFloat] = [0, -14, 0, 6.3, 0].map { $0 * amplitude }
+        let scales: [CGFloat] = [1, 1.01, 1, 0.995, 1].map {
+            1 + ($0 - 1) * amplitude
+        }
         var transforms: [CATransform3D] = []
         for i in ys.indices {
             var t = CATransform3DMakeTranslation(0, ys[i], 0)

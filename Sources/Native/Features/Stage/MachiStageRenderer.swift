@@ -42,7 +42,7 @@ import QuartzCore
 //    网页 MachiClock 同纪律：单步钳 0.1s）；雾走场景 fog。
 //  - 景深 engine/lens.ts → SCNCamera 的 wantsDepthOfField/
 //    focalDistance/focalSize/fStop（focusBand/focusFalloff
-//    公式逐值算 focalSize）；移轴无 SceneKit 通路，只存不用。
+//    公式逐值算 focalSize）；移轴 (62) C6 以焦平面偏移近似消费（见 updateLens）。
 //  - 节拍 engine/beatFx.ts：协议无音频/鼓点数据源，智能
 //    动感三件（霓虹脉冲/涟漪/闪拍）未移植；simulatedBeat
 //    开时以 MACHI_BEAT.steady（period 0.75s）驱动霓虹与
@@ -574,6 +574,19 @@ final class MachiStageRenderer: NSObject, LyricStageRenderer {
         }
         camera.focalSize = CGFloat(max(focusBand, 0.1))
         camera.fStop = CGFloat(tuning.aperture)
+        // 移轴近似（(62) C6 做真）：SceneKit 无 Scheimpflug 通路，
+        // 以焦平面沿视线偏移 + 焦距带宽不对称收窄近似移轴的
+        // 「焦平面倾斜」观感——tiltShift 0 时零偏移（原行为），
+        // >0 时对焦距离按 depth 比例前移、focalSize 收窄，
+        // 模拟微缩模型感的浅景深带。代码通路已接通（样式锁定
+        // 期间同样生效于渲染器本体，解锁后即用户可见）。
+        if tuning.tiltShift > 0 {
+            let tiltDepth = tuning.tiltShift * depth
+            camera.focalDistance = CGFloat(
+                max(Double(camera.focalDistance) - tiltDepth * 1.5, 1))
+            camera.focalSize = CGFloat(
+                max(focusBand * (1 - 0.45 * tuning.tiltShift), 0.1))
+        }
         _ = open
     }
 

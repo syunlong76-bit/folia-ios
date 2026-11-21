@@ -104,6 +104,63 @@ enum ProviderLoginTransport {
         throw lastError
     }
 
+    /// POST JSON（(62) QQ keepalive 用）：与 getJSON 同节点序
+    /// 与 cookie 载体（?cookie= 查询参数 + X-QQ-Session 头），
+    /// 另在 JSON body 里带一份 cookie（后端 /login/refresh
+    /// 实测 POST-only、401 无会话——双载体兼容其读法）。
+    static func postJSON(
+        provider: NativeSessionStore.Provider,
+        path: String,
+        query: [String: String] = [:],
+        cookie: <redacted>
+    ) async throws -> Response {
+        var lastError: Error = TransportError.transport
+        for base in bases(for: provider) {
+            do {
+                var components = URLComponents(
+                    url: base.appendingPathComponent(path),
+                    resolvingAgainstBaseURL: false)
+                var items = query.map { URLQueryItem(name: $0.key, value: $0.value) }
+                if let cookie, provider == .kugou || provider == .qq {
+                    items.append(URLQueryItem(name: "cookie", value: cookie))
+                }
+                items.append(URLQueryItem(
+                    name: "timestamp",
+                    value: String(Int(Date().timeIntervalSince1970 * 1000))))
+                components?.queryItems = items
+                guard let url = components?.url else {
+                    throw TransportError.malformed
+                }
+                var request = URLRequest(url: url)
+                request.httpMethod = "POST"
+                request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+                if provider == .qq, let cookie,
+                   let token = NativeSessionStore.qqSessionToken(in: cookie) {
+                    request.setValue(token, forHTTPHeaderField: "X-QQ-Session")
+                }
+                var body: [String: String] = [:]
+                if let cookie { body["cookie"] = cookie }
+                request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else {
+                    throw TransportError.transport
+                }
+                guard (200...299).contains(http.statusCode) else {
+                    throw TransportError.http(status: http.statusCode)
+                }
+                guard let object = try? JSONSerialization.jsonObject(with: data),
+                      let dict = object as? [String: Any] else {
+                    throw TransportError.malformed
+                }
+                return Response(root: dict, httpStatus: http.statusCode)
+            } catch {
+                lastError = error
+                continue
+            }
+        }
+        throw lastError
+    }
+
     /// 回包层级拆解（酷狗网页版 dataOf/responsePayload 同构）：
     /// 先剥 body 包裹，再取 data。
     static func dataObject(of root: [String: Any]) -> [String: Any] {

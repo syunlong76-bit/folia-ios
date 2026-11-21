@@ -300,6 +300,7 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func frameTick(position: TimeInterval) {
+        position62 = position
         guard isActive, let snapshot else { return }
         lastPosition = position
         let now = CACurrentMediaTime()
@@ -411,10 +412,16 @@ final class PendoloStageRenderer: NSObject, LyricStageRenderer {
 
     // MARK: 机芯运动（pendoloClockworkMotion 无节拍分支对译）
 
+    private var position62: TimeInterval = 0
+
     private func stepClockwork(dt: Double, paused: Bool) {
-        // bass 无频谱数据源：恒 0.18（网页画布缺省），平滑
-        // 公式 min(0.24, 0.12×bassResponse) 中 normal 档 = 0.12。
-        smoothedBass += (0.18 - smoothedBass) * 0.12
+        // bass 无频谱数据源：(62) 以伪能量低频近似替代恒值——
+        // StageEnergy62.bass（确定性慢包络）围绕网页缺省 0.18
+        // 摆动（±0.10），平滑公式 min(0.24, 0.12×bassResponse)
+        // 中 normal 档 = 0.12 不变。beatFx 的鼓点分离仍无数据
+        // 源，未落（见报告）。
+        let bassTarget = 0.18 + (StageEnergy62.bass(at: position62) - 0.5) * 0.2
+        smoothedBass += (bassTarget - smoothedBass) * 0.12
         guard !paused else { return }
         phase += dt * (2.8 + smoothedBass * 3.5)
         secondElapsed += dt

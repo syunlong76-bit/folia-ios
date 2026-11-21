@@ -508,7 +508,23 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     @objc private func miniBarPanelCommand() {
-        presentMiniBarPanel(CommandPaletteViewController(), kind: "command")
+        // (62) C2 做真：同 HomeWall——注入跨面回调，队列走
+        // PlaybackPanel 队列页签，样式走本墙原生舞台内选择器。
+        guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.log("wall.menu.panel skipped kind=command busy=1 wall=proto")
+            return
+        }
+        Breadcrumbs.log("wall.menu.panel present kind=command62 wall=proto")
+        CommandPaletteViewController.present(from: self) { [weak self] palette in
+            palette.onOpenQueuePanel = { [weak self] in
+                guard let self, self.presentedViewController == nil else { return }
+                PlaybackPanelViewController.present(from: self, initialTab: .queue)
+            }
+            palette.onOpenStylePicker = { [weak self] in
+                Breadcrumbs.log("wall62.command stylePicker viaStage=1 wall=proto")
+                self?.openNativeStageFromWall()
+            }
+        }
     }
 
     private func presentMiniBarPanel(_ panel: UIViewController, kind: String) {

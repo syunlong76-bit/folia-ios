@@ -17,7 +17,8 @@ import QuartzCore
 // animations.ts（9 排版 / 12 色块 / 17 入场 / 9 强调 / 7
 // 退场的纯 t 函数）、hanabiSky.ts（夜空四色标）、overlay.ts
 // （画框）、hanabiScreenBloom.ts（全屏辉光公式）、
-// hanabiBeatFx.ts（节拍烟花：协议无节拍数据源，见档案）。
+// hanabiBeatFx.ts（节拍烟花：协议无节拍数据源——(62) 以
+// 行首时间戳节拍近似补，见 frameTick 组装处注记）。
 //
 // 原生落点与选型：
 //  - 粒子不用 CAEmitterLayer：网页烟花是「事件 + 闭式解」
@@ -3987,6 +3988,30 @@ final class HanabiStageRenderer: LyricStageRenderer {
             frontLaunches += holder.eventsFront.launches
             backOrnaments += holder.eventsBack.ornaments
             frontOrnaments += holder.eventsFront.ornaments
+        }
+        // 节拍烟花近似（(62) §6 hanabi）：协议无节拍/鼓声数据
+        // 源，网页 hanabiBeatFx 不可达——以行首时间戳为节拍点
+        // 近似：每行开始时在确定性伪随机位置放一朵小爆（botan
+        // 26 星），相位由 StageEnergy62.beatPhase 对齐到行首。
+        // 这是节拍近似、非真实鼓点检测（档案口径保留标注）。
+        if !tuning.textOnly, let snapshot, let palette = basePalette {
+            let unit = Double(min(bounds.width, bounds.height))
+            for line in snapshot.lines
+            where position >= line.start - 0.05 && position <= line.start + 1.6 {
+                let seed = Double(line.id * 7919 % 1000) / 1000
+                let event = HanabiBurstEvent(
+                    x: Double(bounds.width) * (0.2 + 0.6 * seed),
+                    y: Double(bounds.height) * (0.16 + 0.2 * (1 - seed)),
+                    at: line.start + 0.02,
+                    spec: HanabiBurstSpecData(
+                        kind: "botan", count: 26, radius: 0.15,
+                        duration: 1.4, colors: [0, 1], trail: 0.4,
+                        twinkle: 0.5),
+                    seed: "beat62:\(line.id)", scale: 0.8)
+                backBursts.append(hanabiPlanBurst(
+                    event: event, palette: palette, unit: unit,
+                    amount: tuning.sparkAmount))
+            }
         }
         let quality = tuning.renderQuality
         let budgetScale = [1.0, 0.7, 0.5, 0.32][degradeLevel]

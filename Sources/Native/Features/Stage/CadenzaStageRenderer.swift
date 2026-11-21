@@ -35,7 +35,8 @@ import QuartzCore
 //    的行用真戳、无覆盖行用行内均分兜底（与网页无逐字数据
 //    时 even grapheme timing 同口径）；wordColors 缺失 → 每词颜色恒为
 //    palette.accent（网页 resolveWordColor 的回退色）；
-//  - isChorus 缺失 → 副歌涟漪永不触发；animationIntensity
+//  - isChorus 缺失 → (62) 以重复行推导近似触发涟漪（单环
+//    扩散近似，非协议真值）；animationIntensity
 //    缺失 → 恒 normal 档（baseMargin 6、baseScale 1.01、
 //    passedAlpha 0.82、passedRotate ±6°、透视 1000）；
 //  - tuning（(57) C1 接线）：经 CadenzaTuningStore 门面读
@@ -371,7 +372,8 @@ private final class CadenzaWordView: UIView {
     private let renderScale: CGFloat
     private let fontPx: CGFloat
 
-    init(placement: CadenzaPlacement, font: UIFont, splitGlow: Bool) {
+    init(placement: CadenzaPlacement, font: UIFont, splitGlow: Bool,
+         antialiasEnabled: Bool = true) {
         self.placement = placement
         self.glyphs = placement.text.map { String($0) }
         self.isCJKText = CadenzaStageRenderer.isCJKText(placement.text)
@@ -420,6 +422,10 @@ private final class CadenzaWordView: UIView {
             contentView.transform = CGAffineTransform(scaleX: 1 / r, y: 1 / r)
         }
         contentView.isUserInteractionEnabled = false
+        // 抗锯齿消费（(62) C8）：renderAntialias="off" 时关图层
+        // 边缘抗锯齿（正文/辉光/强调三层标签同口径），文字在旋
+        // 转/缩放变换下呈硬边；"global"/"on" 维持系统默认。
+        contentView.layer.allowsEdgeAntialiasing = antialiasEnabled
         addSubview(contentView)
 
         let labelY = (placement.height * 0.42 - font.ascender) * r
@@ -459,6 +465,9 @@ private final class CadenzaWordView: UIView {
         emphasisGlowLabel.isUserInteractionEnabled = false
         contentView.addSubview(emphasisGlowLabel)
 
+        bodyLabel.layer.allowsEdgeAntialiasing = antialiasEnabled
+        emphasisGlowLabel.layer.allowsEdgeAntialiasing = antialiasEnabled
+        for label in glowLabels { label.layer.allowsEdgeAntialiasing = antialiasEnabled }
         bodyLabel.text = placement.text
         bodyLabel.font = rFont
         bodyLabel.sizeToFit()
@@ -545,6 +554,11 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
+    /// 副歌推导（(62) §6 cadenza）：协议无 isChorus 字段，以
+    /// 归一化重复行检测推导（LyricDerivation62），命中行启用
+    /// 涟漪近似层——网页涟漪本体的逐帧扩散环以单环扩散近似。
+    private var chorusLineIds62: Set<Int> = []
+    private let chorusRing62 = CAShapeLayer()
     /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
     private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
@@ -560,6 +574,10 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
         // 网页 lineLayer 的 transformOrigin 为 50% 42%。
         lineLayer.layer.anchorPoint = CGPoint(x: 0.5, y: 0.42)
         rootView.addSubview(lineLayer)
+        chorusRing62.fillColor = nil
+        chorusRing62.lineWidth = 2
+        chorusRing62.opacity = 0
+        lineLayer.layer.addSublayer(chorusRing62)
         rootView.onLayout = { [weak self] in self?.performLayout() }
     }
 
@@ -581,6 +599,7 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
+        chorusLineIds62 = LyricDerivation62.chorusLineIds(in: snapshot.lines)
         // (61) WC：入口统一过对比钳制——下游 palette.* 全走保护副本。
         var snapshot = snapshot
         snapshot.palette = snapshot.palette.contrastProtected()
@@ -698,6 +717,7 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
 
     private func transitionLine(to idx: Int?) {
         activeLineId = idx
+        chorusRing62.opacity = 0
         clearLineViews()
         currentPrepared = nil
         guard let idx, let snapshot,
@@ -717,7 +737,8 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
                 && !Self.isCJKText(placement.text)
                 && placement.text.count > 1
             let wordView = CadenzaWordView(
-                placement: placement, font: font, splitGlow: splitGlow)
+                placement: placement, font: font, splitGlow: splitGlow,
+                antialiasEnabled: CadenzaTuningStore.renderAntialias != "off")
             wordView.isHidden = true
             lineLayer.addSubview(wordView)
             wordViews[placement.id] = wordView
@@ -776,7 +797,21 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
             let progress = CadenzaEnvelopes.wordProgress(
                 time: time, timing: timing,
                 wordStart: placement.wordStart, wordEnd: placement.wordEnd)
-            _ = progress  // 仅副歌涟漪用；isChorus 数据缺失不触发
+            // 副歌涟漪近似（(62)）：推导副歌行内，活跃词处扩散
+            // 环随词进度扩散消退（网页为多环逐帧扩散，原生单环
+            // 近似）；非副歌行环隐藏。isChorus 由重复行推导，
+            // 非协议真值（见 LyricDerivation62 注记）。
+            if status == 1,
+               let lineIdx = activeLineId,
+               chorusLineIds62.contains(snapshot.lines[lineIdx].id) {
+                let radius = CGFloat(14 + progress * 66)
+                chorusRing62.path = UIBezierPath(
+                    arcCenter: .zero, radius: radius,
+                    startAngle: 0, endAngle: .pi * 2, clockwise: true).cgPath
+                chorusRing62.position = wordView.layer.position
+                chorusRing62.strokeColor = snapshot.palette.accent.cgColor
+                chorusRing62.opacity = Float(max(0, (1 - progress)) * 0.55)
+            }
             let passedAlpha: Double = isInstant ? 0 : 0.82
             let pulse: Double = (status == 1 && !isInstant)
                 ? 1 + sin(time * CadenzaEnvelopes.activePulseFrequency

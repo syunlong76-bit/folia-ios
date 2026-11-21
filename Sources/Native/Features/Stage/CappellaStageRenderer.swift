@@ -61,6 +61,11 @@ import QuartzCore
 //    "......" 按网页无池分支落为普通歌词气泡。调参
 //    showEmoMessages / emojiPackSource 已存（Cappella-
 //    Tuning.swift），待图包通道接入后生效。
+//  - 头像图包（(62) D12）：Resources/Stickers 猫狗贴纸首帧入
+//    池作发送者头像（上文 CappellaRowView.stickerAvatarPool62）；
+//    agentId 仍无协议字段——发送者序号由既有确定性 sequencing
+//    产生（等价于行序轮换近似，见 LyricDerivation62.pseudo
+//    AgentIndex 的同义口径），非协议真值。
 //  - 协议 LyricLine 无 agentId 字段：cappellaMessageSenders
 //    的 TTML agent 解析分支永不触发，发送者恒走 sequencing。
 // 时钟纪律不变：只消费宿主 frameTick 的锚点位置，不自建时钟
@@ -288,6 +293,30 @@ private final class CappellaRowView: UIView {
     let avatarGradient = CAGradientLayer()
     /// 封面宫格裁切图（cover 档；格图由渲染器裁好下发）。
     let coverImageView = UIImageView()
+    /// 贴纸头像（(62) D12）：仓库 Resources/Stickers 的猫狗贴纸
+    /// 首帧作发送者头像池（网页 avatarImages 图包的原生等价
+    /// 素材），按 resolvedAvatarIndex 落位；无图时回退宫格
+    /// 渐变/封面既有通路。
+    let stickerImageView = UIImageView()
+
+    /// 贴纸头像池（图包近似）：cat/dog 各取一段，首帧静态图。
+    static let stickerAvatarPool62: [String] = [
+        "cat-01", "cat-03", "cat-05", "cat-08", "cat-11", "cat-14",
+        "dog-01", "dog-03", "dog-05", "dog-08", "dog-11", "dog-13",
+    ]
+    private static var stickerCache62: [String: UIImage] = [:]
+    static func stickerAvatar62(index: Int) -> UIImage? {
+        let name = stickerAvatarPool62[
+            ((index % stickerAvatarPool62.count) + stickerAvatarPool62.count)
+                % stickerAvatarPool62.count]
+        if let cached = stickerCache62[name] { return cached }
+        guard let url = Bundle.main.url(forResource: name,
+                                        withExtension: "png",
+                                        subdirectory: "Stickers"),
+              let image = UIImage(contentsOfFile: url.path) else { return nil }
+        stickerCache62[name] = image
+        return image
+    }
     let shadowView = UIView()
     let bubbleView = UIView()
     let bubbleLabel = UILabel()
@@ -343,6 +372,19 @@ private final class CappellaRowView: UIView {
         coverImageView.clipsToBounds = true
         coverImageView.isHidden = true
         avatarView.addSubview(coverImageView)
+        // 贴纸头像层（(62) D12）：有图时盖住渐变宫格（封面档
+        // 由渲染器另行控制 coverImageView 显隐、优先级更高时
+        // 渲染器可再隐藏本层——见 applyCover 处注记）。
+        stickerImageView.frame = coverImageView.frame
+        stickerImageView.contentMode = .scaleAspectFill
+        stickerImageView.clipsToBounds = true
+        if let sticker = Self.stickerAvatar62(index: model.resolvedAvatarIndex) {
+            stickerImageView.image = sticker
+            avatarGradient.isHidden = true
+        } else {
+            stickerImageView.isHidden = true
+        }
+        avatarView.addSubview(stickerImageView)
         groupView.addSubview(avatarView)
 
         shadowView.isUserInteractionEnabled = false
@@ -453,6 +495,9 @@ private final class CappellaRowView: UIView {
         coverImageView.image = image
         coverImageView.isHidden = image == nil
         avatarGradient.isHidden = image != nil
+        // 贴纸头像（(62) D12）：封面档优先——有格图时贴纸让位，
+        // 无格图时贴纸恢复（init 已按池落位）。
+        stickerImageView.isHidden = image != nil || stickerImageView.image == nil
     }
 
     func setGlowAlpha(_ alpha: CGFloat) {

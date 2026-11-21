@@ -38,9 +38,17 @@ final class SketchbookStore: ObservableObject {
         var addedAt: TimeInterval
         /// 收进来的出处小字（如「搜索」）；没有就不写（照网页版 origin）。
         var originLabel: String?
+        /// (62) 来源键落盘（search/playlist/queue/manual 等
+        /// add 的 source 原值）：自动成组的依据；旧存量无此
+        /// 字段时按「手动收进」归组。
+        var sourceKey: String?
+        /// (62) 便签形状：rect（矩形，缺省）/ round（圆角）/
+        /// tape（胶带角）；画布形态消费。
+        var shape: String?
         /// 所在用户分组的 id；nil = 未分组。
         var groupId: String?
-        /// 画布落点（槽位左上角，相对该组网格原点）；nil = 未摆过。
+        /// 画布落点（(62) 起为自由坐标：卡片左上角相对该组
+        /// 原点的任意点，不再吸附槽位）；nil = 未摆过。
         var canvasX: Double?
         var canvasY: Double?
     }
@@ -125,11 +133,78 @@ final class SketchbookStore: ObservableObject {
         entries.append(Entry(
             track: track,
             addedAt: Date().timeIntervalSince1970,
-            originLabel: originLabel))
+            originLabel: originLabel ?? Self.originLabel(forSource: source),
+            sourceKey: source))
         recordHistory(action: "add", title: track.title, artist: track.artist)
         save()
         Breadcrumbs.log("sketchbook.add source=\(source) id=\(track.id) total=\(entries.count)")
         return true
+    }
+
+    /// (62) 来源 → 出处小字（add 未带 originLabel 时的缺省）。
+    static func originLabel(forSource source: String) -> String? {
+        switch source {
+        case "search": return "搜索"
+        case "playlist": return "歌单"
+        case "queue": return "队列"
+        case "drawer", "manual": return "手动"
+        default: return nil
+        }
+    }
+
+    /// (62) 批量收进（§7）：逐首走 add 同口径（去重/满员
+    /// 拒收/历史），返回真收下数。供搜索页多选与 WC 的集合
+    /// 页/队列面板多选入口消费。
+    @discardableResult
+    func addBatch(_ tracks: [FoliaTrack], source: String) -> Int {
+        var added = 0
+        for track in tracks where add(track, source: source) { added += 1 }
+        Breadcrumbs.log("sketchbook.addBatch source=\(source) added=\(added)/\(tracks.count)")
+        return added
+    }
+
+    // MARK: - (62) 自动来源组
+
+    /// 来源键 → 自动组键：search/playlist/queue 各自成组，
+    /// 其余（含旧存量无 sourceKey）归 manual。
+    static func autoGroupKey(forSourceKey sourceKey: String?) -> String {
+        switch sourceKey {
+        case "search": return "search"
+        case "playlist": return "playlist"
+        case "queue": return "queue"
+        default: return "manual"
+        }
+    }
+
+    static func autoGroupName(forKey key: String) -> String {
+        switch key {
+        case "search": return "来自搜索"
+        case "playlist": return "来自歌单"
+        case "queue": return "来自队列"
+        default: return "手动收进"
+        }
+    }
+
+    /// 非空自动组（固定序 search/playlist/queue/manual）。
+    var autoGroups62: [(key: String, name: String, entries: [Entry])] {
+        ["search", "playlist", "queue", "manual"].compactMap { key in
+            let items = entries(inAutoGroup: key)
+            return items.isEmpty ? nil
+                : (key: key, name: Self.autoGroupName(forKey: key), entries: items)
+        }
+    }
+
+    func entries(inAutoGroup key: String) -> [Entry] {
+        entries.filter { Self.autoGroupKey(forSourceKey: $0.sourceKey) == key }
+    }
+
+    /// (62) 便签形状设置（rect/round/tape，非法值回 rect）。
+    func setShape(trackId: String, shape: String) {
+        guard let index = entries.firstIndex(where: { $0.track.id == trackId })
+        else { return }
+        entries[index].shape = ["rect", "round", "tape"].contains(shape) ? shape : "rect"
+        save()
+        Breadcrumbs.log("sketchbook62.shape id=\(trackId) shape=\(entries[index].shape ?? "rect")")
     }
 
     func remove(trackId: String, source: String) {

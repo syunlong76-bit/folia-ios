@@ -31,14 +31,15 @@ import QuartzCore
 //  - 121 种 kind 全部登记并参与无重复抽选；几何按十三族生成器
 //    落地，其中 split/band/frame 前 24 种的 region/enter/camera
 //    用 temperaShotProfiles.ts 原值，其余 kind 用同族原值区间的
-//    族级 profile（逐 kind 精确 region 表未逐条搬完）。
+//    族级 profile（(62) 已细化到族内散列微分；逐 kind 精确
+//    region 表仍未逐条搬完）。
 //  - 后处理 GLSL 链（sonnetLens/Glitch/Print）只落暗角（径向
 //    渐变）+ 颗粒（平铺噪点图）+ 对比（半透明墨层近似）；RGB
 //    偏移与镜头畸变无原生等价低成本管线，未落（参数已存储）。
 //  - 墨染奥行：协议无鼓点/频谱数据源（hostCapabilities
 //    requiresSpectrum=false），墨渍层未落；景深只落视差与
 //    glyphDepth 远近（模糊烘焙未落）。
-//  - 用户图片池：协议无图片下发，layerImages 不消费（参数已存）。
+//  - 用户图片池：(62) C4 起 layerImages 真消费（url/封面图源、depth/frequency 生效，见 updateLayerImage）。
 //  - keywordLayer 关键字着色：协议无 wordColors 数据，未落。
 //  - 封面取色（gradient 的 coverColors）：协议调色板只给语义
 //    色，ramp 以主题色相（accent/secondary/primary/ink）构建，
@@ -382,8 +383,27 @@ private func temperaProfile(for kind: String) -> TemperaShotProfile {
             "rubble-fan", "gnomon", "triangle-mass"].contains(kind) {
         return p(0.5, 0.54, 0.8, 0.4, ex: -0.8, ey: 0.9, travel: 0.1, zs: 1.06, ze: 1.13, mood: .loud)
     }
-    // frame / poster / aperture / signal / corridor 其余 kind。
-    return p(0.5, 0.5, 0.74, 0.42, ex: 0.7, ey: 0.7, travel: 0.09, zs: 1.07, ze: 1.12, mood: .neutral)
+    // (62) 族级 profile 细化：frame/window 与 poster 两族拆开，
+    // 并按 kind 散列在族区间内做确定性微分（同 kind 恒同值），
+    // 不再全族一值——逐 kind 精确 region 表仍未逐条搬完（档案）。
+    let jitter = (Double(temperaHashSeed(kind) % 100) / 100 - 0.5)
+    if kind.hasSuffix("-window") || kind.hasSuffix("-frame")
+        || ["grid-cells", "keyhole", "corner-brackets", "inset-box",
+            "bracket-pair", "ladder-frame"].contains(kind) {
+        return p(0.5 + jitter * 0.04, 0.5, 0.62, 0.46, fontScale: 0.94,
+                 ex: 0, ey: 0.9, travel: 0.05 + abs(jitter) * 0.03,
+                 zs: 1.13, ze: 1.03, mood: .neutral)
+    }
+    if kind.hasSuffix("-poster") || kind.hasSuffix("-panel")
+        || ["diamond-stack", "arrow-wedge", "edge-bleed", "ribbon-cross",
+            "half-disc", "stacked-slabs", "wedge-pair"].contains(kind) {
+        return p(0.5, 0.5 + jitter * 0.04, 0.78, 0.44, rotation: jitter * 0.03,
+                 ex: 0.9, ey: 0.5, travel: 0.1, zs: 1.06, ze: 1.13, mood: .loud)
+    }
+    // aperture / signal / corridor 其余 kind：族中位 + 散列微分。
+    return p(0.5 + jitter * 0.05, 0.5 + jitter * 0.03, 0.74, 0.42,
+             ex: 0.7, ey: 0.7, travel: 0.09 + abs(jitter) * 0.02,
+             zs: 1.07, ze: 1.12, mood: .neutral)
 }
 
 private func temperaCandidates(moods: [TemperaMood]) -> [String] {
@@ -1270,6 +1290,14 @@ final class TemperaStageRenderer: LyricStageRenderer {
     private var currentShotView: TemperaShotView?
     private var outgoingShotView: TemperaShotView?
     private var currentShotIndex: Int? = nil
+    /// 层图（3.7 (62) C4 做真）：layerImages placement 真消费——
+    /// 每 shot 按 layerImageFrequency 的种子概率决定是否挂图，
+    /// layerImageDepth 决定在 shot 之下（back）/之上（front）；
+    /// 图源：placement 的 url 直链，或缺省取当前曲封面（原生包
+    /// 内唯一现成图源；网页 IndexedDB 图池无原生等价物）。
+    private let layerImageView = UIImageView()
+    private var layerImageShotIndex: Int? = nil
+    private var layerImageTask: Task<Void, Never>?
     private var builtViewportSize: CGSize = .zero
     private var wipeLayer: CAShapeLayer?
     private var grainImage: UIImage?
@@ -1292,6 +1320,10 @@ final class TemperaStageRenderer: LyricStageRenderer {
         creditsView.isUserInteractionEnabled = false
         creditsView.isHidden = true
         rootView.addSubview(creditsView)
+        layerImageView.isUserInteractionEnabled = false
+        layerImageView.contentMode = .scaleAspectFill
+        layerImageView.clipsToBounds = true
+        layerImageView.isHidden = true
         rootView.onLayout = { [weak self] in self?.performLayout() }
     }
 
@@ -1366,6 +1398,10 @@ final class TemperaStageRenderer: LyricStageRenderer {
         guard let idx else { return }
         if idx != currentShotIndex {
             transitionToShot(idx, position: position, tuning: tuning)
+        }
+        if idx != layerImageShotIndex {
+            layerImageShotIndex = idx
+            updateLayerImage(shotIndex: idx, tuning: tuning)
         }
         let shot = program[idx]
         // 镜头（temperaCamera.ts）：key 插值 eased = 0.5·linear +
@@ -2002,6 +2038,68 @@ final class TemperaStageRenderer: LyricStageRenderer {
     }
 
     // MARK: 布局
+
+    /// 层图消费（(62) C4）：解析 layerImagesJSON placement 数组
+    /// （[{url?, x?, y?, scale?, opacity?}]，x/y/scale 为 0...1
+    /// 相对量）；本 shot 的种子概率 < layerImageFrequency 才挂。
+    private func updateLayerImage(shotIndex: Int, tuning: TemperaTuningValues) {
+        layerImageTask?.cancel()
+        guard let data = tuning.layerImagesJSON.data(using: .utf8),
+              let raw = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]],
+              !raw.isEmpty else {
+            layerImageView.isHidden = true
+            return
+        }
+        let roll = Double(temperaMixSeed(
+            temperaHashSeed(snapshot?.track?.id ?? ""), shotIndex * 131 + 7) % 1000) / 1000
+        guard roll < tuning.layerImageFrequency else {
+            layerImageView.isHidden = true
+            return
+        }
+        let placement = raw[shotIndex % raw.count]
+        let relX = (placement["x"] as? Double) ?? 0.5
+        let relY = (placement["y"] as? Double) ?? 0.5
+        let relScale = min(max((placement["scale"] as? Double) ?? 0.42, 0.1), 1)
+        let opacity = min(max((placement["opacity"] as? Double) ?? 0.85, 0), 1)
+        let bounds = rootView.bounds
+        let side = bounds.width * CGFloat(relScale)
+        layerImageView.frame = CGRect(
+            x: bounds.width * CGFloat(relX) - side / 2,
+            y: bounds.height * CGFloat(relY) - side / 2,
+            width: side, height: side)
+        layerImageView.alpha = CGFloat(opacity)
+        // depth：back 在 shotHost 之下、front 在其上（credits 之下）。
+        layerImageView.removeFromSuperview()
+        if tuning.layerImageDepth == "front" {
+            rootView.insertSubview(layerImageView, belowSubview: creditsView)
+        } else {
+            rootView.insertSubview(layerImageView, belowSubview: shotHost)
+        }
+        layerImageView.isHidden = false
+        if let urlText = placement["url"] as? String, let url = URL(string: urlText) {
+            layerImageTask = Task { [weak self] in
+                let image = await NativeCoverLoader.shared.image(
+                    for: url.absoluteString, tier: 512)
+                await MainActor.run {
+                    guard let self, self.layerImageShotIndex == shotIndex else { return }
+                    self.layerImageView.image = image
+                    self.layerImageView.isHidden = image == nil
+                }
+            }
+        } else if let raw = snapshot?.track?.artworkURL {
+            layerImageTask = Task { [weak self] in
+                let image = await NativeCoverLoader.shared.image(for: raw, tier: 512)
+                await MainActor.run {
+                    guard let self, self.layerImageShotIndex == shotIndex else { return }
+                    self.layerImageView.image = image
+                    self.layerImageView.isHidden = image == nil
+                }
+            }
+        } else {
+            layerImageView.isHidden = true
+        }
+        Breadcrumbs.log("stage62.tempera layerImage shot=\(shotIndex) depth=\(tuning.layerImageDepth)")
+    }
 
     private func performLayout() {
         lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,

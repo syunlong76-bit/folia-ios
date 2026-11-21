@@ -16,7 +16,8 @@ import CoreImage
 // 网页在 iOS WebKit 恒禁用、原生无此约束故保留）。
 // 数据缺口（无数据源、分支保留恒不触发，与 cadenza 等
 // 既定先例同口径）：副歌 isChorus（LyricLine 无此字段）、
-// 副字幕轨（宿主无译文数据）、wordColors 关键字着色。
+// 副字幕轨（(62) 接 LyricTranslation62 tlyric 通路，有数据
+// 则显）、wordColors 关键字着色（仍无数据源）。
 // 时钟纪律：只消费宿主 frameTick，不自建时钟源。
 // 成图纪律（3.7 (44) 异步化）：一切栅格成图（静态行绘制＋
 // 高斯模糊、扫字逐词三图）只在后台 bakeQueue 备好后贴入，
@@ -494,6 +495,12 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     private var didPortraitIntro = false
     private var driftSize: CGSize = .zero
     private var lastPosition: TimeInterval = 0
+    /// 副字幕轨（(62) §6 monet）：译文行（tlyric 通路
+    /// LyricTranslation62）有数据时在轨道下方显示当前行译文；
+    /// 无译文数据整轨不显（网页副字幕轨同义）。漂移消费
+    /// WB 的 FoliaMotion62 减弱动态开关（见 installDriftIfNeeded）。
+    private let subtitleLabel62 = UILabel()
+    private var subtitleLineId62: Int? = nil
 
     private enum LineStatus { case active, waiting, passed }
     private struct Tone {
@@ -536,6 +543,13 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         portraitClipView.isUserInteractionEnabled = false
         portraitShadowView.addSubview(portraitClipView)
         rootView.addSubview(railView)
+        subtitleLabel62.font = .systemFont(ofSize: 13)
+        subtitleLabel62.textColor = UIColor.white.withAlphaComponent(0.75)
+        subtitleLabel62.textAlignment = .center
+        subtitleLabel62.numberOfLines = 1
+        subtitleLabel62.alpha = 0
+        subtitleLabel62.isUserInteractionEnabled = false
+        rootView.addSubview(subtitleLabel62)
         rootView.addSubview(particleView)
         railView.clipsToBounds = false
         // 轨道上下羽化 mask（网页 mask-image 同 stops）。
@@ -693,6 +707,34 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         particleView.tick()
         if let current = activeIndex, let lineView = lineViews[current] {
             lineView.updateSweep(position: position, lineEnd: lines[current].end)
+        }
+        updateSubtitle62()
+    }
+
+    /// 副字幕轨更新（(62)）：焦点行变化时查译文缓存；有译文
+    /// 淡入、无译文淡出。位置 = 视口底部上方（轨道之下）。
+    private func updateSubtitle62() {
+        let bounds = rootView.bounds
+        subtitleLabel62.frame = CGRect(
+            x: 24, y: bounds.height - 64,
+            width: max(bounds.width - 48, 0), height: 20)
+        guard let trackID, let current = activeIndex,
+              lines.indices.contains(current) else {
+            if subtitleLineId62 != nil {
+                subtitleLineId62 = nil
+                UIView.animate(withDuration: 0.25) { self.subtitleLabel62.alpha = 0 }
+            }
+            return
+        }
+        LyricTranslation62.shared.ensureLoaded(trackId: trackID)
+        let line = lines[current]
+        guard subtitleLineId62 != line.id else { return }
+        subtitleLineId62 = line.id
+        let text = LyricTranslation62.shared.translation(
+            for: trackID, lineStart: line.start)
+        subtitleLabel62.text = text
+        UIView.animate(withDuration: 0.25) {
+            self.subtitleLabel62.alpha = text == nil ? 0 : 1
         }
     }
 
@@ -1116,7 +1158,10 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     /// 线程先捕获再带入（traitCollection 非线程安全）。
     private var currentDisplayScale: CGFloat {
         let s = rootView.traitCollection.displayScale
-        return s > 0 ? s : UIScreen.main.scale
+        // (62) 烘焙倍率档（MonetTuning62）乘子：low 0.75 /
+        // high 1.5 / screen 1。
+        return (s > 0 ? s : UIScreen.main.scale)
+            * CGFloat(MonetTuning62.bakeScaleFactor)
     }
 
     private func scheduleStaticBake(cacheKey: String, key: String, index: Int,
@@ -1645,9 +1690,11 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
         bgContainer.addSubview(washView)
         washViews.append(washView)
         let washTrack = trackID
+        // (62) Wash 不透明度（MonetTuning62）：淡入终点即该值。
+        let washTarget = CGFloat(MonetTuning62.washOpacity)
         UIView.animate(withDuration: 0.8, delay: 0,
                        options: [.curveEaseInOut]) {
-            washView.alpha = 1
+            washView.alpha = washTarget
         } completion: { [weak self, weak washView] _ in
             guard let self, let washView, self.trackID == washTrack,
                   self.washViews.contains(where: { $0 === washView })
@@ -1664,6 +1711,12 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 漂移与入场
 
     private func installDriftIfNeeded() {
+        // 漂移减弱动态（WB FoliaMotion62）：开启减弱时不装漂移
+        // 动画（已装的摘除），背景静止呈现。
+        if FoliaMotion62.reduced(.monetDrift) {
+            bgContainer.layer.removeAnimation(forKey: "monet.drift")
+            return
+        }
         let size = bgContainer.bounds.size
         guard size.width > 0, size.height > 0 else { return }
         if abs(size.width - driftSize.width) > 1

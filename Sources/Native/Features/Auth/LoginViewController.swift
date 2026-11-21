@@ -31,6 +31,10 @@ final class LoginViewController: UIViewController {
     /// 都触发；设置页据此刷新账号段）。
     var onLoginSuccess: (() -> Void)?
 
+    /// (62) 预选平台：账户弹层/墙上入口指定时，viewDidLoad
+    /// 按此落 selectedProvider 与段控（nil = 缺省网易云）。
+    var initialProvider: NativeSessionStore.Provider?
+
     private let neteaseClient = NeteaseQRLoginClient()
     private let qqClient = QQLoginClient()
     private let kugouClient = KugouLoginClient()
@@ -51,10 +55,21 @@ final class LoginViewController: UIViewController {
 
     private let providerSegment = UISegmentedControl(items: ["网易云", "QQ", "酷狗"])
     private let channelSegment = UISegmentedControl()
+    // (62) §2 酷狗三方式：方式段控 + 凭据字段组（扫码/账号
+    // 密码/手机验证码；后两式端点 2026-11-21 线上实测在）。
+    private let kugouMethodSegment = UISegmentedControl(
+        items: ["扫码", "账号密码", "验证码"])
+    private let kugouPrimaryField = UITextField()
+    private let kugouSecondaryField = UITextField()
+    private let kugouCaptchaButton = UIButton(type: .system)
+    private let kugouFieldStack = UIStackView()
     private let avatarView = UIImageView()
     private let nameLabel = UILabel()
     private let accountStatusLabel = UILabel()
     private let actionButton = UIButton(type: .system)
+    /// (62) 同步数据钮与结果回显行（§2）。
+    private let syncButton = UIButton(type: .system)
+    private let syncStatusLabel = UILabel()
     private let qrImageView = UIImageView()
     private let qrStatusLabel = UILabel()
     private let spinner = UIActivityIndicatorView(style: .medium)
@@ -65,12 +80,33 @@ final class LoginViewController: UIViewController {
         super.viewDidLoad()
         overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         view.backgroundColor = UIColor(red: 0.086, green: 0.086, blue: 0.102, alpha: 1)
+        // (62) 预选平台落位（段控下标与 providerChanged 同映射）。
+        if let initialProvider {
+            selectedProvider = initialProvider
+            providerSegment.selectedSegmentIndex =
+                initialProvider == .qq ? 1 : (initialProvider == .kugou ? 2 : 0)
+        }
         buildLayout()
         Breadcrumbs.log("login.qr.begin")
         refreshAccountUI()
+        // (62) QQ keepalive：打开登录页时检查到期窗口并续期。
+        Task { [weak self] in await self?.qqClient.keepaliveIfNeeded() }
         // (51) 旧口径保留：打开页面时网易云未登录直接出码。
-        if ProviderSessionStatusQuery.status(for: .netease).isLoggedIn == false {
+        // (62) 预选非网易云时改判预选平台未登录即出码。
+        let entryProvider = initialProvider ?? .netease
+        if ProviderSessionStatusQuery.status(for: entryProvider).isLoggedIn == false {
             startFlow()
+        }
+        // (62) 预选 QQ 时补通道探测（与 providerChanged 同路）。
+        if initialProvider == .qq && !qqChannelsProbed {
+            qqChannelsProbed = true
+            Task { [weak self] in
+                guard let self else { return }
+                if let channels = await self.qqClient.fetchChannels() {
+                    self.qqChannels = channels
+                }
+                await MainActor.run { self.rebuildChannelSegment() }
+            }
         }
         backgroundObserver = NotificationCenter.default.addObserver(
             forName: UIApplication.didEnterBackgroundNotification,
@@ -104,7 +140,9 @@ final class LoginViewController: UIViewController {
     // MARK: - 布局
 
     private func buildLayout() {
-        providerSegment.selectedSegmentIndex = 0
+        // (62) 尊重 viewDidLoad 的预选平台（缺省仍为 0=网易云）。
+        providerSegment.selectedSegmentIndex =
+            selectedProvider == .qq ? 1 : (selectedProvider == .kugou ? 2 : 0)
         providerSegment.addTarget(self, action: #selector(providerChanged), for: .valueChanged)
 
         channelSegment.isHidden = true
@@ -157,9 +195,60 @@ final class LoginViewController: UIViewController {
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         closeButton.heightAnchor.constraint(equalToConstant: 46).isActive = true
 
+        syncButton.setTitle("同步数据", for: .normal)
+        syncButton.setTitleColor(.white, for: .normal)
+        syncButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+        syncButton.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        syncButton.layer.cornerRadius = 12
+        syncButton.addTarget(self, action: #selector(syncTapped), for: .touchUpInside)
+        syncButton.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        syncStatusLabel.font = .systemFont(ofSize: 12)
+        syncStatusLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        syncStatusLabel.textAlignment = .center
+        syncStatusLabel.numberOfLines = 2
+
+        // (62) 酷狗方式段与字段组。
+        kugouMethodSegment.selectedSegmentIndex = 0
+        kugouMethodSegment.addTarget(
+            self, action: #selector(kugouMethodChanged62), for: .valueChanged)
+        for field in [kugouPrimaryField, kugouSecondaryField] {
+            field.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+            field.textColor = .white
+            field.font = .systemFont(ofSize: 14)
+            field.layer.cornerRadius = 10
+            field.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 12, height: 1))
+            field.leftViewMode = .always
+            field.heightAnchor.constraint(equalToConstant: 42).isActive = true
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        kugouPrimaryField.returnKeyType = .next
+        kugouSecondaryField.returnKeyType = .go
+        kugouCaptchaButton.setTitle("获取验证码", for: .normal)
+        kugouCaptchaButton.setTitleColor(.white, for: .normal)
+        kugouCaptchaButton.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
+        kugouCaptchaButton.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        kugouCaptchaButton.layer.cornerRadius = 10
+        kugouCaptchaButton.addTarget(
+            self, action: #selector(kugouCaptchaTapped62), for: .touchUpInside)
+        kugouCaptchaButton.widthAnchor.constraint(equalToConstant: 96).isActive = true
+        let kugouSecondaryRow = UIStackView(arrangedSubviews: [
+            kugouSecondaryField, kugouCaptchaButton])
+        kugouSecondaryRow.axis = .horizontal
+        kugouSecondaryRow.spacing = 8
+        kugouFieldStack.axis = .vertical
+        kugouFieldStack.spacing = 10
+        kugouFieldStack.addArrangedSubview(kugouPrimaryField)
+        kugouFieldStack.addArrangedSubview(kugouSecondaryRow)
+        kugouFieldStack.widthAnchor.constraint(equalToConstant: 260).isActive = true
+        kugouMethodSegment.isHidden = true
+        kugouFieldStack.isHidden = true
+
         let stack = UIStackView(arrangedSubviews: [
-            providerSegment, channelSegment, avatarView, nameLabel,
-            accountStatusLabel, actionButton, qrImageView, qrStatusLabel,
+            providerSegment, channelSegment, kugouMethodSegment,
+            kugouFieldStack, avatarView, nameLabel,
+            accountStatusLabel, actionButton, syncButton, syncStatusLabel,
+            qrImageView, qrStatusLabel,
             spinner, closeButton
         ])
         stack.axis = .vertical
@@ -176,6 +265,7 @@ final class LoginViewController: UIViewController {
             qrImageView.widthAnchor.constraint(equalToConstant: 220),
             qrImageView.heightAnchor.constraint(equalToConstant: 220),
             actionButton.widthAnchor.constraint(equalToConstant: 200),
+            syncButton.widthAnchor.constraint(equalToConstant: 200),
             closeButton.widthAnchor.constraint(equalToConstant: 160)
         ])
     }
@@ -249,12 +339,17 @@ final class LoginViewController: UIViewController {
         let status = ProviderSessionStatusQuery.status(for: provider)
         nameLabel.text = Self.displayName(for: provider)
         if status.isLoggedIn {
-            accountStatusLabel.text = status.displayName.map { "已登录 · \($0)" } ?? "已登录"
+            // (62) §2：已登录态补用户 ID 显示（accountId 走
+            // ProviderSessionStatusQuery 资料缓存，缺失显 —）。
+            let name = status.displayName ?? "已登录"
+            accountStatusLabel.text = "已登录 · \(name) · ID \(status.accountId ?? "—")"
             actionButton.setTitle("退出登录", for: .normal)
         } else {
             accountStatusLabel.text = "未登录"
             actionButton.setTitle("扫码登录", for: .normal)
         }
+        syncButton.isHidden = !status.isLoggedIn
+        updateKugouMethodUI62(loggedIn: status.isLoggedIn)
         avatarView.image = nil
         if let avatarURL = status.avatarURL {
             Task { [weak self] in
@@ -324,9 +419,150 @@ final class LoginViewController: UIViewController {
         let status = ProviderSessionStatusQuery.status(for: selectedProvider)
         if status.isLoggedIn {
             confirmLogout()
+        } else if selectedProvider == .kugou
+                    && kugouMethodSegment.selectedSegmentIndex != 0 {
+            runKugouCredentialLogin62()
         } else {
             startFlow()
         }
+    }
+
+    // MARK: - (62) 酷狗三方式
+
+    @objc private func kugouMethodChanged62() {
+        updateKugouMethodUI62(
+            loggedIn: ProviderSessionStatusQuery
+                .status(for: selectedProvider).isLoggedIn)
+    }
+
+    /// 方式段/字段组显隐与占位文案：仅酷狗未登录时出段控；
+    /// 非扫码方式出字段组并把主钮改「登录」。
+    private func updateKugouMethodUI62(loggedIn: Bool) {
+        let isKugou = selectedProvider == .kugou
+        kugouMethodSegment.isHidden = !isKugou || loggedIn
+        let method = kugouMethodSegment.selectedSegmentIndex
+        let showFields = isKugou && !loggedIn && method != 0
+        kugouFieldStack.isHidden = !showFields
+        if showFields {
+            if method == 1 {
+                kugouPrimaryField.placeholder = "酷狗账号（手机号/邮箱）"
+                kugouSecondaryField.placeholder = "密码"
+                kugouSecondaryField.isSecureTextEntry = true
+                kugouSecondaryField.keyboardType = .default
+                kugouPrimaryField.keyboardType = .default
+                kugouCaptchaButton.isHidden = true
+            } else {
+                kugouPrimaryField.placeholder = "手机号"
+                kugouSecondaryField.placeholder = "短信验证码"
+                kugouSecondaryField.isSecureTextEntry = false
+                kugouSecondaryField.keyboardType = .numberPad
+                kugouPrimaryField.keyboardType = .phonePad
+                kugouCaptchaButton.isHidden = false
+            }
+            if !loggedIn { actionButton.setTitle("登录", for: .normal) }
+        } else if isKugou && !loggedIn {
+            actionButton.setTitle("扫码登录", for: .normal)
+        }
+        let light = [NSAttributedString.Key.foregroundColor:
+                        UIColor.white.withAlphaComponent(0.4)]
+        kugouPrimaryField.attributedPlaceholder = NSAttributedString(
+            string: kugouPrimaryField.placeholder ?? "", attributes: light)
+        kugouSecondaryField.attributedPlaceholder = NSAttributedString(
+            string: kugouSecondaryField.placeholder ?? "", attributes: light)
+    }
+
+    @objc private func kugouCaptchaTapped62() {
+        let mobile = kugouPrimaryField.text?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        guard mobile.count >= 11 else {
+            accountStatusLabel.text = "先填正确的手机号"
+            return
+        }
+        kugouCaptchaButton.isEnabled = false
+        accountStatusLabel.text = "验证码发送中…"
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                try await self.kugouClient.sendCaptcha(mobile: mobile)
+                Breadcrumbs.log("login62.kugou captcha sent")
+                await MainActor.run {
+                    self.accountStatusLabel.text = "验证码已发送，请查收短信"
+                    self.kugouCaptchaButton.isEnabled = true
+                }
+            } catch let error as KugouLoginClient.KugouLoginError {
+                let message: String
+                if case .failed(let text) = error { message = text }
+                else { message = "验证码发送失败" }
+                await MainActor.run {
+                    self.accountStatusLabel.text = message
+                    self.kugouCaptchaButton.isEnabled = true
+                }
+            } catch {
+                await MainActor.run {
+                    self.accountStatusLabel.text = "验证码发送失败（网络异常）"
+                    self.kugouCaptchaButton.isEnabled = true
+                }
+            }
+        }
+    }
+
+    /// 凭据登录执行：成功回包走 handleKugouAuthorized 同路落存
+    /// 与复核；失败把后端文案回显到状态行（不假装）。
+    private func runKugouCredentialLogin62() {
+        let method = kugouMethodSegment.selectedSegmentIndex
+        let primary = kugouPrimaryField.text?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        let secondary = kugouSecondaryField.text?
+            .trimmingCharacters(in: .whitespaces) ?? ""
+        guard !primary.isEmpty, !secondary.isEmpty else {
+            accountStatusLabel.text = method == 1 ? "账号和密码都要填" : "手机号和验证码都要填"
+            return
+        }
+        let gen = coordinator.begin(provider: .kugou)
+        flowActive = true
+        setQRVisible(true)
+        qrImageView.isHidden = true
+        qrStatusLabel.text = "登录中…"
+        Breadcrumbs.log("login62.kugou credential begin method=\(method == 1 ? "password" : "cellphone")")
+        let task = Task { [weak self] in
+            guard let self else { return }
+            let result: KugouLoginClient.CheckResult
+            do {
+                result = method == 1
+                    ? try await self.kugouClient.loginByPassword(
+                        username: primary, password: secondary)
+                    : try await self.kugouClient.loginByCellphone(
+                        mobile: primary, code: secondary)
+            } catch {
+                await MainActor.run {
+                    self.flowActive = false
+                    self.setQRVisible(false)
+                    self.accountStatusLabel.text = "登录失败（网络异常），请重试"
+                }
+                self.coordinator.finish(generation: gen)
+                return
+            }
+            switch result {
+            case .authorized(let cookie, let userId):
+                _ = await self.handleKugouAuthorized(
+                    cookie, userId: userId, gen: gen)
+            case .failed(let message):
+                Breadcrumbs.log("login62.kugou credential fail msg=\(message ?? "-")")
+                await MainActor.run {
+                    self.flowActive = false
+                    self.setQRVisible(false)
+                    self.accountStatusLabel.text = message ?? "登录失败，请重试"
+                }
+            default:
+                await MainActor.run {
+                    self.flowActive = false
+                    self.setQRVisible(false)
+                    self.accountStatusLabel.text = "登录回包异常，请重试"
+                }
+            }
+            self.coordinator.finish(generation: gen)
+        }
+        coordinator.attach(task, generation: gen)
     }
 
     private func confirmLogout() {
@@ -345,6 +581,70 @@ final class LoginViewController: UIViewController {
     /// 退出只清本家：网易云走 NativeDataClient 既有清法（含
     /// Web 侧两键与迁移旗标，与设置页口径一致）；QQ/酷狗先
     /// 本地清（clear(provider:)）再 best effort 通知后端。
+    /// 同步数据（(62) §2）：重拉当前平台资料（enrichProfile
+    /// 同路）+ 网易云附带歌单数校验，结果与时间回显到
+    /// syncStatusLabel；失败诚实报错不假装成功。
+    @objc private func syncTapped() {
+        let provider = selectedProvider
+        syncButton.isEnabled = false
+        syncStatusLabel.text = "同步中…"
+        Breadcrumbs.log("login62.sync begin provider=\(provider.rawValue)")
+        Task { [weak self] in
+            guard let self else { return }
+            var parts: [String] = []
+            var failed = false
+            // 资料重拉：按平台走既有状态端点并回写资料缓存。
+            switch provider {
+            case .netease:
+                if let status = try? await NativeDataClient.shared.fetchLoginStatus(),
+                   status.loggedIn {
+                    NativeSessionStore.shared.saveProfile(
+                        provider: .netease, accountId: status.userId,
+                        displayName: status.nickname,
+                        avatarURLString: status.avatarURL)
+                    parts.append("资料已更新")
+                    if let userId = status.userId,
+                       let playlists = try? await NativeDataClient.shared
+                           .fetchUserPlaylists(userId: userId) {
+                        parts.append("歌单 \(playlists.count) 个")
+                    }
+                } else { failed = true }
+            case .qq:
+                if let cookie = NativeSessionStore.shared.qqCookieString(),
+                   let profile = try? await self.qqClient.fetchLoginStatus(cookie: cookie) {
+                    NativeSessionStore.shared.saveProfile(
+                        provider: .qq, accountId: profile.accountId,
+                        displayName: profile.nickname,
+                        avatarURLString: profile.avatarURLString)
+                    parts.append("资料已更新")
+                } else { failed = true }
+            case .kugou:
+                if let cookie = NativeSessionStore.shared.kugouCookieString(),
+                   let profile = try? await self.kugouClient.fetchUserDetail(
+                       cookie: cookie, userId: Self.kugouUserId(in: cookie)) {
+                    NativeSessionStore.shared.saveProfile(
+                        provider: .kugou, accountId: profile.accountId,
+                        displayName: profile.nickname,
+                        avatarURLString: profile.avatarURLString)
+                    parts.append("资料已更新")
+                } else { failed = true }
+            }
+            await MainActor.run {
+                self.syncButton.isEnabled = true
+                let formatter = DateFormatter()
+                formatter.dateFormat = "HH:mm:ss"
+                if failed {
+                    self.syncStatusLabel.text = "同步失败（\(formatter.string(from: Date()))）：会话可能已失效，请重新登录"
+                    Breadcrumbs.log("login62.sync fail provider=\(provider.rawValue)")
+                } else {
+                    self.syncStatusLabel.text = "已同步 · \(parts.joined(separator: " · ")) · \(formatter.string(from: Date()))"
+                    Breadcrumbs.log("login62.sync ok provider=\(provider.rawValue)")
+                }
+                self.refreshAccountUI()
+            }
+        }
+    }
+
     private func performLogout(provider: NativeSessionStore.Provider) {
         Breadcrumbs.log("login.logout provider=\(provider.rawValue)")
         switch provider {

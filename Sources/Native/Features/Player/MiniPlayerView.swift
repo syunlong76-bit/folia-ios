@@ -61,6 +61,8 @@ struct MiniPlayerView: View {
 
     @State private var isLiked = false
     @State private var sleepActive = false
+    /// (62) 歌名区长按收藏弹层开关。
+    @State private var showAddToPlaylist62 = false
     /// 槽位显隐重读令牌：.foliaMiniBarSlotsChanged 到达时 +1 触发重算。
     @State private var slotsVersion = 0
 
@@ -92,6 +94,10 @@ struct MiniPlayerView: View {
                 for: SleepTimerController.changedNotification)) { _ in refreshSleep() }
             .onReceive(NotificationCenter.default.publisher(
                 for: .foliaMiniBarSlotsChanged)) { _ in slotsVersion += 1 }
+            // (62) 歌名区长按 → 收藏到歌单弹层（与搜索页同体）。
+            .sheet(isPresented: $showAddToPlaylist62) {
+                MiniAddToPlaylistSheet62(track: track)
+            }
         }
     }
 
@@ -210,18 +216,55 @@ struct MiniPlayerView: View {
                 }
 
                 VStack(alignment: .leading, spacing: 2) {
-                    Text(track.title)
-                        .font(.system(size: 14, weight: .medium))
-                        .foregroundColor(.white)
-                        .lineLimit(1)
+                    // (62) 歌名 marquee：长标题溢出时滚动
+                    // （Marquee62，只溢出才滚、缓动启停）。
+                    Marquee62(text: track.title)
+                        .frame(height: 18)
                     Text(track.artist)
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.6))
                         .lineLimit(1)
                 }
+                // (62) 歌名区左右小箭头：与主排共存——主排
+                // prev/next 显时小箭头让位（冲突以主排为准，
+                // 槽位键关掉主排钮时小箭头补位）。
+                if !showPrev {
+                    Button {
+                        QueueManager.shared.playPrevious()
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.55))
+                            .frame(width: 18, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("上一首（歌名区）")
+                }
+                if !showNext {
+                    Button {
+                        QueueManager.shared.playNext(manual: true)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.55))
+                            .frame(width: 18, height: 32)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("下一首（歌名区）")
+                }
             }
             .contentShape(Rectangle())
             .onTapGesture { onTapExpand() }
+            // (62) 歌名区长按开收藏弹层：与 (61) 单击浮层/
+            // 双击详情的调和——单击（展开）与双击语义不动，
+            // 收藏走长按（与顶排星标点按开弹层同为「收藏」
+            // 入口族，长按是标题区唯一未占用手势）。
+            .onLongPressGesture(minimumDuration: 0.45) {
+                Breadcrumbs.log("minibar.title longpress addToPlaylist")
+                showAddToPlaylist62 = true
+            }
 
             Spacer(minLength: 4)
 
@@ -443,4 +486,18 @@ private struct MiniCoverView: View {
     private var coverPlaceholder: some View {
         Color.white.opacity(0.10)
     }
+}
+
+
+/// (62) 收藏弹层的 SwiftUI 挂载（与搜索页 AddToPlaylistSheet
+/// 同体：UINavigationController 包 AddToPlaylistViewController，
+/// pageSheet 呈出）。搜索页那份为其文件私有，故此处另置一份。
+private struct MiniAddToPlaylistSheet62: UIViewControllerRepresentable {
+    let track: FoliaTrack
+
+    func makeUIViewController(context: Context) -> UINavigationController {
+        UINavigationController(rootViewController: AddToPlaylistViewController(track: track))
+    }
+
+    func updateUIViewController(_ uiViewController: UINavigationController, context: Context) {}
 }

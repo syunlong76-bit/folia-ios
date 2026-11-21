@@ -76,6 +76,18 @@ enum PartitaTuningStore {
         set { defaults.set(newValue, forKey: key("avoidOverlap")) }
     }
 
+    /// (62) 动画强度档（网页主题 animationIntensity 的云阶侧
+    /// 承接：calm/normal/chaotic）。全局主题强度同步归设置域
+    /// （WA），本键先让 chaotic 档在云阶内真可达、真消费；
+    /// 渲染器 buildLayout 读取。
+    static var intensity62: String {
+        get {
+            let raw = defaults.string(forKey: key("intensity62")) ?? "normal"
+            return ["calm", "normal", "chaotic"].contains(raw) ? raw : "normal"
+        }
+        set { defaults.set(newValue, forKey: key("intensity62")) }
+    }
+
     // MARK: 整组读 / 写 / 还原
 
     static func values() -> PartitaTuningValues {
@@ -166,6 +178,7 @@ final class PartitaTuningPanelViewController: UIViewController {
             stack.widthAnchor.constraint(equalTo: scrollView.widthAnchor, constant: -32),
         ])
 
+        addIntensityRow62()
         addSwitch(key: "showGuideLines", title: "引导线")
         addSwitch(key: "useSemanticLayout", title: "语义布局")
         addSwitch(key: "avoidOverlap", title: "防止文字重叠")
@@ -177,6 +190,28 @@ final class PartitaTuningPanelViewController: UIViewController {
         reset.titleLabel?.font = .systemFont(ofSize: 14)
         reset.addTarget(self, action: #selector(resetTapped), for: .touchUpInside)
         stack.addArrangedSubview(reset)
+    }
+
+    /// (62) 动画强度分段（平静/普通/混沌）：写 intensity62，
+    /// 渲染器按档改词散布/旋转与块转角（chaotic 档做真）。
+    private func addIntensityRow62() {
+        let label = UILabel()
+        label.text = "动画强度"
+        label.font = .systemFont(ofSize: 13)
+        label.textColor = .label
+        let segment = UISegmentedControl(items: ["平静", "普通", "混沌"])
+        segment.selectedSegmentIndex = ["calm", "normal", "chaotic"]
+            .firstIndex(of: PartitaTuningStore.intensity62) ?? 1
+        segment.addAction(UIAction { _ in
+            let value = ["calm", "normal", "chaotic"][segment.selectedSegmentIndex]
+            PartitaTuningStore.intensity62 = value
+            Breadcrumbs.log("partita62.intensity value=\(value)")
+        }, for: .valueChanged)
+        let row = UIStackView(arrangedSubviews: [label, segment])
+        row.axis = .horizontal
+        row.alignment = .center
+        row.spacing = 8
+        stack.addArrangedSubview(row)
     }
 
     private func addSwitch(key: String, title: String) {

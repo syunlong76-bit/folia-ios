@@ -664,7 +664,7 @@ final class MachiTuningPanelViewController: UIViewController {
         stack.addArrangedSubview(resetRow)
 
         let note = UILabel()
-        note.text = "说明：移轴与自动降级在原生只保存数值（SceneKit 无移轴通路、降级由系统调度）；分辨率「跟随全局」按 1× 处理。"
+        note.text = "说明：移轴已接通（焦平面偏移近似，SceneKit 无 Scheimpflug 原生通路）；自动降级仍只保存数值（降级由系统调度）；分辨率「跟随全局」按 1× 处理。町景当前为锁定样式，参数在解锁后即刻可见效。"
         note.font = .systemFont(ofSize: 12)
         note.textColor = .secondaryLabel
         note.numberOfLines = 0

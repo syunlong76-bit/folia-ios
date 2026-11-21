@@ -187,6 +187,9 @@ final class HomeWallViewController: UIViewController,
     // seamRawPlaylists，entries/playlistIds 恒为「当前段 +
     // 隐藏过滤 + 文字过滤」后的呈现集（applyWallData 唯一装配点）。
     private var seamToolbar: SeamToolbarView?
+    /// (62) WD §1：墙后层与墙缝信息条（WallSurfaces62）。
+    private var wallBackdrop62: WallBackdrop62?
+    private var stripSurface62: StripSurface62?
     private var seamToolbarTrailing: NSLayoutConstraint?
     /// 歌单→曲目墙共享元素转场的 hero 快照（(60) 第 3 条③）：
     /// beginPosterTransition 起、endPosterTransition 收。
@@ -961,6 +964,20 @@ final class HomeWallViewController: UIViewController,
                 heroSnapshot.center = self.view.center
                 heroSnapshot.transform = CGAffineTransform(scaleX: scale, y: scale)
             }
+            // (62) 卡片点开·信息条裂开近似：hero 放大的同时，
+            // 顶部信息条（StripSurface62）纵向压扁上移淡出，
+            // 模拟网页翻牌时信息条从中分开让位。差异如实记：
+            // 网页为左右两半横向裂开 + 卡面翻转，本处为整条
+            // 压扁让位（无翻转、无左右分半），属近似非等价。
+            if let strip = stripSurface62 {
+                UIView.animate(withDuration: 0.45, delay: 0,
+                               usingSpringWithDamping: 0.8, initialSpringVelocity: 0.2,
+                               options: [.allowUserInteraction]) {
+                    strip.transform = CGAffineTransform(translationX: 0, y: -12)
+                        .scaledBy(x: 1, y: 0.25)
+                    strip.alpha = 0
+                }
+            }
             return
         }
         collectionView.transform = .identity
@@ -976,6 +993,14 @@ final class HomeWallViewController: UIViewController,
     /// present 动画总时长可由 begin/end 两条对账）。
     private func endPosterTransition(source: String, seedReady: Bool) {
         collectionView.transform = .identity
+        // (62) 信息条恢复（回墙落位时由 settle 侧再复位一次，
+        // 此处先复原防目标墙期间主页被瞥见时条缺失）。
+        if let strip = stripSurface62, strip.alpha == 0 {
+            UIView.animate(withDuration: 0.3, delay: 0.35) {
+                strip.transform = .identity
+                strip.alpha = 1
+            }
+        }
         // hero 收口（(60) 第 3 条③）：快照淡出撤除，目标墙已
         // 在其下完成 present，不留残影。
         if let hero = seamPosterHeroView {
@@ -2450,6 +2475,22 @@ extension HomeWallViewController {
     // MARK: 安装
 
     func installSeamChrome() {
+        // (62) WD §1 墙后层：插在墙画布之下，画布底色改透使
+        // 墙后画面（透光封面/模糊/墙后歌词）可见；网格画布
+        // 本就 clear 不受影响。墙几何本体不动。
+        if wallBackdrop62 == nil {
+            let backdrop = WallBackdrop62()
+            backdrop.translatesAutoresizingMaskIntoConstraints = false
+            view.insertSubview(backdrop, belowSubview: collectionView)
+            NSLayoutConstraint.activate([
+                backdrop.topAnchor.constraint(equalTo: view.topAnchor),
+                backdrop.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+                backdrop.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+                backdrop.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            ])
+            wallBackdrop62 = backdrop
+            collectionView.backgroundColor = .clear
+        }
         // 网格形态：与墙面同一份 entries 的 flow 呈现，插在墙
         // 画布正上方、其余 chrome 之下；初始按持久化选择显隐。
         let flow = UICollectionViewFlowLayout()
@@ -2498,6 +2539,25 @@ extension HomeWallViewController {
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
             toolbar.heightAnchor.constraint(equalToConstant: 44),
         ])
+        // (62) WD §1 墙缝信息条：工具条下方一条（当前歌/时间/
+        // 队列数），方向由 WA 的 stripDirection 决定贴上/贴下。
+        if stripSurface62 == nil {
+            let strip = StripSurface62()
+            strip.translatesAutoresizingMaskIntoConstraints = false
+            view.insertSubview(strip, aboveSubview: collectionView)
+            let stripTop = SettingsStore.stripDirection == "bottom"
+                ? strip.bottomAnchor.constraint(
+                    equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -64)
+                : strip.topAnchor.constraint(
+                    equalTo: toolbar.bottomAnchor, constant: 6)
+            NSLayoutConstraint.activate([
+                strip.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+                strip.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+                strip.heightAnchor.constraint(equalToConstant: 26),
+                stripTop,
+            ])
+            stripSurface62 = strip
+        }
         toolbar.setLayoutMode(grid: seamGridMode)
         toolbar.onSegmentChanged = { [weak self] segment in
             self?.seamSegmentSelected(segment)
@@ -3069,16 +3129,28 @@ extension HomeWallViewController {
 
     func seamAvatarTapped() {
         Breadcrumbs.log("wall.seam.avatar")
-        let login = LoginViewController()
-        login.modalPresentationStyle = .overFullScreen
-        login.onLoginSuccess = { [weak self] in
+        // (62) WD §1：墙上头像改 popover 账户卡（头像/昵称/ID/
+        // 登录态/平台丸/退出，见 AccountCard62），不再整页
+        // present 登录页；卡内登录走压墙弹层（pageSheet）。
+        // 侧栏深处入口保持整页 LoginViewController 不变。
+        let card = AccountCard62ViewController()
+        card.modalPresentationStyle = .popover
+        card.onLoginSuccess = { [weak self] in
             guard let self else { return }
             self.wallNotLoggedIn = false
             self.loadAttempts = 0
             self.loadEntries()
             self.seamRefreshAccount()
         }
-        present(login, animated: true)
+        card.onSessionChanged = { [weak self] in self?.seamRefreshAccount() }
+        if let pop = card.popoverPresentationController {
+            pop.sourceView = seamToolbar ?? view
+            pop.sourceRect = CGRect(
+                x: (seamToolbar?.bounds.width ?? view.bounds.width) - 44,
+                y: 0, width: 44, height: 44)
+            pop.permittedArrowDirections = [.up]
+        }
+        present(card, animated: true)
     }
 
     /// (62) 追加三：歌单页同款导航台的初始态读口（当前段 +
@@ -3207,7 +3279,26 @@ extension HomeWallViewController {
     }
 
     @objc func miniBarPanelCommand() {
-        seamPresentPanel(CommandPaletteViewController(), kind: "command")
+        // (62) C2 做真：命令面板改走 CommandPaletteViewController
+        // .present 注入跨面回调（此前裸 present、两回调恒 nil，
+        // 「打开队列/选择可视化」点了无落点）。队列 → 本墙呈现
+        // PlaybackPanel 队列页签；样式 → 墙面无自有选样式通路，
+        // 开原生舞台走舞台内同一选择器通路（面包屑留痕）。
+        guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.log("wall.menu.panel skipped kind=command busy=1")
+            return
+        }
+        Breadcrumbs.log("wall.menu.panel present kind=command62")
+        CommandPaletteViewController.present(from: self) { [weak self] palette in
+            palette.onOpenQueuePanel = { [weak self] in
+                guard let self, self.presentedViewController == nil else { return }
+                PlaybackPanelViewController.present(from: self, initialTab: .queue)
+            }
+            palette.onOpenStylePicker = { [weak self] in
+                Breadcrumbs.log("wall62.command stylePicker viaStage=1")
+                self?.openNativeStageFromHome()
+            }
+        }
     }
 
     private func seamPresentPanel(_ panel: UIViewController, kind: String) {

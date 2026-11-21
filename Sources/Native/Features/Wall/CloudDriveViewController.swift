@@ -11,8 +11,12 @@ import UIKit
 /// NativeDataClient+Workbench 的电台/专辑扩展同一通路。
 /// 点按一行以整列为队列经 QueueManager 起播（与搜索/电台
 /// 同一漏斗）。云盘曲目的取流在网页侧带 variant=cloud 标
-/// 记，原生取流链未区分该变体，点播成败以真机为准（本页
-/// 只保证列表真实、点播走标准队列通路，不造假数据）。
+/// 记：(62) 已在入队侧打标（CloudDriveRegistry62 记云盘曲
+/// 目 id 集 + 面包屑 variant=cloud），但原生取流链
+/// （EdgeOneAPIClient.fetchSongStreamURL / QueueManager，
+/// 非本文件域）尚无 variant 参数与云盘专用端点，取流仍走
+/// 标准 /song/url/v1——专用取流请求待 Core 侧补 variant
+/// 通路后由注册表消费（D1，真机未验）。点播成败以真机为准。
 /// 未登录/接口失败/空列表都给诚实状态文案，不塞占位行。
 final class CloudDriveViewController: UIViewController, UITableViewDataSource, UITableViewDelegate {
 
@@ -162,8 +166,30 @@ final class CloudDriveViewController: UIViewController, UITableViewDataSource, U
         tableView.deselectRow(at: indexPath, animated: true)
         guard !tracks.isEmpty else { return }
         let queue = tracks.map(workbenchFoliaTrack)
-        Breadcrumbs.log("wall.menu.cloud play at=\(indexPath.row) n=\(queue.count)")
+        // (62) variant=cloud 入队打标：注册云盘曲目 id 集，
+        // 面包屑带 variant，取流侧待 Core variant 通路消费。
+        CloudDriveRegistry62.mark(queue)
+        Breadcrumbs.log("wall.menu.cloud play at=\(indexPath.row) n=\(queue.count) variant=cloud")
         QueueManager.shared.setQueue(queue, startingAt: indexPath.row, source: "cloud-drive")
         dismiss(animated: true)
+    }
+}
+
+/// (62) 云盘曲目标记注册表：QueueManager/取流链补 variant
+/// 通路后按此判定云盘来源（现阶段供面包屑与后续消费读取）。
+enum CloudDriveRegistry62 {
+    private static var ids: Set<String> = []
+    private static let lock = NSLock()
+
+    static func mark(_ tracks: [FoliaTrack]) {
+        lock.lock()
+        ids.formUnion(tracks.map { $0.id })
+        lock.unlock()
+    }
+
+    static func isCloudTrack(_ id: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return ids.contains(id)
     }
 }

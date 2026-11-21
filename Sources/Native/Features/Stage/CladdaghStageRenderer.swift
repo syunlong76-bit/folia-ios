@@ -14,7 +14,7 @@ import QuartzCore
 //    CladdaghTuningStore（CladdaghTuning.swift）可调：focus/
 //    radius/tilt/字距/轴线开关/圆环位置均已接线（含 focus 驱动
 //    的 focusSpacingScale 间距标尺与 position 的环+轴线同移）；
-//    译文一组只存不用（协议无译文字段，见下）。
+//    译文一组 (62) C3 经 LyricTranslation62 侧通路真消费（见下）。
 // 对齐要点：
 //  - 画面是倾斜椭圆环：歌词逐字素沿弧长定位（nominalAngle），整环
 //    随行号以 π 为步进自转（lineOffset 弹簧 stiffness 55 / damping
@@ -136,6 +136,11 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
 
     private let rootView = LyricStageRootView()
     private let contentView = UIView()
+    /// 译文环承接（3.7 (62) C3 做真）：showTranslation 开且
+    /// LyricTranslation62 有该行译文时，环下以小字显示当前行
+    /// 译文（字号 ×translationScale、字距 translationLetter-
+    /// SpacingOffset 真消费）；无译文数据时不显示（诚实无源）。
+    private let translationLabel = UILabel()
     private let axisView = UIView()
     private let axisGradient = CAGradientLayer()
     private let ringContainer = UIView()
@@ -185,6 +190,11 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
         axisView.isUserInteractionEnabled = false
         contentView.addSubview(axisView)
         contentView.addSubview(ringContainer)
+        translationLabel.textAlignment = .center
+        translationLabel.numberOfLines = 2
+        translationLabel.isUserInteractionEnabled = false
+        translationLabel.isHidden = true
+        contentView.addSubview(translationLabel)
         rootView.addSubview(contentView)
         rootView.onLayout = { [weak self] in self?.performLayout() }
     }
@@ -215,6 +225,8 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
         var snapshot = snapshot
         snapshot.palette = snapshot.palette.contrastProtected()
         self.snapshot = snapshot
+        // (62) C3：译文侧通路预热（有数据时译文环参数真生效）。
+        LyricTranslation62.shared.ensureLoaded(trackId: snapshot.track?.id)
         syncTuning()
         if snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount {
@@ -282,6 +294,39 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
         }
         integrateSpring()
         updateGlyphs(position: position)
+        updateTranslationRing()
+    }
+
+    /// 译文环更新（(62) C3）：仅 showTranslation 开时查当前中心
+    /// 行译文；字号 = 20 × translationScale，字距经 attributed
+    /// kern 消费 translationLetterSpacingOffset。
+    private func updateTranslationRing() {
+        let values = tuning
+        guard values.showTranslation, let snapshot,
+              centerIndex >= 0, snapshot.lines.indices.contains(centerIndex) else {
+            translationLabel.isHidden = true
+            return
+        }
+        let line = snapshot.lines[centerIndex]
+        guard let text = LyricTranslation62.shared.translation(
+            for: snapshot.track?.id, lineStart: line.start) else {
+            translationLabel.isHidden = true
+            return
+        }
+        let fontSize = CGFloat(20 * values.translationScale)
+        let kern = CGFloat(values.translationLetterSpacingOffset)
+        translationLabel.attributedText = NSAttributedString(
+            string: text,
+            attributes: [
+                .font: UIFont.systemFont(ofSize: fontSize, weight: .regular),
+                .foregroundColor: snapshot.palette.secondary.withAlphaComponent(0.85),
+                .kern: kern,
+            ])
+        let bounds = rootView.bounds
+        translationLabel.frame = CGRect(
+            x: 24, y: bounds.height * 0.78,
+            width: max(bounds.width - 48, 0), height: 56)
+        translationLabel.isHidden = false
     }
 
     func unmount() {

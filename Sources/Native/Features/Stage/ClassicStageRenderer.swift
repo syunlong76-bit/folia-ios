@@ -72,10 +72,17 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
         rootView.setNeedsLayout()
     }
 
+    /// 呼吸浮动幅度记账（(62)）：面板改动后下一帧重启浮动
+    /// 动画使新幅度生效（start 自带同键守卫，须先 stop）。
+    private var appliedFloatAmplitude62 = -1.0
+
     func setLifecycle(_ state: LyricStageLifecycleState, active: Bool) {
         isActive = active && state != .destroyed
         if isActive {
-            StageBreathingFloat.start(on: floatView)
+            StageBreathingFloat.start(
+                on: floatView,
+                amplitude: CGFloat(ClassicTuning62.floatAmplitude))
+            appliedFloatAmplitude62 = ClassicTuning62.floatAmplitude
         } else {
             StageBreathingFloat.stop(on: floatView)
         }
@@ -83,6 +90,14 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
 
     func frameTick(position: TimeInterval) {
         guard isActive, let snapshot else { return }
+        if appliedFloatAmplitude62 >= 0,
+           abs(ClassicTuning62.floatAmplitude - appliedFloatAmplitude62) > 0.001 {
+            appliedFloatAmplitude62 = ClassicTuning62.floatAmplitude
+            StageBreathingFloat.stop(on: floatView)
+            StageBreathingFloat.start(
+                on: floatView,
+                amplitude: CGFloat(appliedFloatAmplitude62))
+        }
         let idx = Self.activeIndex(in: snapshot.lines, at: position)
         if idx != activeLineId {
             transitionLine(to: idx, position: position)
@@ -204,9 +219,11 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
             }
         }
         // 新行入场：scale 0.9/透明 → 恒等（网页 initial/animate）。
+        // 时长 (62) 由 ClassicTuning62.enterDurationScale 调制。
         built.container.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
         built.container.alpha = 0
-        UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut]) {
+        UIView.animate(withDuration: 0.3 * ClassicTuning62.enterDurationScale,
+                       delay: 0, options: [.curveEaseOut]) {
             built.container.transform = .identity
             built.container.alpha = 1
         }
@@ -285,7 +302,8 @@ final class ClassicStageRenderer: NSObject, LyricStageRenderer {
         // 流式折行（flex-wrap 等价）：可用宽 = 渲染宽 − 64。
         let bounds = rootView.bounds
         let availWidth = max(bounds.width - 64, 0)
-        let pitch = size * 1.22
+        // 行距 (62) 由 ClassicTuning62.linePitchScale 调制。
+        let pitch = size * 1.22 * CGFloat(ClassicTuning62.linePitchScale)
         var rows: [[Int]] = []
         var row: [Int] = []
         var rowWidth: CGFloat = 0

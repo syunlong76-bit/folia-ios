@@ -38,6 +38,8 @@ private struct PartitaLayout {
         var x: CGFloat
         var y: CGFloat
         var guideLeft: Bool
+        /// (62) 块转角（度）：仅 chaotic 档非 0（左 −3/右 +3）。
+        var rotate62: CGFloat = 0
         var width: CGFloat
         var height: CGFloat
         /// 每词后的间距（词数同长，末词为尾距 12.8）：默认恒
@@ -137,10 +139,12 @@ private final class PartitaChunkView: UIView {
         let side: CGFloat = layout.guideLeft ? -40 : 40
         return CGAffineTransform(translationX: layout.x + side, y: layout.y)
             .scaledBy(x: 0.85, y: 0.85)
+            .rotated(by: layout.rotate62 * .pi / 180)
     }
 
     private func settledTransform() -> CGAffineTransform {
         CGAffineTransform(translationX: layout.x, y: layout.y)
+            .rotated(by: layout.rotate62 * .pi / 180)
     }
 
     private func applyWaitingPose() {
@@ -514,17 +518,30 @@ final class PartitaStageRenderer: LyricStageRenderer {
             var x: CGFloat
             var y: CGFloat
             var guideLeft: Bool
+            var rotate62: CGFloat = 0
         }
         var drafts: [ChunkDraft] = []
         for (rowIndex, chunkUnits) in chunkUnitsList.enumerated() {
             let t = tuning()
+            // (62) 动画强度档（网页 animationIntensity）：calm
+            // 散布/旋转 0、normal ±6/±3、chaotic ±15/±8；块转角
+            // 仅 chaotic ±3°；calm 时 staggerScale 恒 1、行 y 恒 0。
+            let intensity62 = PartitaTuningStore.intensity62
+            let isChaotic62 = intensity62 == "chaotic"
+            let isCalm62 = intensity62 == "calm"
+            let spread62: CGFloat = isChaotic62 ? 15 : (isCalm62 ? 0 : 6)
+            let rotate62: CGFloat = isChaotic62 ? 8 : (isCalm62 ? 0 : 3)
             let staggerMagnitude = CGFloat(t.staggerMin
                 + nextRandom() * max(t.staggerMax - t.staggerMin, 0))
             let staggerX = rowIndex % 2 == 0 ? -staggerMagnitude : staggerMagnitude
-            let staggerScale = CGFloat(0.8 + nextRandom() * 0.9)
+            let staggerScale = isCalm62
+                ? CGFloat(1) : CGFloat(0.8 + nextRandom() * 0.9)
             let rowBias = CGFloat(rowIndex) - CGFloat(actualRows - 1) / 2
             // 词姿态（buildPartitaWordConfigs）：种子 = 首词
-            // start + 词序 × 7.13，偏移 ±6、旋转 ±3、passed ±10°。
+            // start + 词序 × 7.13，偏移/旋转按强度档（见上）。
+            let graphemeCount62 = chunkUnits.reduce(0) { $0 + $1.text.count }
+            let chaoticBoost62: CGFloat = isChaotic62
+                ? 1 + min(CGFloat(graphemeCount62) * 0.01, 0.05) : 1
             var poses: [StageWordPose] = []
             for (i, _) in chunkUnits.enumerated() {
                 let wordSeed = (chunkUnits.first?.start ?? 0) + Double(i) * 7.13
@@ -532,16 +549,17 @@ final class PartitaStageRenderer: LyricStageRenderer {
                     stageSeededRandom(wordSeed + offset)
                 }
                 poses.append(StageWordPose(
-                    x: CGFloat(r(1) - 0.5) * 12,
-                    y: CGFloat(r(2) - 0.5) * 12,
-                    rotate: CGFloat(r(3) - 0.5) * 6,
-                    scale: staggerScale,
+                    x: CGFloat(r(1) - 0.5) * spread62 * 2,
+                    y: CGFloat(r(2) - 0.5) * spread62 * 2,
+                    rotate: CGFloat(r(3) - 0.5) * rotate62 * 2,
+                    scale: staggerScale * chaoticBoost62,
                     passedRotate: CGFloat(r(8) - 0.5) * 20))
             }
             drafts.append(ChunkDraft(
                 units: chunkUnits, poses: poses,
-                x: staggerX, y: rowBias * 2.5,
-                guideLeft: rowIndex % 2 == 0))
+                x: staggerX, y: isCalm62 ? 0 : rowBias * 2.5,
+                guideLeft: rowIndex % 2 == 0,
+                rotate62: isChaotic62 ? (rowIndex % 2 == 0 ? -3 : 3) : 0))
         }
 
         // MARK: avoidOverlap 间距（partitaOverlap.ts 的 pt 等价）
@@ -570,9 +588,9 @@ final class PartitaStageRenderer: LyricStageRenderer {
 
         /// 一行（chunk）的上下 reach：em 部分（半高超出
         /// 1.22em 行框的量）与 px 部分（词自身 y 偏移）分开，
-        /// 与 partitaOverlap.rowReach 同构。chunk 自身 rotate
-        /// 网页仅 chaotic 档非 0、原生恒 normal 档 → turn 项
-        /// 恒 0，不引入估算（差异见 C1 报告）。
+        /// 与 partitaOverlap.rowReach 同构。(62) 起 chunk
+        /// rotate 在 chaotic 档非 0：turn 项按网页公式补入
+        /// （行宽 em/2 × |sin(rotate)|，上下各加）。
         func rowReach(draft: ChunkDraft, widths: [CGFloat],
                       fontSize: CGFloat)
             -> (emTop: CGFloat, pxTop: CGFloat,
@@ -589,6 +607,13 @@ final class PartitaStageRenderer: LyricStageRenderer {
                 bottomEm = max(bottomEm, over)
                 topPx = max(topPx, -pose.y)
                 bottomPx = max(bottomPx, pose.y)
+            }
+            if draft.rotate62 != 0, fontSize > 0 {
+                let rowWidthEm = widths.reduce(0, +) / fontSize
+                let turnEm = (rowWidthEm / 2)
+                    * abs(sin(draft.rotate62 * .pi / 180))
+                topEm += turnEm
+                bottomEm += turnEm
             }
             return (topEm, topPx, bottomEm, bottomPx)
         }
@@ -666,6 +691,7 @@ final class PartitaStageRenderer: LyricStageRenderer {
                     units: draft.units, wordPoses: draft.poses,
                     x: draft.x, y: draft.y,
                     guideLeft: draft.guideLeft,
+                    rotate62: draft.rotate62,
                     width: width, height: chunkHeight,
                     wordGaps: gaps, marginBottom: marginBottom))
                 columnWidth = max(columnWidth, width)

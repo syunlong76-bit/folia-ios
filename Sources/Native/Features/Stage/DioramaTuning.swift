@@ -7,8 +7,8 @@ import UIKit
 // 钳制范围逐字对齐网页 resolveStoredDioramaTuning：
 //  - cameraSpeed [0.55, 1.85] 缺省 1
 //  - motionAmount [0.4, 1.6] 缺省 1
-//  - audioReactivity [0, 1.5] 缺省 1（协议无频谱数据源，
-//    本参数只存不用于相机，见渲染器头注）
+//  - audioReactivity [0, 1.5] 缺省 1（(62) C5 接 StageEnergy62
+//    能量近似调制包络，见渲染器 updateActiveUnits）
 //  - geometryVisibility: enabled 缺省 true、mode 缺省
 //    "clouds"（另一档 "corridor"）、strands/blobs/ribbons/
 //    rings 缺省全 true（box→strands、sphere→blobs、
@@ -26,11 +26,10 @@ import UIKit
 //  - soulEnabled 缺省 true、soulIntensity [0.1, 1.5] 缺省 1
 //  - soulActiveEnabled 缺省 false（当前字漂移子开关，无自有强度）
 //  - gradientEnabled 缺省 false、gradientIntensity [0.1, 1.5] 缺省 1
-//  - keywordColoringEnabled 缺省 true（协议无主题 wordColors
-//    数据源，原生只存不用，见渲染器未移植清单）
-//  - render.scale / render.antialias 缺省 "global"（网页
-//    LyricRenderOverride 缺省跟随全局；原生渲染分辨率由
-//    SCNView 按 bounds×scale 决定，本两项只存不用）
+//  - keywordColoringEnabled 缺省 true（(62) C5 以长单元推导
+//    关键词集真消费，见渲染器 keywordUnitIndices62）
+//  - render.scale / render.antialias 缺省 "global"（(62) C5
+//    接 SCNView contentScaleFactor / antialiasingMode 真消费）
 // 面板拨动即写存储；渲染器经 snapshot() 的 0.25s 缓存逐帧读
 // （照 StageEffectSettings 先例）。
 
