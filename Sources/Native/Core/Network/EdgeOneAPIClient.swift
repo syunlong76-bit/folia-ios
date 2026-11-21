@@ -227,9 +227,12 @@ final class EdgeOneAPIClient {
         let rawId = songId.replacingOccurrences(of: "ncm_", with: "")
         let cookie = await NativeDataClient.shared.webCookie()
         let cookieFlag = cookie != nil ? "yes" : "no"
+        // 音质档位（3.7 (62) WC 簇）：读 SettingsStore.streamQuality62
+        // （播放面板音质页签写），默认 exhigh 与既有行为一致；
+        // 后端对 lossless/hires 是否认账待真机验，见 (62) 报告。
         var queryItems = [
             URLQueryItem(name: "id", value: rawId),
-            URLQueryItem(name: "level", value: "exhigh")
+            URLQueryItem(name: "level", value: SettingsStore.streamQuality62)
         ]
         if let cookie {
             queryItems.append(URLQueryItem(name: "cookie", value: cookie))

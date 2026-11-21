@@ -174,11 +174,15 @@ final class FoliaBridgeLogStore {
     }
 
     /// 桥内诊断写入（不限速）。调用方保证低频。
+    /// (62) WC 簇 §4.11 单 hunk：写入本地文件受
+    /// SettingsStore.bridgeLogWriteEnabled62 门控（默认开＝既有
+    /// 行为）；关时只走 NSLog 控制台、不落盘。
     func write(level: String, module: String, message: String) {
         let clean = sanitize(message)
         let line = "\(iso8601(Date())) [\(level.uppercased())][\(module)] \(clean)\n"
         // Xcode Console 与沙盒日志同步。
         NSLog("[FoliaBridge][\(module)] \(clean)")
+        guard SettingsStore.bridgeLogWriteEnabled62 else { return }
         ioQueue.async { [weak self] in
             guard let self else { return}
             let url = self.fileURL(index: self.currentFileIndex)

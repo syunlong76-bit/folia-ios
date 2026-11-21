@@ -91,6 +91,98 @@ enum SettingsMemoryMonitor {
     }
 }
 
+// MARK: - 内存监控采样器（3.7 (62) WC 簇 §4.11 做真）
+
+/// 持续采样器：按设置间隔（SettingsStore.memorySampleIntervalSec62）
+/// 定时读 residentBytes，存环形历史（最近 120 个样本），提供当前
+/// 值/峰值/近时序列供设置页显示。设置页开发者行负责启停。
+final class MemorySampler62 {
+
+    static let shared = MemorySampler62()
+
+    private(set) var samples: [Int] = []
+    private(set) var peakBytes: Int = 0
+    private(set) var isRunning = false
+    private var timer: Timer?
+    private static let capacity = 120
+
+    private init() {}
+
+    var currentBytes: Int? { samples.last ?? SettingsMemoryMonitor.residentBytes() }
+
+    func start() {
+        guard !isRunning else { return }
+        isRunning = true
+        sampleNow()
+        timer = Timer.scheduledTimer(
+            withTimeInterval: TimeInterval(SettingsStore.memorySampleIntervalSec62),
+            repeats: true) { [weak self] _ in self?.sampleNow() }
+        Breadcrumbs.log("memorysampler62.start interval=\(SettingsStore.memorySampleIntervalSec62)")
+    }
+
+    func stop() {
+        timer?.invalidate()
+        timer = nil
+        isRunning = false
+        Breadcrumbs.log("memorysampler62.stop samples=\(samples.count)")
+    }
+
+    /// 间隔变更后重启计时（采样值保留）。
+    func restartForIntervalChange() {
+        guard isRunning else { return }
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(
+            withTimeInterval: TimeInterval(SettingsStore.memorySampleIntervalSec62),
+            repeats: true) { [weak self] _ in self?.sampleNow() }
+    }
+
+    private func sampleNow() {
+        guard let bytes = SettingsMemoryMonitor.residentBytes() else { return }
+        samples.append(bytes)
+        if samples.count > Self.capacity { samples.removeFirst(samples.count - Self.capacity) }
+        peakBytes = max(peakBytes, bytes)
+    }
+
+    /// 近时曲线文本（最近 12 个样本的 MB 值，供设置行展示）。
+    func recentCurveText() -> String {
+        let tail = samples.suffix(12)
+        guard !tail.isEmpty else { return "暂无样本" }
+        return tail.map { String(format: "%.0f", Double($0) / 1_048_576) }
+            .joined(separator: " · ") + " MB"
+    }
+}
+
+// MARK: - (62) 发行说明（§4.12 动态化：版本从 Bundle 读）
+
+enum ReleaseNotes62 {
+
+    static var versionText: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "?"
+        let build = info?["CFBundleVersion"] as? String ?? "?"
+        return "\(short) (\(build))"
+    }
+
+    static var bodyText: String {
+        """
+        \(versionText) 发行说明（62 全量迁移 · WC 簇部分）
+
+        · 连接与集成：Navidrome 客户端（Subsonic 协议）落地——设置、连接测试、歌单/专辑浏览与点播、播放面板 Navidrome 页签。
+        · 同步服务：通用 REST 同步（设置域＋速记簿），手动推送/拉取，令牌存 Keychain。
+        · Discord 播放状态以 Webhook 形式上报（桌面 RPC 的移动等价）；PlayerCap 按地址周期上报播放状态。
+        · scrobble 上报与网易云打卡：真发请求、结果诚实回显（接口可用性待后端核对）。
+        · OBS 浏览器源：本机 /obs 页输出正在播放海报＋歌词；播放页透明背景与 OBS 保持动画两项设置落地。
+        · 播放面板新增音质/本地/Navidrome 三页签；音质档位真接取流参数。
+        · 存储：媒体缓存子系统（预缓存/上限 LRU/计数/全清）、听歌统计与智能平衡数据两类可清、本地曲库（文件/文件夹导入、四视图、重扫）。
+        · 歌词导出：.lrc 与 .fia（逐字戳 JSON）三入口真达。
+        · 探索页补每日推荐歌曲/歌单货架；歌手页落地；歌单页补导出/换封面/重扫。
+        · 命令面板扩到全集（导航/面板/歌词/速记簿/目录/大肥鱼/场景/主题）。
+        · 开发者：桥日志全量分页查看＋导出、写入本地文件开关、内存持续采样。
+        · 帮助：AI 帮助（本地 FAQ 库）、思索帮助页、Discord 社区行、大肥鱼陪伴面板、直播海报墙。
+        """
+    }
+}
+
 // MARK: - 配置导出 / 导入（配置码）
 
 /// 配置码 = 设置全量 JSON 的 Base64。键白名单 = SettingsStore
@@ -117,6 +209,33 @@ enum SettingsConfigTransfer {
         SettingsStore.SketchbookHandleKey.show,
         SettingsStore.SketchbookHandleKey.position,
         SettingsStore.SketchbookHandleKey.style,
+        // (62) WC 簇键并入白名单：同步服务（SyncService62）的
+        // 设置域即经此导出/导入。凭据类键不在此列（Keychain，
+        // 永不进配置码/同步）；sync.lastStatus 为状态非设置，
+        // 不并入。
+        SettingsStore.Key62C.navidromeEnabled,
+        SettingsStore.Key62C.navidromeBaseURL,
+        SettingsStore.Key62C.navidromeUsername,
+        SettingsStore.Key62C.syncEnabled,
+        SettingsStore.Key62C.syncBaseURL,
+        SettingsStore.Key62C.discordEnabled,
+        SettingsStore.Key62C.scrobbleEnabled,
+        SettingsStore.Key62C.playerCapEnabled,
+        SettingsStore.Key62C.playerCapBaseURL,
+        SettingsStore.Key62C.playerCapPlayerName,
+        SettingsStore.Key62C.playerCapTimelineEnabled,
+        SettingsStore.Key62C.playerCapIgnoreClear,
+        SettingsStore.Key62C.transparentStageBackground,
+        SettingsStore.Key62C.obsKeepMainAnimation,
+        SettingsStore.Key62C.streamQuality,
+        SettingsStore.Key62C.mediaCacheEnabled,
+        SettingsStore.Key62C.mediaCacheLimitMB,
+        SettingsStore.Key62C.autoScanImportedFolders,
+        SettingsStore.Key62C.folderWatchEnabled,
+        SettingsStore.Key62C.bridgeLogWriteEnabled,
+        SettingsStore.Key62C.memorySampleIntervalSec,
+        SettingsStore.Key62C.localLyricFormatOrder,
+        SettingsStore.Key62C.localLyricPriority,
     ]
 
     static func exportCode() -> String {
