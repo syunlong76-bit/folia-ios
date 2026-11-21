@@ -99,8 +99,9 @@ final class HomeWallViewController: UIViewController,
     private var stickerSkipFlashToken = 0
 
     // 底部播放台（3.7 (13.4) #4，Miller 点名）：与曲目墙同款
-    // E 液态玻璃台（构造同构、按仓库惯例有意重复）；差异是主页
-    // 没有定位语义——封面与台身都进播放页，回程存主页票。
+    // E 液态玻璃台（构造同构、按仓库惯例有意重复）；点按规格
+    // (61) 第 7 条起与曲目墙统一（单击浮层/双击详情/进度带
+    // 即时 seek，见 miniBarTapped），详情走 openNativeStageFromHome。
     private var miniBar: UIView?
     /// 台面毛玻璃层（3.7 (20)）：入场时 effect 从 nil 渐入做
     /// 「显影」联动，须持有引用（原为 buildMiniBar 局部量）。
@@ -146,6 +147,14 @@ final class HomeWallViewController: UIViewController,
     /// 毛玻璃/玻璃高光隐藏），只剩轨道+填充+发光圆点步进，
     /// 内容淡出且按钮禁交互。
     private var miniBarCollapsed = false
+    /// 点播台点按识别器组（3.7 (61) 第 7 条）：展开态单击（require
+    /// 双击+长按失败）/展开态双击/收起态单击（无 require 链、即时
+    /// 展开）三件分工，启停由 setMiniBarForm 按形态同步（见
+    /// syncMiniBarTapRecognizers）；进度带即时 seek 走 seekHit 自带
+    /// 识别器（miniSeekTapped），不进本组 require 链。
+    private var miniBarTapRecognizer: UITapGestureRecognizer?
+    private var miniBarDoubleTapRecognizer: UITapGestureRecognizer?
+    private var miniBarCollapsedTapRecognizer: UITapGestureRecognizer?
     /// 迷你台宠物层（3.7 (27)）：纯新增覆盖层，只经下面几处
     /// 一行钩子订阅台子的显隐/形态/切歌边沿，台子逻辑零改动。
     private var miniPetStage: MiniBarPetStage?
@@ -195,6 +204,12 @@ final class HomeWallViewController: UIViewController,
     private var seamGridMode = UserDefaults.standard.bool(forKey: "folia.wall.gridMode")
     private var seamImmersive = false
     private var seamImmersiveTapView: UIView?
+    /// 沉浸期被中和的覆盖层原状态（3.7 (61) 第 1.5 条）：进入沉浸
+    /// 时存速记簿 covered 态/工作台宿主/宠物层的交互开关，退出
+    /// 时逐项恢复（原本就被侧栏 covered 的速记簿不代为解除）。
+    private var seamImmersiveSavedSketchbookCovered: Bool?
+    private var seamImmersiveSavedWorkbenchEnabled: Bool?
+    private var seamImmersiveSavedPetEnabled: Bool?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
     /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
@@ -220,9 +235,11 @@ final class HomeWallViewController: UIViewController,
         Breadcrumbs.log("wall.geom.init bounds=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
             + " orient=\(sceneOrientation.map { "\($0.rawValue)" } ?? "nil")")
         // 入场黑帧缝（3.7 (53) I 组定级）：窗口首帧先渲染本视图，
-        // 入场 veil 在 viewDidAppear present 时才就位——底色用海报
-        // 主色（EntryPosterArt），1~2 帧露出也是油画色域而非黑。
-        view.backgroundColor = EntryPosterArt.dominantColor
+        // 入场 veil 在 viewDidAppear present 时才就位。(61) 第 2
+        // 条改口径：墙底改纯黑——dominantColor（橄榄绿 #6A7342）
+        // 在帧缺位时会露成平绿画布，垫底只认海报图本体、不认
+        // 平均色，与 (59) 黑场第一帧口径一致。
+        view.backgroundColor = .black
         overrideUserInterfaceStyle = .dark
         // 播放台特效总开关/主题变更（设置页）即时同步。
         NotificationCenter.default.addObserver(
@@ -253,8 +270,8 @@ final class HomeWallViewController: UIViewController,
             name: .foliaHiddenPlaylistsChanged, object: nil)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
-        // 同 view 底色口径（(53) I 组）：墙画布未铺满/回弹露底时同为海报主色。
-        collectionView.backgroundColor = EntryPosterArt.dominantColor
+        // 同 view 底色口径（(61) 第 2 条）：墙画布未铺满/回弹露底时同为纯黑。
+        collectionView.backgroundColor = .black
         collectionView.dataSource = self
         collectionView.delegate = self
         collectionView.prefetchDataSource = self
@@ -1217,6 +1234,12 @@ final class HomeWallViewController: UIViewController,
         miniSeekHit = seekHit
         let seekPan = UIPanGestureRecognizer(target: self, action: #selector(miniSeekPanned(_:)))
         seekHit.addGestureRecognizer(seekPan)
+        // 进度带单击即时 seek（3.7 (61) 第 7 条区域分域）：seekHit
+        // 自带无 require 链的点按识别器，点按当下即跳点，不等台身
+        // 单击的双击判定窗口；台身单击/双击识别器对本带落点只做
+        // 分域跳过（见 miniBarTapped/miniBarDoubleTapped）。
+        let seekTap = UITapGestureRecognizer(target: self, action: #selector(miniSeekTapped(_:)))
+        seekHit.addGestureRecognizer(seekTap)
 
         // 宽度按竖屏定版（3.7 (21)）：居中 + 宽度约束存引用，
         // viewDidLayoutSubviews 按 min(宽,高)−24 更新——横屏时
@@ -1300,16 +1323,34 @@ final class HomeWallViewController: UIViewController,
         fill.transform = CGAffineTransform(scaleX: 0, y: 1)
 
         // 长按切主题（13.5）：tap 须等长按落空才触发（短点按
-        // 时触摸抬起即判长按失败，点按进播放页不加可感延迟）；
-        // seek 拖动不与长按互斥（长按静止触发时拖动尚未产生
-        // 位移，松手至多以长按点 seek 一次，与点按跳点同义）。
+        // 时触摸抬起即判长按失败）；seek 拖动不与长按互斥（长
+        // 按静止触发时拖动尚未产生位移，松手至多以长按点 seek
+        // 一次，与点按跳点同义）。
+        // 单击/双击统一规格（3.7 (61) 第 7 条）：展开态单击
+        // require(toFail:) 双击与长按两环（双击失败后才触发、
+        // 代价约一个双击窗口，换双击无回滚闪烁）；双击进歌曲
+        // 详情页；收起态细条走独立无链识别器即时展开。三件的
+        // 启停按形态在 setMiniBarForm 同步。宠物层手势不经台
+        // 身（宠物识别器整组接走其落点），本链不影响宠物；
+        // 4s 开启手势（宠物关闭态）仍挂台身、链外不动。
         let longPress = UILongPressGestureRecognizer(
             target: self, action: #selector(miniBarLongPressed(_:)))
         longPress.minimumPressDuration = 0.55
         bar.addGestureRecognizer(longPress)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(miniBarDoubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.require(toFail: longPress)
+        bar.addGestureRecognizer(doubleTap)
+        miniBarDoubleTapRecognizer = doubleTap
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniBarTapped(_:)))
         tap.require(toFail: longPress)
+        tap.require(toFail: doubleTap)
         bar.addGestureRecognizer(tap)
+        miniBarTapRecognizer = tap
+        let collapsedTap = UITapGestureRecognizer(target: self, action: #selector(miniBarCollapsedTapped(_:)))
+        collapsedTap.isEnabled = false
+        bar.addGestureRecognizer(collapsedTap)
+        miniBarCollapsedTapRecognizer = collapsedTap
 
         applyMiniTheme()
         applyMiniBarSlots()
@@ -1499,14 +1540,19 @@ final class HomeWallViewController: UIViewController,
         QueueManager.shared.playNext(manual: true)
     }
 
-    /// 台面点按分发（主页版）：按键各自处理；封面 = 进播放详
-    /// 情页（13.4 #4 主页口径不变）；底部进度带 = 点按跳点；
-    /// 其余台身空白区 = 呼出附加功能浮层（(60) 第 7 条新触发，
-    /// 取代旧「台身空白也进详情页」——封面仍是进详情页入口）。
+    /// 台面单击分发（主页版，3.7 (61) 第 7 条全台统一规格）：
+    /// 本识别器已 require(toFail:) 双击与 0.55s 长按，触发即
+    /// 「双击失败后的单击」。按键各自处理；进度带落点分域跳
+    /// 过（seek 已由 seekHit 自带识别器即时完成，见
+    /// miniSeekTapped）；封面与台身空白/标题区同规格——浮层
+    /// 开关（已开＝收起、不重出；未开＝呼出）。封面不再单击
+    /// 直达详情页，详情入口改双击（miniBarDoubleTapped）。
+    /// 注：宠物占位区的点按被宠物识别器整组接走，永远到不
+    /// 了台身——双击须落在台身空白/封面/标题区（验收口径）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
         guard let bar = miniBar else { return }
-        // 收起态点按（3.7 (21)）：只展开回完整形态并重新计时，
-        // 不走原分发（不 seek/不开台）。
+        // 收起态点按本应走无链的 collapsedTap 即时展开；此处
+        // 仅作识别器启停万一失同步时的兜底，不走展开态分发。
         if miniBarCollapsed {
             expandMiniBar()
             return
@@ -1518,23 +1564,83 @@ final class HomeWallViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniModeButton.frame.contains(point) { return }
-        // 封面优先于底部进度带（与曲目墙分发序一致）：封面下缘
-        // 与 seekHit 带约 2pt 重叠，点封面应开页不跳点。
-        if miniCover.frame.contains(point) {
-            openNativeStageFromHome()
+        // 进度带分域（封面优先于进度带，与旧分发序一致：封面
+        // 下缘与 seekHit 带约 2pt 重叠，该重叠落点归封面规格、
+        // 不归 seek）：带内落点直接返回，seek 已即时发生。
+        if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
+            Breadcrumbs.log("minibar.tap host=homewall zone=seekband action=skip")
             return
         }
-        if miniSeekHit.frame.contains(point) {
-            let track = miniProgressTrack.frame
-            let engine = PlaybackEngine.shared
-            guard track.width > 0, engine.duration > 0 else { return }
-            let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
-            setMiniProgress(Double(fraction))
-            engine.seek(to: Double(fraction) * engine.duration)
+        if miniQuickRowOverlay?.isShown == true {
+            hideMiniQuickRowOverlay(reason: "bar-tap")
+            Breadcrumbs.log("minibar.tap host=homewall action=overlay-hide")
+        } else {
+            showMiniQuickRowOverlay()
+            Breadcrumbs.log("minibar.tap host=homewall action=overlay-show")
+        }
+    }
+
+    /// 台面双击分发（主页版，3.7 (61) 第 7 条）：双击进歌曲详
+    /// 情页（openNativeStageFromHome 原路径）；封面同规格参
+    /// 与（封面双击同样进详情）。进度带分域：双击落带内不
+    /// 触发详情（每击已由 seekHit 识别器即时 seek）；按键区
+    /// 自理。宠物占位区双击被宠物识别器接走、到不了台身。
+    @objc private func miniBarDoubleTapped(_ gesture: UITapGestureRecognizer) {
+        guard let bar = miniBar, !miniBarCollapsed else { return }
+        resetMiniIdleTimer()
+        let point = gesture.location(in: bar)
+        if miniPlayButton.frame.contains(point)
+            || miniPrevButton.frame.contains(point)
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
+        if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
+            Breadcrumbs.log("minibar.doubletap host=homewall zone=seekband action=skip")
             return
         }
-        // 台身空白区（(60) 第 7 条）：呼出附加功能浮层（五钮行）。
-        showMiniQuickRowOverlay()
+        Breadcrumbs.log("minibar.doubletap host=homewall action=stage")
+        openNativeStageFromHome()
+    }
+
+    /// 收起态细条单击（3.7 (61) 第 7 条）：独立识别器、无任何
+    /// require 链，点按即时展开回完整形态并重新计时（展开在
+    /// expandMiniBar 内），不被双击判定拖延。
+    @objc private func miniBarCollapsedTapped(_ gesture: UITapGestureRecognizer) {
+        guard miniBarCollapsed else { return }
+        Breadcrumbs.log("minibar.tap host=homewall collapsed=1 action=expand")
+        expandMiniBar()
+    }
+
+    /// 进度带单击即时 seek（3.7 (61) 第 7 条）：seekHit 自带
+    /// 识别器、无 require 链，触发即跳点。封面下缘约 2pt 重
+    /// 叠落点归封面规格（单击浮层/双击详情），不在此 seek；
+    /// 按键区自理；收起态不 seek（细条单击只展开）。
+    @objc private func miniSeekTapped(_ gesture: UITapGestureRecognizer) {
+        guard let bar = miniBar, !miniBarCollapsed else { return }
+        resetMiniIdleTimer()
+        let point = gesture.location(in: bar)
+        if miniPlayButton.frame.contains(point)
+            || miniPrevButton.frame.contains(point)
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
+        if miniCover.frame.contains(point) { return }
+        guard miniSeekHit.frame.contains(point) else { return }
+        let track = miniProgressTrack.frame
+        let engine = PlaybackEngine.shared
+        guard track.width > 0, engine.duration > 0 else { return }
+        let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
+        setMiniProgress(Double(fraction))
+        engine.seek(to: Double(fraction) * engine.duration)
+        Breadcrumbs.log("minibar.seek host=homewall via=seek-tap")
+    }
+
+    /// 点按识别器组按形态启停（3.7 (61) 第 7 条）：展开态启
+    /// 单击（require 双击/长按）+双击、停收起单击；收起态反
+    /// 之。全部形态切换都经 setMiniBarForm 收口到这里，启停
+    /// 与形态严格同步。
+    private func syncMiniBarTapRecognizers(collapsed: Bool) {
+        miniBarTapRecognizer?.isEnabled = !collapsed
+        miniBarDoubleTapRecognizer?.isEnabled = !collapsed
+        miniBarCollapsedTapRecognizer?.isEnabled = collapsed
     }
 
     /// 进度拖动（与曲目墙同构）：拖动中只更新填充，松手才 seek；
@@ -1783,6 +1889,9 @@ final class HomeWallViewController: UIViewController,
         miniBlurView?.isHidden = collapsed
         miniRimLight?.isHidden = collapsed
         miniGlassTint?.isHidden = collapsed
+        // 点按识别器组随形态启停（3.7 (61) 第 7 条）：收起态
+        // 只认无链单击即时展开，展开态才挂双击判定链。
+        syncMiniBarTapRecognizers(collapsed: collapsed)
         refreshMiniProgressChrome()
     }
 
@@ -2350,7 +2459,7 @@ extension HomeWallViewController {
         tapView.isHidden = true
         tapView.translatesAutoresizingMaskIntoConstraints = false
         tapView.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(seamImmersiveTap)))
+            UITapGestureRecognizer(target: self, action: #selector(seamImmersiveTap(_:))))
         if let host = workbenchHost {
             view.insertSubview(tapView, belowSubview: host)
         } else {
@@ -2544,6 +2653,10 @@ extension HomeWallViewController {
             self.collectionView.isHidden = showGrid
             grid.alpha = 1
             self.collectionView.alpha = 1
+            // (61) 第 1.5 条 trace 接线：布局切换完成收口（入口
+            // beginAction 由工具条布局钮侧发出，WA 簇接线）。
+            InteractionTrace.shared.endAction("layout-done")
+            Breadcrumbs.log("wall.seam.trace endAction=layout-done")
         }
     }
 
@@ -2630,28 +2743,107 @@ extension HomeWallViewController {
     // 与网页版全屏非等价，面包屑与报告均按此口径表述。
 
     func seamSetImmersive(_ on: Bool) {
+        // 工具条全屏钮等一般路径入口：退出统一记 exit-other；
+        // 点按退出走 seamImmersiveTap 的 exit-tap 分支。
+        applySeamImmersive(on, traceEndReason: on ? nil : "exit-other")
+    }
+
+    private func applySeamImmersive(_ on: Bool, traceEndReason: String?) {
+        let wasImmersive = seamImmersive
         seamImmersive = on
         Breadcrumbs.log("wall.seam.immersive on=\(on) platformSubstitute=1 nonEquivalent=1")
         // (60) 第 2 条：沉浸隐藏走工具条双态入口——整条与
         // grabber 横线同藏，退出沉浸回落收起态。
         seamToolbar?.setImmersiveHidden(on)
         seamFilterBar?.isHidden = true
-        seamImmersiveTapView?.isHidden = !on
         if on {
+            // 提层（3.7 (61) 第 1.5 条，修沉浸假卡死结构缺陷）：
+            // 原退出热区被 insertSubview 到工作台宿主之下，其上
+            // 压着速记簿层与宠物层，落点到不了热区、沉浸退不出
+            // 来。进入沉浸时：①存覆盖层原状态；②速记簿整层经
+            // setExternallyCovered 藏起并穿透（把手/展开把手/
+            // 热区一并不可命中）；③工作台宿主与宠物层关交互
+            // （侧栏把手/悬浮头像等残留小件不可命中）；④退出
+            // 热区 bringSubviewToFront 到全部覆盖层之上。退出
+            // 时逐项恢复原层级与状态。
+            if !wasImmersive {
+                seamImmersiveSavedSketchbookCovered = sketchbookDrawer?.isExternallyCovered
+                seamImmersiveSavedWorkbenchEnabled = workbenchHost?.isUserInteractionEnabled
+                seamImmersiveSavedPetEnabled = miniPetStage?.isUserInteractionEnabled
+            }
+            if sketchbookDrawer?.isExternallyCovered == false {
+                sketchbookDrawer?.setExternallyCovered(true)
+            }
+            workbenchHost?.isUserInteractionEnabled = false
+            miniPetStage?.isUserInteractionEnabled = false
+            seamImmersiveTapView?.isHidden = false
+            if let tapView = seamImmersiveTapView {
+                view.bringSubviewToFront(tapView)
+            }
+            Breadcrumbs.log("wall.seam.immersive zorder raised=1")
             rootCloseButton?.isHidden = true
             miniBar?.alpha = 0
             miniBar?.isUserInteractionEnabled = false
         } else {
+            seamImmersiveTapView?.isHidden = true
+            if wasImmersive {
+                // 恢复原状态：速记簿原本就被外部（侧栏）covered
+                // 时不代为解除，只恢复沉浸自己加的那层。
+                if let savedCovered = seamImmersiveSavedSketchbookCovered, !savedCovered {
+                    sketchbookDrawer?.setExternallyCovered(false)
+                }
+                if let savedWorkbench = seamImmersiveSavedWorkbenchEnabled {
+                    workbenchHost?.isUserInteractionEnabled = savedWorkbench
+                }
+                if let savedPet = seamImmersiveSavedPetEnabled {
+                    miniPetStage?.isUserInteractionEnabled = savedPet
+                }
+                seamImmersiveSavedSketchbookCovered = nil
+                seamImmersiveSavedWorkbenchEnabled = nil
+                seamImmersiveSavedPetEnabled = nil
+                Breadcrumbs.log("wall.seam.immersive zorder restored=1")
+            }
             rootCloseButton?.isHidden =
                 (presentingViewController == nil && navigationController == nil)
             miniBar?.alpha = 1
             miniBar?.isUserInteractionEnabled = true
+            if let traceEndReason {
+                InteractionTrace.shared.endAction(traceEndReason)
+                Breadcrumbs.log("wall.seam.trace endAction=\(traceEndReason)")
+            }
         }
     }
 
-    @objc func seamImmersiveTap() {
-        guard seamImmersive else { return }
-        seamSetImmersive(false)
+    @objc func seamImmersiveTap(_ gesture: UITapGestureRecognizer) {
+        guard seamImmersive, let tapView = seamImmersiveTapView else { return }
+        // (61) 第 1.5 条 trace：退出点按落一行判读料——触点、
+        // 命中链前三层（自顶向下含点图层类名）、热区帧。
+        let point = gesture.location(in: view)
+        InteractionTrace.shared.recordImmersiveTap(
+            point: point,
+            hitViewChain: seamHitViewChain(at: point),
+            seamFrame: tapView.frame,
+            seamHit: true)
+        Breadcrumbs.log("wall.seam.immersive exit-via-tap")
+        applySeamImmersive(false, traceEndReason: "exit-tap")
+    }
+
+    /// 命中链取样（供 InteractionTrace）：自顶向下扫本视图直
+    /// 接子层，取前三个含点且可见的图层类名；扫不到时回退
+    /// hitTest 命中视图类名。
+    private func seamHitViewChain(at point: CGPoint) -> [String] {
+        var chain: [String] = []
+        for subview in view.subviews.reversed() {
+            guard chain.count < 3 else { break }
+            guard !subview.isHidden, subview.alpha > 0.01 else { continue }
+            if subview.convert(subview.bounds, to: view).contains(point) {
+                chain.append(String(describing: type(of: subview)))
+            }
+        }
+        if chain.isEmpty, let hit = view.hitTest(point, with: nil) {
+            chain.append(String(describing: type(of: hit)))
+        }
+        return chain
     }
 
     // MARK: 账户（双入口并存：与侧栏头像同一登录页/同一态）
@@ -2671,13 +2863,36 @@ extension HomeWallViewController {
     }
 
     func seamRefreshAccount() {
+        // 同步缓存先行（3.7 (61) 第 1.4 条）：头像 URL 与昵称同
+        // 源——ProviderSessionStatusQuery 同步缓存里当前登录平
+        // 台的 profile（取数口径与工作台侧栏 refreshAccountUI
+        // 一致：第一家已登录且有头像者优先）。先用缓存把工具
+        // 条头像刷出来，不等 fetchLoginStatus 网络回程。
+        let statuses = ProviderSessionStatusQuery.allStatuses()
+        let loggedInStatuses = statuses.filter(\.isLoggedIn)
+        let avatarStatus = loggedInStatuses.first { $0.avatarURL != nil }
+            ?? statuses.first { $0.avatarURL != nil }
+        let avatarURLString = avatarStatus?.avatarURL?.absoluteString
+        let syncNickname = loggedInStatuses.first?.displayName
+        let syncLoggedIn = !loggedInStatuses.isEmpty
+        seamToolbar?.setAccount(
+            nickname: syncNickname,
+            loggedIn: syncLoggedIn,
+            avatarURLString: avatarURLString)
+        Breadcrumbs.log("wall.seam.account sync loggedIn=\(syncLoggedIn) avatar=\(avatarURLString != nil ? 1 : 0)")
         Task { [weak self] in
             guard let self else { return }
             let status = try? await NativeDataClient.shared.fetchLoginStatus()
             await MainActor.run {
+                // 网络回程只更新昵称/登录态（fetchLoginStatus 无
+                // 头像字段）；失败时保留已刷的同步缓存值，不回
+                // 退成未登录占位。头像仍传同一同步缓存值。
+                guard let status else { return }
                 self.seamToolbar?.setAccount(
-                    nickname: status?.nickname,
-                    loggedIn: status?.loggedIn ?? false)
+                    nickname: status.nickname ?? syncNickname,
+                    loggedIn: status.loggedIn,
+                    avatarURLString: avatarURLString)
+                Breadcrumbs.log("wall.seam.account fetch loggedIn=\(status.loggedIn) avatar=\(avatarURLString != nil ? 1 : 0)")
             }
         }
     }
