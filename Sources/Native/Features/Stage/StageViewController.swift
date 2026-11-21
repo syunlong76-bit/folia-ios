@@ -474,6 +474,21 @@ final class StageViewController: UIViewController {
         // hasRestoredQueue 把关）；装载走现换地址、默认保持
         // 暂停（resumeRestoredQueue 既定语义不变）。
         QueueManager.shared.resumeRestoredQueue()
+        // (62) 集成补接（WD 待接线项）：每首歌随机选出新样式
+        // 后（RandomStylePerSong62 广播），舞台在场时实时换
+        // 装；未开台时下次开台读 currentStyleId 自然生效。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleRandomStylePerSong62),
+            name: .foliaStyleRandom62, object: nil)
+    }
+
+    /// 每首歌随机实时换装：走选样式统一通路（袋子对账 +
+    /// swapRenderer），已是当前样式时不重复换装。
+    @objc private func handleRandomStylePerSong62() {
+        let target = StageStyleStore.currentStyleId
+        guard target != activeStyleId else { return }
+        Breadcrumbs.log("stage62.randomPerSong live-swap to=\(target)")
+        applyNativeStyleSelection(target)
     }
 
     override func viewWillAppear(_ animated: Bool) {

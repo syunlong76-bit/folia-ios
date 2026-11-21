@@ -191,6 +191,8 @@ final class HomeWallViewController: UIViewController,
     private var wallBackdrop62: WallBackdrop62?
     private var stripSurface62: StripSurface62?
     private var seamToolbarTrailing: NSLayoutConstraint?
+    /// (62) 集成补接：工具条弹性回零计时（滚动停 0.3s 后归位）。
+    private var seamElasticResetWork: DispatchWorkItem?
     /// 歌单→曲目墙共享元素转场的 hero 快照（(60) 第 3 条③）：
     /// beginPosterTransition 起、endPosterTransition 收。
     private var seamPosterHeroView: UIView?
@@ -820,6 +822,18 @@ final class HomeWallViewController: UIViewController,
             x: scrollView.contentOffset.x - center.x,
             y: scrollView.contentOffset.y - center.y)
         guard delta.x != 0 || delta.y != 0 else { return }
+        // (62) 集成补接（WD 待接线项）：缝合工具条骑墙弹性
+        // 跟随——滚动位移喂 SeamToolbarView 的弹性 API（欠阻
+        // 尼弹簧、偏移 30%、钳 ±10pt），停滚 0.3s 后以 0 回
+        // 弹归位。只动工具条自身 transform，与其双态展开/收
+        // 起（动内容子视图）不同层、不冲突。
+        seamToolbar?.applySeamElasticOffset(delta.y)
+        seamElasticResetWork?.cancel()
+        let reset = DispatchWorkItem { [weak self] in
+            self?.seamToolbar?.applySeamElasticOffset(0)
+        }
+        seamElasticResetWork = reset
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: reset)
         // 滚动统计（(58) 定稿③）：本回调耗时计入逐秒 wall.scroll。
         let scrollStart = CACurrentMediaTime()
         isWrapping = true
