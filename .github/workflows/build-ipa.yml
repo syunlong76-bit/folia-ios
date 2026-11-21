@@ -15,10 +15,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # 3.6 (7) P1 卡点：墙解码登记表钳制的结构模式必须可命中，
-      # 全灭则 P1 静默失效，直接失败不带病出包（DS 第十六轮 4.1）。
-      - name: Check registry patch anchor
-        run: python3 scripts/check-registry-patch.py
+      # 3.6 (7) P1 卡点已于 3.7 (67) 退役：WallRegistryPatch 本体
+      # 自 3.6 (8) 起停用（isEnabled=false、代码保留备查），其锚点
+      # 目标是全量前端包里的 wall chunk；(67) WebEffect 换包为
+      # player-visual 纯渲染器后 wall chunk 整体离包，锚点无对
+      # 象可命中，检查随之退役（脚本保留在 scripts/ 备查）。
 
       - name: Install XcodeGen
         run: brew install xcodegen

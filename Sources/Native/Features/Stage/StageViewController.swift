@@ -1299,6 +1299,9 @@ final class StageViewController: UIViewController {
         if webView.superview === rendererContainer {
             webView.removeFromSuperview()
         }
+        // 交互标志复原：嵌入态关交互是本台口径，全屏网页舞台
+        // 宿主共用同一 WebView 实例，不许把关着的标志带过去。
+        webView.isUserInteractionEnabled = true
         WebEffectBridge.shared.isEmbeddedInStage = false
         webEmbedStyleId = nil
     }

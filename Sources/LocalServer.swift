@@ -1355,8 +1355,10 @@ enum CoverPolicy {
 /// 循环）。全文件恰好命中 1 次才替换；未命中原样供包（fail-open），
 /// 命中与未命中都只记一次日志（按 文件名+cap 去重，防刷屏）。
 private enum WallRegistryPatch {
-    /// 3.6 (8) 止损：停用（见 sendFile 处注释）。代码保留备查，CI 锚点
-    /// 检查仍在（scripts/check-registry-patch.py），防锚点腐烂。
+    /// 3.6 (8) 止损：停用（见 sendFile 处注释）。代码保留备查。
+    /// CI 锚点检查（scripts/check-registry-patch.py）已于 3.7
+    /// (67) 随 WebEffect 换 player-visual 纯渲染器一并退役：
+    /// wall chunk 离包后锚点无对象可命中（见 build-ipa.yml）。
     static let isEnabled = false
 
     private static let regex: NSRegularExpression? = try? NSRegularExpression(
