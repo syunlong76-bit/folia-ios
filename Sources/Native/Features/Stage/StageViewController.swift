@@ -84,6 +84,14 @@ final class StageViewController: UIViewController {
     /// 钮，glyph 随 QueueManager.playMode 四档变，点按弹 UIMenu
     /// 四档点选（非盲循环）；与队列面板/播放面板同一 playMode 存储。
     private let stageModeButton = UIButton(type: .system)
+    /// (66) 进度条两端功能槽位钮（barSlotLeft62/Right62 的
+    /// 消费者）：落在时间标签与中央簇之间的空隙，不动 (55)
+    /// 定版五钮浮层；配置随 refresh62Settings 重建。
+    private let stageSlotLeft66 = UIButton(type: .system)
+    private let stageSlotRight66 = UIButton(type: .system)
+    /// (66) 点播台顶缘拖高柄（设置「在播放页拖动调整」的
+    /// 定位脉冲目标）。
+    private var stageBarDragHandle66: UIView?
     // 播放列表图标（顶栏 queueButton）已于 (60) 第 10 条删除：
     // 队列入口保留点播台面板页签与命令面板，QueuePanel 本体不动。
     private var stageBarWidthConstraint: NSLayoutConstraint?
@@ -747,6 +755,7 @@ final class StageViewController: UIViewController {
         handle.backgroundColor = .clear
         handle.translatesAutoresizingMaskIntoConstraints = false
         stageBar.addSubview(handle)
+        stageBarDragHandle66 = handle
         NSLayoutConstraint.activate([
             handle.topAnchor.constraint(equalTo: stageBar.topAnchor),
             handle.leadingAnchor.constraint(equalTo: stageBar.leadingAnchor),
@@ -761,6 +770,10 @@ final class StageViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(settings62AChanged),
             name: .foliaTheme62Changed, object: nil)
+        // (66) 设置页「在播放页拖动调整」按钮的定位信号。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(stageBarLocate66),
+            name: .foliaStageBarLocate66, object: nil)
         refresh62Settings()
         Breadcrumbs.log("stage62.install scene=\(SceneSystem62.params().label)"
             + " soundTracing=\(SettingsStore.soundTracingEnabled ? 1 : 0)"
@@ -794,6 +807,95 @@ final class StageViewController: UIViewController {
             ThemeSystem62.currentAccent.withAlphaComponent(0.25)
         if !SettingsStore.headerAutoHideEnabled, headerChromeHidden {
             showStageHeader(source: "62-autohide-off")
+        }
+        // (66) 透明舞台背景消费：开时舞台自有底图层全撤、根
+        // 视图透明（露出下层墙面），与 /obs 页同键同义。
+        let transparent = SettingsStore.transparentStageBackground62
+        view.backgroundColor = transparent ? .clear : .black
+        backdrop62Container.isHidden = transparent
+        backdropImageView.isHidden = transparent
+        backdropBlur.isHidden = transparent
+        backdropTint.isHidden = transparent
+        // (66) 进度条两端槽位钮按当前键值重建。
+        configureStageSlot66(stageSlotLeft66, function: SettingsStore.barSlotLeft62)
+        configureStageSlot66(stageSlotRight66, function: SettingsStore.barSlotRight62)
+    }
+
+    /// (66) 槽位钮配置：功能集与设置行同表
+    /// （SettingsStore.barSlotFunctions62），动作分发复用台
+    /// 既有通路（prev/next/like/队列面板/模式菜单/睡眠菜单）。
+    private func configureStageSlot66(_ button: UIButton, function: String) {
+        button.menu = nil
+        button.showsMenuAsPrimaryAction = false
+        button.removeTarget(nil, action: nil, for: .allEvents)
+        let config = UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)
+        func setGlyph(_ name: String) {
+            button.setImage(UIImage(systemName: name, withConfiguration: config), for: .normal)
+        }
+        switch function {
+        case "prev":
+            setGlyph("backward.end.fill")
+            button.accessibilityLabel = "上一首（槽位）"
+            button.addTarget(self, action: #selector(prevTapped), for: .touchUpInside)
+            button.isHidden = false
+        case "next":
+            setGlyph("forward.end.fill")
+            button.accessibilityLabel = "下一首（槽位）"
+            button.addTarget(self, action: #selector(nextTapped), for: .touchUpInside)
+            button.isHidden = false
+        case "like":
+            setGlyph("heart")
+            button.accessibilityLabel = "喜欢（槽位）"
+            button.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
+            button.isHidden = false
+        case "queue":
+            setGlyph("list.bullet")
+            button.accessibilityLabel = "播放队列（槽位）"
+            button.addTarget(self, action: #selector(stageSlotQueue66), for: .touchUpInside)
+            button.isHidden = false
+        case "mode":
+            setGlyph("repeat")
+            button.accessibilityLabel = "播放模式（槽位）"
+            button.menu = stageModeButton.menu
+            button.showsMenuAsPrimaryAction = true
+            button.isHidden = false
+        case "sleep":
+            setGlyph("moon.zzz")
+            button.accessibilityLabel = "睡眠定时（槽位）"
+            let actions = SleepTimerController.presets.filter { $0 > 0 }.map { minutes in
+                UIAction(title: "\(minutes) 分钟后停止") { _ in
+                    SleepTimerController.shared.set(minutes: minutes)
+                    Breadcrumbs.log("stage66.slot sleep=\(minutes)")
+                }
+            } + [UIAction(title: "取消定时", attributes: .destructive) { _ in
+                SleepTimerController.shared.cancel()
+            }]
+            button.menu = UIMenu(title: "睡眠定时", children: actions)
+            button.showsMenuAsPrimaryAction = true
+            button.isHidden = false
+        default:
+            button.isHidden = true
+        }
+    }
+
+    @objc private func stageSlotQueue66() {
+        resetStageIdleTimer()
+        PlaybackPanelViewController.present(from: self, initialTab: .queue)
+    }
+
+    /// (66) 设置页「在播放页拖动调整」：脉冲高亮点播台顶缘
+    /// 拖高柄两轮，提示拖动位置（与 bottomBarHeight 同通路）。
+    @objc private func stageBarLocate66() {
+        guard let handle = stageBarDragHandle66, !stageBarCollapsed else { return }
+        Breadcrumbs.log("stage66.locate pulse=1")
+        handle.backgroundColor = UIColor.white.withAlphaComponent(0.35)
+        UIView.animate(withDuration: 0.45, delay: 0,
+                       options: [.autoreverse, .repeat, .curveEaseInOut]) {
+            handle.backgroundColor = UIColor.white.withAlphaComponent(0.05)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.9) {
+            handle.layer.removeAllAnimations()
+            handle.backgroundColor = .clear
         }
     }
 
@@ -1960,6 +2062,31 @@ final class StageViewController: UIViewController {
             stageModeButton.heightAnchor.constraint(equalToConstant: 40),
         ])
 
+        // (66) 进度条两端槽位钮装配：左钮落在当前时间标签右
+        // 侧空隙、右钮落在总时长标签左侧空隙（台宽 ≥351 时
+        // 两空隙 ≥30pt，26pt 钮不挤压既有三键/模式钮/标签）；
+        // 纵向跟随主排 centerY。内容由 refresh62Settings 按
+        // barSlotLeft62/Right62 配置，none 时整钮隐藏。
+        for slot in [stageSlotLeft66, stageSlotRight66] {
+            slot.tintColor = .white
+            slot.translatesAutoresizingMaskIntoConstraints = false
+            bar.addSubview(slot)
+        }
+        NSLayoutConstraint.activate([
+            stageSlotLeft66.leadingAnchor.constraint(
+                equalTo: currentTimeLabel.trailingAnchor, constant: 2),
+            stageSlotLeft66.centerYAnchor.constraint(
+                equalTo: playButton.centerYAnchor),
+            stageSlotLeft66.widthAnchor.constraint(equalToConstant: 26),
+            stageSlotLeft66.heightAnchor.constraint(equalToConstant: 40),
+            stageSlotRight66.trailingAnchor.constraint(
+                equalTo: totalTimeLabel.leadingAnchor, constant: -2),
+            stageSlotRight66.centerYAnchor.constraint(
+                equalTo: playButton.centerYAnchor),
+            stageSlotRight66.widthAnchor.constraint(equalToConstant: 26),
+            stageSlotRight66.heightAnchor.constraint(equalToConstant: 40),
+        ])
+
         let longPress = UILongPressGestureRecognizer(
             target: self, action: #selector(stageBarLongPressed(_:)))
         longPress.minimumPressDuration = 0.55
@@ -2324,13 +2451,15 @@ final class StageViewController: UIViewController {
         // 台收起时浮层由 collapseStageBarIdle 单独收起。
         for view in [currentTimeLabel, totalTimeLabel,
                      playButton, prevButton, nextButton,
-                     stageModeButton] as [UIView] {
+                     stageModeButton,
+                     stageSlotLeft66, stageSlotRight66] as [UIView] {
             view.alpha = alpha
         }
     }
 
     private func setStageBarContentsInteractive(_ interactive: Bool) {
-        for button in [playButton, prevButton, nextButton, stageModeButton] {
+        for button in [playButton, prevButton, nextButton, stageModeButton,
+                       stageSlotLeft66, stageSlotRight66] {
             button.isUserInteractionEnabled = interactive
         }
     }
@@ -2722,9 +2851,11 @@ extension StageViewController: PHPickerViewControllerDelegate {
         } else {
             customBgView.clearContent()
             customBgView.alpha = 1
-            backdropImageView.isHidden = false
-            backdropBlur.isHidden = false
-            backdropTint.isHidden = false
+            // (66) 透明舞台背景开时不复显底图层（refresh62Settings 同口径）。
+            let transparent = SettingsStore.transparentStageBackground62
+            backdropImageView.isHidden = transparent
+            backdropBlur.isHidden = transparent
+            backdropTint.isHidden = transparent
         }
         // 渲染器让位联动（3.7 (50)，(47) 挂账①）：莫奈/浮名自带
         // 底靠渲染器在 applySnapshot 时直读 Store 让位——台开着

@@ -1,4 +1,5 @@
 import Combine
+import SwiftUI
 import UIKit
 
 /// M1 阶段 4：Bravais 主页墙（用户歌单墙）原生表面。
@@ -459,14 +460,67 @@ final class HomeWallViewController: UIViewController,
     override var canBecomeFirstResponder: Bool { true }
 
     override var keyCommands: [UIKeyCommand]? {
-        guard SettingsStore.posterWallSHotkeyEnabled else { return nil }
-        return [UIKeyCommand(title: "命令面板", action: #selector(wb62OpenCommandPalette),
-                             input: "s", modifierFlags: [])]
+        var commands: [UIKeyCommand] = []
+        if SettingsStore.posterWallSHotkeyEnabled {
+            commands.append(UIKeyCommand(title: "命令面板", action: #selector(wb62OpenCommandPalette),
+                                         input: "s", modifierFlags: []))
+        }
+        // (66) 自定义快捷键（customKeyLetter62/customKeyCommand62
+        // 的消费者）：与 S 键同键时 S 优先（设置行已声明）。
+        let letter = SettingsStore.customKeyLetter62.lowercased()
+        if letter.count == 1, letter != "s" {
+            commands.append(UIKeyCommand(title: "自定义命令", action: #selector(wb66CustomKey),
+                                         input: letter, modifierFlags: []))
+        }
+        return commands.isEmpty ? nil : commands
     }
 
     @objc private func wb62OpenCommandPalette() {
         Breadcrumbs.log("shortcuts62.sKey host=homewall")
         miniBarPanelCommand()
+    }
+
+    /// (66) 自定义字母键：执行 customKeyCommand62 所绑命令
+    /// （目录 PinnedCommands62.customKeyCatalog66，id 与命
+    /// 令面板注册表同源；每条走墙面既有呈现通路）。
+    @objc private func wb66CustomKey() {
+        let command = SettingsStore.customKeyCommand62
+        Breadcrumbs.log("shortcuts66.custom key=1 cmd=\(command)")
+        guard presentedViewController == nil else { return }
+        switch command {
+        case "panel.open":
+            PlaybackPanelViewController.present(from: self, initialTab: .cover)
+        case "nav.search":
+            let search = SearchWorkspaceViewController()
+            search.modalPresentationStyle = .overFullScreen
+            present(search, animated: true)
+        case "nav.settings":
+            let settings = SettingsViewController()
+            settings.modalPresentationStyle = .overFullScreen
+            present(settings, animated: true)
+        case "nav.local":
+            let local = WorkbenchLocalViewController()
+            local.modalPresentationStyle = .fullScreen
+            present(local, animated: true)
+        case "nav.explore":
+            let browse = UIHostingController(rootView: NativeBrowseView())
+            browse.modalPresentationStyle = .fullScreen
+            present(browse, animated: true)
+        case "dir.rescanLocal":
+            LocalLibrary62.shared.rescanFolders()
+        case "dir.precache":
+            MediaCache62.shared.precacheQueue()
+        case "theme.park":
+            ThemeParkViewController.present(from: self)
+        case "dafeiyu.open":
+            DafeiyuPanel62ViewController.present(from: self)
+        case "panel.posterwall":
+            LivePosterWall62ViewController.present(from: self)
+        case "lyric.checkin":
+            Task { await Scrobble62.neteaseCheckin() }
+        default:
+            miniBarPanelCommand()
+        }
     }
 
     /// 关闭键按压反馈（3.7 (53) L 组）：按下缩 0.86 + 压暗，
@@ -790,9 +844,43 @@ final class HomeWallViewController: UIViewController,
         didCenterCamera = true
         wallLayout.cameraScale = WallPrototypeViewController.cameraScale(
             forWidth: collectionView.bounds.width)
+        // (66) 记住墙面位置消费：开时以落盘的 worldOrigin 为
+        // 初始相机（wallCamera62），关时走默认居中。
+        if SettingsStore.rememberCardPositions,
+           let saved = Self.parseWallCamera66(SettingsStore.wallCamera62) {
+            wallLayout.worldOrigin = saved
+            Breadcrumbs.log("wall66.camera restored=1")
+        }
         let cell = wallLayout.cellViewSize
         collectionView.contentOffset = CGPoint(x: cell.width, y: cell.height)
         wallLayout.invalidateLayout()
+    }
+
+    /// (66) wallCamera62 落盘格式 "x,y" 解析。
+    private static func parseWallCamera66(_ raw: String) -> CGPoint? {
+        let parts = raw.split(separator: ",")
+        guard parts.count == 2,
+              let x = Double(parts[0]), let y = Double(parts[1]) else { return nil }
+        return CGPoint(x: x, y: y)
+    }
+
+    private var wallCameraSaveWork66: DispatchWorkItem?
+
+    /// (66) 相机/网格偏移落盘（滚动去抖 0.6s 合并写，避免逐
+    /// 事件写盘）；仅「记住墙面位置」开时写。
+    private func scheduleWallPositionSave66() {
+        guard SettingsStore.rememberCardPositions else { return }
+        wallCameraSaveWork66?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            let origin = self.wallLayout.worldOrigin
+            SettingsStore.wallCamera62 = "\(origin.x),\(origin.y)"
+            if let grid = self.gridCollectionView, self.seamGridMode {
+                SettingsStore.wallScrollOriginY = Double(grid.contentOffset.y)
+            }
+        }
+        wallCameraSaveWork66 = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
     override func viewDidLayoutSubviews() {
@@ -811,6 +899,11 @@ final class HomeWallViewController: UIViewController,
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // (66) 网格形态滚动：只记网格偏移落盘（记住位置开时）。
+        if scrollView === gridCollectionView {
+            scheduleWallPositionSave66()
+            return
+        }
         // 网格形态（(55) E）的 collection view 共用本 delegate：
         // 相机折叠只认墙面本体那台，网格滚动不触发。
         guard scrollView === collectionView else { return }
@@ -866,6 +959,8 @@ final class HomeWallViewController: UIViewController,
             layout: wallLayout,
             didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000,
             panDelta: delta)
+        // (66) 相机位置落盘（记住位置开时，去抖合并写）。
+        scheduleWallPositionSave66()
     }
 
     // MARK: - 数据源
@@ -2545,6 +2640,16 @@ extension HomeWallViewController {
         grid.isHidden = !seamGridMode
         collectionView.isHidden = seamGridMode
         gridCollectionView = grid
+        // (66) 初始即网格形态时恢复落盘偏移（布局完成后执行，
+        // contentSize 就绪才生效）。
+        if seamGridMode, SettingsStore.rememberCardPositions {
+            let savedY = CGFloat(SettingsStore.wallScrollOriginY)
+            if savedY > 0 {
+                DispatchQueue.main.async {
+                    grid.contentOffset = CGPoint(x: grid.contentOffset.x, y: savedY)
+                }
+            }
+        }
 
         // 工具条 z 序（(60) 第 2 条）：提到速记簿宿主之上作双
         // 保险——速记簿把手热区已下移（edgeTop ≥115）与本条纵
@@ -2859,6 +2964,13 @@ extension HomeWallViewController {
         Breadcrumbs.log("wall.seam.layout=\(seamGridMode ? "grid" : "bravais")")
         guard let grid = gridCollectionView else { return }
         let showGrid = seamGridMode
+        // (66) 切到网格时恢复落盘偏移（记住位置开时）。
+        if showGrid, SettingsStore.rememberCardPositions {
+            let savedY = CGFloat(SettingsStore.wallScrollOriginY)
+            if savedY > 0 {
+                grid.contentOffset = CGPoint(x: grid.contentOffset.x, y: savedY)
+            }
+        }
         grid.isHidden = false
         collectionView.isHidden = false
         grid.alpha = showGrid ? 0 : 1

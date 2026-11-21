@@ -3458,6 +3458,10 @@ final class WallPosterCell: UICollectionViewCell {
             roundedRect: contentView.bounds, cornerRadius: 8).cgPath
         imageView.frame = shadowView.bounds
         let bounds = shadowView.bounds
+        // (66) 歌单卡片样式消费（playlistCardStyle62）：纯图
+        // 片封面档隐藏标题/副行、封面独占卡面；拍立得卡片档
+        // 为现行标题条形态。设置变更经宿主 reloadData 重排。
+        let imageOnly = SettingsStore.playlistCardStyle62 == "image"
         // 展开卡底部让位：进度条 3 + 控件行 34，标题/副行整体上移。
         let bottomInset: CGFloat = controlsVisible ? 41 : 4
         let labelHeight: CGFloat = 16
@@ -3466,10 +3470,11 @@ final class WallPosterCell: UICollectionViewCell {
         titleLabel.frame = CGRect(
             x: 6, y: titleY,
             width: bounds.width - 12, height: labelHeight)
+        titleLabel.isHidden = imageOnly
         subtitleLabel.frame = CGRect(
             x: 6, y: bounds.height - bottomInset - 13,
             width: bounds.width - 12, height: 12)
-        subtitleLabel.isHidden = !hasSubtitle
+        subtitleLabel.isHidden = imageOnly || !hasSubtitle
         if controlsVisible {
             let barTop = bounds.height - 37
             playButton.frame = CGRect(x: 8, y: barTop + 2, width: 30, height: 30)

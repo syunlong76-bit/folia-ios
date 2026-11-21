@@ -226,7 +226,6 @@ enum SettingsConfigTransfer {
         SettingsStore.Key62C.playerCapTimelineEnabled,
         SettingsStore.Key62C.playerCapIgnoreClear,
         SettingsStore.Key62C.transparentStageBackground,
-        SettingsStore.Key62C.obsKeepMainAnimation,
         SettingsStore.Key62C.streamQuality,
         SettingsStore.Key62C.mediaCacheEnabled,
         SettingsStore.Key62C.mediaCacheLimitMB,

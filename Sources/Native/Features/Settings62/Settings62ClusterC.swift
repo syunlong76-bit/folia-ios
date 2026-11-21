@@ -33,7 +33,7 @@ enum Settings62ClusterC {
 
         // Navidrome（组 L）
         let navi = host.makeGroupCard()
-        navi.addArrangedSubview(host.makeSectionHeader("Navidrome"))
+        navi.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("Navidrome"))
         navi.addArrangedSubview(switchRow(host: host, title: "Navidrome 连接",
             isOn: SettingsStore.navidromeEnabled62) { on in
             SettingsStore.navidromeEnabled62 = on
@@ -75,7 +75,7 @@ enum Settings62ClusterC {
 
         // 同步服务（组 L）
         let sync = host.makeGroupCard()
-        sync.addArrangedSubview(host.makeSectionHeader("同步服务"))
+        sync.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("同步服务"))
         sync.addArrangedSubview(switchRow(host: host, title: "同步服务",
             isOn: SettingsStore.syncEnabled62) { on in
             SettingsStore.syncEnabled62 = on
@@ -112,7 +112,7 @@ enum Settings62ClusterC {
 
         // Discord / scrobble / PlayerCap
         let report = host.makeGroupCard()
-        report.addArrangedSubview(host.makeSectionHeader("播放上报"))
+        report.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("播放上报"))
         report.addArrangedSubview(switchRow(host: host, title: "Discord 播放状态",
             isOn: SettingsStore.discordEnabled62) { on in
             SettingsStore.discordEnabled62 = on
@@ -144,7 +144,7 @@ enum Settings62ClusterC {
         reg(report, 8)
 
         let cap = host.makeGroupCard()
-        cap.addArrangedSubview(host.makeSectionHeader("PlayerCap"))
+        cap.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("PlayerCap"))
         cap.addArrangedSubview(switchRow(host: host, title: "PlayerCap 上报",
             isOn: SettingsStore.playerCapEnabled62) { on in
             SettingsStore.playerCapEnabled62 = on
@@ -185,7 +185,7 @@ enum Settings62ClusterC {
 
         // 直播 / OBS
         let live = host.makeGroupCard()
-        live.addArrangedSubview(host.makeSectionHeader("直播与 OBS"))
+        live.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("直播与 OBS"))
         live.addArrangedSubview(switchRow(host: host, title: "播放页透明背景",
             isOn: SettingsStore.transparentStageBackground62) { on in
             SettingsStore.transparentStageBackground62 = on
@@ -199,14 +199,13 @@ enum Settings62ClusterC {
             NativePlaybackFailureToast.show(message: "OBS 源地址已复制")
         })
         live.addArrangedSubview(host.makeHairline())
-        live.addArrangedSubview(switchRow(host: host, title: "OBS 连接时保持主窗口动画",
-            isOn: SettingsStore.obsKeepMainAnimation62) { on in
-            SettingsStore.obsKeepMainAnimation62 = on
-            Breadcrumbs.log("settings62c.obsKeepAnimation value=\(on)")
-        })
+        // (66) OBS 客户端在场状态（后台节流的活动信号面）。
+        live.addArrangedSubview(infoRow(host: host, title: "OBS 客户端",
+            valueLabel: valueLabel(host: host,
+                text: BackgroundThrottle62.obsClientActive ? "在场（近期有拉取）" : "不在场")))
         live.addArrangedSubview(host.makeHairline())
         live.addArrangedSubview(host.makeHintRow(
-            "在 OBS 里新建「浏览器源」，地址填上面复制的本机地址，即可显示正在播放的海报与歌词（页面每 5 秒自动刷新）。透明背景开时舞台背景透明（消费在舞台侧）。「保持主窗口动画」语义：OBS 页被请求时不暂停主窗口动画——原生侧本就不因 OBS 请求改动画，此开关为口径对齐与留痕。"))
+            "在 OBS 里新建「浏览器源」，地址填上面复制的本机地址，即可显示正在播放的海报与歌词（页面每 5 秒自动刷新）。透明背景开时 OBS 页与舞台背景透明（消费在 LocalServer /obs 页与舞台侧）。歌曲卡在 OBS 页的显示开关在「播放页」页签的舞台歌曲卡组（(66) 已做真）。原「OBS 连接时保持主窗口动画」为桌面概念、iOS 无主窗口对应物，(66) 已摘行摘键，不再留假开关。"))
         stack.addArrangedSubview(live)
         reg(live, 8)
     }
@@ -224,7 +223,7 @@ enum Settings62ClusterC {
         host.beginCheckGroup("存储与备份·62C")
 
         let media = host.makeGroupCard()
-        media.addArrangedSubview(host.makeSectionHeader("媒体缓存"))
+        media.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("媒体缓存"))
         media.addArrangedSubview(switchRow(host: host, title: "缓存歌曲（媒体缓存）",
             isOn: SettingsStore.mediaCacheEnabled62) { on in
             SettingsStore.mediaCacheEnabled62 = on
@@ -244,8 +243,35 @@ enum Settings62ClusterC {
         let countLabel = valueLabel(host: host, text: mediaCountText())
         media.addArrangedSubview(infoRow(host: host, title: "已缓存歌曲", valueLabel: countLabel))
         media.addArrangedSubview(host.makeHairline())
-        media.addArrangedSubview(infoRow(host: host, title: "缓存目录",
-            valueLabel: valueLabel(host: host, text: "Caches/folia-media62")))
+        // (66) 缓存歌曲自动回填（切歌订阅回填当前曲＋后续）。
+        media.addArrangedSubview(switchRow(host: host, title: "缓存歌曲自动回填",
+            isOn: SettingsStore.mediaCacheAutoRefill62) { on in
+            SettingsStore.mediaCacheAutoRefill62 = on
+            Breadcrumbs.log("settings66.autoRefill=\(on ? 1 : 0)")
+        })
+        media.addArrangedSubview(host.makeHairline())
+        // (66) 缓存目录自选（DS 改判落地）：UIDocumentPicker
+        // 选文件夹＋安全作用域书签；失效回退默认并明示。
+        let dirLabel = valueLabel(host: host, text: MediaCache62.usingCustomDirectory
+            ? "自选目录" : "默认（Caches/folia-media62）")
+        media.addArrangedSubview(actionRow(host: host, title: "缓存目录（点按更换）",
+                                           valueLabel: dirLabel) {
+            MediaCacheDirPicker66.present(from: host) { picked in
+                if let picked {
+                    MediaCache62.setCustomDirectory(picked)
+                    MediaCache62.shared.reloadIndex()
+                }
+                dirLabel.text = MediaCache62.usingCustomDirectory
+                    ? "自选目录" : "默认（Caches/folia-media62）"
+            }
+        })
+        media.addArrangedSubview(host.makeHairline())
+        media.addArrangedSubview(actionRow(host: host, title: "恢复默认缓存目录", valueLabel: nil) {
+            MediaCache62.clearCustomDirectory()
+            MediaCache62.shared.reloadIndex()
+            dirLabel.text = "默认（Caches/folia-media62）"
+            NativePlaybackFailureToast.show(message: "已恢复默认缓存目录")
+        })
         media.addArrangedSubview(host.makeHairline())
         media.addArrangedSubview(actionRow(host: host, title: "预缓存当前队列", valueLabel: nil) {
             Task { @MainActor in
@@ -263,12 +289,12 @@ enum Settings62ClusterC {
         })
         media.addArrangedSubview(host.makeHairline())
         media.addArrangedSubview(host.makeHintRow(
-            "媒体缓存为磁盘缓存：手动/预缓存把歌曲文件落盘（上限内按最久未用自动清理）。在线播放自动回填缓存需要取流链挂点（引擎侧），当前未接入——播放不会自动落盘，此处如实标注。"))
+            "媒体缓存为磁盘缓存：预缓存把歌曲文件落盘（上限内按最久未用自动清理）；自动回填开时切歌即回填当前曲与队列后续 3 首（(66) 接入，节流积极且 OBS 在场时推迟）。自选目录切换后原目录缓存不迁移、新目录按其自有索引接管；书签失效时自动回退默认目录并在日志明示。"))
         stack.addArrangedSubview(media)
         reg(media, 9)
 
         let classify = host.makeGroupCard()
-        classify.addArrangedSubview(host.makeSectionHeader("缓存分类清除（补充）"))
+        classify.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("缓存分类清除"))
         let statsLabel = valueLabel(host: host, text: statsText())
         classify.addArrangedSubview(infoRow(host: host, title: "分析数据（听歌统计）",
                                             valueLabel: statsLabel))
@@ -290,21 +316,38 @@ enum Settings62ClusterC {
             NativePlaybackFailureToast.show(message: "智能平衡数据已清除")
         })
         classify.addArrangedSubview(host.makeHairline())
+        // (66) 歌单数据分仓：API 缓存按类登记（sidecar 清
+        // 单），歌单类可单独统计/清除，不动其他 API 缓存。
+        let playlistLabel = valueLabel(host: host,
+            text: SettingsCacheManager.sizeText(APICacheClass66.sizeBytes(forClass: APICacheClass66.playlistClass)))
+        classify.addArrangedSubview(infoRow(host: host, title: "歌单数据（API 缓存）",
+                                            valueLabel: playlistLabel))
+        classify.addArrangedSubview(host.makeHairline())
+        classify.addArrangedSubview(actionRow(host: host, title: "清除歌单数据", valueLabel: nil) {
+            let freed = APICacheClass66.clear(cls: APICacheClass66.playlistClass)
+            playlistLabel.text = SettingsCacheManager.sizeText(
+                APICacheClass66.sizeBytes(forClass: APICacheClass66.playlistClass))
+            NativePlaybackFailureToast.show(
+                message: "已清除歌单数据 \(SettingsCacheManager.sizeText(freed))")
+        })
+        classify.addArrangedSubview(host.makeHairline())
         classify.addArrangedSubview(host.makeHintRow(
-            "分析数据＝本机听歌统计（播放次数/聆听时长）；智能平衡数据＝逐曲音量学习偏移（供 ReplayGain 消费）。两类清除均为真删。"))
+            "分析数据＝本机听歌统计（播放次数/聆听时长）；智能平衡数据＝逐曲音量学习偏移（供 ReplayGain 消费）；歌单数据＝接口缓存中歌单类响应（按写缓存时的分类清单分仓）。三类清除均为真删；封面与 API 总缓存在本签宿主卡。"))
         stack.addArrangedSubview(classify)
         reg(classify, 9)
 
         let local = host.makeGroupCard()
-        local.addArrangedSubview(host.makeSectionHeader("本地曲库与歌词"))
+        local.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("本地曲库与歌词"))
         local.addArrangedSubview(switchRow(host: host, title: "自动扫描已导入文件夹",
             isOn: SettingsStore.autoScanImportedFolders62) { on in
             SettingsStore.autoScanImportedFolders62 = on
         })
         local.addArrangedSubview(host.makeHairline())
-        local.addArrangedSubview(switchRow(host: host, title: "文件夹监视",
+        local.addArrangedSubview(switchRow(host: host, title: "文件夹监视（前台）",
             isOn: SettingsStore.folderWatchEnabled62) { on in
             SettingsStore.folderWatchEnabled62 = on
+            // (66) 前台监视做实：开关变更即重挂/撤下目录事件源。
+            FolderWatch62.shared.refresh()
             if on { LocalLibrary62.shared.rescanFolders() }
         })
         local.addArrangedSubview(host.makeHairline())
@@ -318,7 +361,7 @@ enum Settings62ClusterC {
         })
         local.addArrangedSubview(host.makeHairline())
         local.addArrangedSubview(host.makeHintRow(
-            "iOS 无常驻文件夹监视：监视开时在启动与手动重扫时重新访问已导入文件夹（security-scoped bookmark）收新文件，与桌面语义有差异。歌词导出生成 .lrc 与 .fia（逐字戳）经系统分享。"))
+            "文件夹监视为前台监视（(66)）：App 在前台时监听已导入文件夹变化、自动重扫收新文件；切到后台或被杀后不监视（iOS 无常驻后台监视，与桌面语义有此差异，不冒充）。歌词导出生成 .lrc 与 .fia（逐字戳）经系统分享。"))
         stack.addArrangedSubview(local)
         reg(local, 9)
     }
@@ -335,62 +378,71 @@ enum Settings62ClusterC {
     }
 
     // MARK: - 页签 10：开发者
+    //
+    // (66) 对齐网页版 DeveloperPage：单组「开发者工具」——
+    // 运行日志（采集总开关/写入文件/查看全量）＋内存监控
+    // （持续采样/采样间隔/读数）。桥日志入口在宿主老面行。
 
     private static func buildDeveloper(host: SettingsViewController,
                                        into stack: UIStackView,
                                        reg: (UIView, Int) -> Void) {
         host.beginCheckGroup("开发者·62C")
 
-        let log = host.makeGroupCard()
-        log.addArrangedSubview(host.makeSectionHeader("运行日志"))
-        log.addArrangedSubview(switchRow(host: host, title: "写入本地文件",
+        let tools = host.makeGroupCard()
+        tools.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("开发者工具"))
+        // (66) 运行日志采集总开关（网页 consoleLogCapture）：
+        // 关时 FoliaBridgeLogStore 完全不记录。
+        tools.addArrangedSubview(switchRow(host: host, title: "运行日志采集",
+            isOn: SettingsStore.logCaptureEnabled62) { on in
+            SettingsStore.logCaptureEnabled62 = on
+            if on { Breadcrumbs.log("settings66.logCapture value=1") }
+        })
+        tools.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(switchRow(host: host, title: "写入本地文件",
             isOn: SettingsStore.bridgeLogWriteEnabled62) { on in
             SettingsStore.bridgeLogWriteEnabled62 = on
             Breadcrumbs.log("settings62c.bridgeLogWrite value=\(on)")
         })
-        log.addArrangedSubview(host.makeHairline())
-        log.addArrangedSubview(actionRow(host: host, title: "查看全量日志（分页）", valueLabel: nil) {
+        tools.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(actionRow(host: host, title: "查看全量日志（分页）", valueLabel: nil) {
             BridgeLog62ViewController.present(from: host)
         })
-        log.addArrangedSubview(host.makeHairline())
-        log.addArrangedSubview(host.makeHintRow(
-            "全量日志＝桥日志双轮换文件（2MB×2）的全部行，查看器内可翻页与导出分享。关掉「写入本地文件」后日志只进系统控制台、不再落盘。"))
-        stack.addArrangedSubview(log)
-        reg(log, 10)
-
-        let memory = host.makeGroupCard()
-        memory.addArrangedSubview(host.makeSectionHeader("内存监控"))
+        tools.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(host.makeHintRow(
+            "全量日志＝桥日志双轮换文件（2MB×2）的全部行，查看器内可翻页与导出分享。「运行日志采集」关时不再记录（控制台与落盘都停）；「写入本地文件」关时只进系统控制台、不落盘。"))
+        tools.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("内存监控"))
         let sampler = MemorySampler62.shared
-        memory.addArrangedSubview(switchRow(host: host, title: "持续采样",
+        tools.addArrangedSubview(switchRow(host: host, title: "持续采样",
             isOn: sampler.isRunning) { on in
             if on { sampler.start() } else { sampler.stop() }
         })
-        memory.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(host.makeHairline())
         let intervalControl = UISegmentedControl(items: ["2s", "5s", "10s", "30s", "60s"])
         intervalControl.selectedSegmentIndex = [2, 5, 10, 30, 60]
             .firstIndex(of: SettingsStore.memorySampleIntervalSec62) ?? 1
-        memory.addArrangedSubview(segmentedRow(host: host, title: "采样间隔",
+        tools.addArrangedSubview(segmentedRow(host: host, title: "采样间隔",
                                                control: intervalControl) { index in
             SettingsStore.memorySampleIntervalSec62 = [2, 5, 10, 30, 60][index]
             MemorySampler62.shared.restartForIntervalChange()
         })
-        memory.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(host.makeHairline())
         let currentLabel = valueLabel(host: host, text: memoryText())
-        memory.addArrangedSubview(infoRow(host: host, title: "当前 / 峰值", valueLabel: currentLabel))
-        memory.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(infoRow(host: host, title: "当前 / 峰值", valueLabel: currentLabel))
+        tools.addArrangedSubview(host.makeHairline())
         let curveLabel = valueLabel(host: host, text: sampler.recentCurveText())
         curveLabel.numberOfLines = 2
-        memory.addArrangedSubview(infoRow(host: host, title: "近时曲线（MB）", valueLabel: curveLabel))
-        memory.addArrangedSubview(host.makeHairline())
-        memory.addArrangedSubview(actionRow(host: host, title: "刷新读数", valueLabel: nil) {
+        tools.addArrangedSubview(infoRow(host: host, title: "近时曲线（MB）", valueLabel: curveLabel))
+        tools.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(actionRow(host: host, title: "刷新读数", valueLabel: nil) {
             currentLabel.text = memoryText()
             curveLabel.text = MemorySampler62.shared.recentCurveText()
         })
-        memory.addArrangedSubview(host.makeHairline())
-        memory.addArrangedSubview(host.makeHintRow(
+        tools.addArrangedSubview(host.makeHairline())
+        tools.addArrangedSubview(host.makeHintRow(
             "采样器按间隔持续读进程常驻内存并留近 120 个样本；全应用峰值硬线 450MB。"))
-        stack.addArrangedSubview(memory)
-        reg(memory, 10)
+        stack.addArrangedSubview(tools)
+        reg(tools, 10)
     }
 
     private static func memoryText() -> String {
@@ -401,15 +453,72 @@ enum Settings62ClusterC {
     }
 
     // MARK: - 页签 11：帮助
+    //
+    // (66) 对齐网页版 HelpPage：快捷键（信息行）→ 支持（AI
+    // 帮助/大肥鱼陪伴/社区/思索帮助）→ 关于（发行说明）。
 
     private static func buildHelp(host: SettingsViewController,
                                   into stack: UIStackView,
                                   reg: (UIView, Int) -> Void) {
         host.beginCheckGroup("帮助·62C")
 
-        let help = host.makeGroupCard()
-        help.addArrangedSubview(host.makeSectionHeader("帮助与社区（62）"))
-        help.addArrangedSubview(actionRow(host: host,
+        let keys = host.makeGroupCard()
+        keys.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("键盘快捷键"))
+        keys.addArrangedSubview(actionRow(host: host, title: "查看快捷键清单", valueLabel: nil) {
+            let page = SettingsTextPageViewController(
+                title: "键盘快捷键",
+                text: "外接键盘（主页墙/海报墙聚焦时）：\n"
+                    + "· S —— 打开命令窗口（设置 → 快捷操作可关）\n"
+                    + "· 自定义字母键 —— 执行所绑命令（设置 → 快捷操作 → 命令面板组设置，默认未设置）\n\n"
+                    + "触屏等价：\n"
+                    + "· 长按缝合工具条 —— 打开命令面板\n"
+                    + "· 向左滑动 —— 打开所设目标（命令面板/速记簿/搜索）\n"
+                    + "· 舞台三击 —— 洗牌切换下一个歌词特效\n"
+                    + "· 点播台封面单击 —— 回播放页；双击台身 —— 进舞台")
+            page.modalPresentationStyle = .overFullScreen
+            host.present(page, animated: true)
+        })
+        keys.addArrangedSubview(host.makeHairline())
+        keys.addArrangedSubview(host.makeHintRow(
+            "iOS 无系统级全局热键：以上均为 App 内绑定（外接键盘或手势），与网页版清单逐项对应、无对应物的不列。"))
+        stack.addArrangedSubview(keys)
+        reg(keys, 11)
+
+        let support = host.makeGroupCard()
+        support.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("支持"))
+        support.addArrangedSubview(actionRow(host: host, title: "AI 帮助（本地问答库）", valueLabel: nil) {
+            let ai = AIHelp62ViewController()
+            ai.modalPresentationStyle = .overFullScreen
+            host.present(ai, animated: true)
+        })
+        support.addArrangedSubview(host.makeHairline())
+        support.addArrangedSubview(actionRow(host: host, title: "大肥鱼陪伴", valueLabel: nil) {
+            DafeiyuPanel62ViewController.present(from: host)
+        })
+        support.addArrangedSubview(host.makeHairline())
+        support.addArrangedSubview(actionRow(host: host, title: "社区 · Discord（复制）",
+            valueLabel: valueLabel(host: host, text: "网页版社区")) {
+            UIPasteboard.general.string = "Folia 网页版社区（Discord）"
+            NativePlaybackFailureToast.show(message: "已复制社区说明（Discord 为网页版社区渠道）")
+            Breadcrumbs.log("settings62c.help discordCopied=1")
+        })
+        support.addArrangedSubview(host.makeHairline())
+        support.addArrangedSubview(actionRow(host: host, title: "思索帮助", valueLabel: nil) {
+            Ponder62.presentList(from: host)
+        })
+        support.addArrangedSubview(host.makeHairline())
+        support.addArrangedSubview(actionRow(host: host, title: "直播海报墙", valueLabel: nil) {
+            LivePosterWall62ViewController.present(from: host)
+        })
+        support.addArrangedSubview(host.makeHairline())
+        support.addArrangedSubview(host.makeHintRow(
+            "AI 帮助为本地 FAQ 关键词检索（离线可用，不冒充在线 AI）。Discord 为网页版登记的社区渠道，App 内以复制说明行承接。思索帮助即教程列表（通用页签可关提示）。"))
+        stack.addArrangedSubview(support)
+        reg(support, 11)
+
+        let about = host.makeGroupCard()
+        about.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle("关于"))
+        about.addArrangedSubview(actionRow(host: host,
             title: "发行说明（\(ReleaseNotes62.versionText)）", valueLabel: nil) {
             let page = SettingsTextPageViewController(
                 title: "发行说明 · \(ReleaseNotes62.versionText)",
@@ -417,43 +526,11 @@ enum Settings62ClusterC {
             page.modalPresentationStyle = .overFullScreen
             host.present(page, animated: true)
         })
-        help.addArrangedSubview(host.makeHairline())
-        help.addArrangedSubview(actionRow(host: host, title: "思索帮助", valueLabel: nil) {
-            let page = SettingsTextPageViewController(
-                title: "思索帮助",
-                text: "思索（Ponder）是网页版的教程提示系统：按使用场景弹出分步提示卡，"
-                    + "可在「通用」页签关掉教程提示、或用触屏思索按钮主动调出。\n\n"
-                    + "当前状态：教程提示随 (62) 接入（本体归 WB 簇）；若本机尚未出现提示卡，"
-                    + "即该部分未随本包到达，请以 (62) 集成版为准。")
-            page.modalPresentationStyle = .overFullScreen
-            host.present(page, animated: true)
-        })
-        help.addArrangedSubview(host.makeHairline())
-        help.addArrangedSubview(actionRow(host: host, title: "AI 帮助（本地问答库）", valueLabel: nil) {
-            let ai = AIHelp62ViewController()
-            ai.modalPresentationStyle = .overFullScreen
-            host.present(ai, animated: true)
-        })
-        help.addArrangedSubview(host.makeHairline())
-        help.addArrangedSubview(actionRow(host: host, title: "社区 · Discord（复制）",
-            valueLabel: valueLabel(host: host, text: "网页版社区")) {
-            UIPasteboard.general.string = "Folia 网页版社区（Discord）"
-            NativePlaybackFailureToast.show(message: "已复制社区说明（Discord 为网页版社区渠道）")
-            Breadcrumbs.log("settings62c.help discordCopied=1")
-        })
-        help.addArrangedSubview(host.makeHairline())
-        help.addArrangedSubview(actionRow(host: host, title: "大肥鱼陪伴", valueLabel: nil) {
-            DafeiyuPanel62ViewController.present(from: host)
-        })
-        help.addArrangedSubview(host.makeHairline())
-        help.addArrangedSubview(actionRow(host: host, title: "直播海报墙", valueLabel: nil) {
-            LivePosterWall62ViewController.present(from: host)
-        })
-        help.addArrangedSubview(host.makeHairline())
-        help.addArrangedSubview(host.makeHintRow(
-            "AI 帮助为本地 FAQ 关键词检索（离线可用，不冒充在线 AI）。Discord 为网页版登记的社区渠道，App 内以复制说明行承接。"))
-        stack.addArrangedSubview(help)
-        reg(help, 11)
+        about.addArrangedSubview(host.makeHairline())
+        about.addArrangedSubview(host.makeHintRow(
+            "版本与构建号以本机实际安装为准（桥日志 app.build 行为准）。"))
+        stack.addArrangedSubview(about)
+        reg(about, 11)
     }
 
     // MARK: - 行工厂（UIAction 接线）
@@ -477,7 +554,7 @@ enum Settings62ClusterC {
         row.isLayoutMarginsRelativeArrangement = true
         row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         let label = UILabel()
-        label.text = title
+        label.text = FoliaLanguage62.rowTitle(title)
         label.font = .systemFont(ofSize: 15)
         label.textColor = primary
         label.numberOfLines = 0
@@ -502,7 +579,7 @@ enum Settings62ClusterC {
         row.isLayoutMarginsRelativeArrangement = true
         row.layoutMargins = UIEdgeInsets(top: 10, left: 14, bottom: 10, right: 14)
         let label = UILabel()
-        label.text = title
+        label.text = FoliaLanguage62.rowTitle(title)
         label.font = .systemFont(ofSize: 12)
         label.textColor = secondary
         host.track(label)
@@ -594,7 +671,7 @@ enum Settings62ClusterC {
         row.isLayoutMarginsRelativeArrangement = true
         row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 12, right: 14)
         let label = UILabel()
-        label.text = title
+        label.text = FoliaLanguage62.rowTitle(title)
         label.font = .systemFont(ofSize: 15)
         label.textColor = primary
         host.track(label)

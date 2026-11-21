@@ -296,6 +296,27 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
     /// 唯一改曲入口。调用图写死：一切改曲 → QueueManager → loadTrackAtCurrentIndex → engine.load。
     /// playableURL 由 QueueManager 按 track id 现换（在线 URL 有效期仅 1200 秒，不落库）。
     func load(track: FoliaTrack, playableURL: URL, artwork: UIImage?) {
+        // (66) DSD 通路：本地 .dsf 先经 DSDPlayback62 转换
+        // （DoP 封装或 PCM 降级，条件与路径见该组件与面包
+        // 屑 dsd66.*），产物以新地址重入本函数（扩展名已变
+        // wav，不再回本分支）；解析失败回原路径。
+        if track.sourceType == .local, playableURL.isFileURL,
+           playableURL.pathExtension.lowercased() == "dsf" {
+            Breadcrumbs.log("dsd66 hook dop=\(SettingsStore.dsdDopEnabled62 ? 1 : 0)")
+            Task { [weak self] in
+                let converted = DSDPlayback62.convertDSF(playableURL)
+                await MainActor.run {
+                    guard let self else { return }
+                    if let (url, usedDoP) = converted {
+                        Breadcrumbs.log("dsd66 play dop=\(usedDoP ? 1 : 0)")
+                        self.load(track: track, playableURL: url, artwork: artwork)
+                    } else {
+                        self.loadAfterTranscodeCheck(track: track, playableURL: playableURL, artwork: artwork)
+                    }
+                }
+            }
+            return
+        }
         // (62) WB §4.5 / D7：本地资产不可播且自动转换开时，
         // 先走本地转码通路（转 m4a 落缓存后以新地址重入本函
         // 数）；流媒体地址不进此路（不可播走既有跳过逻辑，

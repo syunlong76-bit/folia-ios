@@ -30,7 +30,16 @@ enum Ponder62 {
         Tip(id: "minibar", title: "播放台",
             body: "播放台 5 秒无操作会收成进度细条，宠物会跟着掉到细条上玩；点细条恢复完整形态，任何操作都会重新计时。"),
         Tip(id: "seam", title: "缝合工具条",
-            body: "墙顶工具条可切换歌 / 推 / 探三段、切换网格与墙面布局；「…」菜单里有喜欢的音乐、云盘、过滤与隐藏管理。")
+            body: "墙顶工具条可切换歌 / 推 / 探三段、切换网格与墙面布局；「…」菜单里有喜欢的音乐、云盘、过滤与隐藏管理。"),
+        // (66) 帮助页补齐：补上 (62) 后落地的功能面条目。
+        Tip(id: "island", title: "灵动岛宠物",
+            body: "迷你台上的宠物说完告别词会蹦到灵动岛上坐住（捂脸小猫＋爱心小狗固定双人组），在岛上闲晃冒泡；点它可以蹦回迷你台。"),
+        Tip(id: "concert", title: "汪汪队开大会",
+            body: "歌词样式选「汪汪队开大会」时，宠物全员上舞台列队轮唱，独唱者会跑到中央；此样式生效期间点播台与灵动岛的宠物会撤下，切走样式即恢复。"),
+        Tip(id: "theme-park", title: "主题乐园",
+            body: "设置 → 外观 → 主题乐园：可预览当前歌曲按封面生成的主题、切换配色预设、编辑自定义三色；歌曲主题的自动切换与生成来源在同一页签的「歌曲主题」组。"),
+        Tip(id: "local-cache", title: "本地曲库与媒体缓存",
+            body: "导入的本地歌曲在「本地」分区浏览；听过的歌会自动回填到媒体缓存（设置 → 存储与备份可改缓存目录、看占用），离线时可播已缓存曲目。")
     ]
 
     static func tip(for id: String) -> Tip? { tips.first { $0.id == id } }
@@ -194,6 +203,25 @@ enum PinnedCommands62 {
     }
 
     static func isPinned(_ id: String) -> Bool { pinnedIDs.contains(id) }
+
+    /// (66) 自定义快捷键可绑命令目录：id 与命令面板注册表
+    /// （CommandPaletteViewController.buildRegistry62）同
+    /// 源，只列墙面宿主有直接执行通路的命令（打开面板/搜
+    /// 索/设置/本地/探索/重扫/预缓存/主题乐园/陪伴/海报墙/
+    /// 打卡）；执行分发在 HomeWallViewController.wb66CustomKey。
+    static let customKeyCatalog66: [(id: String, title: String)] = [
+        ("panel.open", "打开播放面板"),
+        ("nav.search", "去搜索"),
+        ("nav.settings", "打开设置"),
+        ("nav.local", "本地曲库"),
+        ("nav.explore", "探索页"),
+        ("dir.rescanLocal", "重扫本地库"),
+        ("dir.precache", "预缓存队列"),
+        ("theme.park", "打开主题乐园"),
+        ("dafeiyu.open", "打开陪伴面板"),
+        ("panel.posterwall", "直播海报墙"),
+        ("lyric.checkin", "网易云听歌打卡"),
+    ]
 }
 
 /// (62) WB §4.7：界面语言有限文案表。覆盖范围（如实）：设
@@ -201,7 +229,17 @@ enum PinnedCommands62 {
 /// 地化不在本包能力内（其余面仍为简体中文写死文案）。
 enum FoliaLanguage62 {
 
-    static var current: String { SettingsStore.appLanguage }
+    /// 当前生效语言：system 按系统首选语言解析（en 系 →
+    /// en，其余 → zh-Hans）；zh-TW/vi 暂无译表，text() 查
+    /// 不到时回退 zh-Hans（(66) 五档口径，设置行如实标注）。
+    static var current: String {
+        let raw = SettingsStore.appLanguage
+        if raw == "system" {
+            let preferred = Locale.preferredLanguages.first ?? "zh-Hans"
+            return preferred.hasPrefix("en") ? "en" : "zh-Hans"
+        }
+        return raw
+    }
 
     private static let table: [String: [String: String]] = [
         "settingsTitle": ["zh-Hans": "设置", "en": "Settings"],

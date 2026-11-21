@@ -48,7 +48,7 @@ enum Settings62ClusterA {
         row.axis = .vertical
         row.isLayoutMarginsRelativeArrangement = true
         row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 2, right: 14)
-        row.addArrangedSubview(host.makeSectionHeader(title))
+        row.addArrangedSubview(host.makeSectionHeader(FoliaLanguage62.rowTitle(title)))
         return row
     }
 
@@ -62,7 +62,8 @@ enum Settings62ClusterA {
 
     private static func titleLabel(_ host: SettingsViewController, _ text: String) -> UILabel {
         let label = UILabel()
-        label.text = text
+        // (66) 行标题过语言表（界面语言 en 时显英文）。
+        label.text = FoliaLanguage62.rowTitle(text)
         label.font = .systemFont(ofSize: 15)
         label.textColor = .white
         label.numberOfLines = 0

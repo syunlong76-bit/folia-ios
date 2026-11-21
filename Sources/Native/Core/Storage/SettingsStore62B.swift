@@ -533,14 +533,19 @@ extension SettingsStore {
     /// 界面语言偏好：zh-Hans（默认）/ en。覆盖范围见
     /// FoliaLanguage62（设置页签标题等关键面文案字典），非
     /// 全量本地化（报告如实标注）。
+    /// 界面语言（(66) 扩为网页五档）：system 跟随系统 /
+    /// zh-Hans / zh-TW / en / vi。消费 FoliaLanguage62——
+    /// 译表现有 zh-Hans 与 en 全量（设置行标题已入表），
+    /// zh-TW/vi 未覆盖文案回退 zh-Hans（设置行如实标注）。
     static var appLanguage: String {
         get {
             let raw = stringB62(Key62B.appLanguage, default: "zh-Hans")
-            return raw == "en" ? "en" : "zh-Hans"
+            return ["system", "zh-Hans", "zh-TW", "en", "vi"].contains(raw) ? raw : "zh-Hans"
         }
         set {
-            UserDefaults.standard.set(newValue == "en" ? "en" : "zh-Hans",
-                                      forKey: Key62B.appLanguage)
+            UserDefaults.standard.set(
+                ["system", "zh-Hans", "zh-TW", "en", "vi"].contains(newValue) ? newValue : "zh-Hans",
+                forKey: Key62B.appLanguage)
         }
     }
 
@@ -643,7 +648,7 @@ extension SettingsStore {
     /// 的 11 条，默认 playback.toggle）。消费同上：按键后经
     /// 命令面板同款分发执行。
     static var customKeyCommand62: String {
-        get { stringB62(Key62B.customKeyCommand, default: "playback.toggle") }
+        get { stringB62(Key62B.customKeyCommand, default: "panel.open") }
         set { UserDefaults.standard.set(newValue, forKey: Key62B.customKeyCommand) }
     }
 

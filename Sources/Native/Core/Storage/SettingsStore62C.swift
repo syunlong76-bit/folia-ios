@@ -28,7 +28,6 @@ extension SettingsStore {
         static let playerCapTimelineEnabled = "settings.playercap.timelineEnabled"
         static let playerCapIgnoreClear = "settings.playercap.ignoreClear"
         static let transparentStageBackground = "settings.live.transparentStageBackground"
-        static let obsKeepMainAnimation = "settings.live.obsKeepMainAnimation"
         // (66) 本机歌词接口开放开关（LocalServer /v1/lyric）
         static let lyricAPIEnabled = "settings.integration.lyricAPIEnabled"
         // (66) 媒体缓存目录自选（安全作用域书签 Data）
@@ -124,10 +123,6 @@ extension SettingsStore {
     static var transparentStageBackground62: Bool {
         get { d62c.bool(forKey: Key62C.transparentStageBackground) }
         set { d62c.set(newValue, forKey: Key62C.transparentStageBackground) }
-    }
-    static var obsKeepMainAnimation62: Bool {
-        get { d62c.bool(forKey: Key62C.obsKeepMainAnimation) }
-        set { d62c.set(newValue, forKey: Key62C.obsKeepMainAnimation) }
     }
 
     /// (66) 本机歌词接口（默认关）：开时 LocalServer 增开

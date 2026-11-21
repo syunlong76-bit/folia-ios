@@ -30,6 +30,8 @@ enum WC62Bootstrap {
         ListeningStats62.shared.start()
         // (66) 媒体缓存自动回填挂点（切歌订阅）。
         MediaCache62.shared.startAutoRefill()
+        // (66) 文件夹前台监视（开关开时挂目录事件源）。
+        FolderWatch62.shared.startIfEnabled()
         Breadcrumbs.log("wc62.bootstrap started=1")
     }
 }

@@ -1314,19 +1314,23 @@ extension SettingsViewController {
         // (62) INT-3：四簇落地后逐签划单——已落地条目全数划
         // 除；部分落者改写为残余注记条；F 节口径排除项（更新
         // 三项）保留原文。
+        // (66) 划单：舞台歌曲卡 OBS 输出已做真（/obs 页歌曲
+        // 卡区块消费开关＋舞台透明背景消费）；设置滚动平滑
+        // 已改切换即时生效；界面语言已落全量行标题表（宿主
+        // 老面行仍为原文，注记改口径）；媒体自动回填已接入
+        // （切歌订阅回填）。余下为口径排除/平台无对应物。
         let unimplemented: [[(String, String)]] = [
             [],
-            [("舞台歌曲卡 OBS 输出", "仅开关与说明页，卡面未消费外部 OBS 状态"),
-             ("字幕层", "已按 Miller (60) 口径整组删除，不属未迁、不回迁")],
-            [],
-            [("降低动态细分项（设置滚动）", "其余细分项已全落（含 Monet 漂移渲染器消费）；设置滚动平滑仅构建时一次性应用")],
+            [("字幕层", "已按 Miller (60) 口径整组删除，不属未迁、不回迁")],
             [],
             [],
-            [("界面语言", "仅有限文案表切换，全量文案未国际化"),
+            [],
+            [],
+            [("界面语言（宿主老面行）", "簇行标题已全量入表（en 可切换）；宿主老面卡行标题仍为原文，待宿主行工厂统一后接入"),
              ("更新检查 / 自动更新 / 更新通道", "侧载分发无更新通道，更新管理器已退役")],
             [],
             [],
-            [("媒体文件缓存自动回填", "预缓存/手动缓存/上限/LRU 已落；播放时自动回填未接（取流链无旁路挂点）")],
+            [],
             [],
             [],
         ]
@@ -1575,8 +1579,11 @@ extension SettingsViewController {
             self.clusterCards62[tab, default: []].append(view)
         }
         Settings62ClusterA.build(host: self, into: cardStack, reg: regFn)
-        Settings62ClusterB.build(host: self, into: cardStack, reg: regFn)
+        // (66) C 先于 B：页签 8 的组序按网页版（Navidrome/同步/
+        // 上报/互联/直播在前，歌词接口/舞台模式在后），C 只建
+        // 8–11 签、B 只建 3–8 签，调序只影响页签 8 的卡序。
         Settings62ClusterC.build(host: self, into: cardStack, reg: regFn)
+        Settings62ClusterB.build(host: self, into: cardStack, reg: regFn)
         Settings62ClusterD.build(host: self, into: cardStack, reg: regFn)
     }
 

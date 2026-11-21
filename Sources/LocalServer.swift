@@ -796,6 +796,9 @@ private enum Proxy {
         apiCacheDir.appendingPathComponent(sha256Hex(target + "|" + cookieHash + "|g\(cacheGeneration)") + ".json")
     }
 
+    /// (66) 缓存分类登记面（APICacheClass66 的落盘口）。
+    static var apiCacheDirectory: URL { apiCacheDir }
+
     /// 网易云大量错误是 HTTP 200 + 业务 code != 200，错误体不许落缓存
     /// （独立审查 H2 附带项）。仅对网易云目标生效：QQ/酷狗的 code 约定
     /// 不同（0 为成功），不在此判。无 code 字段时放行。
@@ -1163,6 +1166,7 @@ private enum Proxy {
            neteaseBusinessOK(body, target: cacheTarget) {
             let file = cacheFile(target: cacheTarget, cookieHash: cookieHash)
             try? body.write(to: file, options: .atomic)
+            APICacheClass66.note(file: file, target: cacheTarget)
             prefetchQueue.async { trimAPICacheIfNeeded() }
             // 「我的歌单」列表一到手，后台把各歌单详情预热进缓存：
             // 用户点开任意自有歌单时大概率直接命中（治 #4 首次点开慢）。
@@ -1243,7 +1247,9 @@ private enum Proxy {
                 // 分档判定，不再写死列表上下文（3.6 (6)，DS Q1 点名）。
                 data = CoverURLRewriter.rewrite(body: data, port: LocalServer.shared.port,
                                                 wallTier: isWallListTarget(target) ? CoverPolicy.wallTier : nil)
-                try? data.write(to: cacheFile(target: target, cookieHash: cookieHash), options: .atomic)
+                let file = cacheFile(target: target, cookieHash: cookieHash)
+                try? data.write(to: file, options: .atomic)
+                APICacheClass66.note(file: file, target: target)
             }
         }
     }
