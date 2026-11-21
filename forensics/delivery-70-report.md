@@ -3,6 +3,7 @@
 - 分支：release-70（自 release-69 / 1d84819f），CFBundleVersion 70。
 - 依据：forensics-2026-11-21-67-uitaps.md（A/B/C 取证）、forensics-2026-11-21-67-webruntime.md（运行位结构）、delivery-67-report.md。
 - 状态口径：以下均为**代码已改＋静态自检过**；编译以 CI 首轮为准，本机无 Swift 工具链；真机未验，不预宣通过。
+- CI 与验包（事后补记）：首轮 run 44906381327 **failure**——fumeMixColor 漏网（见 A 组），修复提交 41f7d132 后第二轮 run 44906609380 **success**。IPA `~/workspace/folia-deploy/Folia-3.7-70-unsigned.ipa`，47,352,859 字节（较 (69) −1,136,979，与删 17 渲染器约 3.6 万行量级相符）。主聊天验包前自验（流式）：CFBundleVersion=70／短版本 3.7 ✓；贴纸 53 ✓；入场母带 md5 8aed0fb4a5e9a0f500184f8a7dae45a9、7,848,834 字节 ✓；WebEffect 1949 文件（与 (67) 同）✓；二进制删除面零检出（SonnetStageRenderer／StageCycleProgressRingView／MiniBarPetOpenGesture／attachOpenGesture／longpress4s 字面量全 0）✓；新增面检出（PetSummonButton70／performFarewellDismissAll70／via=corner2s／via=corner3s／webfx.cover）✓。seek.guard 与 edge=appear 整段未检出——同 (67) byte-check caveat：插值/拼接字符串在二进制中分段存储，(69) 出厂二进制里既有 webfx.fade 同样整段检不出而真机日志实有，故此二项以真机日志是否出现为准、未确认项。
 
 ---
 
