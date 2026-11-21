@@ -33,6 +33,31 @@ final class TrackPill62: UIView {
         addSubview(artistLabel)
         alpha = 0
         isHidden = true
+        // (62) INT-9：舞台数据来源覆写——WB 的 StageDataSource62
+        // 轮询外部端点后经 .foliaExternalStageData 广播，舞台
+        // 模式（stageModeEnabled）开启时本卡信息以外部数据为
+        // 准（标题/歌手覆写、显隐跟随显示方式）；关闭时通知
+        // 忽略、本卡仍由 noteTrackChanged 本地驱动。
+        NotificationCenter.default.addObserver(
+            forName: .foliaExternalStageData, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, SettingsStore.stageModeEnabled else { return }
+            let title = note.userInfo?["title"] as? String ?? ""
+            let artist = note.userInfo?["artist"] as? String ?? ""
+            if !title.isEmpty { self.titleLabel.text = title }
+            if !artist.isEmpty { self.artistLabel.text = artist }
+            guard SettingsStore.trackPillDisplayMode != 2 else { return }
+            self.hideWorkItem?.cancel()
+            self.fadeIn()
+            if SettingsStore.trackPillDisplayMode == 0 {
+                let work = DispatchWorkItem { [weak self] in self?.fadeOut() }
+                self.hideWorkItem = work
+                DispatchQueue.main.asyncAfter(
+                    deadline: .now() + SettingsStore.trackPillDurationSeconds,
+                    execute: work)
+            }
+            Breadcrumbs.log("trackpill62.external override=1")
+        }
     }
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }

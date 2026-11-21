@@ -167,7 +167,7 @@ class WorkbenchSectionViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        overrideUserInterfaceStyle = .dark
+        overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         view.backgroundColor = WorkbenchTheme.background
 
         let titleLabel = UILabel()

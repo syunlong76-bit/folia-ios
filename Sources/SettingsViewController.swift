@@ -124,7 +124,7 @@ final class SettingsViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         // 让 UIAlertController 等系统子界面跟随深色，避免弹出白框跳戏
-        overrideUserInterfaceStyle = .dark
+        overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         view.backgroundColor = .clear
 
         buildLayout()
@@ -1422,7 +1422,7 @@ final class BridgeLogViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        overrideUserInterfaceStyle = .dark
+        overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         view.backgroundColor = UIColor(red: 0.086, green: 0.086, blue: 0.102, alpha: 1)
 
         let header = UIStackView()

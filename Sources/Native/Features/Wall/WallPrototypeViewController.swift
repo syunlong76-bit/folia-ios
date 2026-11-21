@@ -258,7 +258,7 @@ final class WallPrototypeViewController: UIViewController,
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = .black
-        overrideUserInterfaceStyle = .dark
+        overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         // 播放台特效总开关/主题变更（设置页）即时同步。
         NotificationCenter.default.addObserver(
             self, selector: #selector(miniPlayerThemeSettingsChanged),

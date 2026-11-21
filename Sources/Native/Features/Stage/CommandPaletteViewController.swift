@@ -69,7 +69,7 @@ final class CommandPaletteViewController: UIViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(red: 0.09, green: 0.09, blue: 0.11, alpha: 1)
-        overrideUserInterfaceStyle = .dark
+        overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         buildViews()
         allSections = buildRegistry()
         visibleSections = allSections
@@ -255,9 +255,9 @@ final class CommandPaletteViewController: UIViewController {
         ]
         sections += buildRegistry62(track: track, hasTrack: hasTrack)
         // 置顶槽位（§4.8）：WB 的 PinnedCommands62 未就绪时按任务
-        // 口径直读键 settings.shortcuts.pinnedCommandIds 兜底。
+        // 口径直读键 settings.shortcuts.pinnedCommandIDs 兜底。
         let pinnedIds = UserDefaults.standard.stringArray(
-            forKey: "settings.shortcuts.pinnedCommandIds") ?? []
+            forKey: "settings.shortcuts.pinnedCommandIDs") ?? []
         if !pinnedIds.isEmpty {
             let all = sections.flatMap { $0.commands }
             let pinned = pinnedIds.compactMap { id in all.first { $0.id == id } }

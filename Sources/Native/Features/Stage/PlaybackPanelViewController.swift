@@ -130,7 +130,7 @@ final class PlaybackPanelViewController: UIViewController {
         super.viewDidLoad()
         WC62Bootstrap.startIfNeeded()
         view.backgroundColor = UIColor(red: 0.09, green: 0.09, blue: 0.11, alpha: 1)
-        overrideUserInterfaceStyle = .dark
+        overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         buildViews()
         bindState()
         showTab(initialTab)
