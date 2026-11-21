@@ -38,9 +38,12 @@ import QuartzCore
 //  - isChorus 缺失 → 副歌涟漪永不触发；animationIntensity
 //    缺失 → 恒 normal 档（baseMargin 6、baseScale 1.01、
 //    passedAlpha 0.82、passedRotate ±6°、透视 1000）；
-//  - tuning 无下发通道 → 用 DEFAULT_CADENZA_TUNING 默认值
-//    （fontScale 1.12、widthRatio 0.72、motionAmount 1、
-//    glowIntensity 1、beamIntensity 0 网页已废弃不用）。
+//  - tuning（(57) C1 接线）：经 CadenzaTuningStore 门面读
+//    （UserDefaults "folia.tuning.cadenza."，缺省 =
+//    DEFAULT_CADENZA_TUNING：fontScale 1.12、widthRatio 0.72、
+//    motionAmount 1、glowIntensity 1、beamIntensity 0 网页已
+//    废弃恒 0）；render 分辨率覆盖无 UIKit 画布消费点，仅
+//    门面存档（见 CadenzaTuning.swift 文件头注）。
 // 时钟纪律不变：只消费宿主 frameTick 的锚点位置。
 
 // MARK: - cadenza 专用数据结构
@@ -512,11 +515,17 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
     let capabilities = LyricStageCapabilities(
         supportsWordSync: false, requiresSpectrum: false, supportsLineSeek: false)
 
-    // DEFAULT_CADENZA_TUNING（types.ts）默认值，无下发通道时恒用。
-    private let tuningFontScale: CGFloat = 1.12
-    private let tuningWidthRatio: CGFloat = 0.72
-    private let tuningMotionAmount: Double = 1
-    private let tuningGlowIntensity: Double = 1
+    // 调参门面（CadenzaTuningStore，C1 接线）：缺省与
+    // DEFAULT_CADENZA_TUNING 逐字一致（fontScale 1.12、
+    // widthRatio 0.72、motionAmount 1、glowIntensity 1、
+    // beamIntensity 恒 0）；面板改动经 0.25s 缓存生效，
+    // preparedCache 的指纹含调参快照（见 applySnapshot /
+    // frameTick），改参即失效重建（网页 preparedStateContext
+    // 的 deps 含 fontScale/widthRatio 同义）。
+    private var cacheTuning: CadenzaTuningValues?
+    private func tuning() -> CadenzaTuningValues {
+        CadenzaTuningStore.valuesCached(now: CACurrentMediaTime())
+    }
     /// 预生成缓存上限（网页为无界 Map；原生按行 LRU 封顶 48，
     /// 与 partita 布局缓存同口径）。
     private let preparedCacheLimit = 48
@@ -576,11 +585,13 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
         if snapshot.track?.id != cacheTrackId
             || snapshot.lines.count != cacheLineCount
             || snapshot.viewport.size != cacheViewportSize
-            || snapshot.palette.accent != cacheAccent {
+            || snapshot.palette.accent != cacheAccent
+            || tuning() != cacheTuning {
             cacheTrackId = snapshot.track?.id
             cacheLineCount = snapshot.lines.count
             cacheViewportSize = snapshot.viewport.size
             cacheAccent = snapshot.palette.accent
+            cacheTuning = tuning()
             preparedCache.removeAll()
             preparedCacheOrder.removeAll()
             clearLineViews()
@@ -599,6 +610,16 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
 
     func frameTick(position: TimeInterval) {
         guard isActive, let snapshot else { return }
+        // 面板中途改参（无新快照）：指纹一变即失效准备态，
+        // 当前行按新参重建（网页 context deps 变化重算同义）。
+        if tuning() != cacheTuning {
+            cacheTuning = tuning()
+            preparedCache.removeAll()
+            preparedCacheOrder.removeAll()
+            clearLineViews()
+            activeLineId = nil
+            currentPrepared = nil
+        }
         // dt 只用于指数平滑速率（网页 draw 的 performance.now
         // 差分同式，钳制 [1/240, 0.05]、首帧 1/60）；播放位置
         // 只用入参 position，不构成自建时钟源。
@@ -719,7 +740,7 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
 
         // energy：宿主无频谱/功率数据，恒 0（见头部降级说明）。
         let energy: Double = 0
-        let motionEnergy = energy * tuningMotionAmount
+        let motionEnergy = energy * tuning().motionAmount
         let verticalLift = sin(time * 2.3) * (3 + motionEnergy * 8)
         let focusY = Double(height) * 0.42 + verticalLift
 
@@ -754,7 +775,7 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
             let passedAlpha: Double = isInstant ? 0 : 0.82
             let pulse: Double = (status == 1 && !isInstant)
                 ? 1 + sin(time * CadenzaEnvelopes.activePulseFrequency
-                          + placement.wordStart * 5) * 0.04 * tuningMotionAmount
+                          + placement.wordStart * 5) * 0.04 * tuning().motionAmount
                 : 1
             let driftProgress = isInstant ? 0
                 : CadenzaEnvelopes.passedDrift(time: time, wordEnd: placement.wordEnd)
@@ -886,14 +907,14 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
                         glyphCount: glyphCount,
                         glyphTimings: placement.glyphTimings)
                         * cadenzaClamp(s.glowAlpha, 0, 1)
-                        * max(tuningGlowIntensity, 0)
+                        * max(tuning().glowIntensity, 0)
                 }
             } else {
                 let intensity = CadenzaEnvelopes.glowEnvelope(
                     time: time, timing: timing,
                     wordStart: placement.wordStart, wordEnd: placement.wordEnd)
                     * cadenzaClamp(s.glowAlpha, 0, 1)
-                    * max(tuningGlowIntensity, 0)
+                    * max(tuning().glowIntensity, 0)
                 glyphIntensities = [intensity]
             }
             wordView.applyFrame(bodyColor: bodyColor, bodyAlpha: s.bodyAlpha,
@@ -973,7 +994,7 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
         let chosen = cadenzaClamp(
             widthBase - lengthPenalty - densityPenalty, 28, 104)
         let fontPx = CGFloat(cadenzaClamp(
-            chosen * Double(tuningFontScale), 24, 132))
+            chosen * tuning().fontScale, 24, 132))
         let font = StageFonts.bold(size: fontPx)
         let lineHeight = CGFloat(
             (Double(fontPx) * (Self.isCJKText(line.text) ? 1.22 : 1.1))
@@ -984,7 +1005,7 @@ final class CadenzaStageRenderer: NSObject, LyricStageRenderer {
             ? CGFloat(cadenzaClamp(
                 0.92 - Double(graphemeCount - 12) * 0.018, 0.62, 0.92))
             : 0.92
-        let compactWidthRatio = tuningWidthRatio * wrapCompression
+        let compactWidthRatio = CGFloat(tuning().widthRatio) * wrapCompression
         let maxWidth = CGFloat(cadenzaClamp(
             Double(min(viewport.width * compactWidthRatio, 820)),
             Double(minWidth), Double(availableWidth)))

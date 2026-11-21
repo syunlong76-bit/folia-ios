@@ -1,4 +1,5 @@
 import UIKit
+import NaturalLanguage
 
 // 倾诉 tilt（M2' 照搬对齐版）：按 folia-major 网页版
 // tilt/VisualizerTilt.tsx 的展示行为逐项实现。依据文件：
@@ -30,9 +31,13 @@ import UIKit
 // tilt 自己的 seededRandom 入参为 sin(seed·1000+offset)，
 // 在本文件内按源码另行实现，不与 stageSeededRandom 混用。
 // - 调音参数（splitProbability 0.75 / tiltStyleProbability
-// 0.35 / colorScheme default）来自 DEFAULT_TILT_TUNING；
-// 协议快照无 tuning 字段，原生取默认值，colorScheme 的
-// 其余三档（swap/accentAll/primaryAll）无数据源未落。
+// 0.35 / colorScheme default）来自 DEFAULT_TILT_TUNING，
+// 经 TiltTuningStore（TiltTuning.swift，(57) C2）可调：
+// 渲染器逐布局读 0.25s 缓存值，调参指纹变化即失效布局
+// 缓存；colorScheme 四档（default/swap/accentAll/
+// primaryAll）按 TiltLine.getColors 全落（正段/倾段取色
+// 组合逐档对应）。协议快照本身无 tuning 字段，参数走
+// 本地 UserDefaults，与网页 localStorage 存档同位。
 // - 整行呼吸浮动源码没有（那是 classic/partita 侧的
 // lyricContainerFloat），本样式不加。
 // 时钟纪律不变：只消费宿主 frameTick 的锚点位置，不自建
@@ -57,6 +62,9 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
     private var builtViewportSize: CGSize = .zero
     private var layoutCache: [Int: TiltLayoutData] = [:]
     private var layoutCacheOrder: [Int] = []
+    /// 上次构建布局时的调参指纹：概率/配色任一变化，整表
+    /// 布局缓存失效（网页 tuning 变化即重算 layout 同义）。
+    private var builtTuning: TiltTuningValues? = nil
 
     override init() {
         view = rootView
@@ -107,10 +115,10 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
         // 可见段序号（源码 useLayoutEffect 口径）：最后一个
         // start − 0.25 ≤ position 的段；position 在
         // [行 start − 0.1, renderEnd] 之外时为 −1（全隐）。
-        // renderEnd 原生以行 end + 0.35 近似（与 classic 的
-        // activeIndex 余像同值，见档案）。
+        // renderEnd 为 renderHints 公式值（Self.renderEnd，
+        // (57) C2 起逐行移植，不再以 end + 0.35 近似）。
         var target = -1
-        if position >= line.start - 0.1 && position <= line.end + 0.35 {
+        if position >= line.start - 0.1 && position <= Self.renderEnd(of: line) {
             for i in layout.segments.indices {
                 if position >= layout.segmentTimings[i].start - 0.25 {
                     target = i
@@ -150,11 +158,15 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
 
     private func transitionLine(to idx: Int?, position: TimeInterval) {
         // 旧行出场：整容器淡出 0.45s easeInOut 后移除（源码
-        // 外层 motion.div exit；段级 exit 偏移并入容器淡出，
-        // 见档案）。
+        // 外层 motion.div exit），段级 exit 姿态（普通
+        // y −12 / tilt y −16·scale 0.95）由各段自身动画叠加
+        //（(57) C2 补齐；网页段级时长 0.55/0.6 略长于容器
+        // 0.45，原生以容器移除为界截断，残差见报告）。
         if let old = lineContainer {
+            let oldSegments = segmentViews
             lineContainer = nil
             segmentViews = []
+            for segmentView in oldSegments { segmentView.applyExitPose() }
             UIView.animate(withDuration: 0.45, delay: 0,
                            options: [.curveEaseInOut]) {
                 old.alpha = 0
@@ -171,14 +183,34 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
 
         let container = UIView()
         container.isUserInteractionEnabled = false
+        // 配色方案（TiltLine.getColors 四档，(57) C2 全落）：
+        // default 正 primary/倾 accent、swap 正 accent/倾
+        // primary、accentAll 皆 accent、primaryAll 皆 primary。
+        let scheme = TiltTuningStore.valuesCached(
+            now: CACurrentMediaTime()).colorScheme
+        let normalColor: UIColor
+        let tiltColor: UIColor
+        switch scheme {
+        case .default:
+            normalColor = snapshot.palette.primary
+            tiltColor = snapshot.palette.accent
+        case .swap:
+            normalColor = snapshot.palette.accent
+            tiltColor = snapshot.palette.primary
+        case .accentAll:
+            normalColor = snapshot.palette.accent
+            tiltColor = snapshot.palette.accent
+        case .primaryAll:
+            normalColor = snapshot.palette.primary
+            tiltColor = snapshot.palette.primary
+        }
         var views: [TiltSegmentView] = []
         for (i, segment) in layout.segments.enumerated() {
             let segmentView = TiltSegmentView(
                 segment: segment,
                 fontSize: layout.fontSizes[i],
                 font: layout.fonts[i],
-                color: segment.isTilt ? snapshot.palette.accent
-                : snapshot.palette.primary,
+                color: segment.isTilt ? tiltColor : normalColor,
                 charTimings: layout.charTimings[i],
                 yOffset: layout.yOffset)
             views.append(segmentView)
@@ -192,7 +224,7 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
         // 构建后按当前位定格（中途进台/seek 落位）：已到揭示
         // 时刻的段直接摆到落定态，不补播入场动画。
         var target = -1
-        if position >= line.start - 0.1 && position <= line.end + 0.35 {
+        if position >= line.start - 0.1 && position <= Self.renderEnd(of: line) {
             for i in layout.segments.indices {
                 if position >= layout.segmentTimings[i].start - 0.25 {
                     target = i
@@ -252,6 +284,14 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 布局构建（VisualizerTilt.buildTiltLayout 逐项对应）
 
     private func layoutFor(line: LyricLine) -> TiltLayoutData {
+        // 调参指纹变化 → 整表失效（概率决定分段与 tilt 段
+        // 抽选，旧布局不得跨调参复用）。
+        let tuning = TiltTuningStore.valuesCached(now: CACurrentMediaTime())
+        if builtTuning != tuning {
+            builtTuning = tuning
+            layoutCache.removeAll()
+            layoutCacheOrder.removeAll()
+        }
         if let cached = layoutCache[line.id] { return cached }
         let layout = buildLayout(line: line)
         layoutCache[line.id] = layout
@@ -264,11 +304,12 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func buildLayout(line: LyricLine) -> TiltLayoutData {
-        // DEFAULT_TILT_TUNING（types.ts）：协议无 tuning 通道，
-        // 取默认值；lyricsFontScale 的原生落点为视口
-        // dynamicTypeScale（本期恒 1，同 still 口径）。
-        let splitProbability = 0.75
-        let tiltStyleProbability = 0.35
+        // 调参经 TiltTuningStore 读（缺省 = DEFAULT_TILT_
+        // TUNING，(57) C2）；lyricsFontScale 的原生落点为
+        // 视口 dynamicTypeScale（本期恒 1，同 still 口径）。
+        let tuning = TiltTuningStore.valuesCached(now: CACurrentMediaTime())
+        let splitProbability = tuning.splitProbability
+        let tiltStyleProbability = tuning.tiltStyleProbability
         let fontScale = snapshot?.viewport.dynamicTypeScale ?? 1
 
         let viewport = viewportSize()
@@ -282,7 +323,11 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
         let tiltMeasureFont = StageFonts.light(size: measureBasePx)
 
         let fullText = line.text
-        let trimmedCount = fullText.trimmingCharacters(in: .whitespaces).count
+        // 网页 charCount = fullText.trim().length：JS length
+        // 为 UTF-16 码元数，原生以修剪后 utf16.count 对齐
+        //（字素数在星光字符上会少计，(57) C2 修正）。
+        let trimmedCount = fullText
+            .trimmingCharacters(in: .whitespacesAndNewlines).utf16.count
         let isEllipsisOnly = Self.isEllipsisOnly(fullText)
 
         var segmentTexts: [String]
@@ -502,8 +547,8 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
                 return (first.timeStart, last.timeEnd)
             }
             // 源码兜底：段无词时 start = 行 start、end =
-            // getLineRenderEndTime；原生以行 end + 0.35 近似。
-            return (line.start, line.end + 0.35)
+            // getLineRenderEndTime（Self.renderEnd 公式值）。
+            return (line.start, Self.renderEnd(of: line))
         }
     }
 
@@ -595,17 +640,55 @@ final class TiltStageRenderer: NSObject, LyricStageRenderer {
     }
 
     /// markShortLastLine：末段非 tilt、修剪后 ≤2 字且长度
-    /// ×2 ≤ 前段长度时标短末段（渲染时字号 ×1.18）。
+    /// ×2 ≤ 前段长度时标短末段（渲染时字号 ×1.18）。长度
+    /// 口径为 JS length（UTF-16 码元）：末段取 trim 后、
+    /// 前段取段文本原长（网页源码同，(57) C2 对齐）。
     fileprivate static func markShortLastLine(_ input: [TiltSegmentData]) -> [TiltSegmentData] {
         var segs = input
         guard segs.count >= 2 else { return segs }
         let last = segs[segs.count - 1]
-        if last.isTilt || last.text.count > 2 { return segs }
+        let lastTrimmedLength = last.text
+            .trimmingCharacters(in: .whitespacesAndNewlines).utf16.count
+        if last.isTilt || lastTrimmedLength > 2 { return segs }
         let prev = segs[segs.count - 2]
-        if last.text.count * 2 <= prev.text.count {
+        if lastTrimmedLength * 2 <= prev.text.utf16.count {
             segs[segs.count - 1].isShortLastLine = true
         }
         return segs
+    }
+
+    /// getLineRenderEndTime（utils/lyrics/renderHints.ts 的
+    /// buildLineRenderHints 公式逐行移植，(57) C2）：按行时
+    /// 长分 micro（<0.10）/ short（<0.18）/ normal 三档算
+    /// renderEndTime。协议 LyricLine 无 renderHints 字段，
+    /// 但该值本就是 start/end/末词 end 的纯函数（网页
+    /// getLineRenderHints 在行上无存档时同样现算），数据
+    /// 通路无缺口。lastWordEnd 取协议 words 末词 end、无词
+    /// 时行 end（网页 getLastWordEndTime 同义）。
+    static func renderEnd(of line: LyricLine) -> TimeInterval {
+        let rawDuration = max(line.end - line.start, 0)
+        if rawDuration < 0.10 {
+            // micro：transitionMode none，renderEnd 下限
+            // start + MICRO_LINE_RENDER_FLOOR(0.067)。
+            return max(line.end, line.start + 0.067)
+        }
+        let lastWordEnd = line.words?.last?.end ?? line.end
+        if rawDuration < 0.18 {
+            // short/fast：enter clamp(raw×0.45, .045, .06)、
+            // exit clamp(raw×0.22, .03, .04)、hold 0.03。
+            let enter = min(0.06, max(0.045, rawDuration * 0.45))
+            let exit = min(0.04, max(0.03, rawDuration * 0.22))
+            let linePassStart = max(lastWordEnd, line.start) + 0.03
+            let exitStart = max(line.start + enter + 0.01,
+                                linePassStart, line.end - exit)
+            return max(line.end, exitStart + exit)
+        }
+        // normal：exit min(.32, max(.18, max(raw,.12)×.18))、
+        // hold 0.06（enter 只参与 fast 档 exitStart，源码同）。
+        let exit = min(0.32, max(0.18, max(rawDuration, 0.12) * 0.18))
+        let linePassStart = max(lastWordEnd, line.start) + 0.06
+        let exitStart = max(linePassStart, line.end - exit)
+        return max(line.end, exitStart + exit)
     }
 
     /// 逐字脉冲强度（源码 getCharPulseIntensity）：时长夹在
@@ -823,6 +906,21 @@ private final class TiltSegmentView: UIView {
         }
     }
 
+    /// 段级出场姿态（源码 TiltLine exit：普通 y −12、tilt
+    /// y −16 + scale 0.95、opacity 0；曲线同段级 bezier）。
+    func applyExitPose() {
+        let apply = {
+            self.alpha = 0
+            if self.segment.isTilt {
+                self.transform = CGAffineTransform(translationX: 0, y: -16)
+                    .scaledBy(x: 0.95, y: 0.95)
+            } else {
+                self.transform = CGAffineTransform(translationX: 0, y: -12)
+            }
+        }
+        Self.bezierAnimator(duration: 0.45, animations: apply).startAnimation()
+    }
+
     /// 逐字脉冲（frameTick 驱动）：scale = 1 + 强度 ×（tilt
     /// 0.18 / 普通 0.15）；源码靠 MotionValue + CSS 0.06s
     /// 过渡平滑，原生逐帧直设（60fps 下更跟手，见档案）。
@@ -865,9 +963,13 @@ private final class TiltSegmentView: UIView {
 /// 引号 → 西文词块 → CJK 空格 → 特殊符）逐级切到目标段数，
 /// 不足时 secondarySplit 补切、过量时 mergeSentences 并最
 /// 短对。字数口径以字素计（源码为 JS UTF-16 length，BMP
-/// 内一致）。secondarySplit 的 Intl.Segmenter 词边界原生
-/// 无对应物，以「CJK 逐字/空格/标点邻接为边界、取最接近
-/// 中点的边界」近似，差异见档案。
+/// 内一致；已单项对齐 UTF-16 的判定点见 determineLineCount
+/// 与 markShortLastLine）。secondarySplit 的 Intl.Segmenter
+/// 词边界以 NLTokenizer（.word）承接（(57) C2）：词起点集、
+/// 最接近中点的间隙、score = balance×10 + 词数均照网页
+/// 公式；无可用词边界时走网页兜底（种子伪随机选段、中点
+/// 切开）。残差：NLTokenizer 与 ICU Intl.Segmenter 的分词
+/// 结果在个别词上可不同、索引按字素计而非 UTF-16，见报告。
 private enum TiltSentenceSplitter {
 
     static func splitIntoSentences(text: String, targetCount: Int, seed: Double) -> [String] {
@@ -879,7 +981,7 @@ private enum TiltSentenceSplitter {
         }
         var result = sentences
         if result.count < targetCount {
-            result = secondarySplit(result, targetCount: targetCount)
+            result = secondarySplit(result, targetCount: targetCount, seed: seed)
         }
         if result.count > targetCount {
             result = mergeSentences(result, targetCount: targetCount)
@@ -898,33 +1000,47 @@ private enum TiltSentenceSplitter {
         }
     }
 
-    // 一级：标点（标点串 + 其后空格归前段）。
+    // 一级：标点（标点串 + 其后空格归前段；标点串前无正文
+    // 时并入上一段——网页 splitByPunctuation 的 beforePunct
+    // 为空分支，(57) C2 对齐：如 "a。，b" 切为 ["a，。", "b"]
+    // 而非 ["a，", "。", "b"]）。
     private static func splitByPunctuation(_ text: String) -> [String] {
         let punct: Set<Character> = ["，", "。", "；", "！", "？", "、", "…", "·",
                                      ".", ",", ";", "!", "?"]
         let chars = Array(text)
         var result: [String] = []
-        var current = ""
+        var lastIndex = 0
         var i = 0
+        var sawMatch = false
         while i < chars.count {
-            let ch = chars[i]
-            current.append(ch)
-            if punct.contains(ch) {
-                i += 1
-                while i < chars.count && punct.contains(chars[i]) {
-                    current.append(chars[i]); i += 1
-                }
-                while i < chars.count && chars[i].isWhitespace {
-                    current.append(chars[i]); i += 1
-                }
-                result.append(current)
-                current = ""
-            } else {
-                i += 1
+            guard punct.contains(chars[i]) else { i += 1; continue }
+            sawMatch = true
+            var clusterEnd = i
+            while clusterEnd < chars.count && punct.contains(chars[clusterEnd]) {
+                clusterEnd += 1
             }
+            var trailingEnd = clusterEnd
+            while trailingEnd < chars.count && chars[trailingEnd].isWhitespace {
+                trailingEnd += 1
+            }
+            let before = String(chars[lastIndex..<i])
+            let cluster = String(chars[i..<trailingEnd])
+            if !before.isEmpty {
+                result.append(before + cluster)
+            } else if !result.isEmpty {
+                result[result.count - 1] += cluster
+            } else {
+                result.append(cluster)
+            }
+            lastIndex = trailingEnd
+            i = trailingEnd
         }
-        if !current.isEmpty { result.append(current) }
-        return result.isEmpty ? [text] : result
+        guard sawMatch else { return [text] }
+        if lastIndex < chars.count {
+            result.append(String(chars[lastIndex...]))
+        }
+        let filtered = result.filter { !$0.isEmpty }
+        return filtered.isEmpty ? [text] : filtered
     }
 
     // 二级：括号/引号最外层配对（递归切 before/配对段/rest）。
@@ -1090,46 +1206,93 @@ private enum TiltSentenceSplitter {
         return result
     }
 
-    // 补切：候选段（>2 字）里按平衡分取最优段，在最接近
-    // 中点的词边界处切开（边界近似见头部注释）。
-    private static func secondarySplit(_ input: [String], targetCount: Int) -> [String] {
+    // 补切（网页 secondarySplit 逐项移植，(57) C2）：候选段
+    //（字素 >2）逐段取词起点（NLTokenizer .word 的词类
+    // token 起点，承接 Intl.Segmenter isWordLike 位置），
+    // 在最接近中点的词间隙切开，score = balance×10 + 词数，
+    // 全候选取最高分一段切一刀、循环至目标段数；任一段都
+    // 凑不出 ≥2 个词时走网页兜底：seed = 全段 UTF-16 码元
+    // 值总和 + 段数 + timeSeed，fract(sin(seed)×10000) 选段、
+    // 中点切开。
+    private static func secondarySplit(_ input: [String], targetCount: Int,
+                                       seed: Double) -> [String] {
         var sentences = input
         while sentences.count < targetCount {
+            let candidates = sentences.indices.filter {
+                sentences[$0].count > 2
+            }
+            if candidates.isEmpty { break }
+
             var best: (index: Int, splitPos: Int, score: Double)? = nil
-            for (index, sentence) in sentences.enumerated() {
-                let chars = Array(sentence)
-                guard chars.count > 2 else { continue }
-                var boundaries: [Int] = []
-                for pos in 1..<chars.count {
-                    let prev = chars[pos - 1]
-                    let cur = chars[pos]
-                    if isCJK(prev) || isCJK(cur) || prev.isWhitespace
-                        || cur.isWhitespace || isPunctuation(prev) {
-                        boundaries.append(pos)
-                    }
-                }
-                guard !boundaries.isEmpty else { continue }
-                let mid = Double(chars.count) / 2
-                var bestPos = boundaries[0]
+            for index in candidates {
+                let sentence = sentences[index]
+                let wordStarts = wordLikeStarts(in: sentence)
+                guard wordStarts.count >= 2 else { continue }
+                let mid = Double(sentence.count) / 2
+                var bestGap = 1
                 var bestDist = Double.greatestFiniteMagnitude
-                for pos in boundaries {
-                    let dist = abs(Double(pos) - mid)
-                    if dist < bestDist { bestDist = dist; bestPos = pos }
+                for gap in 1..<wordStarts.count {
+                    let dist = abs(Double(wordStarts[gap]) - mid)
+                    if dist < bestDist { bestDist = dist; bestGap = gap }
                 }
-                let balance = 1 - abs(Double(bestPos) - mid) / mid
-                let score = balance * 10 + Double(boundaries.count + 1)
+                let splitPos = wordStarts[bestGap]
+                guard splitPos > 0 && splitPos < sentence.count else { continue }
+                let balance = 1 - abs(Double(splitPos) - mid) / mid
+                let score = balance * 10 + Double(wordStarts.count)
                 if best == nil || score > best!.score {
-                    best = (index, bestPos, score)
+                    best = (index, splitPos, score)
                 }
             }
-            guard let chosen = best else { break }
-            let chars = Array(sentences[chosen.index])
-            let first = String(chars[0..<chosen.splitPos])
-            let second = String(chars[chosen.splitPos...])
-            sentences.replaceSubrange(
-                chosen.index...chosen.index, with: [first, second])
+            if let chosen = best {
+                let chars = Array(sentences[chosen.index])
+                let first = String(chars[0..<chosen.splitPos])
+                let second = String(chars[chosen.splitPos...])
+                sentences.replaceSubrange(
+                    chosen.index...chosen.index, with: [first, second])
+                continue
+            }
+
+            // 网页兜底（无 Segmenter 词边界时）：种子伪随机
+            // 选一段候选、在中点切开。textHash 按 UTF-16 码
+            // 元值求和（JS charCodeAt 口径）。
+            var textHash: Double = 0
+            for sentence in sentences {
+                for unit in sentence.utf16 { textHash += Double(unit) }
+            }
+            let hashSeed = textHash + Double(sentences.count) + seed
+            let roll = stageSeededRandom(hashSeed)
+            let pick = min(Int(roll * Double(candidates.count)),
+                           candidates.count - 1)
+            let index = candidates[pick]
+            let chars = Array(sentences[index])
+            let mid = chars.count / 2
+            guard mid > 0 && mid < chars.count else { break }
+            let first = String(chars[0..<mid])
+            let second = String(chars[mid...])
+            sentences.replaceSubrange(index...index, with: [first, second])
         }
         return sentences
+    }
+
+    /// 词类 token 的字素起点集（NLTokenizer .word；含字母/
+    /// 数字标量的 token 记为词类，承接 Intl.Segmenter 的
+    /// isWordLike）。返回升序字素下标（含 0）。
+    private static func wordLikeStarts(in text: String) -> [Int] {
+        let tokenizer = NLTokenizer(unit: .word)
+        tokenizer.string = text
+        var starts: [Int] = []
+        tokenizer.enumerateTokens(in: text.startIndex..<text.endIndex) {
+            range, _ in
+            let token = text[range]
+            let isWordLike = token.unicodeScalars.contains {
+                CharacterSet.alphanumerics.contains($0)
+            }
+            if isWordLike {
+                starts.append(text[..<range.lowerBound].count)
+            }
+            return true
+        }
+        return starts
     }
 
     // 并段：反复合并相邻最短对直到目标段数。
@@ -1162,9 +1325,4 @@ private enum TiltSentenceSplitter {
             || (0xAC00...0xD7AF).contains(v)
     }
 
-    private static func isPunctuation(_ ch: Character) -> Bool {
-        let punct: Set<Character> = ["，", "。", "；", "！", "？", "、", "…", "·",
-                                     ".", ",", ";", "!", "?", "：", ":"]
-        return punct.contains(ch)
-    }
 }

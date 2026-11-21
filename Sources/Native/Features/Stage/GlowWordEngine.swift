@@ -129,6 +129,275 @@ enum StageLyricUnits {
         return (0x4E00...0x9FA5).contains(v) || (0x3040...0x30FF).contains(v)
             || (0xAC00...0xD7AF).contains(v)
     }
+
+    // MARK: 语义分组（(57) C1b 纯新增 API；既有 units(for:) 等
+    // 既有函数一字未动）
+    //
+    // 网页 partita 恒以 { semantic: tuning.useSemanticLayout,
+    // sticky: true } 调 buildPostLyricLayoutUnits
+    // （cjkSemanticLayout.ts）：semantic 开时先按词分段
+    // （segmentLyricWords → Intl.Segmenter）把解析词编成语义
+    // 布局组，再做标点/缩约粘连（applyStickyPunctuation），
+    // 最后 buildDisplayWordsFromLayoutUnits 派生显示词——
+    // 语义组保留组内原词逐个显示（逐字时序不丢），粘连的
+    // 非语义组才合并成一个显示词。本 API 同构：先经既有
+    // units(for:) 取显示单元（时序来源与口径一字不变），再
+    // 把单元编成布局组返回；组即网页 LyricLayoutUnit 的边
+    // 界，消费方只许在组界切分。分段与单元文本对不齐时整
+    // 行回退单元素组（网页 mapSegmentsToWords 返回 nil →
+    // createSingleWordLayoutUnits 同义），粘连照常在其上做。
+    // 已知数据源差异：原生 LyricLine 无 wordSegments /
+    // autoWordSegments 字段（协议冻结面），用户保存分词与
+    // icu-folia 预分词无从下发，故分段只走系统词界
+    // （NSString.enumerateSubstrings .byWords，ICU 词界，
+    // 与 Intl.Segmenter 同源；词典版本可致个别边界出入，
+    // 出入只影响分组、不影响时序，且有整行回退兜底）。
+
+    /// 语义布局组：一项 = 一个布局组（网页一个
+    /// LyricLayoutUnit 的显示单元集，组内顺序 = 原单元序，
+    /// 全组单元拼接与 units(for:) 输出同序同值）。
+    static func semanticGroups(for line: LyricLine) -> [[StageWordUnit]] {
+        let base = units(for: line)
+        guard !base.isEmpty else { return [] }
+        var groups = base.map {
+            SemanticGroup(text: $0.text, units: [$0], isSemantic: false)
+        }
+        // 网页 CJK 闸门：fullText 无 CJK 且无用户分词覆盖时
+        // 语义分组恒回退单词单元（原生无覆盖数据源，只判
+        // CJK）；非 CJK 行跳过分段、粘连仍照常（拉丁缩约）。
+        if line.text.contains(where: { isCJK(String($0)) }),
+           let mapped = mapSemanticSegments(base: base, text: line.text) {
+            groups = mapped
+        }
+        return applyStickyPunctuation(groups).map { group in
+            // buildDisplayWordsFromLayoutUnits：粘连的非语义
+            // 组合并成一个显示单元（文本 = 组内原文拼接、
+            // 时段 = 首尾单元时段）；其余组原样返回组内单元。
+            if group.isSticky, !group.isSemantic,
+               let first = group.units.first, let last = group.units.last {
+                return [StageWordUnit(text: group.text,
+                                      start: first.start, end: last.end)]
+            }
+            return group.units
+        }
+    }
+
+    /// 网页 LyricLayoutUnit 的原生镜像（仅本组 API 内部用）。
+    private struct SemanticGroup {
+        var text: String
+        var units: [StageWordUnit]
+        var isSemantic: Bool
+        var isSticky: Bool = false
+    }
+
+    /// 系统词分段（wordSegmentation.segmentTextWords 的原生
+    /// 落点）：.byWords 枚举全文（词/标点/空白各自成段），
+    /// isWordLike = 段内含字母或数字（网页回退口径
+    /// !/^[\s\p{P}\p{S}]+$/ 的等价判据）。
+    private static func wordSegments(of text: String)
+        -> [(segment: String, isWordLike: Bool)] {
+        var result: [(segment: String, isWordLike: Bool)] = []
+        let ns = text as NSString
+        ns.enumerateSubstrings(
+            in: NSRange(location: 0, length: ns.length),
+            options: [.byWords]) { substring, range, _, _ in
+            let segment = substring ?? ns.substring(with: range)
+            let wordLike = segment.unicodeScalars.contains {
+                CharacterSet.alphanumerics.contains($0)
+            }
+            result.append((segment: segment, isWordLike: wordLike))
+        }
+        return result
+    }
+
+    /// mapSegmentsToWords 逐项对应：空白剥离后精确对齐，
+    /// 任一段对不上返回 nil（整行回退）；空白-only 单元并
+    /// 入前组（行首的并入首段）；非词段并入前组；语义标记
+    /// = 词段 && 含 CJK && 非空单元数 > 1。
+    private static func mapSemanticSegments(base: [StageWordUnit],
+                                            text: String)
+        -> [SemanticGroup]? {
+        let segments = wordSegments(of: text)
+        guard !segments.isEmpty else { return nil }
+        func strip(_ s: String) -> String {
+            s.filter { !$0.isWhitespace }
+        }
+        var groups: [SemanticGroup] = []
+        var index = 0
+        func absorbWhitespace() {
+            guard !groups.isEmpty else { return }
+            while index < base.count, strip(base[index].text).isEmpty {
+                groups[groups.count - 1].text += base[index].text
+                groups[groups.count - 1].units.append(base[index])
+                index += 1
+            }
+        }
+        for segment in segments {
+            let key = strip(segment.segment)
+            if key.isEmpty { continue }
+            absorbWhitespace()
+            let startIndex = index
+            var collected = ""
+            while index < base.count, collected.count < key.count {
+                collected += strip(base[index].text)
+                index += 1
+                if !key.hasPrefix(collected) { return nil }
+            }
+            if collected != key { return nil }
+            let segUnits = Array(base[startIndex..<index])
+            guard !segUnits.isEmpty else { return nil }
+            let segText = segUnits.map { $0.text }.joined()
+            if !segment.isWordLike, !groups.isEmpty {
+                groups[groups.count - 1].text += segText
+                groups[groups.count - 1].units.append(contentsOf: segUnits)
+                continue
+            }
+            let glyphCount = segUnits.filter { !strip($0.text).isEmpty }.count
+            let semantic = segment.isWordLike
+                && segText.contains(where: { isCJK(String($0)) })
+                && glyphCount > 1
+            groups.append(SemanticGroup(text: segText, units: segUnits,
+                                        isSemantic: semantic))
+        }
+        absorbWhitespace()
+        if index != base.count || groups.isEmpty { return nil }
+        return groups
+    }
+
+    // MARK: 标点/缩约粘连（applyStickyPunctuationLayoutUnits 对应）
+
+    private static let contractionSuffixes: Set<String> =
+        ["s", "t", "m", "d", "ll", "re", "ve", "em"]
+    /// STICKY_TRAILING_PUNCTUATION_REGEX 的字符集逐字转录。
+    private static let stickyPunctuationChars: Set<Character> = [
+        ",", ".", ";", ":", "!", "?",
+        "，", "。", "！", "？", "、", "：", "；",
+        "）", "】", "》", "」", "『", "〉", "〕", "］",
+        ")", "}", "]", "\"", "'", "’", "”",
+    ]
+
+    private static func trimmed(_ s: String) -> String {
+        s.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private static func trimEnd(_ s: String) -> String {
+        var t = s
+        while let last = t.last, last.isWhitespace { t.removeLast() }
+        return t
+    }
+
+    private static func isApostropheOnly(_ text: String) -> Bool {
+        let t = trimmed(text)
+        return t == "'" || t == "’"
+    }
+
+    private static func isContractionSuffix(_ text: String) -> Bool {
+        contractionSuffixes.contains(trimmed(text).lowercased())
+    }
+
+    private static func isDirectContraction(_ text: String) -> Bool {
+        let t = trimmed(text)
+        guard let first = t.first, first == "'" || first == "’"
+        else { return false }
+        return contractionSuffixes.contains(
+            String(t.dropFirst()).lowercased())
+    }
+
+    private static func isStickyTrailingPunctuation(_ text: String) -> Bool {
+        let t = trimmed(text)
+        return !t.isEmpty && t.allSatisfy { stickyPunctuationChars.contains($0) }
+    }
+
+    /// canAttachToPrevious：trimEnd 后末字为字母/数字。
+    private static func canAttachToPrevious(_ text: String) -> Bool {
+        guard let last = trimEnd(text).unicodeScalars.last else { return false }
+        return CharacterSet.alphanumerics.contains(last)
+    }
+
+    private static func endsWithApostrophe(_ text: String) -> Bool {
+        guard let last = trimEnd(text).last else { return false }
+        return last == "'" || last == "’"
+    }
+
+    /// INLINE_CONTRACTION_REGEX 的存在性扫描：撇号前有字母/
+    /// 数字、后接缩约后缀之一（与网页正则同为不锚尾的宽松
+    /// 匹配，交替序 s|t|m|d|ll|re|ve|em）。
+    private static func hasInlineContraction(_ text: String) -> Bool {
+        let chars = Array(text)
+        for i in chars.indices where chars[i] == "'" || chars[i] == "’" {
+            guard i > 0,
+                  let prev = chars[i - 1].unicodeScalars.last,
+                  CharacterSet.alphanumerics.contains(prev)
+            else { continue }
+            let rest = String(chars[(i + 1)...]).lowercased()
+            for suffix in ["s", "t", "m", "d", "ll", "re", "ve", "em"]
+            where rest.hasPrefix(suffix) { return true }
+        }
+        return false
+    }
+
+    private static func applyStickyPunctuation(_ input: [SemanticGroup])
+        -> [SemanticGroup] {
+        var merged: [SemanticGroup] = []
+        func appendToPrevious(_ group: SemanticGroup) {
+            let last = merged.count - 1
+            merged[last].text += group.text
+            merged[last].units.append(contentsOf: group.units)
+            merged[last].isSticky = true
+        }
+        var index = 0
+        while index < input.count {
+            let current = input[index]
+            guard !merged.isEmpty else {
+                merged.append(current)
+                index += 1
+                continue
+            }
+            let previousText = merged[merged.count - 1].text
+            let next = index + 1 < input.count ? input[index + 1] : nil
+            // 撇号独元 + 缩约后缀：三元一并粘（It | ’ | s）。
+            if isApostropheOnly(current.text), let next,
+               canAttachToPrevious(previousText),
+               isContractionSuffix(next.text) {
+                appendToPrevious(current)
+                appendToPrevious(next)
+                index += 2
+                continue
+            }
+            if isDirectContraction(current.text),
+               canAttachToPrevious(previousText) {
+                appendToPrevious(current)
+                index += 1
+                continue
+            }
+            if isContractionSuffix(current.text),
+               endsWithApostrophe(previousText) {
+                appendToPrevious(current)
+                index += 1
+                continue
+            }
+            if isStickyTrailingPunctuation(current.text),
+               canAttachToPrevious(previousText) {
+                appendToPrevious(current)
+                index += 1
+                continue
+            }
+            merged.append(current)
+            index += 1
+        }
+        // 收尾标记：末元为粘性标点、或组内含内联缩约 →
+        // isSticky（网页 hasAttachedTrailingPunctuation /
+        // hasInlineContraction 的 map 标记步）。
+        return merged.map { group in
+            var group = group
+            let hasTrailing = group.units.count > 1
+                && isStickyTrailingPunctuation(group.units.last?.text ?? "")
+            let hasInline = group.units.count > 1 && !group.isSemantic
+                && hasInlineContraction(group.text)
+            if hasTrailing || hasInline { group.isSticky = true }
+            return group
+        }
+    }
 }
 
 /// 词姿态（网页 WordLayoutConfig 的几何子集，单位 pt/度）。

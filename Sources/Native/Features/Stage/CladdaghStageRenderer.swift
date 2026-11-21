@@ -10,7 +10,11 @@ import QuartzCore
 //  - claddagh/claddaghGlow.ts（drop-shadow 拟合系数 0.5 / 副歌 0.4）
 //  - types.ts DEFAULT_CLADDAGH_TUNING（focus 0.65 / radius 1.0 /
 //    ellipseTilt 45° / showAxisLine true / letterSpacingOffset 0 /
-//    position 0,0 / showTranslation false）
+//    position 0,0 / showTranslation false）——(57) C2 起全量经
+//    CladdaghTuningStore（CladdaghTuning.swift）可调：focus/
+//    radius/tilt/字距/轴线开关/圆环位置均已接线（含 focus 驱动
+//    的 focusSpacingScale 间距标尺与 position 的环+轴线同移）；
+//    译文一组只存不用（协议无译文字段，见下）。
 // 对齐要点：
 //  - 画面是倾斜椭圆环：歌词逐字素沿弧长定位（nominalAngle），整环
 //    随行号以 π 为步进自转（lineOffset 弹簧 stiffness 55 / damping
@@ -22,10 +26,12 @@ import QuartzCore
 //  - 字号恒 72pt × dynamicTypeScale（网页 72px × lyricsFontScale，
 //    无 vmin clamp，与 classic/partita 不同）；字重 700 宋体。
 //  - 协议缺失项（未落，见回报档案）：逐字 wordColors（charColor）、
-//    isChorus（副歌三层辉光与交错 stagger）、renderHints.renderEnd
-//    （以行 end 代）、译文环（showTranslation 缺省关且协议无译文
-//    字段）、音频功率（宿主无频谱下发，power 恒 0：半径不脉动、
+//    isChorus（副歌三层辉光与交错 stagger；LyricLine 无 isChorus
+//    字段）、译文环（showTranslation 参数已存、协议无译文字段）、
+//    音频功率（宿主无频谱下发，power 恒 0：半径不脉动、
 //    轴线静止、动画强度 normal 档系数只在公式里保留）。
+//    renderHints.renderEnd 已于 (57) C2 按 renderHints.ts
+//    公式现算（纯函数、无数据缺口），不再以行 end 代。
 //  - 逐字素 blur（网页 filter: blur(8·(1−D)·(1−0.5F))px）未落：
 //    UILabel 无低成本逐字模糊，深度感已由同一 D/F 驱动的透明度
 //    公式承载，与 classic 行进出场 blur 分量未做的口径一致。
@@ -88,16 +94,24 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
     let capabilities = LyricStageCapabilities(
         supportsWordSync: false, requiresSpectrum: false, supportsLineSeek: false)
 
-    // MARK: 网页常量（DEFAULT_CLADDAGH_TUNING 与各源文件）
+    // MARK: 调参与网页常量（DEFAULT_CLADDAGH_TUNING 与各源文件）
 
-    /// focusScaleRatio（types.ts DEFAULT_CLADDAGH_TUNING）。
-    private let focusScaleRatio: Double = 0.65
-    /// radiusScale（同上）。
-    private let radiusScale: Double = 1.0
-    /// ellipseTiltDeg（同上）；投影旋转角 = −ellipseTiltDeg。
-    private let ellipseTiltDeg: Double = 45
-    /// letterSpacingOffset（同上，px/字间隙）。
-    private let letterSpacingOffsetPx: Double = 0
+    /// 调参当前值（CladdaghTuningStore 0.25s 缓存，(57) C2
+    /// 接线；缺省 = DEFAULT_CLADDAGH_TUNING 逐字对齐）。
+    private var tuning: CladdaghTuningValues {
+        CladdaghTuningStore.valuesCached(now: CACurrentMediaTime())
+    }
+    /// focusScaleRatio（types.ts，缺省 0.65）。
+    private var focusScaleRatio: Double { tuning.focusScaleRatio }
+    /// radiusScale（缺省 1.0）。
+    private var radiusScale: Double { tuning.radiusScale }
+    /// ellipseTiltDeg（缺省 45）；投影旋转角 = −ellipseTiltDeg。
+    private var ellipseTiltDeg: Double { tuning.ellipseTiltDeg }
+    /// letterSpacingOffset（缺省 0，px/字间隙）。
+    private var letterSpacingOffsetPx: Double { tuning.letterSpacingOffset }
+    /// 已落地的调参指纹：任一参数变化即失效间距缓存并
+    /// 重建渲染窗（网页 tuning 变化重算 spacing 同义）。
+    private var appliedTuning: CladdaghTuningValues? = nil
     /// CLADDAGH_LETTER_SPACING_EM（claddaghLayout.ts）。
     private let letterSpacingEm: Double = 0.04
     /// CLADDAGH_BASE_TRACKING_EM（claddaghLayout.ts，私有常量）。
@@ -179,8 +193,24 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
         self.context = context
     }
 
+    /// 调参指纹同步：变化时清间距缓存、重建窗口并触发布局
+    ///（位置/轴线/半径都随之变）。applySnapshot 与 frameTick
+    /// 各调一次（0.25s 缓存下开销可忽略）。
+    private func syncTuning() {
+        let current = tuning
+        guard appliedTuning != current else { return }
+        appliedTuning = current
+        layoutCache.removeAll()
+        layoutCacheOrder.removeAll()
+        clearWindow()
+        windowDirty = true
+        updateAxisLine()
+        rootView.setNeedsLayout()
+    }
+
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
         self.snapshot = snapshot
+        syncTuning()
         if snapshot.track?.id != builtTrackId
             || snapshot.lines.count != builtLineCount {
             builtTrackId = snapshot.track?.id
@@ -211,6 +241,7 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
 
     func frameTick(position: TimeInterval) {
         guard isActive, let snapshot else { return }
+        syncTuning()
         let lines = snapshot.lines
         if lines.isEmpty {
             if !lineViews.isEmpty { clearWindow() }
@@ -328,8 +359,8 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
     /// scaleX/scaleY = 1；副歌辉光不触发（isChorus 无数据源）。
     private func updateAxisLine() {
         guard let snapshot else { return }
-        // showAxisLine 缺省 true（DEFAULT_CLADDAGH_TUNING）。
-        axisView.isHidden = false
+        // showAxisLine 经调参可关（缺省 true，(57) C2 接线）。
+        axisView.isHidden = !tuning.showAxisLine
         let mixed = snapshot.palette.primary.withAlphaComponent(0.2)
         axisGradient.colors = [
             UIColor.clear.cgColor,
@@ -590,8 +621,10 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
             offsets.append(max(offsets[count - 1],
                                baseWidth + tracking + extra))
         }
-        // focusSpacingScale = (1 + focus) / (1 + DEFAULT.focus) = 1。
-        let spacingScale = 1.0
+        // focusSpacingScale = (1 + focus) / (1 + DEFAULT.focus)
+        //（VisualizerCladdagh：缺省 focus 0.65 时为 1；调参
+        // 改 focus 后按此公式缩放全部行的间距，(57) C2 接线）。
+        let spacingScale = (1 + focusScaleRatio) / (1 + 0.65)
         let totalWidth = (offsets.last ?? 0) * spacingScale
         let safeRadius = max(Double(radius), fontPx * 2, 1)
         let totalSpan = totalWidth / safeRadius
@@ -626,11 +659,21 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
             || (0xAC00...0xD7AF).contains(v)
     }
 
-    /// 视觉长度（claddaghTimeline.getVisualLength）：CJK 记 1，
-    /// 其余记 0.5（网页按 UTF-16 码元计，原生按字素计，差异
-    /// 只影响长句重叠抑制的触发阈值，见档案）。
+    /// 视觉长度（claddaghTimeline.getVisualLength）：网页按
+    /// UTF-16 码元逐个计（CJK 码元记 1、其余 0.5，代理对
+    /// 两码元合计 1.0）；原生自 (57) C2 起同按 utf16 码元
+    /// 计，与网页逐项一致。
     private static func visualLength(of text: String) -> Double {
-        text.reduce(0) { $0 + (isCJK(String($1)) ? 1.0 : 0.5) }
+        var score = 0.0
+        for unit in text.utf16 {
+            score += isCJKCodeUnit(unit) ? 1.0 : 0.5
+        }
+        return score
+    }
+
+    private static func isCJKCodeUnit(_ value: UInt16) -> Bool {
+        (0x4E00...0x9FA5).contains(value) || (0x3040...0x30FF).contains(value)
+            || (0xAC00...0xD7AF).contains(value)
     }
 
     // MARK: 小数下标 / 整行偏移角 / 播放进度（claddaghTimeline）
@@ -725,15 +768,39 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
 
     // MARK: 逐帧投影（CladdaghRingLine.handler）
 
+    /// buildLineRenderHints 的 renderEndTime（renderHints.ts
+    /// 公式逐行移植，与 TiltStageRenderer.renderEnd 同式）：
+    /// 协议无 renderHints 字段，但该值是 start/end/末词 end
+    /// 的纯函数，网页无存档时同样现算，数据通路无缺口。
+    private static func renderHintEnd(of line: LyricLine) -> TimeInterval {
+        let rawDuration = max(line.end - line.start, 0)
+        if rawDuration < 0.10 {
+            return max(line.end, line.start + 0.067)
+        }
+        let lastWordEnd = line.words?.last?.end ?? line.end
+        if rawDuration < 0.18 {
+            let enter = min(0.06, max(0.045, rawDuration * 0.45))
+            let exit = min(0.04, max(0.03, rawDuration * 0.22))
+            let linePassStart = max(lastWordEnd, line.start) + 0.03
+            let exitStart = max(line.start + enter + 0.01,
+                                linePassStart, line.end - exit)
+            return max(line.end, exitStart + exit)
+        }
+        let exit = min(0.32, max(0.18, max(rawDuration, 0.12) * 0.18))
+        let linePassStart = max(lastWordEnd, line.start) + 0.06
+        let exitStart = max(linePassStart, line.end - exit)
+        return max(line.end, exitStart + exit)
+    }
+
     private func renderEnd(for lineIndex: Int) -> TimeInterval? {
         guard let snapshot, snapshot.lines.indices.contains(lineIndex)
         else { return nil }
         let line = snapshot.lines[lineIndex]
         let next = lineIndex + 1 < snapshot.lines.count
             ? snapshot.lines[lineIndex + 1] : nil
-        // 网页：max(renderHints.renderEnd ?? end, next.start − lead
-        // 或 end + 10)；协议无 renderHints，以 end 代入。
-        return max(line.end,
+        // 网页：max(renderHints.renderEnd, next.start − lead
+        // 或 end + 10)；renderEnd 自 (57) C2 起按公式现算。
+        return max(Self.renderHintEnd(of: line),
                    next != nil ? next!.start - nextLineEntryLead
                                : line.end + 10.0)
     }
@@ -963,7 +1030,16 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
         let bounds = rootView.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
         contentView.frame = bounds
-        ringContainer.frame = bounds
+        // 圆环位置（调参 positionX/Y，画面宽/高百分比，#1124）：
+        // 网页歌词层 wrapper 以 translate(%, %)（相对自身尺寸
+        // = 全舞台）平移、轴线以 left/top 50%+position 定位，
+        // 两者同移；原生以帧原点偏移承接（bounds 不变，逐字
+        // 投影的中心口径不受影响），(57) C2 接线。
+        let positionOffset = CGPoint(
+            x: bounds.width * CGFloat(tuning.positionX) / 100,
+            y: bounds.height * CGFloat(tuning.positionY) / 100)
+        ringContainer.frame = bounds.offsetBy(dx: positionOffset.x,
+                                              dy: positionOffset.y)
         // 半径随视口变（旋转）时布局缓存失效、窗口重建。
         let radius = currentRadius()
         if builtRadius > 0 && abs(radius - builtRadius) > 0.5 {
@@ -976,7 +1052,8 @@ final class CladdaghStageRenderer: NSObject, LyricStageRenderer {
         // 轴线：300×4、居中（position 缺省 0）、旋转 45°
         // （centerNormalTiltDeg = 90 − ellipseTiltDeg）。
         axisView.bounds = CGRect(x: 0, y: 0, width: 300, height: 4)
-        axisView.center = CGPoint(x: bounds.width / 2, y: bounds.height / 2)
+        axisView.center = CGPoint(x: bounds.width / 2 + positionOffset.x,
+                                  y: bounds.height / 2 + positionOffset.y)
         axisView.transform = CGAffineTransform(
             rotationAngle: CGFloat((90 - ellipseTiltDeg) * Double.pi / 180))
         axisGradient.frame = axisView.bounds

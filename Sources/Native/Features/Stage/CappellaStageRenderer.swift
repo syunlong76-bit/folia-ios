@@ -45,12 +45,22 @@ import QuartzCore
 //    至可用高 max(200, 视口高 − 240)，至少 2 条、上限
 //    MAX_VISIBLE_MESSAGES = 20 条视图。
 // 数据源缺口（明确标注，不假装有图）：
-//  - 头像/表情图片包（avatarImages.ts / emoImages.ts /
-//    customPacks.ts 的 builtin/custom 图片）不在原生包内：
-//    头像以发送者色块圆形 + 序号数字替代图片，几何 40×40 照
-//    源码；表情（emo）消息依赖图片池，池为空时网页本身即
+//  - 头像（(57) C2 对齐）：avatarSource 经 CappellaTuning-
+//    Store 可调（缺省 cover）。cover 档已接线——封面位图经
+//    宿主 NativeCoverLoader 取（与 Monet 同一取图管线），
+//    按网页 CappellaAvatar 的宫格裁切呈现（图放大至 300%
+//    后取 resolvedAvatarIndex 所在格，右 8 / 左经
+//    LEFT_AVATAR_INDICES 映射）；color 档与无封面时的回退
+//    为网页同式的宫格渐变（linear-gradient 135° primary→
+//    accent、300% 尺寸、同格偏移）。builtin/custom 图片包
+//    （avatarImages.ts / customPacks.ts）不在原生包内且
+//    协议无图片下发通道，两档只存不用、呈现回退宫格渐变。
+//  - 表情（emo）消息依赖图片池（emoImages.ts / custom-
+//    Packs.ts），池不在原生包内；池为空时网页本身即
 //    showEmoMessages=false，故原生不生成 emo 消息，间奏行
-//    "......" 按网页无池分支落为普通歌词气泡。
+//    "......" 按网页无池分支落为普通歌词气泡。调参
+//    showEmoMessages / emojiPackSource 已存（Cappella-
+//    Tuning.swift），待图包通道接入后生效。
 //  - 协议 LyricLine 无 agentId 字段：cappellaMessageSenders
 //    的 TTML agent 解析分支永不触发，发送者恒走 sequencing。
 // 时钟纪律不变：只消费宿主 frameTick 的锚点位置，不自建时钟
@@ -272,7 +282,12 @@ private final class CappellaRowView: UIView {
     let model: CappellaMessageModel
     let groupView = UIView()
     let avatarView = UIView()
-    let avatarLabel = UILabel()
+    /// 宫格渐变层（网页 CappellaAvatar 无图时的 linear-
+    /// gradient(135deg, primary, accent)：尺寸 300%、按格
+    /// 偏移，getAvatarPosition 口径）。
+    let avatarGradient = CAGradientLayer()
+    /// 封面宫格裁切图（cover 档；格图由渲染器裁好下发）。
+    let coverImageView = UIImageView()
     let shadowView = UIView()
     let bubbleView = UIView()
     let bubbleLabel = UILabel()
@@ -306,11 +321,28 @@ private final class CappellaRowView: UIView {
         avatarView.layer.borderColor =
             UIColor.white.withAlphaComponent(0.24).cgColor
         avatarView.clipsToBounds = true
-        avatarLabel.textAlignment = .center
-        avatarLabel.font = .systemFont(ofSize: 15, weight: .bold)
-        avatarLabel.textColor = .white
-        avatarLabel.text = String(model.resolvedAvatarIndex + 1)
-        avatarView.addSubview(avatarLabel)
+        // 宫格几何（getAvatarPosition）：backgroundSize 300%
+        // → 层尺寸 120×120；backgroundPosition col×50% /
+        // row×50% 的 CSS 百分比公式 offset = (容器 − 图) × p
+        // = −40×col / −40×row。
+        let gridIndex = ((model.resolvedAvatarIndex % 9) + 9) % 9
+        let gridCol = gridIndex % CappellaConst.avatarGridSize
+        let gridRow = gridIndex / CappellaConst.avatarGridSize
+        avatarGradient.frame = CGRect(
+            x: CGFloat(-gridCol * 40), y: CGFloat(-gridRow * 40),
+            width: CappellaConst.avatarSize * 3,
+            height: CappellaConst.avatarSize * 3)
+        avatarGradient.startPoint = CGPoint(x: 0, y: 0)
+        avatarGradient.endPoint = CGPoint(x: 1, y: 1) // 135deg
+        avatarView.layer.addSublayer(avatarGradient)
+        coverImageView.frame = CGRect(
+            origin: .zero,
+            size: CGSize(width: CappellaConst.avatarSize,
+                         height: CappellaConst.avatarSize))
+        coverImageView.contentMode = .scaleAspectFill
+        coverImageView.clipsToBounds = true
+        coverImageView.isHidden = true
+        avatarView.addSubview(coverImageView)
         groupView.addSubview(avatarView)
 
         shadowView.isUserInteractionEnabled = false
@@ -403,12 +435,24 @@ private final class CappellaRowView: UIView {
     }
 
     func setColors(background: UIColor, border: UIColor, text: UIColor,
-                   secondary: UIColor) {
+                   secondary: UIColor, gradientStart: UIColor,
+                   gradientEnd: UIColor) {
         bubbleView.backgroundColor = background
         borderLayer.strokeColor = border.cgColor
         bubbleLabel.textColor = text
-        avatarView.backgroundColor = background
+        // 网页 CappellaAvatar 底色 = theme.secondaryColor，
+        // 其上叠宫格渐变（primary → accent）。
+        avatarView.backgroundColor = secondary
+        avatarGradient.colors = [gradientStart.cgColor, gradientEnd.cgColor]
         timestampLabel.textColor = secondary
+    }
+
+    /// 封面宫格格图（cover 档且封面已到货时非 nil）：显示
+    /// 格图、藏渐变；nil 回退宫格渐变（网页无图分支同形）。
+    func setCoverImage(_ image: UIImage?) {
+        coverImageView.image = image
+        coverImageView.isHidden = image == nil
+        avatarGradient.isHidden = image != nil
     }
 
     func setGlowAlpha(_ alpha: CGFloat) {
@@ -475,6 +519,15 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
     private var builtLineCount = -1
     private var builtTitle: String? = nil
 
+    /// 调参指纹与封面头像状态（(57) C2）：封面经宿主
+    /// NativeCoverLoader 取图（与 Monet 同管线），按宫格
+    /// 裁切后下发各行；裁切缓存按 resolvedAvatarIndex 存。
+    private var appliedTuning: CappellaTuningValues? = nil
+    private var coverTask: Task<Void, Never>? = nil
+    private var coverImage: UIImage? = nil
+    private var coverTrackId: String? = nil
+    private var coverCrops: [Int: UIImage] = [:]
+
     /// 揭示计划缓存（键 = 行 id；LRU 上限 CAPPELLA_LAYOUT_CACHE_LIMIT 32）。
     private var planCache: [Int: CappellaRevealPlan] = [:]
     private var planCacheOrder: [Int] = []
@@ -523,7 +576,107 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
         }
         // 调色板变化时重着色（行对象保留，仅换色）。
         for row in rows.values { applyColors(to: row) }
+        syncTuningAndCover()
         rootView.setNeedsLayout()
+    }
+
+    // MARK: 调参与封面头像（(57) C2）
+
+    private func currentTuning() -> CappellaTuningValues {
+        CappellaTuningStore.valuesCached(now: CACurrentMediaTime())
+    }
+
+    /// 调参同步：avatarSource 为 cover 时确保封面在途/已
+    /// 到货；调参变化时全体行重贴头像形态。showEmoMessages
+    /// 在此只读不消费——表情池为空时网页同样压掉表情消息
+    ///（见文件头注），开关待图包通道接入后生效。
+    private func syncTuningAndCover() {
+        let tuning = currentTuning()
+        let changed = appliedTuning != tuning
+        appliedTuning = tuning
+        _ = tuning.showEmoMessages // 门已读：池空恒无 emo（头注）
+        if tuning.avatarSource == .cover {
+            loadCoverIfNeeded()
+        }
+        if changed {
+            for row in rows.values { applyAvatar(to: row) }
+        }
+    }
+
+    private func applyAvatar(to row: CappellaRowView) {
+        if currentTuning().avatarSource == .cover,
+           let cell = coverCellImage(for: row.model.resolvedAvatarIndex) {
+            row.setCoverImage(cell)
+        } else {
+            row.setCoverImage(nil)
+        }
+    }
+
+    private func loadCoverIfNeeded() {
+        guard let raw = snapshot?.track?.artworkURL, !raw.isEmpty else {
+            coverTask?.cancel()
+            coverImage = nil
+            coverTrackId = nil
+            coverCrops.removeAll()
+            return
+        }
+        let tid = snapshot?.track?.id
+        if coverTrackId == tid && coverImage != nil { return }
+        coverTask?.cancel()
+        coverTrackId = tid
+        coverImage = nil
+        coverCrops.removeAll()
+        if let cached = NativeCoverLoader.shared.cachedImageAnyTier(
+            raw: raw, excludingTier: 512) {
+            storeCoverImage(cached)
+        }
+        let urlString = NativeCoverLoader.shared.proxiedURLString(
+            raw, tier: 512) ?? raw
+        coverTask = Task { [weak self] in
+            let image = await NativeCoverLoader.shared.image(
+                for: urlString, tier: 512)
+            await MainActor.run { [weak self] in
+                guard let self, self.coverTrackId == tid,
+                      let image else { return }
+                self.storeCoverImage(image)
+            }
+        }
+    }
+
+    private func storeCoverImage(_ image: UIImage) {
+        coverImage = image
+        coverCrops.removeAll()
+        for row in rows.values { applyAvatar(to: row) }
+    }
+
+    /// 宫格格图：封面 aspect-fill 到 120×120 画布（网页
+    /// backgroundSize 300%）后裁出 index 所在 40×40 格。
+    private func coverCellImage(for index: Int) -> UIImage? {
+        if let cached = coverCrops[index] { return cached }
+        guard let image = coverImage else { return nil }
+        let grid = ((index % 9) + 9) % 9
+        let col = grid % CappellaConst.avatarGridSize
+        let rowIdx = grid / CappellaConst.avatarGridSize
+        let canvas = CGSize(width: 120, height: 120)
+        let filled = UIGraphicsImageRenderer(size: canvas).image { _ in
+            let scale = max(canvas.width / image.size.width,
+                            canvas.height / image.size.height)
+            let w = image.size.width * scale
+            let h = image.size.height * scale
+            image.draw(in: CGRect(x: (canvas.width - w) / 2,
+                                  y: (canvas.height - h) / 2,
+                                  width: w, height: h))
+        }
+        guard let cg = filled.cgImage else { return nil }
+        let s = filled.scale
+        let cell: CGFloat = 40
+        let rect = CGRect(x: CGFloat(col) * cell * s,
+                          y: CGFloat(rowIdx) * cell * s,
+                          width: cell * s, height: cell * s)
+        guard let cropped = cg.cropping(to: rect) else { return nil }
+        let result = UIImage(cgImage: cropped, scale: s, orientation: .up)
+        coverCrops[index] = result
+        return result
     }
 
     func setLifecycle(_ state: LyricStageLifecycleState, active: Bool) {
@@ -596,6 +749,8 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
 
     func unmount() {
         isActive = false
+        coverTask?.cancel()
+        coverTask = nil
         for row in rows.values {
             row.stopGlow()
             row.removeFromSuperview()
@@ -751,6 +906,12 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
                             || characters[startIndex] == "\t"
                             || characters[startIndex] == "　") {
                     revealTimes[startIndex] = unit.start
+                    // 淡入 40ms 与网页一致（已复核：
+                    // buildCharacterFadeDurationsMs 走
+                    // buildLineGraphemeTimeline 路径，间隙字
+                    // 素时刻为零时长 → 淡入取下限 MIN 40ms；
+                    // 缺省 220 只出现在该路径不成立的兜底
+                    // 分支，本数据形态下不触发）。
                     fadeMs[startIndex] = CappellaConst.minCharFadeMs
                     startIndex += 1
                 }
@@ -767,6 +928,8 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
             if cursor < count {
                 for idx in cursor..<count {
                     revealTimes[idx] = lastResolved
+                    // 尾部字素同间隙字素：零时长 → 淡入下限
+                    // 40ms（网页 lineTimeline 路径同值）。
                     fadeMs[idx] = CappellaConst.minCharFadeMs
                 }
             }
@@ -914,6 +1077,7 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
             } else {
                 let row = CappellaRowView(model: model)
                 applyColors(to: row)
+                applyAvatar(to: row)
                 applyState(to: row, state: state, animated: false)
                 row.appliedState = state
                 rows[model.id] = row
@@ -1043,7 +1207,9 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
             text = palette.primary
         }
         row.setColors(background: background, border: border, text: text,
-                      secondary: palette.secondary)
+                      secondary: palette.secondary,
+                      gradientStart: palette.primary,
+                      gradientEnd: palette.accent)
     }
 
     // MARK: 揭示与时间戳
@@ -1173,7 +1339,6 @@ final class CappellaStageRenderer: NSObject, LyricStageRenderer {
         row.avatarView.frame = CGRect(
             x: avatarX, y: groupH - CappellaConst.avatarSize,
             width: CappellaConst.avatarSize, height: CappellaConst.avatarSize)
-        row.avatarLabel.frame = row.avatarView.bounds
         row.bubbleView.frame = CGRect(
             x: bubbleX, y: groupH - row.bubbleSize.height,
             width: row.bubbleSize.width, height: row.bubbleSize.height)

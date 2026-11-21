@@ -25,7 +25,11 @@ import QuartzCore
 // CAShapeLayer 近似——网页的渐变描边以混色实线代（档案注
 // 明），音频频段缩放因 requiresSpectrum=false 恒 1。
 
-// MARK: - 调参（DEFAULT_FUME_TUNING；宿主可经快照 ext 覆盖）
+// MARK: - 调参（DEFAULT_FUME_TUNING；以 FumeTuningStore 为
+// 底、宿主快照 ext "fume.*" 覆盖优先，(57) C1 接线。此前
+// ext 缺项时恒回硬编码缺省且 disableGeometricBackground
+// 根本不在取值面内：网页缺省 true（几何背景默认关），原生
+// 却恒画几何背景——本次一并补齐字段与门控。）
 
 struct FumeTuningValues {
     var cameraSpeed: Double = 1        // 0.55…1.85
@@ -35,9 +39,21 @@ struct FumeTuningValues {
     var textHoldRatio: Double = 1      // 1 = 读过不淡出
     var backgroundObjectOpacity: Double = 0.5
     var hidePrintSymbols: Bool = false
+    var disableGeometricBackground: Bool = true  // 网页缺省 true
 
     static func from(ext: [String: String]) -> FumeTuningValues {
         var values = FumeTuningValues()
+        // 底：调参门面（UserDefaults "folia.tuning.fume."，
+        // 缺省 = DEFAULT_FUME_TUNING）。
+        let stored = FumeTuningStore.values()
+        values.cameraSpeed = stored.cameraSpeed
+        values.stepped = stored.cameraTrackingMode == "stepped"
+        values.glowIntensity = stored.glowIntensity
+        values.heroScale = stored.heroScale
+        values.textHoldRatio = stored.textHoldRatio
+        values.backgroundObjectOpacity = stored.backgroundObjectOpacity
+        values.hidePrintSymbols = stored.hidePrintSymbols
+        values.disableGeometricBackground = stored.disableGeometricBackground
         func number(_ key: String) -> Double? {
             guard let raw = ext[key] else { return nil }
             return Double(raw)
@@ -54,6 +70,9 @@ struct FumeTuningValues {
         }
         if let raw = ext["fume.hidePrintSymbols"] {
             values.hidePrintSymbols = (raw == "true" || raw == "1")
+        }
+        if let raw = ext["fume.disableGeometricBackground"] {
+            values.disableGeometricBackground = (raw == "true" || raw == "1")
         }
         return values
     }
@@ -562,6 +581,14 @@ final class FumeStageRenderer: NSObject, LyricStageRenderer {
     }
 
     private func buildBackground(article: FumeArticleData, viewport: CGSize, palette: PaletteTokens) {
+        // 网页 backgroundConfig：disableGeometricBackground
+        // （缺省 true）时几何图形整场不建（宿主背景配置的
+        // common.disableGeometricBackground 亦可关，原生无
+        // 该下发通道、只认调参面，见 C1 报告）。
+        guard !tuning.disableGeometricBackground else {
+            clearBackground()
+            return
+        }
         let scene = fumeBuildBackgroundScene(
             viewport: viewport, worldWidth: article.width, worldHeight: article.height,
             paper: (article.paperLeft, article.paperTop, article.paperRight, article.paperBottom))
