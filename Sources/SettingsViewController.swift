@@ -229,8 +229,10 @@ final class SettingsViewController: UIViewController {
                 for (labelIndex, label) in labels.enumerated()
                 where labelLaid[groupIndex]?[labelIndex] == nil
                     && ancestorsVisible(label) {
-                    labelLaid[groupIndex, default: [:]][labelIndex] =
+                    var groupMap = labelLaid[groupIndex] ?? [:]
+                    groupMap[labelIndex] =
                         label.bounds.width > 0 && label.bounds.height > 0
+                    labelLaid[groupIndex] = groupMap
                 }
             }
         }
@@ -243,7 +245,7 @@ final class SettingsViewController: UIViewController {
             let labels = index < checkLabels.count ? checkLabels[index] : []
             let first = labels.first
             let firstLen = first?.text?.count ?? -1
-            let firstFrameOK = first.map {
+            let firstFrameOK = first.map { _ in
                 labelLaid[index]?[0] ?? false
             } ?? false
             let laidOK = !labels.isEmpty && labels.indices.allSatisfy {
