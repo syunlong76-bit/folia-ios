@@ -1065,7 +1065,15 @@ final class WallPrototypeViewController: UIViewController,
         guard let bar = miniBar else { return }
         // 收起态点按本应走无链的 collapsedTap 即时展开；此处
         // 仅作识别器启停万一失同步时的兜底。
-        if miniBarCollapsed {
+        // (63) 第 2 条几何自愈（与主页墙同构）：标志说展开但
+        // 几何已是细条高（≤20）＝形态失同步，先按几何纠正
+        // 标志再走既有展开流程，同步时行为不变。
+        if miniBarCollapsed || bar.bounds.height <= 20 {
+            if !miniBarCollapsed {
+                Breadcrumbs.log("minibar.form host=wallproto heal=geom"
+                    + " h=\(Int(bar.bounds.height)) flag=0")
+                miniBarCollapsed = true
+            }
             expandMiniBar()
             return
         }
@@ -1116,6 +1124,8 @@ final class WallPrototypeViewController: UIViewController,
             return
         }
         Breadcrumbs.log("minibar.doubletap host=wallproto action=stage")
+        // (63) DS R63 B0：分发边界同步落盘（同主页墙）。
+        Breadcrumbs.logSync("tap.dispatch host=wallproto")
         openNativeStageFromWall()
     }
 
@@ -1409,6 +1419,13 @@ final class WallPrototypeViewController: UIViewController,
         // 点按识别器组随形态启停（3.7 (61) 第 7 条）：收起态
         // 只认无链单击即时展开，展开态才挂双击判定链。
         syncMiniBarTapRecognizers(collapsed: collapsed)
+        // (63) 第 2 条形态面包屑（与主页墙同构）：标志/几何
+        // 高/三识别器启停位同行落盘，供失同步判读。
+        Breadcrumbs.log("minibar.form host=wallproto collapsed=\(collapsed ? 1 : 0)"
+            + " h=\(Int(miniBarHeightConstraint?.constant ?? -1))"
+            + " recog=\((miniBarTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarDoubleTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarCollapsedTapRecognizer?.isEnabled ?? false) ? 1 : 0)")
         refreshMiniProgressChrome()
     }
 
@@ -2376,12 +2393,24 @@ final class WallPrototypeViewController: UIViewController,
     private func openNativeStageFromWall() {
         // (62) 尾波第 1 组：同 HomeWall——补呈现守卫＋present 面包屑，
         // 防呈现竞态下第二台覆盖 canonical 登记（双击闪退候选 2）。
+        // (63) DS R63 B1：守卫判定同步落盘 guard.decision（带
+        // pvc 类名＋闸门相位），begin 行改同步落盘（同主页墙）。
+        let gate = StageExitGate.shared
+        let gatePhase = gate.canonicalStage == nil ? "idle"
+            : (gate.guardActive ? "guard" : "live")
+        let pvcName = presentedViewController.map {
+            String(describing: type(of: $0))
+        } ?? "nil"
         guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.logSync("guard.decision host=wallproto go=0"
+                + " pvc=\(pvcName) gate=\(gatePhase)")
             Breadcrumbs.log("minibar.doubletap action=stage-skipped reason=busy host=wallproto")
             return
         }
+        Breadcrumbs.logSync("guard.decision host=wallproto go=1"
+            + " pvc=nil gate=\(gatePhase)")
         Breadcrumbs.log("stage open (native) from playlist wall")
-        Breadcrumbs.log("stage.present.begin host=wallproto")
+        Breadcrumbs.logSync("stage.present.begin host=wallproto")
         let stage = StageViewController()
         stage.modalPresentationStyle = .fullScreen
         present(stage, animated: true) {

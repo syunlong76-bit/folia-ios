@@ -178,43 +178,103 @@ final class SettingsViewController: UIViewController {
     /// 汇总行数、首行 text 长度、首行/全行 frame 非零与 text
     /// 非空，落一条面包屑。frame 异常 → 布局问题；text 为空
     /// → 数据/时序问题；皆正常仍不可见 → 渲染/颜色问题。
+    ///
+    /// (63) 第 1 条自检改造（(62) 版四处漏检逐项堵）：
+    /// ①逐签遍历：依次 selectTab 全部 12 页签、每签 layout-
+    /// IfNeeded 后再量，不再只量默认页签 0；
+    /// ②取消 hidden 豁免的空过：标签只在其所属页签被选中、
+    /// 祖先链全可见时才记量测值；遍历完仍没被量到的标签
+    /// （未注册页签/从不显形）按 laid=0 判死——62A header
+    /// 那类潜伏 bug 不再被豁免掩盖；
+    /// ③检查面扩到非标签行：每签注册顶层视图（卡）的高与
+    /// 卡内每行（arranged 子视图，含开关/分段/滑杆行）的高
+    /// 一并量，塌陷不再只靠标签代言；
+    /// ④ok 基线 diff：失败组集合与上次运行落盘的基线比，
+    /// 新增失败单独落 settings.selfcheck.newfail 报警；首
+    /// 次运行只建基线不报警（老脏基线不冒充新事故）。
+    /// 遍历在同一 runloop 内同步完成、末尾切回原页签，界面
+    /// 不会逐签闪给用户看。
     private func runSelfCheckIfNeeded() {
         guard !didRunSelfCheck else { return }
         didRunSelfCheck = true
-        view.layoutIfNeeded()
-        // (55) 页签化后未选中页签的组整组 hidden：其标签 frame
-        // 为零属预期，帧检对「祖先链含 hidden」者豁免，text
-        // 检照常（缺字仍判死）。
-        func inHiddenTab(_ label: UILabel) -> Bool {
-            var view: UIView? = label
+        let originalTab = selectedTab
+        // 标签量测状态：groupIndex -> labelIndex -> 是否已在
+        // 其可见页签下量到且 frame 非零。
+        var labelLaid: [Int: [Bool]] = [:]
+        func ancestorsVisible(_ leaf: UIView) -> Bool {
+            var view: UIView? = leaf
             while let current = view {
-                if current.isHidden { return true }
+                if current.isHidden { return false }
                 view = current.superview
             }
-            return false
+            return true
         }
+        var tabParts: [String] = []
+        var failingTabs: [String] = []
+        for tab in Self.tabTitles.indices {
+            selectTab(tab)
+            view.layoutIfNeeded()
+            var bad = 0
+            for top in tabGroups[tab] {
+                if top.bounds.height <= 0 { bad += 1 }
+                if let card = top as? UIStackView {
+                    for row in card.arrangedSubviews where !row.isHidden {
+                        if row.bounds.height <= 0 { bad += 1 }
+                    }
+                }
+            }
+            if bad > 0 { failingTabs.append(Self.tabTitles[tab]) }
+            tabParts.append("tab\(tab)[cards=\(tabGroups[tab].count) bad=\(bad)]")
+            for (groupIndex, labels) in checkLabels.enumerated() {
+                for (labelIndex, label) in labels.enumerated()
+                where labelLaid[groupIndex]?[labelIndex] == nil
+                    && ancestorsVisible(label) {
+                    labelLaid[groupIndex, default: [:]][labelIndex] =
+                        label.bounds.width > 0 && label.bounds.height > 0
+                }
+            }
+        }
+        selectTab(originalTab)
+        view.layoutIfNeeded()
         var parts: [String] = []
-        var allOK = true
+        var allOK = failingTabs.isEmpty
+        var failingGroups: [String] = []
         for (index, name) in checkNames.enumerated() {
             let labels = index < checkLabels.count ? checkLabels[index] : []
             let first = labels.first
             let firstLen = first?.text?.count ?? -1
             let firstFrameOK = first.map {
-                inHiddenTab($0) || ($0.bounds.width > 0 && $0.bounds.height > 0)
+                labelLaid[index]?[0] ?? false
             } ?? false
-            let laidOK = !labels.isEmpty && labels.allSatisfy {
-                inHiddenTab($0) || ($0.bounds.width > 0 && $0.bounds.height > 0)
+            let laidOK = !labels.isEmpty && labels.indices.allSatisfy {
+                labelLaid[index]?[$0] ?? false
             }
             let textsOK = !labels.isEmpty && labels.allSatisfy {
                 !($0.text ?? "").isEmpty
             }
-            if !(firstFrameOK && laidOK && textsOK) { allOK = false }
+            if !(firstFrameOK && laidOK && textsOK) {
+                allOK = false
+                failingGroups.append(name)
+            }
             parts.append("\(name)[n=\(labels.count) firstLen=\(firstLen)"
                 + " firstFrame=\(firstFrameOK ? 1 : 0)"
                 + " laid=\(laidOK ? 1 : 0) texts=\(textsOK ? 1 : 0)]")
         }
         Breadcrumbs.log("settings.selfcheck ok=\(allOK ? 1 : 0) "
-            + parts.joined(separator: " "))
+            + parts.joined(separator: " ") + " " + tabParts.joined(separator: " "))
+        // 基线 diff：失败集合（组名＋页签名）落盘比对。
+        let failSet = failingGroups + failingTabs.map { "tab:\($0)" }
+        let baselineKey = "folia.selfcheck.failBaseline"
+        if let baseline = UserDefaults.standard.stringArray(forKey: baselineKey) {
+            let newFails = failSet.filter { !baseline.contains($0) }
+            if !newFails.isEmpty {
+                Breadcrumbs.log("settings.selfcheck.newfail groups="
+                    + newFails.joined(separator: ","))
+            }
+        } else {
+            Breadcrumbs.log("settings.selfcheck baseline=init fails=\(failSet.count)")
+        }
+        UserDefaults.standard.set(failSet, forKey: baselineKey)
     }
 
     // MARK: - 布局
@@ -269,7 +329,15 @@ final class SettingsViewController: UIViewController {
             cardStack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor),
             cardStack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor)
         ])
-        let hugHeight = cardView.heightAnchor.constraint(equalTo: cardStack.heightAnchor)
+        // (63) 第 1 条根治：旧 hug 钉 cardStack.height 与 required
+        // 的 0.88 上限构成回路——内容超上限时求解器可以不打破
+        // 任何约束、直接把 cardStack 本体压进上限（裸标签/分段
+        // 行先塌成细线，见 (62) 反馈取证）。改钉 scroll 的
+        // contentLayoutGuide 高：卡高想贴合的是「滚动内容高」
+        // 本身，超上限时只能断这条 defaultHigh 的 hug、靠滚动
+        // 看全，内容永远不许被压。
+        let hugHeight = cardView.heightAnchor.constraint(
+            equalTo: scroll.contentLayoutGuide.heightAnchor)
         hugHeight.priority = .defaultHigh
         let maxHeight = cardView.heightAnchor.constraint(
             lessThanOrEqualTo: view.heightAnchor, multiplier: 0.88)

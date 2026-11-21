@@ -23,14 +23,33 @@ enum Settings62ClusterA {
 
     // MARK: - 行工厂（本簇自有，样式与宿主既有行同族）
 
+    /// (63) 第 1 条修：(62) 版 header 直挂 cardStack、从不随卡
+    /// 注册页签——13 个 header 是全栈唯一无卡包裹的裸标签，
+    /// 压缩时最先塌零、且修好压缩后会在 12 页签同时冒头。
+    /// 改照 62B 的 sectionHeaderRow 模式：header 包边距行入
+    /// 卡作首行，随卡注册/显隐。各组首行 addRow 均显式
+    /// hairline:false，header 入卡不会多出一条发丝线。
     private static func group(_ host: SettingsViewController, into stack: UIStackView,
                               tab: Int, header: String,
                               reg: (UIView, Int) -> Void) -> UIStackView {
-        stack.addArrangedSubview(host.makeSectionHeader(header))
         let card = host.makeGroupCard()
+        card.addArrangedSubview(sectionHeaderRow(host, header))
         stack.addArrangedSubview(card)
         reg(card, tab)
         return card
+    }
+
+    /// 组内分节标题行（与 62B sectionHeaderRow 同构造）：宿主
+    /// makeSectionHeader 无边距，包一层带边距的纵向行再入卡，
+    /// 与开关行左边距对齐。
+    private static func sectionHeaderRow(_ host: SettingsViewController,
+                                         _ title: String) -> UIStackView {
+        let row = UIStackView()
+        row.axis = .vertical
+        row.isLayoutMarginsRelativeArrangement = true
+        row.layoutMargins = UIEdgeInsets(top: 12, left: 14, bottom: 2, right: 14)
+        row.addArrangedSubview(host.makeSectionHeader(title))
+        return row
     }
 
     private static func addRow(_ host: SettingsViewController, to card: UIStackView,
@@ -526,22 +545,9 @@ enum Settings62ClusterA {
             SettingsStore.stackEdgesEnabled = on
             post(SettingsStore.Key62A.stackEdgesEnabled)
         })
-        addRow(host, to: wall, segmentedRow(host, "信息条方向",
-            items: ["横", "纵"], selected: SettingsStore.stripDirection) { idx in
-            SettingsStore.stripDirection = idx
-            post(SettingsStore.Key62A.stripDirection)
-        })
-        addRow(host, to: wall, switchRow(host, "信息条始终透明",
-            isOn: SettingsStore.stripAlwaysTransparent) { on in
-            SettingsStore.stripAlwaysTransparent = on
-            post(SettingsStore.Key62A.stripAlwaysTransparent)
-        })
-        addRow(host, to: wall, segmentedRow(host, "信息条样式",
-            items: ["样式一", "样式二", "样式三", "样式四"],
-            selected: SettingsStore.stripStyle) { idx in
-            SettingsStore.stripStyle = idx
-            post(SettingsStore.Key62A.stripStyle)
-        })
+        // (63) 第 4 条：信息条本体（StripSurface62）已按 Miller
+        // 令摘除，其三行设置（方向/始终透明/样式）唯一消费者
+        // 就是本体，随本体一并撤下防假生效；存储键保留不读。
         addRow(host, to: wall, switchRow(host, "墙后画面显示歌词",
             isOn: SettingsStore.backdropLyricsEnabled) { on in
             SettingsStore.backdropLyricsEnabled = on
@@ -554,7 +560,7 @@ enum Settings62ClusterA {
             post(SettingsStore.Key62A.backdropBlurAmount)
         })
         addRow(host, to: wall, host.makeHintRow(
-            "墙面透光/信息条/墙后画面的渲染本体由 WD 簇接入，键与访问器已定死（SettingsStore62A），本组只落键＋行。"))
+            "墙面透光/墙后画面的渲染本体由 WD 簇接入，键与访问器已定死（SettingsStore62A），本组只落键＋行。"))
     }
 }
 

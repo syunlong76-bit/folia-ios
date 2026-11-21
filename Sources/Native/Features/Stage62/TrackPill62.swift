@@ -155,7 +155,15 @@ enum PlaybackEntry62 {
     static func openPanelOnPresentedStage(from host: UIViewController) {
         var top = host
         while let presented = top.presentedViewController { top = presented }
-        guard top is StageViewController else {
+        // (63) DS R63 B4：0.6s 延迟任务触发行（同步落盘）——
+        // 带台存活/视图已载/已挂窗三态。候选 3（延迟开面板落
+        // 在已退出/未就绪的台上）的判别证据：崩溃会话尾有本
+        // 行且 stage=0 或 win=0 即命中，全无本行即排除。
+        let stage = top as? StageViewController
+        Breadcrumbs.logSync("entry62.fire stage=\(stage != nil ? 1 : 0)"
+            + " loaded=\(stage?.isViewLoaded == true ? 1 : 0)"
+            + " win=\(stage?.viewIfLoaded?.window != nil ? 1 : 0)")
+        guard stage != nil else {
             Breadcrumbs.log("entry62.detail skip=no-stage-on-top")
             return
         }

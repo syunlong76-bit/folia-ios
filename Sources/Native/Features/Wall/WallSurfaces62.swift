@@ -1,122 +1,15 @@
 import Combine
 import UIKit
 
-// (62) WD §1 墙面余项：墙缝信息条 StripSurface62 与墙后层
-// WallBackdrop62。参数消费 WA 的 SettingsStore62A 访问器
-// （跨簇契约名）：stripDirection / stripAlwaysTransparent /
-// stripStyle / wallTransparency / wallWindowsPerPane /
+// (62) WD §1 墙面余项：墙后层 WallBackdrop62（墙缝信息条
+// StripSurface62 已于 (63) 第 4 条按 Miller 令整条删除，类
+// 本体与装配点、三行设置一并摘除，strip* 存储键保留不读）。
+// 参数消费 WA 的 SettingsStore62A 访问器（跨簇契约名）：
+// wallTransparency / wallWindowsPerPane /
 // stackEdgesEnabled / backdropLyricsEnabled / backdropBlurAmount。
 // 墙几何本体（BravaisFinite 等）一字不动：wallWindowsPerPane 与
 // stackEdgesEnabled 只作只读参数在本层做视觉提示（窗格分隔线 /
 // 叠页边线），不回写任何布局算法（消费深度见交付报告）。
-
-// MARK: - 墙缝信息条
-
-/// 墙缝处信息条：当前歌 / 播放时间 / 队列数。自订阅播放引擎
-/// 与队列，不需宿主逐帧驱动。挂载于 HomeWall 工具条下方。
-final class StripSurface62: UIView {
-
-    private let titleLabel = UILabel()
-    private let timeLabel = UILabel()
-    private let queueLabel = UILabel()
-    private let backgroundView = UIVisualEffectView(
-        effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-    private var cancellables = Set<AnyCancellable>()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        isUserInteractionEnabled = false
-        layer.cornerRadius = 13
-        layer.masksToBounds = true
-
-        addSubview(backgroundView)
-        backgroundView.translatesAutoresizingMaskIntoConstraints = false
-
-        titleLabel.font = .systemFont(ofSize: 12, weight: .medium)
-        titleLabel.textColor = .white
-        titleLabel.lineBreakMode = .byTruncatingTail
-        timeLabel.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
-        timeLabel.textColor = UIColor.white.withAlphaComponent(0.75)
-        queueLabel.font = .systemFont(ofSize: 11)
-        queueLabel.textColor = UIColor.white.withAlphaComponent(0.75)
-        let stack = UIStackView(arrangedSubviews: [titleLabel, timeLabel, queueLabel])
-        stack.axis = .horizontal
-        stack.spacing = 10
-        stack.alignment = .center
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(stack)
-        NSLayoutConstraint.activate([
-            backgroundView.topAnchor.constraint(equalTo: topAnchor),
-            backgroundView.bottomAnchor.constraint(equalTo: bottomAnchor),
-            backgroundView.leadingAnchor.constraint(equalTo: leadingAnchor),
-            backgroundView.trailingAnchor.constraint(equalTo: trailingAnchor),
-            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            stack.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
-            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
-        ])
-        titleLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-
-        applyStyle()
-        bind()
-    }
-
-    @available(*, unavailable)
-    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-
-    /// 样式消费（WA strip* 访问器）：stripStyle =
-    /// glass（毛玻璃，缺省）/ solid（实色）/ clear（全透）；
-    /// stripAlwaysTransparent 恒全透（压过 style）。
-    private func applyStyle() {
-        if SettingsStore.stripAlwaysTransparent || SettingsStore.stripStyle == 2 { // (62) 集成修正：WA 键为 Int 码（0 毛玻璃/1 实色/2 全透），WD 原按字符串码消费
-            backgroundView.isHidden = true
-            backgroundColor = .clear
-        } else if SettingsStore.stripStyle == 1 {
-            backgroundView.isHidden = true
-            backgroundColor = UIColor(white: 0.08, alpha: 0.92)
-        } else {
-            backgroundView.isHidden = false
-            backgroundColor = .clear
-        }
-    }
-
-    private func bind() {
-        let engine = PlaybackEngine.shared
-        engine.$currentTrack
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] track in
-                self?.titleLabel.text = track.map {
-                    "\($0.title) · \($0.artist)"
-                } ?? "未在播放"
-            }
-            .store(in: &cancellables)
-        engine.$currentTime
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.refreshTime() }
-            .store(in: &cancellables)
-        engine.$duration
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.refreshTime() }
-            .store(in: &cancellables)
-        QueueManager.shared.$queue
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] queue in
-                self?.queueLabel.text = "队列 \(queue.count)"
-            }
-            .store(in: &cancellables)
-        refreshTime()
-    }
-
-    private func refreshTime() {
-        let engine = PlaybackEngine.shared
-        timeLabel.text = "\(Self.format(engine.currentTime)) / \(Self.format(engine.duration))"
-    }
-
-    private static func format(_ t: TimeInterval) -> String {
-        guard t.isFinite, t > 0 else { return "0:00" }
-        let s = Int(t)
-        return String(format: "%d:%02d", s / 60, s % 60)
-    }
-}
 
 // MARK: - 墙后层
 

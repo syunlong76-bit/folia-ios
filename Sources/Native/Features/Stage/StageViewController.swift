@@ -172,6 +172,11 @@ final class StageViewController: UIViewController {
     private var styleTraceStyleId: String?
     private var styleTraceDataHash = ""
     private var styleTraceFirstFrameLogged = false
+    /// (63) DS R63 埋点状态：装配相位（pre=未装配/mount=装配
+    /// 中/ready=装配完成），供 swap.begin 标注换装落在哪个
+    /// 相位（候选 2 判别）；首 tick 面包屑只落一次锁存。
+    private var asmPhase63 = "pre"
+    private var didLogFirstTick63 = false
     private var styleProofFrames = 0
     private var styleProofArmedAt: CFTimeInterval = 0
     private var styleProofFramesOK = false
@@ -404,6 +409,9 @@ final class StageViewController: UIViewController {
     /// 持久化（StageStyleStore.currentStyleId）由各调用方在
     /// 进本落点前写好（选择器点选时点、轮换触发时点）。
     private func applyNativeStyleSelection(_ styleId: String) {
+        // (63) DS R63 B2 装配相位·选样式入口（选择器/三击/
+        // INT-14 实时换装共用本落点）。
+        Breadcrumbs.log("asm.select style=\(styleId) via=apply")
         StageStyleCycleBag.shared.noteExternalSelection(styleId)
         noticeBar.isHidden = true
         view.setNeedsLayout()
@@ -480,6 +488,10 @@ final class StageViewController: UIViewController {
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleRandomStylePerSong62),
             name: .foliaStyleRandom62, object: nil)
+        // (63) DS R63 B3 门控状态行：开台落一次 INT-14 开关
+        // 值——关时候选 2（切歌随机换装竞态）直接出局，不必
+        // 再向用户核对开关状态。
+        Breadcrumbs.log("int14.setting on=\(SettingsStore.randomPerSongEnabled62 ? 1 : 0)")
     }
 
     /// 每首歌随机实时换装：走选样式统一通路（袋子对账 +
@@ -528,6 +540,16 @@ final class StageViewController: UIViewController {
         // RouteGuard presented 模式（3.7 (46)）：守卫窗顺延到
         // appear+3s（DS 成功标准以 viewDidAppear 为锚）。
         StageExitGate.shared.noteStageAppeared(token: stageToken)
+        // (63) DS R63 B6：运行期起点行——appear 后首个主线程
+        // tick 落一行。崩溃日志尾停在 asm.done 之后、有本行
+        // ＝崩点在装配完成后的运行期（M2 方向）；无本行＝崩
+        // 在 present/装配段内（候选 1/4 方向）。
+        if !didLogFirstTick63 {
+            didLogFirstTick63 = true
+            DispatchQueue.main.async {
+                Breadcrumbs.log("runtime.tick first=1")
+            }
+        }
     }
 
     /// dismiss 统一拦截（3.7 (46)）：未登记来源、会带下本台且
@@ -890,6 +912,8 @@ final class StageViewController: UIViewController {
     private func resolveInitialStyle() {
         let recorded = StageStyleStore.currentStyleId
         activeStyleId = StageStyleStore.effectiveStyleId()
+        // (63) DS R63 B2 装配相位·开台初始选样式。
+        Breadcrumbs.log("asm.select style=\(activeStyleId) via=initial")
         mountRenderer(styleId: activeStyleId)
         // 三击轮换对账（3.7 (54) 工作流 R 立、(61) 改三击）：
         // 开台初始样式即当前样式，从洗牌袋本轮余量剔除（轮
@@ -923,8 +947,17 @@ final class StageViewController: UIViewController {
         styleTraceFirstFrameLogged = false
         StyleOpenTrace.mark("open", styleId: styleId, dataHash: traceHash)
         Breadcrumbs.log("style.open.begin style=\(styleId) dataHash=\(traceHash)")
+        // (63) DS R63 B2 装配相位行（全同步落盘，M5）：init/
+        // mount 前后各一行——崩溃日志尾停在哪对之间，装配期
+        // trap（候选 1）就钉在哪一步，不再只有 open/assembly
+        // 两端粗粒度二分。
+        asmPhase63 = "mount"
+        Breadcrumbs.logSync("asm.init.pre style=\(styleId)")
         let next = factory()
+        Breadcrumbs.logSync("asm.init.post style=\(styleId)")
+        Breadcrumbs.logSync("asm.mount.pre style=\(styleId)")
         next.mount(context: context)
+        Breadcrumbs.logSync("asm.mount.post style=\(styleId)")
         // gate 解码图像清单（3.7 (26)，R40 Q4 口径）：本期两
         // 样式为 UIKit/文本类，渲染方自身解码图像 0 张、无
         // Metal 纹理；舞台唯一解码图像是宿主背景封面（到货
@@ -947,6 +980,11 @@ final class StageViewController: UIViewController {
         // 带同口径 availMB/footprintMB 可交叉对账）。
         StyleOpenTrace.mark("assembly", styleId: styleId, dataHash: traceHash)
         Breadcrumbs.log("style.assembly.done style=\(styleId) dataHash=\(traceHash) \(StyleOpenTrace.memoryFields())")
+        // (63) DS R63 B2/B6：装配完成行（同步落盘）——与
+        // style.assembly.done 同点，短名供判读表对位；此后
+        // asmPhase63=ready，swap.begin 的 phase 据此判读。
+        asmPhase63 = "ready"
+        Breadcrumbs.logSync("asm.done style=\(styleId)")
         StageStyleStore.lastNativeStyleId = styleId
         // 防卡死守卫武装（3.7 (44)）：样式装配即落 pending，
         // 待证明存活后清除（见 styleProof* 状态）。(45) R-4：
@@ -979,6 +1017,11 @@ final class StageViewController: UIViewController {
     }
 
     private func swapRenderer(to styleId: String) {
+        // (63) DS R63 B3：换装入口同步落盘，带装配相位——
+        // phase=mount 时换装落在半装配状态（候选 2 的指纹），
+        // phase=ready 为常规换装；出口落 swap.done 对位。
+        Breadcrumbs.logSync("swap.begin phase=\(asmPhase63)"
+            + " from=\(activeStyleId) to=\(styleId)")
         // (62) INT-13：样式切换转场接线（WD StyleSwapTransition62
         // 帮助类）——旧层快照淡出 + 新层首帧淡入（系统弹簧）。
         let swapTransition = StyleSwapTransition62(container: rendererContainer)
@@ -992,6 +1035,7 @@ final class StageViewController: UIViewController {
         swapTransition.finish(newView: renderer?.view)
         refreshStyleButton()
         Breadcrumbs.log("stage gate style switch to=\(styleId)")
+        Breadcrumbs.log("swap.done phase=\(asmPhase63) to=\(styleId)")
     }
 
     private func refreshStyleButton() {
@@ -2079,7 +2123,16 @@ final class StageViewController: UIViewController {
     /// 本识别器经 require(toFail:) 等双击落空后才触发（展开
     /// 态，(61) 第 7 条）；收起态双击识别器禁用、即时触发。
     @objc private func stageBarTapped(_ gesture: UITapGestureRecognizer) {
-        if stageBarCollapsed {
+        // (63) 第 2 条几何自愈（与两墙同构）：标志说展开但几
+        // 何已是细条高（≤20）＝形态失同步，先按几何纠正标志
+        // （含双击识别器启停收口）再走既有展开流程。
+        if stageBarCollapsed || stageBar.bounds.height <= 20 {
+            if !stageBarCollapsed {
+                Breadcrumbs.log("minibar.form host=stage heal=geom"
+                    + " h=\(Int(stageBar.bounds.height)) flag=0")
+                stageBarCollapsed = true
+                syncStageBarDoubleTapEnabled()
+            }
             expandStageBar()
             return
         }
@@ -2256,6 +2309,12 @@ final class StageViewController: UIViewController {
         stageBlurView?.isHidden = collapsed
         stageRimLight?.isHidden = collapsed
         stageGlassTint?.isHidden = collapsed
+        // (63) 第 2 条形态面包屑（舞台宿主）：标志/几何高/双
+        // 击识别器启停位同行（本宿主形态识别器只有双击一位，
+        // 单击恒启停于 require 链，见 syncStageBarDoubleTapEnabled）。
+        Breadcrumbs.log("minibar.form host=stage collapsed=\(collapsed ? 1 : 0)"
+            + " h=\(Int(stageBarHeightConstraint?.constant ?? -1))"
+            + " recog=\((stageBarDoubleTap?.isEnabled ?? false) ? 1 : 0)")
         refreshStageProgressChrome()
     }
 
@@ -2379,8 +2438,13 @@ final class StageViewController: UIViewController {
         if !styleTraceFirstFrameLogged, let traceStyle = styleTraceStyleId {
             styleTraceFirstFrameLogged = true
             let traceHash = styleTraceDataHash
+            // (63) DS R63 B2 首帧相位：pre 在首个帧 tick 同步
+            // 落盘，post 在 CATransaction 完成（帧已提交合成）
+            // 时同步落盘——尾停在 pre 无 post ＝死在首帧提交前。
+            Breadcrumbs.logSync("asm.frame.pre style=\(traceStyle)")
             CATransaction.begin()
             CATransaction.setCompletionBlock {
+                Breadcrumbs.logSync("asm.frame.post style=\(traceStyle)")
                 StyleOpenTrace.mark("firstFrame", styleId: traceStyle, dataHash: traceHash)
                 Breadcrumbs.log("style.firstFrame.commit.alive style=\(traceStyle) dataHash=\(traceHash) \(StyleOpenTrace.memoryFields())")
             }

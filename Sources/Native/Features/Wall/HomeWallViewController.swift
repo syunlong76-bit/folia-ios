@@ -187,9 +187,9 @@ final class HomeWallViewController: UIViewController,
     // seamRawPlaylists，entries/playlistIds 恒为「当前段 +
     // 隐藏过滤 + 文字过滤」后的呈现集（applyWallData 唯一装配点）。
     private var seamToolbar: SeamToolbarView?
-    /// (62) WD §1：墙后层与墙缝信息条（WallSurfaces62）。
+    /// (62) WD §1：墙后层（WallSurfaces62）。墙缝信息条
+    /// StripSurface62 已于 (63) 第 4 条按 Miller 令整条摘除。
     private var wallBackdrop62: WallBackdrop62?
-    private var stripSurface62: StripSurface62?
     private var seamToolbarTrailing: NSLayoutConstraint?
     /// (62) 集成补接：工具条弹性回零计时（滚动停 0.3s 后归位）。
     private var seamElasticResetWork: DispatchWorkItem?
@@ -978,20 +978,9 @@ final class HomeWallViewController: UIViewController,
                 heroSnapshot.center = self.view.center
                 heroSnapshot.transform = CGAffineTransform(scaleX: scale, y: scale)
             }
-            // (62) 卡片点开·信息条裂开近似：hero 放大的同时，
-            // 顶部信息条（StripSurface62）纵向压扁上移淡出，
-            // 模拟网页翻牌时信息条从中分开让位。差异如实记：
-            // 网页为左右两半横向裂开 + 卡面翻转，本处为整条
-            // 压扁让位（无翻转、无左右分半），属近似非等价。
-            if let strip = stripSurface62 {
-                UIView.animate(withDuration: 0.45, delay: 0,
-                               usingSpringWithDamping: 0.8, initialSpringVelocity: 0.2,
-                               options: [.allowUserInteraction]) {
-                    strip.transform = CGAffineTransform(translationX: 0, y: -12)
-                        .scaledBy(x: 1, y: 0.25)
-                    strip.alpha = 0
-                }
-            }
+            // (62) 卡片点开·信息条裂开近似随信息条本体于
+            // (63) 第 4 条摘除（StripSurface62 整条删除），
+            // hero 放大不再有让位动画对象。
             return
         }
         collectionView.transform = .identity
@@ -1007,14 +996,6 @@ final class HomeWallViewController: UIViewController,
     /// present 动画总时长可由 begin/end 两条对账）。
     private func endPosterTransition(source: String, seedReady: Bool) {
         collectionView.transform = .identity
-        // (62) 信息条恢复（回墙落位时由 settle 侧再复位一次，
-        // 此处先复原防目标墙期间主页被瞥见时条缺失）。
-        if let strip = stripSurface62, strip.alpha == 0 {
-            UIView.animate(withDuration: 0.3, delay: 0.35) {
-                strip.transform = .identity
-                strip.alpha = 1
-            }
-        }
         // hero 收口（(60) 第 3 条③）：快照淡出撤除，目标墙已
         // 在其下完成 present，不留残影。
         if let hero = seamPosterHeroView {
@@ -1653,7 +1634,17 @@ final class HomeWallViewController: UIViewController,
         guard let bar = miniBar else { return }
         // 收起态点按本应走无链的 collapsedTap 即时展开；此处
         // 仅作识别器启停万一失同步时的兜底，不走展开态分发。
-        if miniBarCollapsed {
+        // (63) 第 2 条几何自愈：标志说展开（false）但几何已是
+        // 细条高（≤20）＝形态失同步——旧路径会落进展开态分
+        // 发、命中 seek 带 skip，点细条毫无反应（(62) 反馈现
+        // 象）。先按几何把标志纠正为收起，再走既有展开流程；
+        // 同步时（几何为展开高）行为与旧版完全一致。
+        if miniBarCollapsed || bar.bounds.height <= 20 {
+            if !miniBarCollapsed {
+                Breadcrumbs.log("minibar.form host=homewall heal=geom"
+                    + " h=\(Int(bar.bounds.height)) flag=0")
+                miniBarCollapsed = true
+            }
             expandMiniBar()
             return
         }
@@ -1704,6 +1695,9 @@ final class HomeWallViewController: UIViewController,
             return
         }
         Breadcrumbs.log("minibar.doubletap host=homewall action=stage")
+        // (63) DS R63 B0：分发边界同步落盘——崩溃会话里本行
+        // 在不在，直接判「双击到底有没有走到开台分发」。
+        Breadcrumbs.logSync("tap.dispatch host=homewall")
         openNativeStageFromHome()
     }
 
@@ -2031,6 +2025,14 @@ final class HomeWallViewController: UIViewController,
         // 点按识别器组随形态启停（3.7 (61) 第 7 条）：收起态
         // 只认无链单击即时展开，展开态才挂双击判定链。
         syncMiniBarTapRecognizers(collapsed: collapsed)
+        // (63) 第 2 条形态面包屑：每次形态收口落一行——标志/
+        // 几何高/三识别器启停位同行，下轮日志一次判清标志与
+        // 几何是否同值（细条无法展开的判别证据）。
+        Breadcrumbs.log("minibar.form host=homewall collapsed=\(collapsed ? 1 : 0)"
+            + " h=\(Int(miniBarHeightConstraint?.constant ?? -1))"
+            + " recog=\((miniBarTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarDoubleTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarCollapsedTapRecognizer?.isEnabled ?? false) ? 1 : 0)")
         refreshMiniProgressChrome()
     }
 
@@ -2165,12 +2167,25 @@ final class HomeWallViewController: UIViewController,
         // (62) 尾波第 1 组：present 无守卫是双击闪退候选 2——呈现
         // 动画期间第二记双击可再造一台并覆盖 canonical 登记。
         // 与面板口径（seamPresentPanel）对齐补守卫＋present 面包屑。
+        // (63) DS R63 B1：守卫判定同步落盘一行 guard.decision，
+        // 带 presented 顶层类名与闸门相位（兼覆 M4 present/
+        // dismiss 交叉判读）；begin 行改同步落盘（M5）。
+        let gate = StageExitGate.shared
+        let gatePhase = gate.canonicalStage == nil ? "idle"
+            : (gate.guardActive ? "guard" : "live")
+        let pvcName = presentedViewController.map {
+            String(describing: type(of: $0))
+        } ?? "nil"
         guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.logSync("guard.decision host=homewall go=0"
+                + " pvc=\(pvcName) gate=\(gatePhase)")
             Breadcrumbs.log("minibar.doubletap action=stage-skipped reason=busy host=homewall")
             return
         }
+        Breadcrumbs.logSync("guard.decision host=homewall go=1"
+            + " pvc=nil gate=\(gatePhase)")
         Breadcrumbs.log("stage open (native) from home wall")
-        Breadcrumbs.log("stage.present.begin host=homewall")
+        Breadcrumbs.logSync("stage.present.begin host=homewall")
         let stage = StageViewController()
         stage.modalPresentationStyle = .fullScreen
         present(stage, animated: true) {
@@ -2553,25 +2568,9 @@ extension HomeWallViewController {
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
             toolbar.heightAnchor.constraint(equalToConstant: 44),
         ])
-        // (62) WD §1 墙缝信息条：工具条下方一条（当前歌/时间/
-        // 队列数），方向由 WA 的 stripDirection 决定贴上/贴下。
-        if stripSurface62 == nil {
-            let strip = StripSurface62()
-            strip.translatesAutoresizingMaskIntoConstraints = false
-            view.insertSubview(strip, aboveSubview: collectionView)
-            let stripTop = SettingsStore.stripDirection == 1 // (62) 集成修正：WA 键为 Int（0 横/1 纵），WD 布局以 1 作贴下锚定（纵向侧边形态未实现，见交付报告）
-                ? strip.bottomAnchor.constraint(
-                    equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -64)
-                : strip.topAnchor.constraint(
-                    equalTo: toolbar.bottomAnchor, constant: 6)
-            NSLayoutConstraint.activate([
-                strip.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-                strip.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-                strip.heightAnchor.constraint(equalToConstant: 26),
-                stripTop,
-            ])
-            stripSurface62 = strip
-        }
+        // (63) 第 4 条：墙缝信息条（StripSurface62）按 Miller
+        // 令整条摘除——装配块删除后工具条下方区域回归墙面卡
+        // 片本体；条本不拦截触摸，顶部热区与层级零变化。
         toolbar.setLayoutMode(grid: seamGridMode)
         toolbar.onSegmentChanged = { [weak self] segment in
             self?.seamSegmentSelected(segment)

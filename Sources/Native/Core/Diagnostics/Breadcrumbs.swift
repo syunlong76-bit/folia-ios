@@ -21,6 +21,21 @@ enum Breadcrumbs {
             message: "\(event) · availMB=\(availMB) footprintMB=\(footprintMB())")
     }
 
+    /// (63) 同步落盘版 log（DS R63 对账口径）：调用返回时该行
+    /// 已在磁盘上，进程紧接着被杀也不丢。仅供崩溃判别边界
+    /// 行使用（tap.dispatch / stage.present.begin / asm 相位 /
+    /// swap.begin / entry62.fire）；普通行仍走 log（异步）。
+    /// 内存告警行 memoryWarning 为既有机制（本类 install 时
+    /// 已订阅 didReceiveMemoryWarningNotification 落面包屑，
+    /// DS M3 的 OOM/watchdog 方向靠它＋本行尾的 availMB 判读）。
+    static func logSync(_ event: String) {
+        installIfNeeded()
+        let availMB = os_proc_available_memory() / 1_048_576
+        FoliaBridgeLogStore.shared.writeSync(
+            level: "info", module: "crumb",
+            message: "\(event) · availMB=\(availMB) footprintMB=\(footprintMB())")
+    }
+
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。
     static func samplerStart() {
         samplerRefs += 1

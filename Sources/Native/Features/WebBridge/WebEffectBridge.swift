@@ -184,24 +184,53 @@ final class FoliaBridgeLogStore {
         NSLog("[FoliaBridge][\(module)] \(clean)")
         guard SettingsStore.bridgeLogWriteEnabled62 else { return }
         ioQueue.async { [weak self] in
-            guard let self else { return}
-            let url = self.fileURL(index: self.currentFileIndex)
-            if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
-            size.intValue >= self.maxFileBytes {
-                self.currentFileIndex = 1 - self.currentFileIndex
-                let next = self.fileURL(index: self.currentFileIndex)
-                try? FileManager.default.removeItem(at: next)
-                FileManager.default.createFile(atPath: next.path, contents: nil)
-            }
-            if !FileManager.default.fileExists(atPath: url.path) {
-                FileManager.default.createFile(atPath: url.path, contents: nil)
-            }
-            if let handle = try? FileHandle(forWritingTo: url) {
-                defer { try? handle.close()}
-                try? handle.seekToEnd()
-                if let data = line.data(using:.utf8) {
-                    try? handle.write(contentsOf: data)
-                }
+            self?.appendToFile(line)
+        }
+    }
+
+    /// (63) 同步落盘版 write：调用返回时该行已写进文件。
+    /// 背景（DS R63 M5 取证缺陷）：write 走 ioQueue.async，
+    /// 进程在队列排空前被杀（闪退现场）时关键行永远到不了
+    /// 磁盘——三轮双击闪退取证都只剩存活会话日志。本入口供
+    /// 崩溃判别边界行专用（tap.dispatch / present.begin /
+    /// asm 相位 / swap.begin / entry62.fire），调用方保证
+    /// 低频；门控与 write 同口径。
+    func writeSync(level: String, module: String, message: String) {
+        let clean = sanitize(message)
+        let line = "\(iso8601(Date())) [\(level.uppercased())][\(module)] \(clean)\n"
+        NSLog("[FoliaBridge][\(module)] \(clean)")
+        guard SettingsStore.bridgeLogWriteEnabled62 else { return }
+        ioQueue.sync {
+            appendToFile(line)
+        }
+    }
+
+    /// (63) 冲刷屏障：等 ioQueue 上已排队的异步写入全部落盘
+    /// 后才返回（供关键点后补一手 flush 用）。
+    func flush() {
+        ioQueue.sync {}
+    }
+
+    /// 实际追加写文件（2MB 双文件轮换）。只许在 ioQueue 上调。
+    /// 与 (62) 前 write 内联实现逐行同语义（url 先捕获、轮换
+    /// 后本行仍写旧文件，下一行起走新文件），(63) 只做抽取。
+    private func appendToFile(_ line: String) {
+        let url = fileURL(index: currentFileIndex)
+        if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
+        size.intValue >= maxFileBytes {
+            currentFileIndex = 1 - currentFileIndex
+            let next = fileURL(index: currentFileIndex)
+            try? FileManager.default.removeItem(at: next)
+            FileManager.default.createFile(atPath: next.path, contents: nil)
+        }
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: nil)
+        }
+        if let handle = try? FileHandle(forWritingTo: url) {
+            defer { try? handle.close() }
+            try? handle.seekToEnd()
+            if let data = line.data(using:.utf8) {
+                try? handle.write(contentsOf: data)
             }
         }
     }
