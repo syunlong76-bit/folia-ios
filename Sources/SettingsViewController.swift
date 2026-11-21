@@ -200,7 +200,7 @@ final class SettingsViewController: UIViewController {
         let originalTab = selectedTab
         // 标签量测状态：groupIndex -> labelIndex -> 是否已在
         // 其可见页签下量到且 frame 非零。
-        var labelLaid: [Int: [Bool]] = [:]
+        var labelLaid: [Int: [Int: Bool]] = [:]
         func ancestorsVisible(_ leaf: UIView) -> Bool {
             var view: UIView? = leaf
             while let current = view {
