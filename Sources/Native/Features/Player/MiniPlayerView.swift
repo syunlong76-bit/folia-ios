@@ -112,10 +112,17 @@ struct MiniPlayerView: View {
             } label: {
                 Image(systemName: isLiked ? "heart.fill" : "heart")
                     .font(.system(size: 17))
+                    // (68) A1 状态强可视化：已喜欢 = 整钮填充
+                    // 喜欢色＋白心；未喜欢维持现行（白 75%、无填充）。
                     .foregroundColor(isLiked
-                        ? Color(red: 1, green: 0.35, blue: 0.45)
+                        ? .white
                         : .white.opacity(0.75))
                     .frame(width: 44, height: 44)
+                    .background(
+                        RoundedRectangle(cornerRadius: 12, style: .continuous)
+                            .fill(isLiked
+                                ? Color(red: 1, green: 0.35, blue: 0.45)
+                                : .clear))
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)

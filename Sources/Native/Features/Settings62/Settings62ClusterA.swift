@@ -336,6 +336,17 @@ enum Settings62ClusterA {
             SettingsStore.headerAutoHideEnabled = on
             post(SettingsStore.Key62A.headerAutoHideEnabled)
         }, hairline: false)
+        // (68) B 组出样开关：键→消费者→生效路径＝wideBar68Enabled
+        // → StageVC.syncWideBar68（识别器启停＋条收起）→
+        // StageWideBar68 点屏唤出/闲置自隐。缺省关。
+        addRow(host, to: bar, switchRow(host, "全宽控制条出样",
+            isOn: SettingsStore.wideBar68Enabled) { on in
+            SettingsStore.wideBar68Enabled = on
+            post(SettingsStore.Key62A.wideBar68Enabled)
+            Breadcrumbs.log("widebar.set on=\(on ? 1 : 0)")
+        })
+        addRow(host, to: bar, host.makeHintRow(
+            "对比出样：开启后在舞台点屏唤出全宽控制条（进度＋播放控制一行全宽），闲置 5 秒自隐；与现行点播台并存，关闭即恢复现行行为。"))
         addRow(host, to: bar, sliderRow(host, "底部组件高度",
             value: SettingsStore.bottomBarHeight, min: 48, max: 110,
             format: { "\(Int($0.rounded())) pt" }) { v in

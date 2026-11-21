@@ -3535,7 +3535,12 @@ final class WallPosterCell: UICollectionViewCell {
     func setLiked(_ liked: Bool) {
         likeButton.setImage(
             UIImage(systemName: liked ? "heart.fill" : "heart"), for: .normal)
-        likeButton.tintColor = liked ? .systemRed : .white
+        // (68) A1 状态强可视化：已喜欢 = 整钮填充喜欢色＋白心；
+        // 未喜欢维持现行（黑 45% 底＋白描边心）。
+        likeButton.tintColor = .white
+        likeButton.backgroundColor = liked
+            ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 0.95)
+            : UIColor.black.withAlphaComponent(0.45)
     }
 
     /// 进度条热更新（VC 的 0.3 秒计时器只打这一处，不整表刷新）。

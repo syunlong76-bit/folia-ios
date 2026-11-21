@@ -70,6 +70,8 @@ final class MiniBarQuickRowView: UIView {
     var onOpenSettings: (() -> Void)?
 
     private let likeButton = UIButton(type: .system)
+    /// (68) A1：喜欢填充态（refreshLike 写、configurationUpdateHandler 读）。
+    private var likeFilled = false
     private let starButton = UIButton(type: .system)
     private let shuffleButton = UIButton(type: .system)
     private let panelButton = UIButton(type: .system)
@@ -172,12 +174,19 @@ final class MiniBarQuickRowView: UIView {
         // 按下态反馈：高亮时圆角白底 14%＋轻微缩放，松手即
         // 复原。不碰 alpha（打乱钮的禁用态靠 alpha 表达，
         // 两者不许打架）。
-        button.configurationUpdateHandler = { btn in
+        // (68) A1：喜欢钮已喜欢态整钮填充喜欢色——填充由本
+        // handler 统一裁决（高亮优先，其次喜欢填充），避免
+        // setButtonState 写回 configuration 时被高亮分支冲掉。
+        button.configurationUpdateHandler = { [weak self] btn in
             btn.transform = btn.isHighlighted
                 ? CGAffineTransform(scaleX: 0.92, y: 0.92) : .identity
             var updated = btn.configuration
+            let likeFilled = self?.likeButton === btn && (self?.likeFilled ?? false)
             updated?.background.backgroundColor = btn.isHighlighted
-                ? UIColor.white.withAlphaComponent(0.14) : .clear
+                ? UIColor.white.withAlphaComponent(0.14)
+                : (likeFilled
+                    ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 1)
+                    : .clear)
             updated?.background.cornerRadius = 10
             btn.configuration = updated
         }
@@ -226,10 +235,14 @@ final class MiniBarQuickRowView: UIView {
     private func refreshLike() {
         let liked = PlaybackEngine.shared.currentTrack
             .map { LikesStore.shared.isLiked($0.id) } ?? false
+        // (68) A1：先落填充标志再写回 configuration（handler
+        // 据此填整钮喜欢色）；填充后图标与标签转白保证可读，
+        // 未喜欢维持现行（白 75% 前景、无填充）。
+        likeFilled = liked
         setButtonState(likeButton,
             symbol: liked ? "heart.fill" : "heart", pointSize: 17,
             color: liked
-                ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 1)
+                ? .white
                 : UIColor.white.withAlphaComponent(0.75))
         likeButton.accessibilityLabel = liked ? "取消喜欢" : "喜欢"
         onLikeStateChanged?()

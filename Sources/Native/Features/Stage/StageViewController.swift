@@ -66,6 +66,11 @@ final class StageViewController: UIViewController {
     // + 时间标签。实现见文件内「点播台」MARK 段，与墙台的
     // 参数逐项对齐（弹簧/时长/填充色/圆点皮肤）。
     private let stageBar = MiniBarHitView()
+    // (68) B 组出样：全宽控制条与其点屏识别器（开关缺省关，
+    // 关时识别器 disabled、本条恒隐藏，舞台行为与现行一致；
+    // 本体在 StageWideBar68.swift，可整体摘除）。
+    private var wideBar68: StageWideBar68?
+    private var wideBarTap68: UITapGestureRecognizer?
     private var stageBlurView: UIVisualEffectView?
     private var stageThemeLayer: MiniPlayerThemeLayer?
     private var stageRimLight: UIView?
@@ -355,6 +360,63 @@ final class StageViewController: UIViewController {
         cycleToNextStyle(source: "tripleTap")
     }
 
+    // MARK: (68) B 组出样·全宽控制条装配
+
+    /// 装配：条本体加在视图最上层（layoutStage 每帧按安全区
+    /// 定帧并在可见时置顶）；识别器与三击同挂 rendererContainer
+    /// ——点播台/顶栏/提示条都是其兄弟视图，从它们上面起的手
+    /// 势天然不进本识别器（与三击识别区纪律同构）。命令闭包
+    /// 全部走既有落点（toggle/prev/next/seek 与点播台同路）。
+    private func installWideBar68() {
+        let bar = StageWideBar68()
+        bar.onTogglePlay = { [weak self] in
+            self?.handleCommand(LyricStageCommand(kind: .toggle, source: "widebar68"))
+        }
+        bar.onPrev = { [weak self] in
+            self?.handleCommand(LyricStageCommand(kind: .prev, source: "widebar68"))
+        }
+        bar.onNext = { [weak self] in
+            self?.handleCommand(LyricStageCommand(kind: .next, source: "widebar68"))
+        }
+        bar.onSeek = { [weak self] fraction in
+            guard let self else { return }
+            self.performSeek(to: fraction * self.engine.duration,
+                             source: "widebar68")
+        }
+        view.addSubview(bar)
+        wideBar68 = bar
+        let tap = UITapGestureRecognizer(
+            target: self, action: #selector(wideBarStageTapped68))
+        tap.cancelsTouchesInView = false
+        rendererContainer.addGestureRecognizer(tap)
+        wideBarTap68 = tap
+        syncWideBar68()
+    }
+
+    /// 开关同步（viewWillAppear 与设置变更通知共用出口）：
+    /// 关 → 识别器停用＋条立即收起；开 → 识别器启用（条仍
+    /// 待点屏唤出，不自动弹出）。
+    private func syncWideBar68() {
+        let enabled = SettingsStore.wideBar68Enabled
+        wideBarTap68?.isEnabled = enabled
+        if !enabled { wideBar68?.hideNow() }
+    }
+
+    /// 点屏：条已可见则只续命（与顶栏 tapObserver 顺延口径
+    /// 一致），未可见则先喂当前进度再唤出。
+    @objc private func wideBarStageTapped68() {
+        guard SettingsStore.wideBar68Enabled, let bar = wideBar68 else { return }
+        if bar.isBarVisible {
+            bar.poke()
+            return
+        }
+        let duration = engine.duration
+        let fraction = duration > 0 ? positionNow() / duration : 0
+        bar.update(fraction: fraction, playing: engine.isPlaying,
+                   duration: duration)
+        bar.show()
+    }
+
     /// 三击轮换落点：向洗牌袋取下一只并经统一选样式通路
     /// 落地（持久化写在本方法、与选择器点选时的写点一致）；
     /// 触发瞬间中档触觉 + 样式名标签短暂浮现（自动消失、
@@ -482,6 +544,9 @@ final class StageViewController: UIViewController {
         // 样式三击轮换（3.7 (61) 第 6 条）：rendererContainer
         // 三击切特效；（54) 的 5 秒长按已退役。
         installStyleCycleRecognizers()
+        // (68) B 组出样：全宽控制条装配（开关关时仅装隐藏
+        // 视图＋disabled 识别器，零行为差异）。
+        installWideBar68()
         // 网页运行首帧回执（3.7 (67) A4）：桥转交本台处理淡换。
         WebEffectBridge.shared.onStyleFrame = { [weak self] styleId in
             self?.handleWebStyleFrame(styleId)
@@ -532,6 +597,9 @@ final class StageViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // (68) B 组：全宽控制条开关回台同步（设置里关掉时回
+        // 台不得残留识别器/条体）。
+        syncWideBar68()
         Breadcrumbs.samplerStart()
         Breadcrumbs.log("stage gate enter style=\(activeStyleId) token=\(stageToken)")
         progressDriver.onFraction = { [weak self] fraction in
@@ -589,6 +657,9 @@ final class StageViewController: UIViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        // (68) B 组：全宽条离台即收（舞台实例复用，不残留到
+        // 下次开台）。
+        wideBar68?.hideNow()
         // 自定义背景离台暂停（3.7 (47)）。
         customBgView.pause()
         progressDriver.stop()
@@ -683,6 +754,10 @@ final class StageViewController: UIViewController {
         closeButton.tintColor = .white
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
         likeButton.tintColor = .white
+        // (68) A1 状态强可视化：已喜欢态整钮填充变色，钮体
+        // 38×38 圆角 19 成圆钮（填充在 refreshLikeButton 切换）。
+        likeButton.layer.cornerRadius = 19
+        likeButton.layer.masksToBounds = true
         likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
         titleLabel.textColor = .white
@@ -805,6 +880,9 @@ final class StageViewController: UIViewController {
     @objc private func settings62AChanged() {
         refresh62Settings()
         refreshCustomBackground()
+        // (68) B 组：全宽控制条开关即时同步（同台在场时改
+        // 设置返回即生效/摘除）。
+        syncWideBar68()
         view.setNeedsLayout()
     }
 
@@ -1017,6 +1095,15 @@ final class StageViewController: UIViewController {
         }
         if let overlay = stageQuickRowOverlay {
             view.bringSubviewToFront(overlay)
+        }
+        // (68) B 组：全宽条帧（全宽、贴底，内容行高＋底部安全
+        // 区填充；横竖屏同式，宽随 bounds 全幅、行高恒定）；
+        // 可见时置顶盖住点播台所在带，自隐后点播台原样露出。
+        if let bar = wideBar68 {
+            let barHeight = StageWideBar68.contentHeight + safe.bottom
+            bar.frame = CGRect(x: 0, y: bounds.height - barHeight,
+                               width: bounds.width, height: barHeight)
+            if !bar.isHidden { view.bringSubviewToFront(bar) }
         }
         // 统一 chromeInsets 规则（(60) 第 4 条）：把当前 chrome
         // 占用（顶栏高 = contentTop、点播台当前形态高含安全区与
@@ -1448,7 +1535,11 @@ final class StageViewController: UIViewController {
         let liked = engine.currentTrack.map { LikesStore.shared.isLiked($0.id) } ?? false
         likeButton.setImage(
             UIImage(systemName: liked ? "heart.fill" : "heart"), for: .normal)
-        likeButton.tintColor = liked ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 1) : .white
+        // (68) A1：已喜欢 = 整钮填充喜欢色＋白心（不再只是描边
+        // 心变色）；未喜欢维持现行（白描边心、无填充）。
+        likeButton.tintColor = .white
+        likeButton.backgroundColor = liked
+            ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 1) : .clear
     }
 
     // MARK: 歌词与封面
@@ -2403,6 +2494,12 @@ final class StageViewController: UIViewController {
             stageKnobLeading?.constant = clamped * trackWidth - 4.5
         }
         stageThemeLayer?.setFraction(Double(clamped))
+        // (68) B 组：全宽条可见时同源喂入（同一 fraction，不
+        // 另起进度源）；不可见时零开销跳过。
+        if let bar = wideBar68, bar.isBarVisible {
+            bar.update(fraction: Double(clamped),
+                       playing: engine.isPlaying, duration: engine.duration)
+        }
     }
 
     private func applyStageTheme() {

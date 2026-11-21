@@ -36,6 +36,8 @@ extension SettingsStore {
         static var latticeBadgeCurrentOnly: String { "settings.player.latticeBadgeCurrentOnly" }
         // 播放页·控制栏/底栏
         static var headerAutoHideEnabled: String { "settings.player.headerAutoHideEnabled" }
+        // (68) B 组出样：舞台全宽控制条开关
+        static var wideBar68Enabled: String { "settings.player.wideBar68Enabled" }
         static var bottomBarHeight: String { "settings.player.bottomBarHeight" }
         static var barSlots62: String { "settings.player.barSlots62" }
         static var hideBottomBar: String { "settings.player.hideBottomBar" }
@@ -220,6 +222,14 @@ extension SettingsStore {
     static var headerAutoHideEnabled: Bool {
         get { bool62(Key62A.headerAutoHideEnabled, default: true) }
         set { setBool62(newValue, Key62A.headerAutoHideEnabled) }
+    }
+    /// (68) B 组出样：舞台全宽控制条（默认关）。开时舞台点屏
+    /// 唤出全宽条（进度＋播放控制一行）、闲置 5 秒自隐；关时
+    /// 舞台行为与现行逐项一致。消费面只有 StageWideBar68 与
+    /// StageVC 的装配钩子，出样可整体摘除，不迁移现行控制。
+    static var wideBar68Enabled: Bool {
+        get { bool62(Key62A.wideBar68Enabled, default: false) }
+        set { setBool62(newValue, Key62A.wideBar68Enabled) }
     }
     /// 底部组件高度（pt，48...110，默认 70＝现行展开台高）：StageVC 消费；
     /// MiniPlayerView（WD 簇）按同键消费。键名任务定死。

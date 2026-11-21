@@ -110,6 +110,14 @@ enum ThemeSystem62 {
         return "预设 · \(selectedPreset.name)"
     }
 
+    /// (68) A3 播放面主题名回显：与 currentSourceLabel 同源
+    /// 解析，只给名字本体——歌曲主题生效时名义为「歌曲主题」，
+    /// 其余为所选预设/自定义名。消费：播放面板主题行。
+    static var currentDisplayName: String {
+        if songThemeActive { return "歌曲主题" }
+        return selectedPreset.name
+    }
+
     /// 切歌/封面到货钩子：按生成来源取图生成歌曲主题。
     /// source: 0 封面 / 1 专辑（原生曲目与专辑同用 artworkURL，同源）/
     /// 2 艺术家（无图源 → 回退封面，面包屑标注 fallback=cover）。

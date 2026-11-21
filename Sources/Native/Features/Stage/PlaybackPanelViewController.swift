@@ -100,6 +100,10 @@ final class PlaybackPanelViewController: UIViewController {
     private var sleepChips: [UIButton] = []
     private let sleepStateLabel = UILabel()
     private let volumeSlider = UISlider()
+    /// (68) A2：音量百分比回显（拖动实时、静置显示当前值）。
+    private let volumeValueLabel = UILabel()
+    /// (68) A3：当前主题名回显（ThemeSystem62 同源、变更即时刷新）。
+    private let themeNameLabel = UILabel()
     private var sleepCountdown: Timer?
 
     // 队列页签（内嵌本体）
@@ -329,12 +333,35 @@ final class PlaybackPanelViewController: UIViewController {
         stack.addArrangedSubview(sleepStack)
 
         // 音量：PlaybackEngine.setVolume 真接（AVPlayer 本级音量）。
+        // (68) A2：滑杆右侧加百分比回显——拖动时随 .valueChanged
+        // 实时刷新、静置显示引擎当前值（外部改量经 $volume 订阅同步）。
         stack.addArrangedSubview(sectionLabel("音量"))
         volumeSlider.minimumValue = 0
         volumeSlider.maximumValue = 1
         volumeSlider.value = engine.volume
         volumeSlider.addTarget(self, action: #selector(volumeChanged), for: .valueChanged)
-        stack.addArrangedSubview(volumeSlider)
+        volumeValueLabel.font = .monospacedDigitSystemFont(ofSize: 13, weight: .medium)
+        volumeValueLabel.textColor = UIColor.white.withAlphaComponent(0.75)
+        volumeValueLabel.textAlignment = .right
+        volumeValueLabel.setContentHuggingPriority(.required, for: .horizontal)
+        volumeValueLabel.widthAnchor.constraint(equalToConstant: 46).isActive = true
+        let volumeRow = UIStackView()
+        volumeRow.axis = .horizontal
+        volumeRow.spacing = 10
+        volumeRow.alignment = .center
+        volumeRow.addArrangedSubview(volumeSlider)
+        volumeRow.addArrangedSubview(volumeValueLabel)
+        stack.addArrangedSubview(volumeRow)
+        refreshVolumeLabel()
+
+        // (68) A3 主题名回显：直显当前主题名（预设名/自定义/
+        // 歌曲主题），切主题经 .foliaTheme62Changed 即时刷新，
+        // 不再只藏在设置与主题乐园里。
+        stack.addArrangedSubview(sectionLabel("主题"))
+        themeNameLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        themeNameLabel.textColor = .white
+        stack.addArrangedSubview(themeNameLabel)
+        refreshThemeName()
 
         // 打开设置：既有设置页通路。
         let settingsButton = UIButton(type: .system)
@@ -595,7 +622,15 @@ final class PlaybackPanelViewController: UIViewController {
             .sink { [weak self] value in
                 guard let self, !self.volumeSlider.isTracking else { return }
                 self.volumeSlider.value = value
+                self.refreshVolumeLabel()
             }
+            .store(in: &cancellables)
+        // (68) A3：主题变更（预设切换/歌曲主题生成/恢复默认）
+        // 即时刷新主题名回显。
+        NotificationCenter.default.publisher(
+            for: .foliaTheme62Changed)
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.refreshThemeName() }
             .store(in: &cancellables)
         queueManager.$playMode
             .receive(on: DispatchQueue.main)
@@ -732,6 +767,18 @@ final class PlaybackPanelViewController: UIViewController {
 
     @objc private func volumeChanged() {
         engine.setVolume(volumeSlider.value)
+        refreshVolumeLabel()
+    }
+
+    /// (68) A2：百分比回显统一出口（以滑杆当前值为准，拖动
+    /// 中与引擎值一致；静置由 $volume 订阅驱动到此）。
+    private func refreshVolumeLabel() {
+        volumeValueLabel.text = "\(Int((volumeSlider.value * 100).rounded()))%"
+    }
+
+    /// (68) A3：主题名回显统一出口。
+    private func refreshThemeName() {
+        themeNameLabel.text = ThemeSystem62.currentDisplayName
     }
 
     @objc private func openSettingsTapped() {
