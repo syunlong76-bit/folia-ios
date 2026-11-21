@@ -1,1 +1,0 @@
-import{i as e,r as t}from"./useMotionSettingsStore-CwZw822S.js";var n=n=>e(e=>t(e,n));export{n as t};

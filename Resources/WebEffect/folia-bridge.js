@@ -296,11 +296,16 @@
         return idx;
     }
 
-    function setLyrics(trackId, lrc) {
+    function setLyrics(trackId, lrc, wlines) {
         currentLrc = lrc || '';
         lyricsLines = parseLrc(currentLrc);
+        // 逐字载荷（3.7 (67) A5）：原生已合并的逐行词表（词戳已 rebase 到
+        // LRC 行界），原样透传给应用层；缺失时应用层回退行级 LRC 解析。
         window.dispatchEvent(new CustomEvent('folia:lyrics', {
-            detail: { trackId: trackId, lrc: currentLrc, lines: lyricsLines }
+            detail: {
+                trackId: trackId, lrc: currentLrc, lines: lyricsLines,
+                wlines: Array.isArray(wlines) ? wlines : undefined
+            }
         }));
     }
 
@@ -396,7 +401,7 @@
                 break;
             }
             case 'lyrics': {
-                setLyrics(payload.trackId || '', payload.lrc || '');
+                setLyrics(payload.trackId || '', payload.lrc || '', payload.wlines);
                 break;
             }
             case 'theme': {
@@ -422,7 +427,7 @@
                     };
                     window.dispatchEvent(new CustomEvent('folia:track', { detail: currentTrack }));
                 }
-                if (typeof payload.lrc === 'string') setLyrics(currentTrack ? currentTrack.id : '', payload.lrc);
+                if (typeof payload.lrc === 'string') setLyrics(currentTrack ? currentTrack.id : '', payload.lrc, payload.wlines);
                 if (Array.isArray(payload.queue)) {
                     currentQueue = payload.queue;
                     currentQueueIndex = typeof payload.currentIndex === 'number' ? payload.currentIndex : -1;

@@ -1,1 +1,0 @@
-import{r as e}from"./rolldown-runtime-hePW80VL.js";import{Xi as t}from"./lucide-icons-Bwc2gLl8.js";import{n,q as r}from"./proxy-D4HbjVSQ.js";import{r as i}from"./value-0ooAHtK2.js";var a=e(t(),1);function o(e){let t=r(()=>i(e)),{isStatic:o}=(0,a.useContext)(n);if(o){let[,n]=(0,a.useState)(e);(0,a.useEffect)(()=>t.on(`change`,n),[])}return t}export{o as t};
