@@ -57,6 +57,9 @@ enum PetConcertPalette {
 // MARK: - 静态底景（渐变/柔光/星点/舞台板/脚圈）
 
 final class PetConcertBackdropView: UIView {
+    /// (60) 5① 面包屑只落一次（draw 随布局反复调用）。
+    private var didLogFloorSeams = false
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         isUserInteractionEnabled = false
@@ -103,39 +106,20 @@ final class PetConcertBackdropView: UIView {
             UIBezierPath(ovalIn: CGRect(x: x - r, y: y - r,
                                         width: r * 2, height: r * 2)).fill()
         }
-        // 木地板（(57) E 重画，同源几何）：全部线条只从
-        // ConcertPlan.floor* 推导（其唯一输入是 slotCellRect
-        // 与既有常数，见 PetConcertPlan 地板同源几何段）——
-        // 旧画法 9 带 pow1.35 边与格位行界最大差 275 参考 px、
-        // 6 条任意分数（0.06…0.94）放射缝与列界零关系、地板
-        // 全宽矩形无梯形收分，(55) 真机呈蛛网扇形，一并退役。
+        // 木地板（(57) E 同源几何 + (60) 5① 删缝）：横线与
+        // 带面只从 ConcertPlan.floor* 推导（其唯一输入是
+        // slotCellRect 与既有常数，见 PetConcertPlan 地板同
+        // 源几何段）。
         //  - 横线 = floorBandEdges：队形区与格位行界逐条重
         //    合，apron 区按格位行高等差步长延续（越往后越
         //    密 = 透视压缩），独唱脚圈/脚灯所在的前台同表。
-        //  - 板缝 = 消失点 (refW/2, floorTopY)（地平线中点）
-        //    → 地板前沿等分点 floorFrontColumnX 的直线，穿
-        //    过格位列界在队形前沿线上的锚点；apron 同线延
-        //    续、不另起参数。
-        //  - 地板面 = 梯形（后沿幕布开口外侧界 @ 地平线 →
-        //    前沿最外侧板缝点 @ refH）；带面逐带按梯形宽拼
-        //    四边形、板缝经 ctx 裁剪于梯形内。梯形自地平线
-        //    起恒宽于幕布有效开口（后沿已减摆动极值、前沿
-        //    外扩出屏），侧幕之下无露底；横屏同口径（L 表）。
-        let y0 = (land ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY) * sy, y1 = h
-        let cols = land ? PetConcertConst.gridColsL : PetConcertConst.gridCols
+        //  - 带面 = 梯形内四边形（左右边随 y 收分，梯形口
+        //    径见 floorTrapezoidX），逐带拼满、侧幕之下无露底。
+        //  - (60) 5①：板缝放射线（消失点 → 前沿等分点）与
+        //    逐带短接缝已整组删除——Miller 点名「不要竖线」，
+        //    地板只剩纯横向板纹；梯形收分与独唱脚圈不动。
         let edgesRef = ConcertPlan.floorBandEdges(landscape: land)
         let edges = edgesRef.map { $0 * sy }
-        // 梯形轮廓（视图坐标，后沿两角 → 前沿两角）。
-        let horizonRef = land ? PetConcertConst.floorTopYL : PetConcertConst.floorTopY
-        let frontRef = land ? PetConcertConst.refHL : PetConcertConst.refH
-        let trapBack = ConcertPlan.floorTrapezoidX(atY: horizonRef, landscape: land)
-        let trapFront = ConcertPlan.floorTrapezoidX(atY: frontRef, landscape: land)
-        let trapPath = UIBezierPath()
-        trapPath.move(to: CGPoint(x: trapBack.left * sx, y: y0))
-        trapPath.addLine(to: CGPoint(x: trapBack.right * sx, y: y0))
-        trapPath.addLine(to: CGPoint(x: trapFront.right * sx, y: y1))
-        trapPath.addLine(to: CGPoint(x: trapFront.left * sx, y: y1))
-        trapPath.close()
         for i in 0..<(edges.count - 1) {
             let topRef = edgesRef[i], botRef = edgesRef[i + 1]
             let (l0, r0) = ConcertPlan.floorTrapezoidX(atY: topRef, landscape: land)
@@ -155,36 +139,13 @@ final class PetConcertBackdropView: UIView {
             UIBezierPath(rect: CGRect(x: l0 * sx, y: edges[i],
                                       width: (r0 - l0) * sx,
                                       height: max(1, 3 * sy))).fill()
-            // 带内错位短缝（板长错落）：沿本带所选板缝自带顶
-            // 走到带中点——短缝本身就是板缝线段，不自备坐标。
-            let k = (i * 3 + 1) % (cols + 1)
-            let joint = UIBezierPath()
-            joint.move(to: CGPoint(
-                x: ConcertPlan.floorSeamX(k, atY: topRef, landscape: land) * sx,
-                y: edges[i]))
-            joint.addLine(to: CGPoint(
-                x: ConcertPlan.floorSeamX(k, atY: (topRef + botRef) / 2,
-                                           landscape: land) * sx,
-                y: (edges[i] + edges[i + 1]) / 2))
-            PetConcertPalette.woodLine.setStroke()
-            joint.lineWidth = max(1, 3 * sx)
-            joint.stroke()
         }
-        // 纵向板缝：消失点 → 前沿等分点，全程裁剪在梯形内。
-        ctx.saveGState()
-        ctx.addPath(trapPath.cgPath)
-        ctx.clip()
-        PetConcertPalette.woodLine.setStroke()
-        let seams = UIBezierPath()
-        let vanishX = (land ? PetConcertConst.refWL : PetConcertConst.refW) / 2 * sx
-        for k in 0...cols {
-            seams.move(to: CGPoint(x: vanishX, y: y0))
-            seams.addLine(to: CGPoint(
-                x: ConcertPlan.floorFrontColumnX(k, landscape: land) * sx, y: y1))
+        if !didLogFloorSeams {
+            didLogFloorSeams = true
+            Breadcrumbs.log("concert.floor seams=removed"
+                + " bands=\(max(0, edges.count - 1))"
+                + " orient=\(land ? "landscape" : "portrait")")
         }
-        seams.lineWidth = max(1, 2.5 * sx)
-        seams.stroke()
-        ctx.restoreGState()
         // 独唱位金色脚圈（双圈，(54) Q 放大至 190×42 参考 px；
         // (54) U 横屏走 L 表 150×30@1920 参考系）。
         let ringCX = land ? PetConcertConst.soloXL : PetConcertConst.soloX
@@ -827,8 +788,14 @@ final class PetConcertCurtainView: UIView {
             if spec.onValance {
                 // (54) U 横屏：点缀 x 按参考宽比铺满全宽（原表
                 // 只到 1006/1080，横屏不缩放只盖左半——截图症状）。
+                // (60) 5② 审计修正：y 同步按参考高比换算——L 垂
+                // 幔常数（baseYL 105/depthL 28）本身即竖屏值
+                // （196/54）的等比缩放，y 不换算时点缀相对垂幔
+                // 下移、底排脱出幔面（与侧幕点缀 dy 双轴换算的
+                // 既有口径对齐）。
                 let dx = isLand ? spec.x * PetConcertConst.refWL / PetConcertConst.refW : spec.x
-                center = CGPoint(x: dx * sx, y: spec.y * sy)
+                let dy = isLand ? spec.y * PetConcertConst.refHL / PetConcertConst.refH : spec.y
+                center = CGPoint(x: dx * sx, y: dy * sy)
             } else {
                 // 侧幕点缀：横向分数落在当前幕布宽度内，左右各一份
                 // 用同一图层画两侧（path 内含两形）。
@@ -887,7 +854,12 @@ final class PetConcertCurtainView: UIView {
             piece.layer.isHidden = false
             let x0 = isLand ? piece.x0 * PetConcertConst.refWL / PetConcertConst.refW : piece.x0
             let x = (x0 + 26 * sin(3 * CGFloat(dt) + CGFloat(piece.phase))) * sx
-            let y = (piece.y0 + piece.vy * CGFloat(dt)) * sy
+            // (60) 5② 审计修正：y0/vy 同 x0 口径按参考高比换
+            // 算——原码只换 x 不换 y，横屏纸屑生成带占高比与
+            // 落速相对竖屏放大约 1.78 倍（1920/1080）。
+            let y0 = isLand ? piece.y0 * PetConcertConst.refHL / PetConcertConst.refH : piece.y0
+            let vy = isLand ? piece.vy * PetConcertConst.refHL / PetConcertConst.refH : piece.vy
+            let y = (y0 + vy * CGFloat(dt)) * sy
             let fade = dt > 1.2 ? 1 - (dt - 1.2) / 0.6 : 1
             piece.layer.opacity = Float(max(0, fade))
             let size = piece.size * sx * 1.4

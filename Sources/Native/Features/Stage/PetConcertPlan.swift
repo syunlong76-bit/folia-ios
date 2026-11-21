@@ -122,6 +122,28 @@ enum PetConcertConst {
     static let introGreetOnlyThreshold: TimeInterval = 0.5
     /// 从容档打招呼上限（其余归交头接耳窗，cue 在窗内摊开）。
     static let greetingNominal: TimeInterval = 1.8
+    // MARK: (60) 第 9 条：仪式预算 / 告别唱完点 / 间奏耳语
+    /// 仪式预算守卫：R = firstLineStart − formationSettledAt − guard。
+    static let ceremonyGuard: TimeInterval = 0.2
+    /// 全仪式分量：招呼 1.2s + 间隔 0.1s + 耳语 1.2s 起，
+    /// R 的余量全部归耳语延展（总时长恒 = R、止于首行前 guard）。
+    static let ceremonyGreetFull: TimeInterval = 1.2
+    static let ceremonyGap: TimeInterval = 0.1
+    static let ceremonyWhisperFull: TimeInterval = 1.2
+    /// 列队让路：落定上限 = firstLineStart − 2.6（= 全仪式
+    /// 2.4 + guard 0.2），R 不足时压缩 formAt 让路、先保仪式。
+    static let formationSettledLead: TimeInterval = 2.6
+    /// 告别唱完点：有词级取末字 end + 此尾巴；无词级取行
+    /// 时长样本 P90 估算 + 此 guard（计划层口径，不动共享
+    /// LyricParser 的末行 end 填充语义）。
+    static let singEndWordTail: TimeInterval = 0.2
+    static let singEndGuard: TimeInterval = 0.25
+    /// 告别成立门槛：singEnd + 此值 ≤ duration 才排，否则跳过。
+    static let farewellMinWindow: TimeInterval = 1.2
+    /// 间奏耳语：空档 ≥ max(此值, 一轮时长 + 1.2) 才排，
+    /// 前后各留此缓冲；一轮时长 = 3 cue × socialCueMaxDuration。
+    static let interludeChatMinGap: TimeInterval = 6.0
+    static let interludeChatBuffer: TimeInterval = 0.8
     /// 单条社交 cue 的最长展示（短窗等分压缩，长窗摊开留白）。
     static let socialCueMaxDuration: TimeInterval = 1.05
     static let farewellCueMaxDuration: TimeInterval = 1.2
@@ -400,13 +422,20 @@ struct ConcertPlan {
     /// 两者之和恒 ≤ 首行前的可用时间）。
     let greetingDuration: TimeInterval
     let whisperDuration: TimeInterval
-    /// 仪式安排结果：none / greeting-only / dual / full。
+    /// 仪式安排结果：none / greeting-only / full（(60) 9②
+    /// 三档；旧 dual 档并入 greeting-only/full 预算制）。
     let introKind: String
+    /// 仪式预算 R（(60) 9②，面包屑对账用；无前奏歌为 0）。
+    let introBudgetR: TimeInterval
     let chatAt: TimeInterval
     let firstLineStart: TimeInterval
     let farewellAt: TimeInterval?
+    /// 末行唱完点（(60) 9① 计划层推导）；nil = 无歌词行。
+    let singEnd: TimeInterval?
     let greetingCues: [ConcertChatCue]
     let chatCues: [ConcertChatCue]
+    /// 间奏交头接耳 cue（(60) 9③）；空档不足时为空。
+    let interludeCues: [ConcertChatCue]
     /// 交头接耳配对（asset → 相邻伙伴 asset，槽位相邻成对）。
     let whisperPartnerOf: [String: String]
     let farewellCues: [ConcertChatCue]
@@ -593,12 +622,24 @@ struct ConcertPlan {
         // 仪式整段省去。无歌词时以 5s 锚点走完整开场缺省。
         let firstStart = lines.first?.start ?? min(duration, 5)
         let noIntro = !lines.isEmpty && firstStart < PetConcertConst.introNoneThreshold
-        let formAt: TimeInterval
+        var formAt: TimeInterval
         if noIntro {
             formAt = min(0.45, max(0.15, firstStart * 0.5))
         } else {
             formAt = min(PetConcertConst.dropNominal,
                          max(0.6, firstStart * 0.30))
+            // (60) 9② 列队让路：落定上限 = firstStart − 2.6，
+            // 超限时压 formAt（渲染方 k 只由 formAt 推导、两侧
+            // 同步压缩，见 formationSettledAt 口径）。settled
+            // 关于 formAt 分段：formAt ≥ 0.6 时 k = formAt/1.5
+            // → settled = 1.7·formAt；更小时 k 触底 0.4 →
+            // settled = formAt + 0.42，据此反解 formAt 上限。
+            let settledCap = firstStart - PetConcertConst.formationSettledLead
+            if settledCap > 0 {
+                let cappedFormAt: TimeInterval = settledCap >= 1.02
+                    ? settledCap / 1.7 : settledCap - 0.42
+                formAt = min(formAt, max(0.15, cappedFormAt))
+            }
         }
         // 列队落定时刻：与渲染方 basePosition 同一缩放口径
         // （k = max(0.4, formAt/formNominal×1.667)，最晚一只在
@@ -606,30 +647,36 @@ struct ConcertPlan {
         let formK = max(0.4, formAt / PetConcertConst.formNominal * 1.667)
         let formationSettledAt = formAt
             + (PetConcertConst.formDelayMax + PetConcertConst.formMoveDuration) * formK
-        // 仪式分配：可用 = 首行前列队落定后的余量，分档见
-        // PetConcertConst.intro* 注释；greetAt/chatAt 由此定。
-        let introAvail = noIntro ? 0 : max(0, firstStart - formationSettledAt)
+        // 仪式分配（(60) 9② 预算制）：R = 首行 − 落定 − 0.2。
+        // greetAt = formationSettledAt：全员（含队长）已落定
+        // 才开始，与落队尾段重叠 0（≤ 0.2 上限内）；耳语在
+        // 招呼之后、全员 settled 前提天然成立。仪式总时长
+        // 恒 = R，止于首行前 0.2s，绝不侵占演唱。
+        let ceremonyR = noIntro ? 0
+            : max(0, firstStart - formationSettledAt - PetConcertConst.ceremonyGuard)
         var greetAt: TimeInterval? = nil
         var greetingDuration: TimeInterval = 0
         var whisperDuration: TimeInterval = 0
         var introKind = "none"
-        if introAvail >= PetConcertConst.introFullThreshold {
+        if ceremonyR >= PetConcertConst.introFullThreshold {
             greetAt = formationSettledAt
-            greetingDuration = min(PetConcertConst.greetingNominal,
-                                   introAvail * 0.45)
-            whisperDuration = introAvail - greetingDuration
+            greetingDuration = PetConcertConst.ceremonyGreetFull
+            // 耳语保底名义 1.2（R=2.4 边界时三件套合计 2.5、
+            // 仪式止于首行前 0.1s，仍不侵占演唱）；R 更大时
+            // 余量全部归耳语延展、总时长回到 = R。
+            whisperDuration = max(PetConcertConst.ceremonyWhisperFull,
+                                  ceremonyR - greetingDuration
+                                      - PetConcertConst.ceremonyGap)
             introKind = "full"
-        } else if introAvail >= PetConcertConst.introDualThreshold {
+        } else if ceremonyR >= PetConcertConst.introDualThreshold {
             greetAt = formationSettledAt
-            greetingDuration = introAvail * 0.55
-            whisperDuration = introAvail - greetingDuration
-            introKind = "dual"
-        } else if introAvail >= PetConcertConst.introGreetOnlyThreshold {
-            greetAt = formationSettledAt
-            greetingDuration = introAvail
+            greetingDuration = ceremonyR
             introKind = "greeting-only"
         }
-        let chatAt = greetAt.map { $0 + greetingDuration } ?? firstStart
+        let chatAt = greetAt.map {
+            $0 + greetingDuration
+                + (whisperDuration > 0 ? PetConcertConst.ceremonyGap : 0)
+        } ?? firstStart
         // 间奏：全曲最大空档（行间 + 首行前不算、末行后归告别）。
         var gap: (start: TimeInterval, end: TimeInterval, intensity: Double)? = nil
         if lines.count >= 2 {
@@ -650,17 +697,31 @@ struct ConcertPlan {
                 gap = (best.0, best.1, intensity)
             }
         }
-        // 告别起点（(54) T：再短也不缺席）：自然起点末行
-        // end+0.4；尾段不足保底 2.4s 时向前借位补足，借位
-        // 上限 1.5s 且不早于末行中点（见 farewellMaxBorrow）。
+        // 告别起点（(60) 9①，计划层推导唱完点）：共享
+        // LyricParser 把末行 end 填成 duration，旧条件
+        // `duration > last.end` 恒假、告别永不成立。本层改
+        // 按唱完点 singEnd 排：有词级取末字 end + 0.2 尾巴；
+        // 无词级以全曲行时长样本 P90 估末行时长 + 0.25
+        // guard。仅 singEnd + 1.2 ≤ duration 才排告别且起
+        // 点恒 = singEnd（窗口短于旧保底 2.4 时按实长缩短，
+        // 绝不向前借位压末行）；否则整段跳过。
+        var singEnd: TimeInterval? = nil
         var farewellAt: TimeInterval? = nil
-        if let last = lines.last, duration > last.end {
-            let natural = last.end + PetConcertConst.farewellLead
-            let guaranteedStart = duration - PetConcertConst.farewellMinSpan
-            let borrowFloor = max(last.start + (last.end - last.start) * 0.5,
-                                  last.end - PetConcertConst.farewellMaxBorrow)
-            farewellAt = min(natural, max(borrowFloor, guaranteedStart))
-            if farewellAt! >= duration { farewellAt = nil }
+        if let last = lines.last {
+            if let words = last.words, let lastWord = words.last {
+                singEnd = min(duration,
+                              lastWord.end + PetConcertConst.singEndWordTail)
+            } else {
+                let durations = lines.map { $0.end - $0.start }.sorted()
+                let p90Index = min(durations.count - 1,
+                                   max(0, Int((0.9 * Double(durations.count))
+                                                .rounded(.up)) - 1))
+                singEnd = min(duration, last.start + durations[p90Index]
+                              + PetConcertConst.singEndGuard)
+            }
+            if let singEnd, singEnd + PetConcertConst.farewellMinWindow <= duration {
+                farewellAt = singEnd
+            }
         }
 
         // 蛇形轮唱序：前排（row 7）起逐排向上，奇偶排交替方向，
@@ -815,6 +876,47 @@ struct ConcertPlan {
                 maxDuration: PetConcertConst.socialCueMaxDuration)
         }
 
+        // 间奏交头接耳（(60) 9③ 新实现）：最大空档够长才
+        // 排——gap ≥ max(6.0, 一轮 3 cue 时长 + 1.2)，窗内
+        // 前后各留 0.8s 缓冲；拼装复用 PetChat（话题/人格/
+        // 开场/回应/收尾，seed 位与前奏错开），配对优先与
+        // 前奏主对话对错开（前奏用 last 对、多对时取 first
+        // 对）。空档不足维持现行弹跳玩耍、不排对话（渲染方
+        // interlude 分支无 cue 即走弹跳，通道预订见渲染方）。
+        var interludeCues: [ConcertChatCue] = []
+        if let gap {
+            let gapLen = gap.end - gap.start
+            let roundDuration = 3 * PetConcertConst.socialCueMaxDuration
+            let pair = whisperPairs.count > 1 ? whisperPairs.first
+                : (whisperPairs.last ?? whisperPairs.first)
+            if gapLen >= max(PetConcertConst.interludeChatMinGap,
+                             roundDuration + 1.2),
+               let (a, b) = pair {
+                let topics = PetChatTopic.allCases
+                let topic = topics[Int(seed >> 12) % topics.count]
+                let persA = PetPersonalities.of(a), persB = PetPersonalities.of(b)
+                var speakers: [String] = []
+                var texts: [String] = []
+                if let pool = PetChat.openers[persA]?[topic], !pool.isEmpty {
+                    speakers.append(a)
+                    texts.append(pool[Int(seed >> 16) % pool.count])
+                }
+                if let pool = PetChat.responses[persB]?[topic], !pool.isEmpty {
+                    speakers.append(b)
+                    texts.append(pool[Int(seed >> 20) % pool.count])
+                }
+                if let pool = PetChat.closers[persA]?[topic], !pool.isEmpty {
+                    speakers.append(a)
+                    texts.append(pool[Int(seed >> 24) % pool.count])
+                }
+                interludeCues = Self.spreadCues(
+                    speakers: speakers, texts: texts,
+                    windowStart: gap.start + PetConcertConst.interludeChatBuffer,
+                    windowDuration: gapLen - 2 * PetConcertConst.interludeChatBuffer,
+                    maxDuration: PetConcertConst.socialCueMaxDuration)
+            }
+        }
+
         // 告别＋关心 cue（顺序不重叠）：第 1 句队长向观众
         // 说再见（本地 farewellLines），第 2 句时段关心池
         // （PetLines.carePool，既有分池规则复用），第 3 句
@@ -868,9 +970,12 @@ struct ConcertPlan {
             formAt: formAt, formationSettledAt: formationSettledAt,
             greetAt: greetAt, greetingDuration: greetingDuration,
             whisperDuration: whisperDuration, introKind: introKind,
+            introBudgetR: ceremonyR,
             chatAt: chatAt, firstLineStart: firstStart,
-            farewellAt: farewellAt, greetingCues: greetingCues,
-            chatCues: chatCues, whisperPartnerOf: whisperPartnerOf,
+            farewellAt: farewellAt, singEnd: singEnd,
+            greetingCues: greetingCues,
+            chatCues: chatCues, interludeCues: interludeCues,
+            whisperPartnerOf: whisperPartnerOf,
             farewellCues: farewellCues, animPriority: animPriority)
     }
 

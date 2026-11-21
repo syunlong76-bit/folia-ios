@@ -503,14 +503,18 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             // 样式生效 + 舞台呈现中：台/岛宠物撤下（(53) J §8）。
             PetConcertRelocation.shared.beginConcert()
         }
-        if state == .destroyed, relocationActive {
-            relocationActive = false
-            PetConcertRelocation.shared.endConcert()
+        if state == .destroyed {
+            cancelConcertProbe()
+            if relocationActive {
+                relocationActive = false
+                PetConcertRelocation.shared.endConcert()
+            }
         }
     }
 
     func frameTick(position: TimeInterval) {
         guard isActive, let plan, rootView.bounds.width > 0 else { return }
+        tickGen += 1
         let size = rootView.bounds.size
         let phase = plan.phase(at: position)
         if phase != lastPhase {
@@ -584,6 +588,7 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     }
 
     func unmount() {
+        cancelConcertProbe()
         isActive = false
         if relocationActive {
             relocationActive = false
@@ -646,7 +651,10 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             + " chatCues=\(built.chatCues.count)"
             + " farewellAt=\(built.farewellAt.map { String(format: "%.2f", $0) } ?? "none")"
             + " farewellDur=\(built.farewellAt.map { String(format: "%.2f", built.duration - $0) } ?? "0")"
-            + " farewellCues=\(built.farewellCues.count)")
+            + " farewellCues=\(built.farewellCues.count)"
+            + " R=\(String(format: "%.2f", built.introBudgetR))"
+            + " singEnd=\(built.singEnd.map { String(format: "%.2f", $0) } ?? "none")"
+            + " interludeCues=\(built.interludeCues.count)")
 
         // 演员按槽位行序添加（row 0 后排先加、row 7 前排后加，
         // 前排天然压后排）。
@@ -1063,6 +1071,18 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                     concertLerp(soloScaleValue, formScale, u))
         }
 
+        // 通道预订（(60) 9③）：同一演员同一时间窗只许一个
+        // 动作占用 transform/torso/head/bubble/arms 通道。
+        // 优先级：歌曲同步动作（独唱跑位 trip 已在上方先行
+        // 返回、天然最高）> 间奏耳语倾身（cue 窗内的说话人
+        // 与其配对伙伴）> 装饰动作（间奏弹跳让路，见下方
+        // 弹跳分支的 !interludeWhisperActive 守卫）。
+        let interludeWhisperActive = phase == .interlude
+            && plan.interludeCues.contains {
+                t >= $0.start && t < $0.end
+                    && ($0.asset == asset
+                        || plan.whisperPartnerOf[$0.asset] == asset)
+            }
         // 队形内动态（闲晃/律动/间奏跳/告别鞠躬）。
         var center = base
         let swayPhase = plan.swayPhaseOf[asset] ?? 0
@@ -1094,10 +1114,13 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                 * 9 * envelope)
             scale *= 1 + 0.05 * CGFloat(envelope)
         }
-        // 交头接耳动作（(54) T）：配对成员在耳语窗内向伙伴
-        // 贴近（位移向伙伴槽位、封顶 16 参考 px）并微微下
-        // 倾（y +3），呈现成对倾身；无配对者保持闲晃。
-        if phase == .preludeChat, let partner = plan.whisperPartnerOf[asset],
+        // 交头接耳动作（(54) T，(60) 9③ 扩到间奏）：配对成
+        // 员在耳语窗内向伙伴贴近（位移向伙伴槽位、封顶 16
+        // 参考 px）并微微下倾（y +3），呈现成对倾身；无配
+        // 对者保持闲晃。间奏只在 cue 激活窗内倾身（通道预
+        // 订，见 interludeWhisperActive），其余时间走玩耍位。
+        if phase == .preludeChat || interludeWhisperActive,
+           let partner = plan.whisperPartnerOf[asset],
            let partnerSlot = (landscape ? plan.slotOfLandscape[partner]
                                   : plan.slotOf[partner]) {
             let target = ConcertPlan.slotPoint(partnerSlot, landscape: landscape)
@@ -1113,7 +1136,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         if phase == .farewell {
             center.y -= abs(CGFloat(sin(2.2 * t + swayPhase))) * 5
         }
-        if phase == .interlude, let gap = plan.interlude,
+        if phase == .interlude, !interludeWhisperActive,
+           let gap = plan.interlude,
            t >= gap.start + 0.45, t < gap.end - 0.55 {
             // (55) B：16 → 12——玩耍位 y 抖动上限 30（竖屏）
             // 与弹跳同向叠加时 30+12=42 < 最小格半高 44，中
@@ -1183,9 +1207,11 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
                 stageSize: size)
             return
         }
-        // 前奏闲聊 / 告别关心（cue 表驱动，非歌词不套整行专区）。
+        // 前奏闲聊 / 间奏耳语（(60) 9③）/ 告别关心（cue 表
+        // 驱动，非歌词不套整行专区）。
         let cues = phase == .preludeChat ? plan.chatCues
-            : (phase == .farewell ? plan.farewellCues : [])
+            : (phase == .farewell ? plan.farewellCues
+               : (phase == .interlude ? plan.interludeCues : []))
         if let cue = cues.first(where: { position >= $0.start && position < $0.end }),
            let actor = actors[cue.asset] {
             bubbleView.show(
@@ -1277,10 +1303,16 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
 
     /// 上次落面包屑的布局尺寸（旋转检测：尺寸变即重排+记录）。
     private var lastLayoutLoggedSize: CGSize = .zero
+    /// (60) 5② concert.probe：layout/tick 代次计数与探针状态。
+    private var layoutGen = 0
+    private var tickGen = 0
+    private var probeOrientation: Bool?
+    private var probeItems: [DispatchWorkItem] = []
 
     private func performLayout() {
         let bounds = rootView.bounds
         guard bounds.width > 0 else { return }
+        layoutGen += 1
         // (55) B 第 1 项域内口径：本渲染器全部子层（背景/灯
         // 光/宠物/幕布/气泡/提词条）一律 = 容器 bounds、内部
         // 映射走等比拉伸（refToStage 的 sx/sy 独立换算），无
@@ -1303,6 +1335,12 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             let first = lastLayoutLoggedSize == .zero
             lastLayoutLoggedSize = bounds.size
             lastTeleLineId = nil
+            // (60) 5②：朝向翻转触发 concert.probe 采样列。
+            let landNow = PetConcertConst.isLandscape(bounds.size)
+            if let prev = probeOrientation, prev != landNow {
+                startConcertProbe()
+            }
+            probeOrientation = landNow
             if !first || plan != nil {
                 let land = PetConcertConst.isLandscape(bounds.size)
                 let f: String, so: String
@@ -1341,5 +1379,99 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             width: bounds.width - 48 * sx, height: barH)
         teleBar.layer.cornerRadius = 20 * sx
         teleLabel.frame = teleBar.bounds.insetBy(dx: 12 * sx, dy: 4)
+    }
+
+    // MARK: (60) 5② concert.probe（横屏半幅未定级取证探针）
+    //
+    // 旋转（朝向翻转）时由 performLayout 触发，其后 0.5s×6
+    // 采样：容器覆盖率、队形包围盒（归一化 + 像素）、六层
+    // frame、layout/tick 代次、chrome 遮挡比。只读采样、
+    // 不改任何几何；演唱会退出（unmount/destroyed）即停。
+
+    private func startConcertProbe() {
+        cancelConcertProbe()
+        for i in 1...6 {
+            let item = DispatchWorkItem { [weak self] in
+                self?.logConcertProbe(index: i)
+            }
+            probeItems.append(item)
+            DispatchQueue.main.asyncAfter(
+                deadline: .now() + 0.5 * Double(i), execute: item)
+        }
+    }
+
+    private func cancelConcertProbe() {
+        probeItems.forEach { $0.cancel() }
+        probeItems.removeAll()
+    }
+
+    private func logConcertProbe(index: Int) {
+        let bounds = rootView.bounds
+        guard bounds.width > 0, let plan else { return }
+        let land = PetConcertConst.isLandscape(bounds.size)
+        let refW = land ? PetConcertConst.refWL : PetConcertConst.refW
+        let refH = land ? PetConcertConst.refHL : PetConcertConst.refH
+        let sx = bounds.width / refW, sy = bounds.height / refH
+        // 队形包围盒：当前朝向全部已占格位的并集（参考 px）。
+        var union = CGRect.null
+        let slots = land ? plan.slotOfLandscape : plan.slotOf
+        for slot in Set(slots.values) {
+            union = union.union(
+                ConcertPlan.slotCellRect(slot, landscape: land))
+        }
+        let bboxN = union.isNull ? "none"
+            : String(format: "(%.3f,%.3f)-(%.3f,%.3f)",
+                     union.minX / refW, union.minY / refH,
+                     union.maxX / refW, union.maxY / refH)
+        let bboxPx = union.isNull ? "none"
+            : "\(Int(union.minX * sx)),\(Int(union.minY * sy)),"
+                + "\(Int(union.width * sx)),\(Int(union.height * sy))"
+        let cover: Double
+        if let win = rootView.window?.bounds.size, win.width > 0, win.height > 0 {
+            cover = Double(bounds.width * bounds.height)
+                / Double(win.width * win.height)
+        } else { cover = 0 }
+        func rectStr(_ v: UIView) -> String {
+            let f = v.frame
+            return "\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width)),\(Int(f.height))"
+        }
+        Breadcrumbs.log("concert.probe i=\(index)"
+            + " cover=\(String(format: "%.3f", cover))"
+            + " bboxN=\(bboxN) bboxPx=\(bboxPx)"
+            + " frames[curtain=\(rectStr(curtainView))"
+            + "/floor=\(rectStr(backdropView))"
+            + "/tele=\(rectStr(teleBar))"
+            + "/bubble=\(rectStr(bubbleView))"
+            + "/spot=\(rectStr(lightView))"
+            + "/bg=\(rectStr(backdropView))]"
+            + " gen[layout=\(layoutGen)/tick=\(tickGen)]"
+            + " occ=\(String(format: "%.3f", chromeOcclusionRatio()))")
+    }
+
+    /// chrome 遮挡比：视图层级中位于本容器之上、与容器在
+    /// 窗口坐标内相交的兄弟视图（点播台/顶栏等宿主 chrome）
+    /// 覆盖容器面积的比例（多 rect 面积和、上限 1）。
+    private func chromeOcclusionRatio() -> Double {
+        guard let window = rootView.window, rootView.bounds.width > 0
+        else { return 0 }
+        let mine = rootView.convert(rootView.bounds, to: window)
+        guard mine.width > 0, mine.height > 0 else { return 0 }
+        var covered: CGFloat = 0
+        var child: UIView = rootView
+        while let parent = child.superview {
+            if let idx = parent.subviews.firstIndex(of: child) {
+                for sib in parent.subviews[(idx + 1)...] {
+                    guard !sib.isHidden, sib.alpha > 0.01 else { continue }
+                    let r = sib.convert(sib.bounds, to: window)
+                        .intersection(mine)
+                    if !r.isNull, !r.isEmpty {
+                        covered += r.width * r.height
+                    }
+                }
+            }
+            if parent === window { break }
+            child = parent
+        }
+        return min(1, Double(covered / (mine.width * mine.height)))
     }
 }
