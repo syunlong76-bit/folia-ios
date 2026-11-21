@@ -331,7 +331,12 @@ final class NativeSessionStore {
     }
 
     /// 存账号展示资料（昵称/头像/accountId，均非凭据）。
-    /// 三项皆 nil = 清除该 provider 的资料缓存。
+    /// (62) 尾波第 3 组：改合并语义——nil 表示「不改此字段」，
+    /// 非 nil 字段并入既有缓存；三项皆 nil = 显式清除该
+    /// provider 的资料缓存（退出登录/会话失效的 clear 走此
+    /// 路）。旧整表覆盖写会被只传部分字段的调用抹掉其余字段
+    /// （酷狗先存 accountId 后补资料即此模式险例），且是头像
+    /// 回填的同型隐患，故切换；现有调用点已逐个核对。
     func saveProfile(provider: Provider, accountId: String?,
                      displayName: String?, avatarURLString: String?) {
         let key = Self.profileKey(provider)
@@ -339,7 +344,8 @@ final class NativeSessionStore {
             UserDefaults.standard.removeObject(forKey: key)
             return
         }
-        var dict: [String: String] = [:]
+        var dict = (UserDefaults.standard.dictionary(forKey: key)
+            as? [String: String]) ?? [:]
         if let accountId { dict["accountId"] = accountId }
         if let displayName { dict["displayName"] = displayName }
         if let avatarURLString { dict["avatarURL"] = avatarURLString }

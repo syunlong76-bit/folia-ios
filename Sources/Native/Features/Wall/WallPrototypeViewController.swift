@@ -97,6 +97,15 @@ final class WallPrototypeViewController: UIViewController,
     /// 40pt 网格化原点，未变不重复落盘）。
     private var lyricAnchorInstanceId: String?
     private var lastLyricOverlayCrumb: String?
+    /// (62) 尾波第 4 组：歌词条跟随三压——锚下标缓存（稳态
+    /// O(1) 校验、身份变化才全量重找）、base frame＋transform
+    /// 平移跟随（拖动期不改 frame、不进歌词窗
+    /// layoutSubviews）、didScroll/tick 双路同输入去重。
+    private var lyricAnchorItemCache: Int?
+    private var lyricFollowExpandedId: String?
+    private var lyricOverlayBaseFrame: CGRect?
+    private var lastLyricFollowKey: String?
+    private var lastLyricFollowOutcome: LyricAnchorOutcome = .noCandidate
     /// 锚出窗隐藏态（3.7 (19)）：原锚滑出 overscan 窗口后歌词
     /// 淡出隐藏（不跨实例重锚、不清行窗），回窗淡入恢复；
     /// 状态翻转由 setLyricAnchorHidden 落面包屑供真机对账。
@@ -123,6 +132,10 @@ final class WallPrototypeViewController: UIViewController,
 
     // 丝滑切入（3.7 (8)）：预加载 + 等首批数据再 present 的信号。
     private(set) var seedReady = false
+    /// (62) 尾波第 5 组：主页墙封面单击打开本墙时置 true——
+    /// 种子落地且本墙已呈现（或呈现时种子已到）后自动定位并
+    /// 展开正在播放的卡（locateCurrentTrack），消费一次即清。
+    var locateCurrentTrackWhenReady = false
     private var seedWaiters: [CheckedContinuation<Bool, Never>] = []
     // 加载胶囊已随 (53) L 组提示条删除退役（加载反馈归拍立得
     // 背板 + 小猫贴纸），原 pillShownAt 防闪记账一并删除。
@@ -1002,14 +1015,15 @@ final class WallPrototypeViewController: UIViewController,
         QueueManager.shared.playNext(manual: true)
     }
 
-    /// 台面单击分发（曲目墙版，3.7 (61) 第 7 条全台统一规格、
-    /// 与主页墙逐项镜像）：本识别器已 require(toFail:) 双击
-    /// 与 0.55s 长按，触发即「双击失败后的单击」。按键各自
-    /// 处理；进度带落点分域跳过（seek 已由 seekHit 自带识别
-    /// 器即时完成，见 miniSeekTapped）；封面与台身空白/标题
-    /// 区同规格——浮层开关（已开＝收起、不重出；未开＝呼
-    /// 出）。封面单击不再定位（locateCurrentTrack 仍保留其
-    /// 他入口），详情入口改双击（miniBarDoubleTapped）。
+    /// 台面单击分发（曲目墙版，3.7 (61) 第 7 条规格＋(62)
+    /// 尾波第 5 组手势合并）：本识别器已 require(toFail:)
+    /// 双击与 0.55s 长按，触发即「双击失败后的单击」。按键
+    /// 各自处理；进度带落点分域跳过（seek 已由 seekHit 自
+    /// 带识别器即时完成，见 miniSeekTapped）；**封面区单击
+    /// ＝回封面播放页（locateCurrentTrack 定位并展开正在播
+    /// 放的卡）**，台身空白/标题区维持浮层开关（已开＝收
+    /// 起、不重出；未开＝呼出）。双击仍进详情
+    /// （miniBarDoubleTapped），识别器组与 require 链零改动。
     /// 注：宠物占位区的点按被宠物识别器整组接走，永远到不
     /// 了台身——双击须落在台身空白/封面/标题区（验收口径）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
@@ -1031,6 +1045,13 @@ final class WallPrototypeViewController: UIViewController,
         // 带约 2pt 重叠，该重叠落点归封面规格、不归 seek）。
         if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
             Breadcrumbs.log("minibar.tap host=wallproto zone=seekband action=skip")
+            return
+        }
+        // (62) 尾波第 5 组：封面区单击换动作——回封面播放页，
+        // 不再与台身同走浮层开关。
+        if miniCover.frame.contains(point) {
+            Breadcrumbs.log("minibar.tap host=wallproto zone=cover action=locate")
+            locateCurrentTrack()
             return
         }
         if miniQuickRowOverlay?.isShown == true {
@@ -1562,26 +1583,15 @@ final class WallPrototypeViewController: UIViewController,
         let duration = min(0.85, max(0.45, Double(distance) * 0.00035))
         animateWorldOrigin(to: targetOrigin, duration: duration) { [weak self] in
             guard let self else { return }
-            // hero 落点展开（(60) 第 3 条②）：飞行落位后以目标卡
-            // 现帧为源 hero 放大，去掉旧 crossDissolve+reloadData
-            // 硬切；身份变化的 reload 只在 hero 遮盖下发生（见
-            // animateHeroExpansion）。
-            let srcItem = self.wallLayout.instances.firstIndex(
-                where: { $0.instanceId == target.instanceId })
-            let srcCell = srcItem.flatMap {
-                self.collectionView.cellForItem(
-                    at: IndexPath(item: $0, section: 0)) as? WallPosterCell
-            }
-            let hero = srcCell?.snapshotView(afterScreenUpdates: false)
-            let heroFrame = srcCell.map {
-                self.collectionView.convert($0.frame, to: self.view)
-            }
+            // 落点展开（(62) 尾波第 6 组：原 hero 快照放大已摘
+            // 除，走 animateHeroExpansion 的非 hero 路径——布局
+            // 弹簧重排落位）。
             self.wallLayout.expandedInstanceId = target.instanceId
-            self.animateHeroExpansion(heroSnapshot: hero, sourceFrame: heroFrame,
+            self.animateHeroExpansion(heroSnapshot: nil, sourceFrame: nil,
                                       targetInstanceId: target.instanceId) { [weak self] in
                 guard let self else { return }
                 self.emphasizeLocateLanding()
-                // 落点校验（3.7 (13.2)）：hero 落定后核对展开的
+                // 落点校验（3.7 (13.2)）：展开落定后核对展开的
                 // 确实是冻结目标，不是就纠正/重飞，全程面包屑。
                 self.locateFlightInstanceId = target.instanceId
                 let gen = self.locateGeneration
@@ -1691,21 +1701,11 @@ final class WallPrototypeViewController: UIViewController,
         let duration = min(0.85, max(0.45, Double(distance) * 0.00035))
         animateWorldOrigin(to: targetOrigin, duration: duration) { [weak self] in
             guard let self else { return }
-            // hero 落点展开（(60) 第 3 条②）：与 locateCurrentTrack
-            // 同口径——目标卡现帧为源 hero 放大，无 crossDissolve
-            // 硬切（见 animateHeroExpansion）。
-            let srcItem = self.wallLayout.instances.firstIndex(
-                where: { $0.instanceId == target.instanceId })
-            let srcCell = srcItem.flatMap {
-                self.collectionView.cellForItem(
-                    at: IndexPath(item: $0, section: 0)) as? WallPosterCell
-            }
-            let hero = srcCell?.snapshotView(afterScreenUpdates: false)
-            let heroFrame = srcCell.map {
-                self.collectionView.convert($0.frame, to: self.view)
-            }
+            // 落点展开：与 locateCurrentTrack 同口径，走
+            // animateHeroExpansion 非 hero 路径（(62) 尾波第 6
+            // 组已摘快照放大）。
             self.wallLayout.expandedInstanceId = target.instanceId
-            self.animateHeroExpansion(heroSnapshot: hero, sourceFrame: heroFrame,
+            self.animateHeroExpansion(heroSnapshot: nil, sourceFrame: nil,
                                       targetInstanceId: target.instanceId) { [weak self] in
                 guard let self else { return }
                 self.emphasizeLocateLanding()
@@ -1864,6 +1864,12 @@ final class WallPrototypeViewController: UIViewController,
         super.viewDidAppear(animated)
         Breadcrumbs.log("wall.appear kind=playlist")
         Breadcrumbs.log("tracks appear playlist=\(playlistId)")
+        // (62) 尾波第 5 组：种子先于呈现落地时在此消费待定位
+        // （种子后到则由 loadEntries 落点消费，标志只认一次）。
+        if locateCurrentTrackWhenReady, !entries.isEmpty {
+            locateCurrentTrackWhenReady = false
+            locateCurrentTrack()
+        }
         Breadcrumbs.samplerStart()
         refreshMiniBar()
         // 迷你台无操作计时（3.7 (21)）：回墙即续命（在场且
@@ -2023,6 +2029,12 @@ final class WallPrototypeViewController: UIViewController,
                     Breadcrumbs.log("tracks seed ok n=\(seed.count)/\(total)")
                     self.seedReady = true
                     self.flushSeedWaiters()
+                    // (62) 尾波第 5 组：待定位且已呈现 → 此刻飞；
+                    // 未呈现（预加载先行）时留给 viewDidAppear。
+                    if self.locateCurrentTrackWhenReady, self.view.window != nil {
+                        self.locateCurrentTrackWhenReady = false
+                        self.locateCurrentTrack()
+                    }
                     self.waveStart = Date()
                     self.backdrop?.dismiss()
                     // 贴纸层（3.7 (24)，纯新增）：空歌单出空态贴纸。
@@ -2266,10 +2278,19 @@ final class WallPrototypeViewController: UIViewController,
     /// jumpToWebStage）；原 openStageFromWall 回程票套（存票+收
     /// 墙+凭票恢复）已随回程票链整链删除（3.7 (51)）。
     private func openNativeStageFromWall() {
+        // (62) 尾波第 1 组：同 HomeWall——补呈现守卫＋present 面包屑，
+        // 防呈现竞态下第二台覆盖 canonical 登记（双击闪退候选 2）。
+        guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.log("minibar.doubletap action=stage-skipped reason=busy host=wallproto")
+            return
+        }
         Breadcrumbs.log("stage open (native) from playlist wall")
+        Breadcrumbs.log("stage.present.begin host=wallproto")
         let stage = StageViewController()
         stage.modalPresentationStyle = .fullScreen
-        present(stage, animated: true)
+        present(stage, animated: true) {
+            Breadcrumbs.log("stage.present.done host=wallproto")
+        }
     }
 
     /// 后台点入直达（3.7 (31)）：SceneDelegate 在「曾进后台 + 有活跃
@@ -2366,6 +2387,11 @@ final class WallPrototypeViewController: UIViewController,
             lyricSessionTrackId = track.id
             lastLyricIndex = nil
             lyricAnchorInstanceId = nil
+            // (62) 尾波第 4 组：跟随缓存随锚一并作废，新曲重锚。
+            lyricAnchorItemCache = nil
+            lyricFollowExpandedId = nil
+            lyricOverlayBaseFrame = nil
+            lastLyricFollowKey = nil
             // 切歌先解绑旧曲行界（新曲歌词到手后 tick 内重新绑定）。
             lyricFlipDriver.unbind()
             // 切歌重置锚隐藏态：淡出动画与 alpha 不许带进新曲。
@@ -2546,9 +2572,44 @@ final class WallPrototypeViewController: UIViewController,
     /// 最近的实例成为原锚，此后不再跨实例。
     @discardableResult
     private func updateLyricOverlayFrame() -> LyricAnchorOutcome {
-        guard let overlay = lyricOverlay,
+        // 双路去重（(62) 尾波第 4 组）：didScroll、viewDid-
+        // LayoutSubviews 与歌词 tick 三路都会调本函数；输入
+        // （曲目/展开/锚/原点/偏移/实例集代）未变时结论必同，
+        // 直回上次结论，不重复全量 filter 与帧落位。
+        let followKey = "\(PlaybackEngine.shared.currentTrack?.id ?? "-")"
+            + "|\(wallLayout.expandedInstanceId ?? "-")"
+            + "|\(wallLayout.worldOrigin.x),\(wallLayout.worldOrigin.y)"
+            + "|\(collectionView.contentOffset.x),\(collectionView.contentOffset.y)"
+            + "|\(wallLayout.dataVersion)|\(wallLayout.instances.count)"
+            + "|\(lyricAnchorInstanceId ?? "-")"
+        if followKey == lastLyricFollowKey { return lastLyricFollowOutcome }
+        let outcome = updateLyricOverlayFrameImpl()
+        lastLyricFollowKey = followKey
+        lastLyricFollowOutcome = outcome
+        return outcome
+    }
+
+    @discardableResult
+    private func updateLyricOverlayFrameImpl() -> LyricAnchorOutcome {
+        guard lyricOverlay != nil,
               wallLayout.expandedInstanceId != nil,
               let trackId = PlaybackEngine.shared.currentTrack?.id else { return .noCandidate }
+        // 锚下标缓存快路（(62) 尾波第 4 组）：锚已定且展开态
+        // 自上次全量判定后未变（接管决定仍成立）时，O(1) 校
+        // 验缓存下标仍指向锚实例即直达帧落位，跳过 ≤400 实
+        // 例的全量 filter。下标处实例易主（rebase/身份变化）
+        // 校验不过，落回下方全量逻辑重找（含出窗隐藏判定）。
+        if let anchorId = lyricAnchorInstanceId,
+           wallLayout.expandedInstanceId == lyricFollowExpandedId,
+           let item = lyricAnchorItemCache,
+           wallLayout.instances.indices.contains(item),
+           wallLayout.instances[item].instanceId == anchorId,
+           let attrs = collectionView.layoutAttributesForItem(
+               at: IndexPath(item: item, section: 0)) {
+            applyLyricOverlayFrame(attrs: attrs, targetId: anchorId,
+                                   restoreReason: "back-in-window")
+            return .anchored
+        }
         // 实例窗口 = 当前 instances 集（世界窗 + overscan 900）。
         let inWindow = wallLayout.instances.filter {
             $0.queueIndex < entries.count && entries[$0.queueIndex].id == trackId
@@ -2601,22 +2662,43 @@ final class WallPrototypeViewController: UIViewController,
             return .outOfWindow
         }
         lyricAnchorInstanceId = target.instanceId
+        lyricAnchorItemCache = item
+        lyricFollowExpandedId = wallLayout.expandedInstanceId
+        applyLyricOverlayFrame(attrs: attrs, targetId: target.instanceId,
+                               restoreReason: restoreReason)
+        return .anchored
+    }
+
+    /// 帧落位（(62) 尾波第 4 组）：目标帧由布局属性按帧公式
+    /// 换算（与旧实现逐字一致）。锚/尺寸变化时落 base frame
+    /// 并清 transform；尺寸不变的稳态跟随只写 transform 平
+    /// 移——合成器直达、不改 frame、不触发 LyricWindowView
+    /// 的 layoutSubviews 逐行重设，拖动期歌词条不再与滚动
+    /// 处理抢主线程。帧面包屑口径不变（原点按 40pt 网格去
+    /// 重），供真机对账锚定是否恒为播放曲实例、帧是否随卡走。
+    private func applyLyricOverlayFrame(attrs: UICollectionViewLayoutAttributes,
+                                        targetId: String, restoreReason: String) {
+        guard let overlay = lyricOverlay else { return }
         let frame = CGRect(
             x: attrs.frame.minX - collectionView.contentOffset.x + collectionView.frame.minX,
             y: attrs.frame.minY - collectionView.contentOffset.y + collectionView.frame.minY,
             width: attrs.frame.width,
             height: attrs.frame.height)
-        if overlay.frame != frame { overlay.frame = frame }
+        if let base = lyricOverlayBaseFrame, base.size == frame.size {
+            let t = CGAffineTransform(translationX: frame.minX - base.minX,
+                                      y: frame.minY - base.minY)
+            if overlay.transform != t { overlay.transform = t }
+        } else {
+            overlay.transform = .identity
+            if overlay.frame != frame { overlay.frame = frame }
+            lyricOverlayBaseFrame = frame
+        }
         setLyricAnchorHidden(false, reason: restoreReason)
-        // 帧面包屑：锚实例 id + 帧矩形（原点按 40pt 网格去重，
-        // 平移时约每 40pt 一条，不刷屏）；供真机对账锚定是否恒
-        // 为播放曲实例、帧是否随卡走。
-        let crumb = "\(target.instanceId)|\(Int(frame.minX / 40))|\(Int(frame.minY / 40))"
+        let crumb = "\(targetId)|\(Int(frame.minX / 40))|\(Int(frame.minY / 40))"
         if crumb != lastLyricOverlayCrumb {
             lastLyricOverlayCrumb = crumb
-            Breadcrumbs.log("lrc overlay anchor=\(target.instanceId) frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height)) visible=\(!overlay.isHidden)")
+            Breadcrumbs.log("lrc overlay anchor=\(targetId) frame=\(Int(frame.minX)),\(Int(frame.minY)),\(Int(frame.width))x\(Int(frame.height)) visible=\(!overlay.isHidden)")
         }
-        return .anchored
     }
 
     /// 锚出窗隐藏/恢复的视觉状态机（3.7 (19)）：隐藏走 0.2s
@@ -2709,7 +2791,8 @@ final class WallPrototypeViewController: UIViewController,
         pendingTrackId = tappedId
         failedPlayback = nil
         refreshVisiblePlaybackUI()
-        QueueManager.shared.setQueue(queue, startingAt: start, source: "native-wall")
+        QueueManager.shared.setQueue(queue, startingAt: start, source: "native-wall",
+                                     sourcePlaylistId: playlistId)
     }
 
     /// NativeTrack → FoliaTrack 的唯一构造点（点播队列与预取共用）。
@@ -2811,15 +2894,12 @@ final class WallPrototypeViewController: UIViewController,
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         let instance = wallLayout.instances[indexPath.item]
         Breadcrumbs.log("wall tap item=\(indexPath.item) queueIndex=\(instance.queueIndex)")
-        // hero 源（(60) 第 3 条②）：突变前先抓被点卡的快照与现帧，
-        // 展开/收起都从这张卡自身长出去/收回来，不再整墙硬换。
+        // 突变前先清被点卡的按压态（bounce 0.96 的 transform/
+        // 动画），展开弹簧从干净态起步。（(62) 尾波第 6 组：
+        // 此处原 hero 快照采集已随 hero 摘除一并删除。）
         let sourceCell = collectionView.cellForItem(at: indexPath) as? WallPosterCell
         sourceCell?.contentView.layer.removeAllAnimations()
         sourceCell?.contentView.transform = .identity
-        let heroSnapshot = sourceCell?.snapshotView(afterScreenUpdates: false)
-        let heroSourceFrame = sourceCell.map {
-            collectionView.convert($0.frame, to: view)
-        }
         // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
         // 被点卡在原地长大、同块卡让位，镜头不动。
         if wallLayout.expandedInstanceId == instance.instanceId {
@@ -2855,95 +2935,39 @@ final class WallPrototypeViewController: UIViewController,
             }
             prefetchExpandedNeighbors(queueIndex: instance.queueIndex)
         }
-        animateHeroExpansion(heroSnapshot: heroSnapshot,
-                             sourceFrame: heroSourceFrame,
+        animateHeroExpansion(heroSnapshot: nil,
+                             sourceFrame: nil,
                              targetInstanceId: instance.instanceId)
     }
 
-    /// hero 展开/收起衔接（(60) 第 3 条②）：以被点卡快照为源，
-    /// 弹簧（damping 0.76、轻微过冲）从现帧放大到展开帧（收起
-    /// 反向）。布局切换在 hero 遮盖下完成：身份变化时先预排
-    /// 布局（invalidate 后取目标帧），reloadData 只许在 hero
-    /// 盖住源卡时于无动画块内发生、不再裸硬切；身份不变时其
-    /// 余卡走布局 animator 与 hero 并行让位。hero 结束才撤，
-    /// 随后刷播放态控件归属。无快照/Reduce Motion 时回退
-    /// (58) 旧路径（动画布局或 reload）。
+    /// 展开/收起衔接（(62) 尾波第 6 组：hero 快照飞行层已按
+    /// Miller 口径摘除——点封面不再先放大图片再回归正常）。
+    /// 恒走原非 hero 回退路径，即展开动画本体：身份变化
+    /// reloadData、身份不变走布局 animator（0.45s / damping
+    /// 0.86）弹簧重排（其余卡让位、展开帧落位），随后刷播放
+    /// 态控件归属。签名保留旧形（heroSnapshot/sourceFrame 已
+    /// 弃用、三处调用点恒传 nil），各调用点 completion 链不
+    /// 变。按压 bounce 0.96（WallPosterCell.applyPressTransform）
+    /// 与定位落点强调（emphasizeLocateLanding）是另两套代码，
+    /// 不在此列、保留不动。
     private func animateHeroExpansion(heroSnapshot: UIView?,
                                       sourceFrame: CGRect?,
                                       targetInstanceId: String?,
                                       completion: (() -> Void)? = nil) {
-        // (58)：身份判定改用 refreshInstances 返回值（展开/收起
-        // 只换 expandedRects、实例序列不变）。
+        // 身份判定改用 refreshInstances 返回值（展开/收起只换
+        // expandedRects、实例序列不变）。
         let identityChanged = wallLayout.refreshInstances()
-        guard let hero = heroSnapshot, let sourceFrame,
-              !UIAccessibility.isReduceMotionEnabled else {
-            if !identityChanged {
-                let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
-                    self.wallLayout.invalidateLayout()
-                    self.collectionView.layoutIfNeeded()
-                }
-                animator.startAnimation()
-            } else {
-                collectionView.reloadData()
-            }
-            refreshVisiblePlaybackUI()
-            completion?()
-            return
-        }
-        hero.frame = sourceFrame
-        hero.isUserInteractionEnabled = false
-        view.addSubview(hero)
-        wallLayout.invalidateLayout()
-        if identityChanged {
-            // 预排：hero 盖住源卡期间无动画完成 reload + 布局落位。
-            UIView.performWithoutAnimation {
-                collectionView.reloadData()
-                collectionView.layoutIfNeeded()
-            }
-        }
-        // 目标帧：按实例 id 在新布局里定位（身份变化后下标可变）。
-        var targetFrame = sourceFrame
-        var targetItem: Int?
-        if let targetInstanceId,
-           let newItem = wallLayout.instances.firstIndex(
-               where: { $0.instanceId == targetInstanceId }) {
-            targetItem = newItem
-            if let attrs = collectionView.layoutAttributesForItem(
-                at: IndexPath(item: newItem, section: 0)) {
-                targetFrame = collectionView.convert(attrs.frame, to: view)
-            }
-        }
-        Breadcrumbs.log("wall.hero expand from=\(Int(sourceFrame.minX)),\(Int(sourceFrame.minY))"
-            + " \(Int(sourceFrame.width))x\(Int(sourceFrame.height))"
-            + " to=\(Int(targetFrame.width))x\(Int(targetFrame.height))"
-            + " identity=\(identityChanged)")
         if !identityChanged {
-            // 其余卡与 hero 并行弹簧让位（同一时长/阻尼族）。
-            let animator = UIViewPropertyAnimator(duration: 0.55, dampingRatio: 0.76) {
+            let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
+                self.wallLayout.invalidateLayout()
                 self.collectionView.layoutIfNeeded()
             }
             animator.startAnimation()
+        } else {
+            collectionView.reloadData()
         }
-        // 目标 cell 在 hero 下藏好，撤 hero 时无缝交接。
-        let targetCell = targetItem.flatMap {
-            collectionView.cellForItem(at: IndexPath(item: $0, section: 0))
-        }
-        targetCell?.alpha = 0
-        collectionView.isUserInteractionEnabled = false
-        UIView.animate(withDuration: 0.55, delay: 0,
-                       usingSpringWithDamping: 0.76, initialSpringVelocity: 0.25,
-                       options: [.beginFromCurrentState]) {
-            hero.frame = targetFrame
-        } completion: { [weak self] _ in
-            hero.removeFromSuperview()
-            targetCell?.alpha = 1
-            guard let self else { completion?(); return }
-            self.collectionView.isUserInteractionEnabled = true
-            // 展开/收起后控件归属变了：手动刷一遍可见 cell 的
-            // 播放态（展开卡出控件、收起卡撤控件）。
-            self.refreshVisiblePlaybackUI()
-            completion?()
-        }
+        refreshVisiblePlaybackUI()
+        completion?()
     }
 }
 

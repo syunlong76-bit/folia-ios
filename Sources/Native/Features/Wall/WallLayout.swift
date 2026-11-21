@@ -213,8 +213,8 @@ final class WallLayout: UICollectionViewLayout {
     /// invalidateLayout 让 CV 重读上屏，见类头 (59) 注）。
     /// 三条路径：
     /// 键变 → 全量重算（数据/类别/展开/缩放事件，非滚动期）；
-    /// 同键但漂移超覆盖且未展开 → 同帧 rebase（全量重算到新
-    /// 锚，rebaseCount+1）；同键其余 → 纯帧平移（零 lattice
+    /// 同键但漂移超覆盖 → 同帧 rebase（全量重算到新锚，展开
+    /// 态把展开实例钉进新集，rebaseCount+1）；同键其余 → 纯帧平移（零 lattice
     /// 重算、零身份变化）。数据源计数与实例集的同步由 VC 在
     /// 身份变化点调 reloadData 保证。
     @discardableResult
@@ -254,8 +254,13 @@ final class WallLayout: UICollectionViewLayout {
         // 同键：覆盖检查。漂移 = 当前原点相对锚点的位移；缓存
         // 集覆盖锚点可见窗 ±cacheOverscan，留 120 世界单位安
         // 全边距（布局查询rect 恒为可见域本身，边距只防浮点
-        // 与档内尺寸微差）。展开态禁 rebase：展开实例可能已
-        // 不在新窗内、重算会让展开块凭空消失（定稿口径）。
+        // 与档内尺寸微差）。展开态原禁 rebase（怕展开块凭空
+        // 消失），但 (61) 真机黑页定因于此：展开后继续平移、
+        // 漂移超覆盖时实例集永不重算，可见区落到实例窗外只
+        // 剩边缘一条带。(62) 尾波第 2 组改：展开态同样
+        // rebase，展开实例不在新集内时按其世界矩形强制钉入
+        // 并重算 expandedRects——展开块世界位置固定，钉入不
+        // 改变呈现位（不变式见下段）。
         // 呈现位不变式（(59) 代码级保证）：rebase 只换锚点与
         // 实例集，不写 worldOrigin、不写 contentOffset；而属
         // 性帧是（tile 世界矩形, worldOrigin, contentOffset）
@@ -268,15 +273,30 @@ final class WallLayout: UICollectionViewLayout {
         let driftX = abs(worldOrigin.x - anchorOrigin.x)
         let driftY = abs(worldOrigin.y - anchorOrigin.y)
         let limit = CGFloat(cacheOverscan - 120)
-        if expandedInstanceId == nil, driftX > limit || driftY > limit {
+        logRenderAudit(driftX: driftX, driftY: driftY, limit: limit)
+        if driftX > limit || driftY > limit {
             let oldIds = instances.map(\.instanceId)
             let result = computeInstanceSet(anchor: worldOrigin)
-            instances = result.list
-            expandedRects = result.rects
+            var newList = result.list
+            var newRects = result.rects
+            // (62) 尾波第 2 组：展开实例钉入新集（其世界矩形
+            // 在旧集里取，展开块位置本就固定）；已在新集内时
+            // computeInstanceSet 已算好 expandedRects，不重复。
+            if let expandedId = expandedInstanceId,
+               !newList.contains(where: { $0.instanceId == expandedId }),
+               let pinned = instances.first(where: { $0.instanceId == expandedId }) {
+                newList.append(pinned)
+                newRects = WallGeometry.layoutExpandedBlock(
+                    geometry: geometry, totalEntries: totalEntries,
+                    active: pinned, metrics: metrics)
+                Breadcrumbs.log("wall.cache rebase pin expanded=\(expandedId)")
+            }
+            instances = newList
+            expandedRects = newRects
             anchorOrigin = worldOrigin
             cacheOverscan = result.overscan
             rebaseCount += 1
-            Breadcrumbs.log("wall.cache rebase n=\(rebaseCount) overscan=\(Int(result.overscan)) instances=\(result.list.count)")
+            Breadcrumbs.log("wall.cache rebase n=\(rebaseCount) overscan=\(Int(result.overscan)) instances=\(newList.count)")
             rebuildAttributes()
             let changed = oldIds != instances.map(\.instanceId)
             lastIdentityChanged = changed
@@ -285,6 +305,24 @@ final class WallLayout: UICollectionViewLayout {
         rebuildAttributes()
         lastIdentityChanged = false
         return false
+    }
+
+    private var lastRenderAuditAt: TimeInterval = 0
+
+    /// (62) 尾波第 2 组：歌单黑页判别面包屑——同键路径节流
+    /// 1s 一行。复现时 drift 超 limit 且 visible 只剩个位数即
+    /// 候选 1（展开态禁 rebase 旧机制）坐实；drift 小而黑页
+    /// 则是候选 2（属性帧 offset 错位），offset 一并记下对照。
+    private func logRenderAudit(driftX: CGFloat, driftY: CGFloat, limit: CGFloat) {
+        let now = CACurrentMediaTime()
+        guard now - lastRenderAuditAt >= 1 else { return }
+        lastRenderAuditAt = now
+        let offset = collectionView?.contentOffset ?? .zero
+        Breadcrumbs.log("wall.render.audit expanded=\(expandedInstanceId != nil ? 1 : 0)"
+            + " drift=\(Int(max(driftX, driftY))) limit=\(Int(limit))"
+            + " instances=\(instances.count) visible=\(collectionView?.visibleCells.count ?? -1)"
+            + " origin=\(Int(worldOrigin.x)),\(Int(worldOrigin.y))"
+            + " offset=\(Int(offset.x)),\(Int(offset.y))")
     }
 
     override func prepare() {

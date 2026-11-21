@@ -685,6 +685,15 @@ final class HomeWallViewController: UIViewController,
                     }
                     return
                 }
+                // (62) 尾波第 3 组：冷启主线顺手回填资料缓存。
+                // fetchLoginStatus 已带 avatarURL，此前整条主线只
+                // 用 loggedIn/userId、从不落盘，存量缓存头像键永
+                // 不回填（avatar=0 定因断点）。saveProfile 已改
+                // 合并语义，此处只传本次真值不会抹其余字段。
+                NativeSessionStore.shared.saveProfile(
+                    provider: .netease, accountId: userId,
+                    displayName: status.nickname,
+                    avatarURLString: status.avatarURL)
                 let playlists = try await NativeDataClient.shared.fetchUserPlaylists(userId: userId)
                 await MainActor.run {
                     guard generation == self.entryLoadGeneration else { return }
@@ -1540,13 +1549,16 @@ final class HomeWallViewController: UIViewController,
         QueueManager.shared.playNext(manual: true)
     }
 
-    /// 台面单击分发（主页版，3.7 (61) 第 7 条全台统一规格）：
-    /// 本识别器已 require(toFail:) 双击与 0.55s 长按，触发即
-    /// 「双击失败后的单击」。按键各自处理；进度带落点分域跳
-    /// 过（seek 已由 seekHit 自带识别器即时完成，见
-    /// miniSeekTapped）；封面与台身空白/标题区同规格——浮层
-    /// 开关（已开＝收起、不重出；未开＝呼出）。封面不再单击
-    /// 直达详情页，详情入口改双击（miniBarDoubleTapped）。
+    /// 台面单击分发（主页版，3.7 (61) 第 7 条规格＋(62) 尾
+    /// 波第 5 组手势合并）：本识别器已 require(toFail:) 双
+    /// 击与 0.55s 长按，触发即「双击失败后的单击」。按键各
+    /// 自处理；进度带落点分域跳过（seek 已由 seekHit 自带
+    /// 识别器即时完成，见 miniSeekTapped）；**封面区单击＝
+    /// 回封面播放页（打开当前曲来源歌单的曲目墙并定位展开，
+    /// 见 locateCurrentTrackFromCover）**，台身空白/标题区
+    /// 维持浮层开关（已开＝收起、不重出；未开＝呼出）。双
+    /// 击仍进详情（miniBarDoubleTapped），识别器组与
+    /// require 链零改动。
     /// 注：宠物占位区的点按被宠物识别器整组接走，永远到不
     /// 了台身——双击须落在台身空白/封面/标题区（验收口径）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
@@ -1569,6 +1581,12 @@ final class HomeWallViewController: UIViewController,
         // 不归 seek）：带内落点直接返回，seek 已即时发生。
         if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
             Breadcrumbs.log("minibar.tap host=homewall zone=seekband action=skip")
+            return
+        }
+        // (62) 尾波第 5 组：封面区单击换动作——回封面播放页，
+        // 不再与台身同走浮层开关。
+        if miniCover.frame.contains(point) {
+            locateCurrentTrackFromCover()
             return
         }
         if miniQuickRowOverlay?.isShown == true {
@@ -1599,6 +1617,39 @@ final class HomeWallViewController: UIViewController,
         }
         Breadcrumbs.log("minibar.doubletap host=homewall action=stage")
         openNativeStageFromHome()
+    }
+
+    /// 封面区单击＝回封面播放页（(62) 尾波第 5 组）：打开当
+    /// 前曲来源歌单的曲目墙并定位展开正在播放的卡。来源歌
+    /// 单只在队列由歌单墙起播时可知（QueueManager.source-
+    /// PlaylistId，歌单墙 setQueue 时传入），且须在本墙歌单
+    /// 集内；来源不可知 → 面包屑 locate-miss、无操作（与手
+    /// 势合并表口径一致）。呈现走与点卡同路的预加载＋转场，
+    /// 定位由曲目墙的 locateCurrentTrackWhenReady 在种子落
+    /// 地且已呈现后消费。
+    private func locateCurrentTrackFromCover() {
+        guard let playlistId = QueueManager.shared.sourcePlaylistId,
+              let idx = playlistIds.firstIndex(of: playlistId),
+              idx < entries.count else {
+            Breadcrumbs.log("minibar.tap host=homewall zone=cover action=locate-miss")
+            return
+        }
+        Breadcrumbs.log("minibar.tap host=homewall zone=cover action=locate playlist=\(playlistId)")
+        let entry = entries[idx]
+        let wall = WallPrototypeViewController(
+            playlistId: playlistId, title: entry.title, coverUrl: entry.picUrl)
+        wall.modalPresentationStyle = .fullScreen
+        wall.modalTransitionStyle = .crossDissolve
+        wall.locateCurrentTrackWhenReady = true
+        beginPosterTransition(source: "cover-locate", playlistId: playlistId)
+        wall.startPreload()
+        Task { [weak self] in
+            guard let self else { return }
+            let seed = await wall.awaitSeed(timeout: 0.25)
+            self.present(wall, animated: true) { [weak self] in
+                self?.endPosterTransition(source: "cover-locate", seedReady: seed)
+            }
+        }
     }
 
     /// 收起态细条单击（3.7 (61) 第 7 条）：独立识别器、无任何
@@ -2023,10 +2074,20 @@ final class HomeWallViewController: UIViewController,
     /// 程票套（存票+收墙+凭票恢复）已随回程票链整链删除
     /// （3.7 (51)）。
     private func openNativeStageFromHome() {
+        // (62) 尾波第 1 组：present 无守卫是双击闪退候选 2——呈现
+        // 动画期间第二记双击可再造一台并覆盖 canonical 登记。
+        // 与面板口径（seamPresentPanel）对齐补守卫＋present 面包屑。
+        guard view.window != nil, presentedViewController == nil else {
+            Breadcrumbs.log("minibar.doubletap action=stage-skipped reason=busy host=homewall")
+            return
+        }
         Breadcrumbs.log("stage open (native) from home wall")
+        Breadcrumbs.log("stage.present.begin host=homewall")
         let stage = StageViewController()
         stage.modalPresentationStyle = .fullScreen
-        present(stage, animated: true)
+        present(stage, animated: true) {
+            Breadcrumbs.log("stage.present.done host=homewall")
+        }
     }
 
     /// 后台点入直达（3.7 (31)）：SceneDelegate 在「曾进后台 + 有活跃
@@ -2884,15 +2945,25 @@ extension HomeWallViewController {
             guard let self else { return }
             let status = try? await NativeDataClient.shared.fetchLoginStatus()
             await MainActor.run {
-                // 网络回程只更新昵称/登录态（fetchLoginStatus 无
-                // 头像字段）；失败时保留已刷的同步缓存值，不回
-                // 退成未登录占位。头像仍传同一同步缓存值。
+                // (62) 尾波第 3 组：fetchLoginStatus 自 (61) 起带
+                // avatarURL——网络值优先于同步缓存落工具条，并
+                // 回填资料缓存（旧注释口径停在 (61) 前、原样回
+                // 传缓存值，网络头像永远用不上、存量缓存的头像
+                // 键永不回填）。失败时保留已刷的同步缓存值，不
+                // 回退成未登录占位。
                 guard let status else { return }
+                let effectiveAvatar = status.avatarURL ?? avatarURLString
+                if status.loggedIn {
+                    NativeSessionStore.shared.saveProfile(
+                        provider: .netease, accountId: status.userId,
+                        displayName: status.nickname,
+                        avatarURLString: status.avatarURL)
+                }
                 self.seamToolbar?.setAccount(
                     nickname: status.nickname ?? syncNickname,
                     loggedIn: status.loggedIn,
-                    avatarURLString: avatarURLString)
-                Breadcrumbs.log("wall.seam.account fetch loggedIn=\(status.loggedIn) avatar=\(avatarURLString != nil ? 1 : 0)")
+                    avatarURLString: effectiveAvatar)
+                Breadcrumbs.log("wall.seam.account fetch loggedIn=\(status.loggedIn) avatar=\(effectiveAvatar != nil ? 1 : 0)")
             }
         }
     }

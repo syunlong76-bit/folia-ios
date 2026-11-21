@@ -58,6 +58,14 @@ final class StageExitGate {
     func registerStage(_ stage: StageViewController) -> String {
         tokenCounter += 1
         let token = "S\(tokenCounter)"
+        // (62) 尾波第 1 组：防重——canonical 已有存活实例且非本台
+        // 时拒绝覆盖登记（仍发独立 token，本台 deinit 的 unregister
+        // 因 === 校验不会误清 canonical），防呈现竞态下第二台把
+        // 闸门状态机带错位（双击闪退候选 2）。
+        if let existing = canonicalStage, existing !== stage {
+            Breadcrumbs.log("gate.register.replaced kept=\(canonicalStageToken) refused=\(token)")
+            return token
+        }
         canonicalStage = stage
         canonicalStageToken = token
         return token
