@@ -51,6 +51,11 @@ final class QueueManager: ObservableObject {
     /// （网络超时/节点故障）仍按 3.2 教训停住报错，不连环跳歌。
     @Published private(set) var lastError: String?
 
+    /// 最近一次点播失败的分类（DS26 四分，与 lastError 成对写、
+    /// 先类后文）：墙面失败条按类选文案（3.7 (64) U2），不再靠
+    /// 文案子串猜类别。
+    @Published private(set) var lastErrorClass: String?
+
     /// 本次 load 是否来自用户点播（setQueue / insertAndPlay / playAtIndex）。
     /// 自动推进（完播切歌）置 false：失败按老规矩跳歌 + 熔断。
     private var loadIsManual = false
@@ -80,6 +85,10 @@ final class QueueManager: ObservableObject {
     /// 因装载 Task 在后台线程读写。
     private var streamURLCache: [String: (url: URL, fetchedAt: Date)] = [:]
     private var streamPrefetchInFlight: Set<String> = []
+    /// 预取在途 Task 登记（3.7 (64) R2）：正取发现同曲预取在途时
+    /// await 同一份结果，不另发一份互抢（在途集合只供预取自身
+    /// 去重，Task 登记供正取合并）。与在途集合同锁保护。
+    private var streamPrefetchTasks: [String: Task<URL?, Never>] = [:]
     private let streamCacheLock = NSLock()
     private static let streamCacheTTL: TimeInterval = 600
 
@@ -110,8 +119,8 @@ final class QueueManager: ObservableObject {
         if shouldFetch { streamPrefetchInFlight.insert(id) }
         streamCacheLock.unlock()
         guard shouldFetch else { return }
-        Task { [weak self] in
-            guard let self else { return }
+        let task = Task<URL?, Never> { [weak self] in
+            guard let self else { return nil }
             var resolved: URL?
             do {
                 let raw = try await self.apiClient.fetchSongStreamURL(
@@ -127,9 +136,17 @@ final class QueueManager: ObservableObject {
             }
             self.streamCacheLock.lock()
             self.streamPrefetchInFlight.remove(id)
+            self.streamPrefetchTasks[id] = nil
             if let resolved { self.streamURLCache[id] = (resolved, Date()) }
             self.streamCacheLock.unlock()
+            return resolved
         }
+        // Task 登记紧随创建（同步段内完成，远早于网络返回）：
+        // 正取在窗口内查不到登记时退化为自发一份（与旧行为同，
+        // 无正确性问题），查到即合并等待。
+        streamCacheLock.lock()
+        streamPrefetchTasks[id] = task
+        streamCacheLock.unlock()
     }
 
     /// 连续失败计数；成功起播即清零。达到 queue.count 即整队一轮无一可播 → 熔断停播。
@@ -332,7 +349,7 @@ final class QueueManager: ObservableObject {
                 else { return }
                 self.currentIndex = index
                 self.consecutiveFailures = 0
-                self.lastError = nil
+                self.clearLastError()
                 self.updateCommandAvailability()
                 self.persistQueueSnapshot()
                 DatabaseManager.shared.upsertTrack(track)
@@ -796,6 +813,35 @@ final class QueueManager: ObservableObject {
         return "other"
     }
 
+    /// 点播失败文案（3.7 (64) U1）：按失败分类生成——只有
+    /// auth-missing（接口明确回空地址）才提 VIP/版权；超时、
+    /// 网络异常各说各的。此前三处出口共用一句写死的 VIP 文
+    /// 案，timeout/network/other 四类失败在卡面上全被说成
+    /// VIP（取证 forensics-2026-11-21-stream-fail §3）。
+    private static func loadErrorMessage(for error: Error, track: FoliaTrack) -> String {
+        switch loadErrorClass(error) {
+        case "auth-missing":
+            return "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+        case "timeout-or-nodes", "timeout":
+            return "《\(track.title)》加载超时，网络较慢，点播放重试"
+        case "network":
+            return "《\(track.title)》网络异常，点播放重试"
+        default:
+            return "《\(track.title)》暂时无法播放，点播放重试"
+        }
+    }
+
+    /// lastError 与分类成对写（先类后文，订阅方读到文案时类已就位）。
+    private func setLastError(_ error: Error, track: FoliaTrack) {
+        lastErrorClass = Self.loadErrorClass(error)
+        lastError = Self.loadErrorMessage(for: error, track: track)
+    }
+
+    private func clearLastError() {
+        lastError = nil
+        lastErrorClass = nil
+    }
+
     private func loadTrackAtCurrentIndex() {
         // 本方法只在主线程调（经 runOnMain）。
         guard let track = currentTrack else { return }
@@ -812,7 +858,7 @@ final class QueueManager: ObservableObject {
                     // 切歌代际已过期（用户又切了歌）→ 丢弃本次结果。
                     guard generation == self.loadGeneration else { return }
                     self.consecutiveFailures = 0
-                    self.lastError = nil
+                    self.clearLastError()
                     self.manualSelectionPending = false
                     // 曲目元数据入库（仅元数据；remote_stream_url 不写入播放地址）。
                     DatabaseManager.shared.upsertTrack(track)
@@ -860,7 +906,7 @@ final class QueueManager: ObservableObject {
                             self.consecutiveFailures = 0
                             self.manualSelectionPending = false
                             self.engine.stop()
-                            self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+                            self.setLastError(error, track: track)
                             self.onManualLoadFailed?(track)
                         }
                     } else if Self.isDeterministicallyUnplayable(error) {
@@ -885,24 +931,62 @@ final class QueueManager: ObservableObject {
         switch track.sourceType {
         case .netease, .qq, .kugou:
             if let cached = cachedStreamURL(for: track.id) { return cached }
-            let rawURL = try await apiClient.fetchSongStreamURL(provider: track.sourceType, songId: track.id)
-            // Range 探测后置（DS26）：探明过的 host 按缓存改写；未探明
-            // 先按原地址起播，后台探热供后续曲目，不挡本次起播。
-            let resolved: URL
-            if let cachedResolved = apiClient.cachedRangeResolvedURL(rawStreamURL: rawURL) {
-                resolved = cachedResolved
-            } else {
-                Task { _ = await apiClient.resolvePlayableURL(rawStreamURL: rawURL) }
-                resolved = rawURL
+            // R2（3.7 (64)）：预取在途合并——同曲预取在途时 await
+            // 同一份结果，不另发一份与预取互抢冷实例（取证 §1：
+            // 预取已成功、正取自发双腿同超 3s 判败、成功成果被
+            // 竞态丢弃）。预取失败（nil）才落自取恢复链。
+            streamCacheLock.lock()
+            let inFlightPrefetch = streamPrefetchTasks[track.id]
+            streamCacheLock.unlock()
+            if let inFlightPrefetch, let url = await inFlightPrefetch.value {
+                return url
             }
-            storeStreamURL(resolved, for: track.id)
-            return resolved
+            return try await fetchStreamWithRecovery(for: track)
         case .local:
             guard let relPath = DatabaseManager.shared.localAudioRelPath(trackId: track.id) else {
                 throw QueueError.localFileMissing(trackId: track.id)
             }
             let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             return documents.appendingPathComponent(relPath)
+        }
+    }
+
+    /// 正取取流＋自动恢复（3.7 (64) R1/R3/F1，取证 §7）：
+    /// - R1：每次失败判死前先回查缓存——并发预取刚成功落缓存
+    ///   时直接按成功装载，消灭「ok 成果躺在缓存里没用上」。
+    /// - R3：瞬时类（timeout-or-nodes / timeout / network）自
+    ///   动重试 1 次（间隔 400ms 重发 hedged）；确定性失败
+    ///   （auth-missing / providerUnverified）不重试、立即抛。
+    /// - F1：timeout 类在重试耗尽前不落失败态、不出文案；耗
+    ///   尽后由调用方按分类落「网络超时」文案（U1），仍不与
+    ///   确定性不可播混同（不顺跳口径不变）。
+    private func fetchStreamWithRecovery(for track: FoliaTrack) async throws -> URL {
+        var attempt = 0
+        while true {
+            do {
+                let rawURL = try await apiClient.fetchSongStreamURL(
+                    provider: track.sourceType, songId: track.id)
+                // Range 探测后置（DS26）：探明过的 host 按缓存改写；未探明
+                // 先按原地址起播，后台探热供后续曲目，不挡本次起播。
+                let resolved: URL
+                if let cachedResolved = apiClient.cachedRangeResolvedURL(rawStreamURL: rawURL) {
+                    resolved = cachedResolved
+                } else {
+                    Task { _ = await apiClient.resolvePlayableURL(rawStreamURL: rawURL) }
+                    resolved = rawURL
+                }
+                storeStreamURL(resolved, for: track.id)
+                return resolved
+            } catch {
+                if let cached = cachedStreamURL(for: track.id) { return cached }
+                let cls = Self.loadErrorClass(error)
+                let transient = cls == "timeout-or-nodes" || cls == "timeout" || cls == "network"
+                guard transient, attempt == 0 else { throw error }
+                attempt += 1
+                Breadcrumbs.log("stream.retry track=\(track.id) class=\(cls)")
+                try? await Task.sleep(nanoseconds: 400_000_000)
+                if let cached = cachedStreamURL(for: track.id) { return cached }
+            }
         }
     }
 
@@ -1028,7 +1112,7 @@ final class QueueManager: ObservableObject {
             consecutiveFailures = 0
             engine.stop()
             NSLog("[QueueManager] manual skip exhausted queue: \(error.localizedDescription)")
-            lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+            setLastError(error, track: track)
             onManualLoadFailed?(track)
             onFatalError?(error)
             return
@@ -1051,7 +1135,7 @@ final class QueueManager: ObservableObject {
                 self.consecutiveFailures = 0
                 self.engine.stop()
                 if let track = self.currentTrack {
-                    self.lastError = "《\(track.title)》暂时无法播放，可能需要 VIP 或受版权限制"
+                    self.setLastError(error ?? QueueError.allTracksFailed, track: track)
                     self.onManualLoadFailed?(track)
                 }
                 return

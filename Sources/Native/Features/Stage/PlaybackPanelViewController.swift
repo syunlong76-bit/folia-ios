@@ -663,6 +663,7 @@ final class PlaybackPanelViewController: UIViewController {
             lyricTrackId = nil
             currentLyricIndex = nil
             lyricsTable.reloadData()
+            lyricsEmptyLabel.text = "暂无歌词"
             lyricsEmptyLabel.isHidden = false
             return
         }
@@ -674,6 +675,8 @@ final class PlaybackPanelViewController: UIViewController {
                 from: hit.lines, trackDuration: track.duration,
                 singingRatio: hit.singingRatio)
             lyricsTable.reloadData()
+            // (64)：空态文案按条目类别（纯音乐/QQ 未接入/暂无）。
+            lyricsEmptyLabel.text = hit.emptyStateText
             lyricsEmptyLabel.isHidden = !lyricLines.isEmpty
             refreshLyricHighlight(scroll: true)
             return
@@ -687,6 +690,8 @@ final class PlaybackPanelViewController: UIViewController {
                 from: entry.lines, trackDuration: duration,
                 singingRatio: entry.singingRatio)
             self.lyricsTable.reloadData()
+            // (64)：空态文案按条目类别（纯音乐/QQ 未接入/暂无）。
+            self.lyricsEmptyLabel.text = entry.emptyStateText
             self.lyricsEmptyLabel.isHidden = !self.lyricLines.isEmpty
             self.refreshLyricHighlight(scroll: true)
         }

@@ -83,6 +83,32 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
         if SettingsStore.autoScanImportedFolders62 { rescanFolders() }
         // (62) 集成对齐：向 WB 歌词钩子注册表登记本地歌词源。
         LocalLyricSource62Registry.shared.source = self
+        // (64) R-5 存量回填：(64) 之前导入的曲目没探过内嵌歌
+        // 词，后台逐首补探、命中写派生 .lrc；已有伴随文件的
+        // 跳过，文件存在性守卫保证每首至多劳动一次。
+        Task { [weak self] in await self?.backfillEmbeddedLyrics() }
+    }
+
+    /// 存量曲目内嵌歌词回填（3.7 (64) R-5）：无伴随 .lrc/.txt
+    /// 的条目逐首读元数据探内嵌词，命中写派生 .lrc。
+    private func backfillEmbeddedLyrics() async {
+        var filled = 0
+        for entry in entries {
+            let base = (entry.audioRelPath as NSString).deletingPathExtension
+            let lrcURL = rootDir.appendingPathComponent("\(base).lrc")
+            let txtURL = rootDir.appendingPathComponent("\(base).txt")
+            if FileManager.default.fileExists(atPath: lrcURL.path)
+                || FileManager.default.fileExists(atPath: txtURL.path) { continue }
+            let asset = AVURLAsset(url: rootDir.appendingPathComponent(entry.audioRelPath))
+            guard let items = try? await asset.load(.metadata),
+                  let text = await Self.embeddedLyricText(in: items) else { continue }
+            if (try? text.write(to: lrcURL, atomically: true, encoding: .utf8)) != nil {
+                filled += 1
+            }
+        }
+        if filled > 0 {
+            Breadcrumbs.log("locallibrary62.embeddedLyric backfilled n=\(filled)")
+        }
     }
 
     // MARK: - 查询（四视图数据源）
@@ -182,6 +208,20 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
                 }
             }
             let meta = await Self.parseMetadata(url: dest, fallbackName: source.lastPathComponent)
+            // (64) R-5：内嵌歌词落盘为派生 .lrc，走既有伴随文件
+            // 链被 localLyricText 直接命中。伴随文件（.lrc/.txt
+            // 任一）已收进库时不落——不抢用户文件的位置与优先
+            // 序；派生文件与伴随文件同名同规，removeTrack 一并删。
+            if let embedded = meta.lyricText {
+                let audioDir = rootDir.appendingPathComponent("audio")
+                let derivedLrc = audioDir.appendingPathComponent("\(fingerprint).lrc")
+                let sidecarTxt = audioDir.appendingPathComponent("\(fingerprint).txt")
+                if !FileManager.default.fileExists(atPath: derivedLrc.path),
+                   !FileManager.default.fileExists(atPath: sidecarTxt.path),
+                   (try? embedded.write(to: derivedLrc, atomically: true, encoding: .utf8)) != nil {
+                    Breadcrumbs.log("locallibrary62.embeddedLyric saved id=\(trackId)")
+                }
+            }
             var artworkRel: String? = nil
             if let imageData = meta.artworkData {
                 let artName = "\(fingerprint).jpg"
@@ -216,6 +256,8 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
         var album: String
         var duration: Double
         var artworkData: Data?
+        /// 内嵌歌词原文（3.7 (64) R-5）：ID3 USLT / iTunes ©lyr 等。
+        var lyricText: String?
     }
 
     private static func parseMetadata(url: URL, fallbackName: String) async -> Metadata {
@@ -224,6 +266,7 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
         var artist = "未知歌手"
         var album = ""
         var artworkData: Data?
+        var lyricText: String?
         let durationSeconds = (try? await asset.load(.duration))?.seconds ?? 0
         if let items = try? await asset.load(.commonMetadata) {
             for item in items {
@@ -242,9 +285,37 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
                 }
             }
         }
+        if let items = try? await asset.load(.metadata) {
+            lyricText = await Self.embeddedLyricText(in: items)
+        }
         return Metadata(title: title, artist: artist, album: album,
                         duration: durationSeconds.isFinite ? durationSeconds : 0,
-                        artworkData: artworkData)
+                        artworkData: artworkData, lyricText: lyricText)
+    }
+
+    /// 内嵌歌词提取（3.7 (64) R-5，审计 A-7）：三路键探——
+    /// iTunes ©lyr（M4A/MP3 经 iTunes 系写入）、ID3 USLT
+    /// （MP3 未同步歌词帧）、ID3 LYRICS（Vorbis/FLAC 映射
+    /// 键）。命中取第一个非空 stringValue；全空返回 nil。
+    /// 此前本地歌词只认同名伴随文件，内嵌词从不读——Google
+    /// Drive 曲库（MP3 多带内嵌词）导入后无 .lrc 即无词。
+    private static func embeddedLyricText(in items: [AVMetadataItem]) async -> String? {
+        let probes: [(String, AVMetadataKeySpace)] = [
+            ("©lyr", .iTunes),
+            ("USLT", .id3),
+            ("LYRICS", .id3),
+        ]
+        for (key, space) in probes {
+            let found = AVMetadataItem.metadataItems(
+                from: items, withKey: key, keySpace: space)
+            for item in found {
+                if let value = try? await item.load(.stringValue),
+                   !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    return value
+                }
+            }
+        }
+        return nil
     }
 
     /// 登记到内核 DB：upsertTrack 建行（异步）后直写

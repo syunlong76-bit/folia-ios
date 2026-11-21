@@ -448,12 +448,27 @@ final class WallPrototypeViewController: UIViewController,
         // 那次点播；网页侧发起的失败不归本墙管。
         QueueManager.shared.$lastError
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] message in
-                guard let self, let message,
+            .sink { [weak self] _ in
+                guard let self, QueueManager.shared.lastError != nil,
                       let pending = self.pendingTrackId else { return }
                 self.pendingTrackId = nil
-                self.failedPlayback = (pending, message.contains("VIP")
-                    ? "VIP 或版权受限，点播放重试" : "播放失败，点播放重试")
+                // (64) U2：按 QueueManager 结构化分类选卡面文案，
+                // 不再用 contains("VIP") 子串判定——旧 lastError
+                // 恒含「VIP」，timeout/network/other 四类失败此前
+                // 全被说成 VIP（取证 §3）。分类与文案成对写入、
+                // 先类后文，此处读类时已就位。
+                let banner: String
+                switch QueueManager.shared.lastErrorClass {
+                case "auth-missing":
+                    banner = "VIP 或版权受限，点播放重试"
+                case "timeout-or-nodes", "timeout":
+                    banner = "网络超时，点播放重试"
+                case "network":
+                    banner = "网络异常，点播放重试"
+                default:
+                    banner = "播放失败，点播放重试"
+                }
+                self.failedPlayback = (pending, banner)
                 self.refreshVisiblePlaybackUI()
             }
             .store(in: &playbackCancellables)

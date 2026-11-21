@@ -143,6 +143,12 @@ final class EdgeOneAPIClient {
     /// (40) 由 3s 放宽到 6s：2026-11-20 函数冷路径实测（冷实例
     /// init 0.93–1.68s + 上游长尾）常把双节点一起顶过 3s 造成
     /// 取流全灭，函数侧瘦身后残余冷极值约 5.6s，6s 兜住尾部。
+    /// 3.7 (64) T1：6s 是唯一口径——调用点不得再显式传小值覆盖
+    /// （(40) 的放宽曾因唯一调用点显式传 3 而从未生效，取证
+    /// forensics-2026-11-21-stream-fail §2）。
+    /// 3.7 (64) T2：双腿皆败时落 hedge.fail 分腿面包屑（每腿耗
+    /// 时＋失败形态 timeout/http<码>/neterr），allNodesFailed
+    /// 不再是不可区分的聚合黑箱。
     func requestDataHedged(
         provider: AudioSourceType,
         path: String,
@@ -154,29 +160,34 @@ final class EdgeOneAPIClient {
         }
         let bases = [pair.primary, pair.backup]
         let winner: (Int, Data)? = await withTaskGroup(
-            of: (Int, Result<Data, Error>).self
+            of: (Int, LegOutcome).self
         ) { group in
             for (index, base) in bases.enumerated() {
                 group.addTask {
-                    do {
-                        let data = try await self.fetchOnce(
-                            baseURL: base, path: path,
-                            queryItems: queryItems, timeout: perNodeTimeout)
-                        return (index, .success(data))
-                    } catch {
-                        return (index, .failure(error))
-                    }
+                    (index, await self.fetchLegOutcome(
+                        baseURL: base, path: path,
+                        queryItems: queryItems, timeout: perNodeTimeout))
                 }
             }
             var firstSuccess: (Int, Data)?
-            for await (index, result) in group {
-                if case .success(let data) = result {
+            var legs: [Int: LegOutcome] = [:]
+            for await (index, outcome) in group {
+                legs[index] = outcome
+                if let data = outcome.data {
                     firstSuccess = (index, data)
                     // 先成先用：取消另一路（URLSession 任务响应取消，
                     // 组排空很快），不再等慢节点跑满超时。
                     group.cancelAll()
                     break
                 }
+            }
+            if firstSuccess == nil {
+                // 走到这里任务组已排空（两腿皆败），legs 必齐。
+                let legText = bases.indices.map { i in
+                    let leg = legs[i]
+                    return "n\(i)=\(leg?.elapsedMs ?? -1)ms/\(leg?.kind ?? "none")"
+                }.joined(separator: " ")
+                Breadcrumbs.log("hedge.fail \(legText)")
             }
             return firstSuccess
         }
@@ -185,6 +196,52 @@ final class EdgeOneAPIClient {
         }
         activeNodeIndex[provider] = index
         return data
+    }
+
+    /// hedged 单腿结果（3.7 (64) T2）：成功带数据；失败带形态
+    /// 分类，供双腿皆败时落分腿面包屑。请求构造与 fetchOnce
+    /// 同口径（GET + Accept + 可选单次超时覆盖）。
+    private struct LegOutcome {
+        var data: Data?
+        var kind: String
+        var elapsedMs: Int
+    }
+
+    private func fetchLegOutcome(
+        baseURL: URL,
+        path: String,
+        queryItems: [URLQueryItem],
+        timeout: TimeInterval?
+    ) async -> LegOutcome {
+        let start = Date()
+        func elapsed() -> Int { Int(Date().timeIntervalSince(start) * 1000) }
+        guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
+            return LegOutcome(data: nil, kind: "badurl", elapsedMs: elapsed())
+        }
+        if !queryItems.isEmpty { components.queryItems = queryItems }
+        guard let finalURL = components.url else {
+            return LegOutcome(data: nil, kind: "badurl", elapsedMs: elapsed())
+        }
+        var request = URLRequest(url: finalURL)
+        request.httpMethod = "GET"
+        request.setValue("application/json", forHTTPHeaderField: "Accept")
+        if let timeout { request.timeoutInterval = timeout }
+        do {
+            let (data, response) = try await session.data(for: request)
+            guard let httpResp = response as? HTTPURLResponse,
+                  (200...299).contains(httpResp.statusCode) else {
+                let code = (response as? HTTPURLResponse)?.statusCode ?? -1
+                return LegOutcome(data: nil, kind: "http\(code)", elapsedMs: elapsed())
+            }
+            return LegOutcome(data: data, kind: "ok", elapsedMs: elapsed())
+        } catch let urlError as URLError {
+            return LegOutcome(
+                data: nil,
+                kind: urlError.code == .timedOut ? "timeout" : "neterr",
+                elapsedMs: elapsed())
+        } catch {
+            return LegOutcome(data: nil, kind: "other", elapsedMs: elapsed())
+        }
     }
 
     // MARK: - 网易云业务方法（实测路由，2026-11-14 全部 200）
@@ -237,16 +294,18 @@ final class EdgeOneAPIClient {
         if let cookie {
             queryItems.append(URLQueryItem(name: "cookie", value: cookie))
         }
-        // 取流走并行竞速（DS26）：串行故障转移实测凑出 11–12 秒死等，
-        // 起播等待封顶约 3 秒。竞速两节点共用同一份 queryItems，
-        // 同带同一 cookie。
+        // 取流走并行竞速（DS26）：串行故障转移实测凑出 11–12 秒死等。
+        // 单节点超时走 requestDataHedged 默认 6s（3.7 (64) T1：
+        // 此前此处显式传 3，(40) 的 6s 放宽因此从未生效；函数
+        // 延迟实测双峰、慢峰 2.2–4.7s，3s 正切慢峰腰部造成免费
+        // 歌批量误杀，取证 forensics-2026-11-21-stream-fail §2/§5）。
+        // 竞速两节点共用同一份 queryItems，同带同一 cookie。
         let resp: NeteaseSongURLResponse
         do {
             let data = try await requestDataHedged(
                 provider: .netease,
                 path: "/song/url/v1",
-                queryItems: queryItems,
-                perNodeTimeout: 3
+                queryItems: queryItems
             )
             resp = try JSONDecoder().decode(NeteaseSongURLResponse.self, from: data)
         } catch {
@@ -280,7 +339,9 @@ final class EdgeOneAPIClient {
     /// 与逐字扫光，与 Web 详情页（同走 /lyric/new）同源时刻表；
     /// yrc 缺失/为空时调用方回落 lrc。舞台/Web 桥仍用上面的
     /// fetchLyricText，本方法只供墙链。
-    func fetchLyricBundle(songId: String) async throws -> (lrc: String, yrc: String?) {
+    /// 3.7 (64)：顺带回 nolyric 标志（源头纯音乐标记），供仓库
+    /// 做纯音乐识别（审计 A-6）；字段缺失时按 false 处理。
+    func fetchLyricBundle(songId: String) async throws -> (lrc: String, yrc: String?, nolyric: Bool) {
         let rawId = songId.replacingOccurrences(of: "ncm_", with: "")
         let resp = try await requestJSON(
             provider: .netease,
@@ -289,7 +350,62 @@ final class EdgeOneAPIClient {
             as: NeteaseLyricNewResponse.self
         )
         let yrc = resp.yrc?.lyric
-        return (resp.lrc?.lyric ?? "", (yrc?.isEmpty == false) ? yrc : nil)
+        return (resp.lrc?.lyric ?? "", (yrc?.isEmpty == false) ? yrc : nil,
+                resp.nolyric ?? false)
+    }
+
+    /// 酷狗歌词两步链（3.7 (64)，审计 R-1）：GET /search/lyric?hash=
+    /// 取候选（id + accesskey），再 GET /lyric?id=&accesskey=&fmt=lrc
+    /// &charset=utf8 取 content（base64 LRC，解码失败时按原文用，
+    /// 与抽样脚本同口径）。函数端现成，2026-11-21 实测 20/20 供词
+    /// （forensics-2026-11-21-lyric-missing-audit B-2）。无候选/
+    /// 无内容返回空串（源头无词语义），网络失败原样抛。
+    func fetchKugouLyricText(hash: String) async throws -> String {
+        let search = try await requestJSON(
+            provider: .kugou,
+            path: "/search/lyric",
+            queryItems: [URLQueryItem(name: "hash", value: hash)],
+            as: KugouLyricSearchResponse.self
+        )
+        guard let candidate = search.candidates?.first,
+              let accesskey = candidate.accesskey, !accesskey.isEmpty else {
+            return ""
+        }
+        let resp = try await requestJSON(
+            provider: .kugou,
+            path: "/lyric",
+            queryItems: [
+                URLQueryItem(name: "id", value: candidate.id),
+                URLQueryItem(name: "accesskey", value: accesskey),
+                URLQueryItem(name: "fmt", value: "lrc"),
+                URLQueryItem(name: "charset", value: "utf8")
+            ],
+            as: KugouLyricResponse.self
+        )
+        guard let content = resp.content, !content.isEmpty else { return "" }
+        if let data = Data(base64Encoded: content),
+           let text = String(data: data, encoding: .utf8) {
+            return text
+        }
+        return content
+    }
+
+    /// QQ 歌词（3.7 (64)，审计 R-2 的 App 侧通路）：GET /lyric?songmid=。
+    /// ⚠️ 函数端该路由当前未实装——2026-11-21 实测回 501
+    /// 「/lyric is not implemented」（函数自报清单却称 getLyrics=
+    /// true，清单与实装矛盾，缺口在函数端，见交付报告外部依赖
+    /// 节）。本方法只把 App 侧通路接好：函数补齐前调用恒抛错，
+    /// 仓库据此把 QQ 歌标 platformPending（UI 明示未接入），不
+    /// 冒充已通；响应形状按网易云同族 {lrc:{lyric}} 假设并兼容
+    /// {lyric} 平铺键，函数实装后须以真回包复核形状。
+    func fetchQQLyricText(songmid: String) async throws -> String {
+        let resp = try await requestJSON(
+            provider: .qq,
+            path: "/lyric",
+            queryItems: [URLQueryItem(name: "songmid", value: songmid)],
+            as: QQLyricResponse.self
+        )
+        return resp.lrc?.lyric ?? resp.lyric ?? ""
     }
 
     /// 歌单详情。实测：GET /api/netease/playlist/detail?id=19723756（飙升榜）→ 200。
@@ -686,9 +802,45 @@ private struct NeteaseLyricResponse: Decodable {
 }
 
 /// /lyric/new 响应：lrc 与 yrc 同构（{version, lyric}），只取文本。
+/// nolyric（3.7 (64)）：源头纯音乐标记，缺失按 false。
 private struct NeteaseLyricNewResponse: Decodable {
     let lrc: NeteaseLyricResponse.LrcBody?
     let yrc: NeteaseLyricResponse.LrcBody?
+    let nolyric: Bool?
+}
+
+/// 酷狗 /search/lyric 响应（2026-11-21 抽样实测形状）：candidates[]
+/// 每项带 id（数字或字符串两形态都收，统一成串）与 accesskey。
+private struct KugouLyricSearchResponse: Decodable {
+    let candidates: [Candidate]?
+    struct Candidate: Decodable {
+        let id: String
+        let accesskey: String?
+
+        enum CodingKeys: String, CodingKey { case id, accesskey }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            if let number = try? container.decode(Int.self, forKey: .id) {
+                id = "\(number)"
+            } else {
+                id = try container.decode(String.self, forKey: .id)
+            }
+            accesskey = try? container.decode(String.self, forKey: .accesskey)
+        }
+    }
+}
+
+/// 酷狗 /lyric 响应：content 为 base64 编码的 LRC 文本。
+private struct KugouLyricResponse: Decodable {
+    let content: String?
+}
+
+/// QQ /lyric 假设形状（函数端未实装，见 fetchQQLyricText 注释）：
+/// {lrc:{lyric}} 与 {lyric} 两键兼容。
+private struct QQLyricResponse: Decodable {
+    let lrc: NeteaseLyricResponse.LrcBody?
+    let lyric: String?
 }
 
 private struct NeteasePlaylistDetailResponse: Decodable {

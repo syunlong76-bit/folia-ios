@@ -42,15 +42,39 @@ final class LyricRepository {
         let singingRatio: Double
         /// 负结果（无歌词/取数失败）：lines 为空、短 TTL。
         let isNegative: Bool
+        /// 纯音乐识别（3.7 (64)，审计 A-6/R-4）：源头无正文歌
+        /// 词且带「纯音乐」标记或仅 JSON 名单行——与「没取到」
+        /// 在 UI 上分开说。
+        let isInstrumental: Bool
+        /// 平台歌词通路未接入（3.7 (64)，审计 R-2）：QQ 函数端
+        /// 歌词路由未实装（501），App 侧通路已接、函数补齐前
+        /// QQ 歌恒带此标，UI 明示「该平台歌词暂未接入」。
+        let platformPending: Bool
+        /// 请求失败型负结果（3.7 (64)，审计 A-3/R-3）：双腿皆
+        /// 抛错（函数瞬时 500/超时）而非源头无词——负缓存 TTL
+        /// 按此分级（30 秒 vs 源头无词 5 分钟），不再把一次抖
+        /// 动钉成 5 分钟无词。
+        let transientFailure: Bool
         let fetchedAt: Date
         /// LRU 内存估算（文本 UTF-16 字节 + 逐字戳开销）。
         let estimatedBytes: Int
+
+        /// 空态文案（3.7 (64)）：三类负结果分开说，消费端不再
+        /// 笼统一句「暂无歌词」。
+        var emptyStateText: String {
+            if isInstrumental { return "纯音乐，无歌词" }
+            if platformPending { return "该平台歌词暂未接入" }
+            return "暂无歌词"
+        }
     }
 
     private static let maxEntries = 64
     private static let maxBytes = 8 * 1024 * 1024
     private static let positiveTTL: TimeInterval = 30 * 60
     private static let negativeTTL: TimeInterval = 5 * 60
+    /// 请求失败型负结果的短 TTL（3.7 (64)）：瞬时失败不钉死，
+    /// 30 秒后即可重新取词；源头无词仍走 negativeTTL。
+    private static let transientNegativeTTL: TimeInterval = 30
 
     private let lock = NSLock()
     private var cache: [String: Entry] = [:]
@@ -64,13 +88,19 @@ final class LyricRepository {
     // MARK: - 同步读（墙面逐帧 tick 用）
 
     /// 已缓存且未过期的条目；未命中/已过期返回 nil（过期即
-    /// 淘汰）。负条目在 5 分钟内同样返回（lines 为空），调用
-    /// 方据此不再重复发起请求。
+    /// 淘汰）。负条目在 TTL 内同样返回（lines 为空），调用方
+    /// 据此不再重复发起请求。负 TTL 分级（3.7 (64)）：请求失
+    /// 败型 30 秒、源头无词型 5 分钟。
     func cachedEntry(for songId: String) -> Entry? {
         lock.lock()
         defer { lock.unlock() }
         guard let entry = cache[songId] else { return nil }
-        let ttl = entry.isNegative ? Self.negativeTTL : Self.positiveTTL
+        let ttl: TimeInterval
+        if entry.isNegative {
+            ttl = entry.transientFailure ? Self.transientNegativeTTL : Self.negativeTTL
+        } else {
+            ttl = Self.positiveTTL
+        }
         guard Date().timeIntervalSince(entry.fetchedAt) < ttl else {
             removeLocked(songId)
             return nil
@@ -94,6 +124,8 @@ final class LyricRepository {
             guard let self else {
                 return Entry(lines: [], lrcText: "", source: "none",
                              flip: "lrc", singingRatio: 0.8, isNegative: true,
+                             isInstrumental: false, platformPending: false,
+                             transientFailure: true,
                              fetchedAt: Date(), estimatedBytes: 0)
             }
             let fetched = await self.fetch(songId: songId)
@@ -110,22 +142,80 @@ final class LyricRepository {
 
     // MARK: - 取数（与墙面 (20) ensureLyrics 同链）
 
+    /// 取词分发（3.7 (64)，审计 A-1）：按 id 前缀分来源——此
+    /// 前不分来源全走网易云，qq_/kg_ 被原样喂网易云端点必空
+    /// （QQ/酷狗来源 100% 无歌词）、local_ 先白发两轮远端请
+    /// 求才轮到本地兜底。ncm_ 与裸 id 走网易云链。
     private func fetch(songId: String) async -> Entry {
+        if songId.hasPrefix("kg_") { return await fetchKugouEntry(songId: songId) }
+        if songId.hasPrefix("qq_") { return await fetchQQEntry(songId: songId) }
+        if songId.hasPrefix("local_") { return fetchLocalEntry(songId: songId) }
+        return await fetchNeteaseEntry(songId: songId)
+    }
+
+    /// EdgeOne 双腿结果（bundle 优先、text 回落、双腿皆败）。
+    private struct RemoteBundle {
+        let lrc: String
+        let yrc: String?
+        let nolyric: Bool
+    }
+
+    private enum RemoteLyricResult {
+        case bundle(RemoteBundle)
+        case text(String)
+        case failed
+    }
+
+    /// EdgeOne 双腿＋失败重试 1 次（3.7 (64) R-3，审计 A-3）：
+    /// bundle 抛错才试 text（与旧链同序）；任一腿拿到响应
+    /// （哪怕空文本）即定型——空响应是源头无词语义不重试；
+    /// 双腿皆抛错（函数瞬时 500/超时，抽样首轮命中率 2.8%）
+    /// 短退避后整段重发一次，仍败回 .failed（请求失败型负
+    /// 结果，短 TTL），不再被 5 分钟负缓存钉死。
+    private static func fetchEdgeOneLyric(songId: String) async -> RemoteLyricResult {
+        for attempt in 0...1 {
+            if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: songId) {
+                return .bundle(RemoteBundle(
+                    lrc: bundle.lrc, yrc: bundle.yrc, nolyric: bundle.nolyric))
+            }
+            if let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: songId) {
+                return .text(text)
+            }
+            if attempt == 0 {
+                Breadcrumbs.log("lyric.retry track=\(songId)")
+                try? await Task.sleep(nanoseconds: 600_000_000)
+            }
+        }
+        return .failed
+    }
+
+    private func fetchNeteaseEntry(songId: String) async -> Entry {
         var parsed: [LyricLineData] = []
         var source = "none"
         var flip = "lrc"
         var lrcText = ""
         var mergeStats = LyricParsing.MergeStats()
+        // (64) 链路标记：请求失败型负结果与 bundle 的 nolyric
+        // 标志，随链写入、结尾入条目。
+        var fetchFailed = false
+        var bundleNolyric = false
+        // 链头预判（与旧 if/else-if 链同序、同短路）：本地优先
+        // 命中则不问自定义 API，两者皆空才走 EdgeOne 双腿。
+        let localFirstHit = SettingsStore.localLyricPriority == "localFirst"
+            ? Self.localLyricLines(songId: songId) : nil
+        let customHit = localFirstHit == nil
+            ? await Self.fetchCustomLyric(songId: songId) : nil
+        let remoteHit = (localFirstHit == nil && customHit == nil)
+            ? await Self.fetchEdgeOneLyric(songId: songId) : nil
         // (62) WB §4.6：本地歌词优先（localFirst）——钩子已注
         // 册且命中时整段替代远端链；未注册/未命中行为不变。
-        if SettingsStore.localLyricPriority == "localFirst",
-           let local = Self.localLyricLines(songId: songId) {
+        if let local = localFirstHit {
             parsed = local.lines
             lrcText = local.text
             source = "local"
             flip = local.isWordTimed ? "yrc" : "lrc"
             Breadcrumbs.log("lyric62.local hit track=\(songId) lines=\(parsed.count)")
-        } else if let custom = await Self.fetchCustomLyric(songId: songId) {
+        } else if let custom = customHit {
             // (62) WB §4.9：自定义歌词 API 基址非空时先试它，
             // 命中即用（形状与 EdgeOne /lyric 兼容：{lrc:{lyric}}）。
             parsed = custom.lines
@@ -133,7 +223,8 @@ final class LyricRepository {
             source = "custom-api"
             flip = "lrc"
             Breadcrumbs.log("lyric62.customAPI hit track=\(songId) lines=\(parsed.count)")
-        } else if let bundle = try? await EdgeOneAPIClient.shared.fetchLyricBundle(songId: songId) {
+        } else if let remote = remoteHit, case .bundle(let bundle) = remote {
+            bundleNolyric = bundle.nolyric
             lrcText = bundle.lrc
             let lrcLines = LyricParsing.parseLRC(bundle.lrc)
             let yrcLines = bundle.yrc.map(LyricParsing.parseYRC) ?? []
@@ -171,11 +262,15 @@ final class LyricRepository {
                     break
                 }
             }
-        } else if let text = try? await EdgeOneAPIClient.shared.fetchLyricText(songId: songId) {
+        } else if let remote = remoteHit, case .text(let text) = remote {
             lrcText = text
             parsed = LyricParsing.parseLRC(text)
             source = parsed.isEmpty ? "none" : "lrc-fallback"
             flip = "lrc"
+        } else if remoteHit != nil {
+            // EdgeOne 双腿两轮皆抛错：请求失败型负结果（短 TTL
+            // 分级在 cachedEntry），与其后的本地兜底互不影响。
+            fetchFailed = true
         }
         // (62) WB §4.6：platformFirst（默认）时本地钩子作远端
         // 皆空的兜底（localFirst 已在链头处理）。
@@ -204,6 +299,13 @@ final class LyricRepository {
                 Breadcrumbs.log("lyric62.aiSegment fallback=local-estimate reason=endpoint-empty track=\(songId)")
             }
         }
+        // (64) R-4：纯音乐识别（在字节估算/标定/面包屑之前，
+        // 让下游一律看到最终行表）：单行「纯音乐」标记行摘除
+        // 不作歌词行展示，条目标 instrumental。
+        let instrumentalCheck = Self.applyInstrumentalCheck(
+            lrcText: lrcText, lines: parsed, nolyric: bundleNolyric)
+        let instrumental = instrumentalCheck.instrumental
+        parsed = instrumentalCheck.lines
         let bytes = Self.estimateBytes(lines: parsed, lrcText: lrcText)
         // r 三级来源（3.7 (46) 跨曲学习）：本曲有戳 → 同曲标定
         // 并入池（rSource=track）；本曲无戳 → 池中位数
@@ -247,11 +349,160 @@ final class LyricRepository {
             + " yrcLines=\(mergeStats.yrcLineCount)"
             + " yrcMatched=\(mergeStats.yrcMatched)"
             + " yrcAmbiguous=\(mergeStats.yrcAmbiguous)"
-            + " wordSrc=\(wordSrc)")
+            + " wordSrc=\(wordSrc)"
+            + " inst=\(instrumental ? 1 : 0)"
+            + " fail=\(fetchFailed ? 1 : 0)")
         return Entry(lines: parsed, lrcText: lrcText, source: source,
                      flip: flip, singingRatio: ratio,
                      isNegative: parsed.isEmpty,
+                     isInstrumental: instrumental,
+                     platformPending: false,
+                     transientFailure: fetchFailed && parsed.isEmpty,
                      fetchedAt: Date(), estimatedBytes: bytes)
+    }
+
+    /// 纯音乐判定（3.7 (64) R-4，审计 A-6）：①正文仅一行且
+    /// 该行含「纯音乐」标记 → 纯音乐且摘除该行（标记不是歌
+    /// 词）；②正文为空时：响应带 nolyric 标志、或原文含「纯
+    /// 音乐」标记、或原文只有 JSON 名单行（源头仅制作名单，
+    /// 抽样 C-1 的 2 首形态）→ 纯音乐。正文非空（≥2 行或单
+    /// 行正文）一律不动。
+    private static func applyInstrumentalCheck(
+        lrcText: String, lines: [LyricLineData], nolyric: Bool
+    ) -> (instrumental: Bool, lines: [LyricLineData]) {
+        if lines.count == 1, lines[0].text.contains("纯音乐") {
+            return (true, [])
+        }
+        guard lines.isEmpty else { return (false, lines) }
+        if nolyric || lrcText.contains("纯音乐") {
+            return (true, lines)
+        }
+        let rawLines = lrcText.split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        if !rawLines.isEmpty, rawLines.allSatisfy({ $0.hasPrefix("{") }) {
+            return (true, lines)
+        }
+        return (false, lines)
+    }
+
+    /// 酷狗取词（3.7 (64) R-1）：kg_<hash> 走客户端两步链；
+    /// 抛错重试 1 次（与网易云链同口径），仍败 = 请求失败型
+    /// 负结果（30 秒短 TTL）；拿到空文本 = 源头无词。
+    private func fetchKugouEntry(songId: String) async -> Entry {
+        let hash = String(songId.dropFirst(3))
+        var text: String?
+        var failed = false
+        for attempt in 0...1 {
+            do {
+                text = try await EdgeOneAPIClient.shared.fetchKugouLyricText(hash: hash)
+                failed = false
+                break
+            } catch {
+                failed = true
+                if attempt == 0 {
+                    Breadcrumbs.log("lyric.retry track=\(songId)")
+                    try? await Task.sleep(nanoseconds: 600_000_000)
+                }
+            }
+        }
+        let lrcText = text ?? ""
+        var lines = LyricParsing.parseLRC(lrcText)
+        var instrumental = false
+        if !failed {
+            let check = Self.applyInstrumentalCheck(
+                lrcText: lrcText, lines: lines, nolyric: false)
+            instrumental = check.instrumental
+            lines = check.lines
+        }
+        if !SettingsStore.keepPlatformWordLyrics {
+            lines = lines.map { LyricLineData(time: $0.time, text: $0.text, words: nil) }
+        }
+        lines = LyricFilter62.apply(to: lines)
+        let ratio = Self.singingCalibration(for: lines)
+            ?? (SingingRatioPool.median() ?? 0.8)
+        Breadcrumbs.log("lrc source track=\(songId) lines=\(lines.count)"
+            + " src=kugou inst=\(instrumental ? 1 : 0) fail=\(failed ? 1 : 0)")
+        return Entry(lines: lines, lrcText: lrcText,
+                     source: lines.isEmpty ? "none" : "kugou",
+                     flip: "lrc", singingRatio: ratio,
+                     isNegative: lines.isEmpty,
+                     isInstrumental: instrumental,
+                     platformPending: false,
+                     transientFailure: failed,
+                     fetchedAt: Date(),
+                     estimatedBytes: Self.estimateBytes(lines: lines, lrcText: lrcText))
+    }
+
+    /// QQ 取词（3.7 (64) R-2）：qq_<mid> 走客户端 QQ 通路。
+    /// 函数端歌词路由未实装（501，外部依赖）——调用抛错时标
+    /// platformPending（标准负 TTL，不高频重试未实装端点），
+    /// UI 明示「该平台歌词暂未接入」；函数补齐后本通路自动
+    /// 开始供词。拿到空文本（函数已通但源头无词）不标 pending。
+    private func fetchQQEntry(songId: String) async -> Entry {
+        let mid = String(songId.dropFirst(3))
+        var text: String?
+        var threw = false
+        do {
+            text = try await EdgeOneAPIClient.shared.fetchQQLyricText(songmid: mid)
+        } catch {
+            threw = true
+        }
+        let lrcText = text ?? ""
+        var lines = LyricParsing.parseLRC(lrcText)
+        if !SettingsStore.keepPlatformWordLyrics {
+            lines = lines.map { LyricLineData(time: $0.time, text: $0.text, words: nil) }
+        }
+        lines = LyricFilter62.apply(to: lines)
+        let ratio = Self.singingCalibration(for: lines)
+            ?? (SingingRatioPool.median() ?? 0.8)
+        Breadcrumbs.log("lrc source track=\(songId) lines=\(lines.count)"
+            + " src=qq pending=\(threw ? 1 : 0)")
+        return Entry(lines: lines, lrcText: lrcText,
+                     source: lines.isEmpty ? "none" : "qq",
+                     flip: "lrc", singingRatio: ratio,
+                     isNegative: lines.isEmpty,
+                     isInstrumental: false,
+                     platformPending: threw,
+                     transientFailure: false,
+                     fetchedAt: Date(),
+                     estimatedBytes: Self.estimateBytes(lines: lines, lrcText: lrcText))
+    }
+
+    /// 本地取词（3.7 (64)）：local_ 只走本地源（伴随文件＋内
+    /// 嵌歌词，LocalLibrary62 经注册表供），不再白发网易云请
+    /// 求（审计 A-1）。未注册/未命中 = 源头无词语义负结果
+    /// （标准负 TTL；新导入文件的歌词靠导入时落盘＋仓库清
+    /// 缓存/到期刷新）。
+    private func fetchLocalEntry(songId: String) -> Entry {
+        var parsed: [LyricLineData] = []
+        var lrcText = ""
+        var source = "none"
+        var flip = "lrc"
+        if let local = Self.localLyricLines(songId: songId) {
+            parsed = local.lines
+            lrcText = local.text
+            source = "local"
+            flip = local.isWordTimed ? "yrc" : "lrc"
+            Breadcrumbs.log("lyric62.local hit track=\(songId) lines=\(parsed.count)")
+        }
+        if !SettingsStore.keepPlatformWordLyrics {
+            parsed = parsed.map { LyricLineData(time: $0.time, text: $0.text, words: nil) }
+            flip = "lrc"
+        }
+        parsed = LyricFilter62.apply(to: parsed)
+        let ratio = Self.singingCalibration(for: parsed)
+            ?? (SingingRatioPool.median() ?? 0.8)
+        Breadcrumbs.log("lrc source track=\(songId) lines=\(parsed.count)"
+            + " src=\(source) flip=\(flip)")
+        return Entry(lines: parsed, lrcText: lrcText, source: source,
+                     flip: flip, singingRatio: ratio,
+                     isNegative: parsed.isEmpty,
+                     isInstrumental: false,
+                     platformPending: false,
+                     transientFailure: false,
+                     fetchedAt: Date(),
+                     estimatedBytes: Self.estimateBytes(lines: parsed, lrcText: lrcText))
     }
 
     // MARK: - (62) WB 取词链扩展
