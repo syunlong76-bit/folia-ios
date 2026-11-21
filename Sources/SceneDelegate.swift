@@ -62,6 +62,14 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         window.backgroundColor = .black
         Breadcrumbs.log("scene.launchchrome bg=black poster=removed")
         window.rootViewController = HomeWallViewController()
+        // (62) 明暗模式统一应用点：窗口级 overrideUserInterfaceStyle
+        // 读 SettingsStore.daylightMode（跟随系统/恒深色/恒浅色）；
+        // 设置变更经 foliaSettings62AChanged 即时重应用（观察者以
+        // 本 delegate 为 owner、随 scene 生命周期存活）。
+        ThemeSystem62.applyInterfaceStyle(to: window)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(daylight62Changed),
+            name: .foliaSettings62AChanged, object: nil)
         window.makeKeyAndVisible()
         self.window = window
 
@@ -102,6 +110,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 3) 冷启动自动检查更新已退役（3.7 (51)）：OTA 产物在现
         //    行拓扑里从未被服务（审计 §5 空转链），冷启自动检查
         //    段删除；UpdateManager 本体由 (51) C 组删除。
+    }
+
+    /// (62) 明暗模式变更重应用（窗口级）。
+    @objc private func daylight62Changed() {
+        ThemeSystem62.applyInterfaceStyle(to: window)
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {}

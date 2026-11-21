@@ -104,6 +104,63 @@ enum CustomBackgroundStore {
         UserDefaults.standard.removeObject(forKey: kindKey)
         UserDefaults.standard.removeObject(forKey: fileKey)
     }
+
+    // MARK: (62) WA 视频层独立槽（歌词后方视频层，与自定义背景槽分开）
+
+    private static let videoKindKey = "folia.stage.videoLayerKind"
+    private static let videoFileKey = "folia.stage.videoLayerFileName"
+
+    static var videoLayerDirectory: URL {
+        directory.appendingPathComponent("VideoLayer", isDirectory: true)
+    }
+
+    static var currentVideoLayer: (kind: CustomBackgroundKind, url: URL)? {
+        guard let kindRaw = UserDefaults.standard.string(forKey: videoKindKey),
+              let kind = CustomBackgroundKind(rawValue: kindRaw),
+              let name = UserDefaults.standard.string(forKey: videoFileKey)
+        else { return nil }
+        let url = videoLayerDirectory.appendingPathComponent(name)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            UserDefaults.standard.removeObject(forKey: videoKindKey)
+            UserDefaults.standard.removeObject(forKey: videoFileKey)
+            return nil
+        }
+        return (kind, url)
+    }
+
+    /// 把已下载到本地的文件装进视频层槽（URL 路径先下载后走此通路）。
+    @discardableResult
+    static func installVideoLayer(sourceURL: URL, kind: CustomBackgroundKind) throws -> Int {
+        let fm = FileManager.default
+        let attrs = try? fm.attributesOfItem(atPath: sourceURL.path)
+        let bytes = (attrs?[.size] as? NSNumber)?.intValue ?? 0
+        let limit = kind == .video ? maxVideoBytes : maxImageBytes
+        if bytes > limit { throw InstallError.tooLarge(limit: limit) }
+        try fm.createDirectory(at: videoLayerDirectory,
+                               withIntermediateDirectories: true)
+        if let old = currentVideoLayer {
+            try? fm.removeItem(at: old.url)
+        }
+        let ext = sourceURL.pathExtension.isEmpty
+            ? (kind == .video ? "mov" : "img") : sourceURL.pathExtension
+        let dest = videoLayerDirectory.appendingPathComponent("videolayer.\(ext)")
+        do {
+            try fm.copyItem(at: sourceURL, to: dest)
+        } catch {
+            throw InstallError.copyFailed
+        }
+        UserDefaults.standard.set(kind.rawValue, forKey: videoKindKey)
+        UserDefaults.standard.set(dest.lastPathComponent, forKey: videoFileKey)
+        return bytes
+    }
+
+    static func clearVideoLayer() {
+        if let entry = currentVideoLayer {
+            try? FileManager.default.removeItem(at: entry.url)
+        }
+        UserDefaults.standard.removeObject(forKey: videoKindKey)
+        UserDefaults.standard.removeObject(forKey: videoFileKey)
+    }
 }
 
 // MARK: - 动图帧进播放（GIF/APNG，ImageIO 逐帧）
@@ -128,6 +185,11 @@ final class AnimatedImagePlayerView: UIView {
     private var useThumbnail = false
     private let decodeQueue = DispatchQueue(
         label: "folia.custombg.animdecode", qos: .userInitiated)
+
+    /// (62) 填充方式转发到内部 imageView。
+    var imageContentMode: UIView.ContentMode = .scaleAspectFill {
+        didSet { imageView.contentMode = imageContentMode }
+    }
 
     init(url: URL) {
         super.init(frame: .zero)
@@ -308,6 +370,11 @@ final class CustomBackgroundVideoView: UIView {
         playerLayer.frame = bounds
     }
 
+    /// (62) 填充方式：fill = resizeAspectFill / fit = resizeAspect。
+    func setFillMode(fill: Bool) {
+        playerLayer.videoGravity = fill ? .resizeAspectFill : .resizeAspect
+    }
+
     func play() { player.play() }
 
     func pause() { player.pause() }
@@ -340,16 +407,28 @@ final class CustomBackgroundView: UIView {
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
+    /// (62) 视频层渲染参数：不透明度与填充方式（fill/fit）真消费点。
+    func applyLayerRendering(opacity: Double, fill: Bool) {
+        alpha = CGFloat(opacity)
+        let mode: UIView.ContentMode = fill ? .scaleAspectFill : .scaleAspectFit
+        staticView?.contentMode = mode
+        animatedView?.imageContentMode = mode
+        videoView?.setFillMode(fill: fill)
+    }
+
     func apply(kind: CustomBackgroundKind, url: URL) {
         let key = "\(kind.rawValue)|\(url.path)"
         if key == appliedKey { return }
         clearContent()
         appliedKey = key
         isActive = true
+        // (62) 填充方式来自视频层设置（fill 默认）；apply 后由宿主
+        // refreshCustomBackground 再调 applyLayerRendering 对齐当次值。
+        let fillMode = SettingsStore.videoLayerFillMode == 0
         switch kind {
         case .image:
             let imageView = UIImageView()
-            imageView.contentMode = .scaleAspectFill
+            imageView.contentMode = fillMode ? .scaleAspectFill : .scaleAspectFit
             imageView.clipsToBounds = true
             imageView.frame = bounds
             imageView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -377,12 +456,14 @@ final class CustomBackgroundView: UIView {
             }
         case .animated:
             let player = AnimatedImagePlayerView(url: url)
+            player.imageContentMode = fillMode ? .scaleAspectFill : .scaleAspectFit
             player.frame = bounds
             player.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             addSubview(player)
             animatedView = player
         case .video:
             let video = CustomBackgroundVideoView(url: url)
+            video.setFillMode(fill: fillMode)
             video.frame = bounds
             video.autoresizingMask = [.flexibleWidth, .flexibleHeight]
             addSubview(video)
@@ -411,5 +492,63 @@ final class CustomBackgroundView: UIView {
     func pause() {
         animatedView?.pause()
         videoView?.pause()
+    }
+}
+
+/// (62) 视频层 URL 安装：远程图片/GIF/视频 URL 先下载到本地缓存
+/// （Caches/FoliaVideoLayerURL），再走 CustomBackgroundStore
+/// .installVideoLayer 落槽播放——原生等价实现，禁 WebView。
+/// 完成后发 foliaSettings62AChanged（key=videoLayerURL），在场
+/// 舞台经 refreshCustomBackground 即时换层。
+enum VideoLayerURLInstaller62 {
+
+    static func install(from urlString: String) {
+        let trimmed = urlString.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let url = URL(string: trimmed),
+              url.scheme == "https" || url.scheme == "http" else {
+            Breadcrumbs.log("videolayer62.url fail=bad-url")
+            return
+        }
+        Breadcrumbs.log("videolayer62.url download begin")
+        let task = URLSession.shared.downloadTask(with: url) { temp, _, error in
+            guard let temp, error == nil else {
+                Breadcrumbs.log("videolayer62.url fail=download")
+                return
+            }
+            let ext = url.pathExtension.lowercased()
+            let kind: CustomBackgroundKind
+            if ["mp4", "mov", "m4v"].contains(ext) {
+                kind = .video
+            } else if ext == "gif" || ext == "apng" {
+                kind = .animated
+            } else {
+                kind = .image
+            }
+            // downloadTask 的临时文件在回调返回后即删：先挪进缓存目录再装槽。
+            let cacheDir = FileManager.default.urls(
+                for: .cachesDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("FoliaVideoLayerURL", isDirectory: true)
+            try? FileManager.default.createDirectory(
+                at: cacheDir, withIntermediateDirectories: true)
+            let staged = cacheDir.appendingPathComponent(
+                "download.\(ext.isEmpty ? "bin" : ext)")
+            try? FileManager.default.removeItem(at: staged)
+            do {
+                try FileManager.default.copyItem(at: temp, to: staged)
+                let bytes = try CustomBackgroundStore.installVideoLayer(
+                    sourceURL: staged, kind: kind)
+                SettingsStore.videoLayerURL = trimmed
+                SettingsStore.videoLayerEnabled = true
+                Breadcrumbs.log("videolayer62.url ok kind=\(kind.rawValue) bytes=\(bytes)")
+                DispatchQueue.main.async {
+                    NotificationCenter.default.post(
+                        name: .foliaSettings62AChanged, object: nil,
+                        userInfo: ["key": SettingsStore.Key62A.videoLayerURL])
+                }
+            } catch {
+                Breadcrumbs.log("videolayer62.url fail=install")
+            }
+        }
+        task.resume()
     }
 }

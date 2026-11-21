@@ -45,6 +45,20 @@ struct LatticeWallView: View {
 
             backButton
                 .zIndex(3)
+
+            // (62) Lattice 边缘暗角：四边径向渐变罩，强度读设置。
+            if SettingsStore.latticeVignetteEnabled {
+                RadialGradient(
+                    colors: [.clear,
+                             Color.black.opacity(SettingsStore.latticeVignetteStrength * 0.9)],
+                    center: .center,
+                    startRadius: 120,
+                    endRadius: 560
+                )
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+                .zIndex(4)
+            }
         }
         .preferredColorScheme(.dark)
         .onChange(of: queueManager.queue.count) { _, _ in
@@ -137,7 +151,21 @@ struct LatticeWallView: View {
                     .stroke(accent, lineWidth: 2)
             }
 
+            // (62) 海报聚焦叠色：开时整卡掺一层叠色——强制自定义色
+            // 用 latticePosterTintColorHex，否则用当前主题强调色；
+            // 强度读 latticePosterTintStrength。
+            if SettingsStore.latticePosterTintEnabled {
+                Rectangle()
+                    .fill(Color(uiColor: SettingsStore.latticePosterTintForceCustom
+                        ? (FoliaColorHex62.color(from: SettingsStore.latticePosterTintColorHex)
+                            ?? ThemeSystem62.currentAccent)
+                        : ThemeSystem62.currentAccent)
+                        .opacity(SettingsStore.latticePosterTintStrength))
+            }
+
             // 序号牌（top/left 14、padding 5/8、11px 800、tabular-nums、字距 0.12em）。
+            // (62) 只显示正在播放序号：开时非当前卡不挂序号牌。
+            if !SettingsStore.latticeBadgeCurrentOnly || isCurrent {
             Text("\(index + 1)")
                 .font(.system(size: 11, weight: .heavy).monospacedDigit())
                 .tracking(11 * 0.12)
@@ -147,6 +175,7 @@ struct LatticeWallView: View {
                 .background(Color.black.opacity(isCurrent ? 0.78 : 0.62))
                 .padding(.top, 14)
                 .padding(.leading, 14)
+            }
 
             // 底部文案（距边 17、gap 5）。
             VStack(alignment: .leading, spacing: 5) {
