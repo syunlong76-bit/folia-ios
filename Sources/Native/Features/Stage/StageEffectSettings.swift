@@ -10,8 +10,8 @@ import Foundation
 /// SettingsStore（新键 settings.lyrics.* 为主、旧键
 /// folia.stage.* 兼容读并同步写、旧键不删）。本门面的公开
 /// API 与缺省口径（键不存在 → true）逐字不变，全部既有读
-/// 者（GlowWordEngine / CadenzaStageRenderer / StageTextKit
-/// / ClassicStageRenderer / MonetStageRenderer）无感知。
+/// 者（GlowWordEngine / StageTextKit；原读者 Cadenza /
+/// Classic / Monet 三渲染器已随 (70) A 组删除）无感知。
 enum StageEffectSettings {
 
     static var wordEmphasisEnabled: Bool {

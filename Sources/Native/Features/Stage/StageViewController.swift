@@ -3,6 +3,7 @@ import Combine
 import QuartzCore
 import PhotosUI
 import UniformTypeIdentifiers
+import WebKit
 
 // 原生舞台页壳（3.7 (14)，M2'）：全屏舞台——封面氛围背景、
 // LyricStage 协议驱动的歌词面、与迷你台/展开卡同一命令入口的
@@ -123,6 +124,14 @@ final class StageViewController: UIViewController {
     private var stageBarDoubleTap: UITapGestureRecognizer?
     private var stageBarPresented = false
     private var stageSeekDragging = false
+    /// seek 落点保持窗（3.7 (70) B4）：.ended 发 seek 后、
+    /// 驱动重锚收敛前冻结驱动写点，免落点回跳；目标秒数
+    /// 与截止时刻（+300ms）成对记，任一满足即放行。
+    private var seekHoldTarget70: TimeInterval?
+    private var seekHoldDeadline70: CFTimeInterval = 0
+    /// 拖动期被守卫挡下的驱动回调计数（seek 落点时一行
+    /// 面包屑自证 seek.guard）。
+    private var seekGuardBlocked70 = 0
     private var stageIdleWorkItem: DispatchWorkItem?
     private var stagePetStage: MiniBarPetStage?
 
@@ -138,6 +147,10 @@ final class StageViewController: UIViewController {
     private weak var webBackingRenderer: LyricStageRenderer?
     private var webSwapGeneration = 0
     private var webFadeWorkItem: DispatchWorkItem?
+    /// 网页→网页切换快照盖（3.7 (70) B6）：切换前对当前
+    /// WebView 的截图覆盖层，压住页面自切的清屏帧；首帧回
+    /// 执/超时在 completeWebFade 同一出口交叉淡出后摘除。
+    private var webSwitchCover70: UIView?
     /// §0 量测节流（3.7 (67) B 组）：tick.pos 每 30 帧一行、
     /// sync.per5 每 5 秒一行。
     private var syncProbeTickCount = 0
@@ -332,10 +345,10 @@ final class StageViewController: UIViewController {
     // mountRenderer 的 style-guard 武装、汪汪队宠物迁移）。
     //
     // (54) 工作流 R 的 5 秒长按切样式本版退役：长按识别器与
-    // 进度环 observer（StageCyclePressObserver）接线已整组摘
-    // 除（observer/环类本体留在 StageStyleCycleBag.swift——
-    // 宠物 4s 开启手势（MiniBarPetStage）仍共用，非本包文件
-    // 不动）。三击识别器独立安装、不给任何既有识别器加
+    // 进度环 observer 接线已整组摘除（observer/环类本体曾留
+    // 在 StageStyleCycleBag.swift 供宠物 4s 开启手势共用；
+    // (70) B2 该手势整套撤除后两类已整类删除）。三击识别
+    // 器独立安装、不给任何既有识别器加
     // require(toFail:)：双击顶栏恢复照常零延迟（三击途中第
     // 2 击先触发顶栏恢复，无害、与切样式不冲突）。
     //
@@ -344,9 +357,6 @@ final class StageViewController: UIViewController {
     // 条都是它的兄弟视图而非子孙，从它们上面起的手势天然
     // 不进本识别器；容器内的贴纸浮层（StickerView）一律
     // isUserInteractionEnabled=false、触摸穿透，无死点。
-
-    private var styleCycleToast: UILabel?
-    private var styleCycleToastWorkItem: DispatchWorkItem?
 
     private func installStyleCycleRecognizers() {
         let tripleTap = UITapGestureRecognizer(
@@ -419,10 +429,12 @@ final class StageViewController: UIViewController {
 
     /// 三击轮换落点：向洗牌袋取下一只并经统一选样式通路
     /// 落地（持久化写在本方法、与选择器点选时的写点一致）；
-    /// 触发瞬间中档触觉 + 样式名标签短暂浮现（自动消失、
-    /// 不留常驻 UI），让用户知道切到了哪一只。落网页兜底
-    /// 样式时与选择器点选未迁样式完全同路（跳网页舞台），
-    /// 标签会被网页宿主盖住，切换事实以面包屑为准。
+    /// 触发瞬间只有中档触觉、无任何屏幕提示（(70) B5，
+    /// Miller 点名：三击切特效时屏幕中央不许再弹样式名
+    /// toast——旧 showStyleCycleToast 整组已摘，切换事实以
+    /// 面包屑为准）。落点分流与选择器同口径：本台可呈现
+    /// （原生渲染或网页嵌入）走统一通路、内部再按运行方式
+    /// 分流；皆不可呈现才跳全屏网页舞台兜底。
     private func cycleToNextStyle(source: String) {
         let from = activeStyleId
         guard let draw = StageStyleCycleBag.shared.next(currentStyleId: from) else {
@@ -432,57 +444,13 @@ final class StageViewController: UIViewController {
         guard let info = LyricStageRegistry.info(for: draw.styleId) else { return }
         StageStyleStore.currentStyleId = draw.styleId
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        // 网页运行标注不丢（3.7 (67) A3）：袋中网页运行样式
-        // 在轮换浮签上同样明示。
-        let toastName = info.displayName
-            + (StageRuntimeStore.isWeb(draw.styleId) ? " · 网页运行" : "")
-        showStyleCycleToast(name: toastName)
         Breadcrumbs.log("style.cycle.switch source=\(source) from=\(from) to=\(draw.styleId)"
             + " round=\(draw.round) remaining=\(draw.remaining)")
-        if info.isNativeAvailable {
+        if info.isStagePresentable {
             applyNativeStyleSelection(draw.styleId)
         } else {
             applyWebStyleSelection(info, reason: "cycle web style \(draw.styleId)")
         }
-    }
-
-    private func showStyleCycleToast(name: String) {
-        styleCycleToastWorkItem?.cancel()
-        styleCycleToastWorkItem = nil
-        styleCycleToast?.removeFromSuperview()
-        let label = UILabel()
-        label.text = name
-        label.font = .systemFont(ofSize: 15, weight: .semibold)
-        label.textColor = .white
-        label.backgroundColor = UIColor.black.withAlphaComponent(0.55)
-        label.textAlignment = .center
-        label.layer.cornerRadius = 16
-        label.clipsToBounds = true
-        label.alpha = 0
-        label.isUserInteractionEnabled = false
-        view.addSubview(label)
-        styleCycleToast = label
-        label.sizeToFit()
-        let width = label.bounds.width + 32
-        label.frame = CGRect(
-            x: (view.bounds.width - width) / 2,
-            y: view.bounds.height * 0.32,
-            width: width, height: 32)
-        UIView.animate(withDuration: 0.3, delay: 0,
-                       usingSpringWithDamping: 0.85, initialSpringVelocity: 0,
-                       options: [.beginFromCurrentState]) {
-            label.alpha = 1
-        }
-        let work = DispatchWorkItem { [weak label] in
-            UIView.animate(withDuration: 0.35, delay: 0,
-                           options: [.beginFromCurrentState]) {
-                label?.alpha = 0
-            } completion: { _ in
-                label?.removeFromSuperview()
-            }
-        }
-        styleCycleToastWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
 
     /// 选样式统一落点·原生（样式选择器手选与三击轮换共用，
@@ -603,7 +571,30 @@ final class StageViewController: UIViewController {
         Breadcrumbs.samplerStart()
         Breadcrumbs.log("stage gate enter style=\(activeStyleId) token=\(stageToken)")
         progressDriver.onFraction = { [weak self] fraction in
-            self?.setStageProgress(fraction)
+            guard let self else { return }
+            // 拖动态守卫（3.7 (70) B4，与墙台 !miniSeekDragging
+            // 对齐）：拖动中驱动不许写点——否则填充/圆点在
+            // 手指位置与播放位置之间逐帧轮写＝闪帧（取证
+            // uitaps C② 已定级，舞台接线独缺此守卫）。挡下
+            // 次数在 seek 落点时一行自证。
+            if self.stageSeekDragging {
+                self.seekGuardBlocked70 += 1
+                return
+            }
+            // seek 落点保持窗（3.7 (70) B4）：驱动重锚（漂移
+            // >0.25s 连续 2 帧）收敛前，写点冻结在落点呈现
+            // 上；rawPlayhead 进入目标 ±0.25s 或 300ms 超时
+            // 任一满足即放行，消灭落点回跳。
+            if let target = self.seekHoldTarget70 {
+                let playhead = fraction * self.engine.duration
+                if abs(playhead - target) <= 0.25
+                    || CACurrentMediaTime() >= self.seekHoldDeadline70 {
+                    self.seekHoldTarget70 = nil
+                } else {
+                    return
+                }
+            }
+            self.setStageProgress(fraction)
         }
         progressDriver.start()
         // 自定义背景回台恢复（3.7 (47)）：动图/视频续播。
@@ -708,12 +699,8 @@ final class StageViewController: UIViewController {
     private func teardown() {
         guard !tornDown else { return }
         tornDown = true
-        // 三击轮换收尾（3.7 (61) 第 6 条）：样式名标签不跨台
-        // 残留（袋子轮次状态是进程级、保留不动）。
-        styleCycleToastWorkItem?.cancel()
-        styleCycleToastWorkItem = nil
-        styleCycleToast?.removeFromSuperview()
-        styleCycleToast = nil
+        // 三击轮换的袋子轮次状态是进程级、保留不动（(70)
+        // B5 起切换无屏幕提示，旧 toast 收尾随之退役）。
         // 守卫证明·teardown 路（3.7 (45) R-4）：本台只在正常
         // dismiss 时走 teardown——开过又正常关掉即该样式活
         // 过，清 pending，免健康样式下次启动遭误报回退。
@@ -1130,7 +1117,7 @@ final class StageViewController: UIViewController {
         // 开台初始样式即当前样式，从洗牌袋本轮余量剔除（轮
         // 次跨开台保留）。
         StageStyleCycleBag.shared.noteExternalSelection(activeStyleId)
-        if !StageStyleStore.currentStyleIsNative && !noticeDismissed {
+        if !StageStyleStore.currentStyleIsPresentable && !noticeDismissed {
             let recordedName = LyricStageRegistry.info(for: recorded)?.displayName ?? recorded
             let effectiveName = LyricStageRegistry.info(for: activeStyleId)?.displayName ?? activeStyleId
             noticeLabel.text = "当前样式『\(recordedName)』尚未原生化，暂时用『\(effectiveName)』"
@@ -1300,14 +1287,22 @@ final class StageViewController: UIViewController {
     }
 
     /// 换装·网页运行：原生→网页时旧渲染器留作垫底（淡换完成
-    /// 才拆）；网页→网页时页面自切（WebView 已在台面、alpha
-    /// 保持），回执只作量测与留痕。
+    /// 才拆）；网页→网页时页面自切——(70) B6 起先铺快照盖
+    /// 再下发（见 installWebSwitchCoverThenPush），回执/超时
+    /// 在 completeWebFade 同一出口结算。
     private func swapToWebRenderer(styleId: String) {
         if webEmbedStyleId == styleId {
             WebEffectBridge.shared.pushVisual(lyricMode: styleId, backgroundMode: nil)
             return
         }
         let backing = renderer
+        // 网页→网页（已结算网页态再切网页式）：无原生垫底、
+        // WebView alpha 恒 1，页面自切的清屏帧会透过透明页
+        // （html,body background:0 0）与无底色的
+        // rendererContainer 露出舞台黑底＝一闪黑屏（(70)
+        // B6 定级）。此路改走快照盖；其余两路（原生→网页、
+        // 未结算网页→网页尚有原生垫底）维持 (67) 直发。
+        let isWebToWeb = webEmbedStyleId != nil && backing == nil
         activeStyleId = styleId
         armWebStyleProof(styleId: styleId)
         embedWebView()
@@ -1316,11 +1311,48 @@ final class StageViewController: UIViewController {
         }
         webEmbedStyleId = styleId
         WebEffectBridge.shared.isEmbeddedInStage = true
-        WebEffectBridge.shared.pushSnapshot()
-        WebEffectBridge.shared.pushVisual(lyricMode: styleId, backgroundMode: nil)
-        armWebFade(backing: backing)
+        if isWebToWeb {
+            installWebSwitchCoverThenPush(styleId: styleId)
+        } else {
+            WebEffectBridge.shared.pushSnapshot()
+            WebEffectBridge.shared.pushVisual(lyricMode: styleId, backgroundMode: nil)
+            armWebFade(backing: backing)
+        }
         Breadcrumbs.log("webfx.mount style=\(styleId) via=swap \(StyleOpenTrace.memoryFields())")
         Breadcrumbs.log("est.src style=\(styleId) est=web")
+    }
+
+    /// 网页→网页切换的快照盖（3.7 (70) B6）：对当前 WebView
+    /// 用 WKWebView 官方 takeSnapshot 截图（异步、内容进程
+    /// 合成后回图），回图后把图作不透明覆盖层压在 WebView
+    /// 之上，再下发 pushSnapshot/pushVisual 并武装淡换——
+    /// 页面自切全程被盖遮住，completeWebFade 在首帧回执
+    /// （ack）或超时（1.8s/冷启 6s、既有口径）任一结算时把
+    /// 盖交叉淡出，超时也只淡出不露黑。取图失败（image 为
+    /// nil）则无盖直发（退回 (67) 行为、面包屑留痕）；截图
+    /// 在途时目标式已被新一轮切换改写则整发作废，不下发
+    /// 陈旧样式。
+    private func installWebSwitchCoverThenPush(styleId: String) {
+        let webView = WebEffectBridge.shared.webView
+        webView.takeSnapshot(with: nil) { [weak self] image, _ in
+            guard let self, self.webEmbedStyleId == styleId else { return }
+            if let image {
+                self.webSwitchCover70?.removeFromSuperview()
+                let cover = UIImageView(image: image)
+                cover.frame = self.rendererContainer.bounds
+                cover.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                cover.contentMode = .scaleToFill
+                cover.isUserInteractionEnabled = false
+                self.rendererContainer.addSubview(cover)
+                self.webSwitchCover70 = cover
+                Breadcrumbs.log("webfx.cover style=\(styleId)")
+            } else {
+                Breadcrumbs.log("webfx.cover style=\(styleId) miss=1")
+            }
+            WebEffectBridge.shared.pushSnapshot()
+            WebEffectBridge.shared.pushVisual(lyricMode: styleId, backgroundMode: nil)
+            self.armWebFade(backing: nil)
+        }
     }
 
     /// 网页运行同样武装防卡死守卫（(67) 独立审查修复）：网页
@@ -1393,6 +1425,9 @@ final class StageViewController: UIViewController {
 
     /// 淡换出口：网页层 0.35s easeOut 淡入，完成后拆垫底的
     /// 原生渲染器（汪汪队迁移等生命周期随 unmount 自然结算）。
+    /// 网页→网页的快照盖（(70) B6）也在本出口同 0.35s 交叉
+    /// 淡出后摘除——回执（ack）与超时（timeout）同一结算，
+    /// 超时也只淡出、不露黑。
     private func completeWebFade(generation: Int, via: String) {
         guard generation == webSwapGeneration, webEmbedStyleId != nil else { return }
         webFadeWorkItem?.cancel()
@@ -1401,6 +1436,15 @@ final class StageViewController: UIViewController {
         // 首帧回执到 = 网页样式存活证明（守卫结算，审查修复）。
         if via == "ack" { finishStyleProof(via: "web-frame") }
         let webView = WebEffectBridge.shared.webView
+        if let cover = webSwitchCover70 {
+            webSwitchCover70 = nil
+            UIView.animate(withDuration: 0.35, delay: 0,
+                           options: [.curveEaseOut, .beginFromCurrentState]) {
+                cover.alpha = 0
+            } completion: { _ in
+                cover.removeFromSuperview()
+            }
+        }
         UIView.animate(withDuration: 0.35, delay: 0,
                        options: [.curveEaseOut, .beginFromCurrentState]) {
             webView.alpha = 1
@@ -1421,6 +1465,9 @@ final class StageViewController: UIViewController {
         webFadeWorkItem = nil
         webSwapGeneration += 1
         webBackingRenderer = nil
+        // 快照盖（(70) B6）随摘嵌一并清，勿带出本台。
+        webSwitchCover70?.removeFromSuperview()
+        webSwitchCover70 = nil
         guard webEmbedStyleId != nil else { return }
         let webView = WebEffectBridge.shared.webView
         if webView.superview === rendererContainer {
@@ -1950,12 +1997,6 @@ final class StageViewController: UIViewController {
                     info, reason: "picker web style \(info.id)")
             }
         }
-        picker.onPickRuntime = { [weak self] styleId in
-            guard let self else { return }
-            self.dismiss(animated: true) { [weak self] in
-                self?.applyNativeStyleSelection(styleId)
-            }
-        }
         picker.onOpenWebStage = { [weak self] in
             guard let self else { return }
             self.dismiss(animated: true) { [weak self] in
@@ -2090,12 +2131,6 @@ final class StageViewController: UIViewController {
                     info, reason: "palette web style \(info.id)")
             }
         }
-        picker.onPickRuntime = { [weak self] styleId in
-            guard let self else { return }
-            self.dismiss(animated: true) { [weak self] in
-                self?.applyNativeStyleSelection(styleId)
-            }
-        }
         picker.onOpenWebStage = { [weak self] in
             guard let self else { return }
             self.dismiss(animated: true) { [weak self] in
@@ -2175,8 +2210,11 @@ final class StageViewController: UIViewController {
         let petStage = MiniBarPetStage(bar: bar, role: .stage)
         view.addSubview(petStage)
         stagePetStage = petStage
-        // (60) 第 8 条：4s 长按开启宠物手势挂台身空白域。
-        petStage.attachOpenGesture(to: bar)
+        // (70) B2：点播台 4s 长按开启宠物手势整套已撤（与切
+        // 主题长按同域打架、圆圈干扰操作，Miller 改令）——
+        // 台上不再挂任何宠物相关识别器；宠物开关改全局右
+        // 下角召唤钮（PetSummonButton70）＋设置开关，关闭
+        // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = 35
@@ -2559,11 +2597,11 @@ final class StageViewController: UIViewController {
     /// 长按台身循环切主题（与墙同规：收起态不切、按键区不
     /// 切、总开关关时停用；切换落盘 + 发同一变更通知）。
     @objc private func stageBarLongPressed(_ gesture: UILongPressGestureRecognizer) {
-        // (60) 第 8 条手势域隔离：宠物关闭态下台身空白长按让给
-        // 4s 开启手势，切主题不动作（宠物开启态照常）。
+        // (70) B2：(60) 的宠物域隔离门控随 4s 开启手势整套
+        // 撤除——台身长按只剩切主题一职，宠物开关态不再
+        // 影响本识别器。
         guard gesture.state == .began, !stageBarCollapsed,
-              MiniPlayerTheme.effectsEnabled,
-              StickerSettings.miniPetsEnabled else { return }
+              MiniPlayerTheme.effectsEnabled else { return }
         let point = gesture.location(in: stageBar)
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
@@ -2682,9 +2720,20 @@ final class StageViewController: UIViewController {
             stageSeekDragging = false
             resetStageIdleTimer()
             guard engine.duration > 0 else { return }
-            performSeek(to: Double(fraction) * engine.duration, source: "stage.bar.seek")
+            let target = Double(fraction) * engine.duration
+            // 落点保持窗开窗（3.7 (70) B4）：先记目标与截止
+            // 再发 seek；拖动期守卫战绩一行自证（无挡下则
+            // 不落，免噪音）。
+            seekHoldTarget70 = target
+            seekHoldDeadline70 = CACurrentMediaTime() + 0.3
+            if seekGuardBlocked70 > 0 {
+                Breadcrumbs.log("seek.guard n=\(seekGuardBlocked70)")
+                seekGuardBlocked70 = 0
+            }
+            performSeek(to: target, source: "stage.bar.seek")
         case .cancelled, .failed:
             stageSeekDragging = false
+            seekGuardBlocked70 = 0
             resetStageIdleTimer()
         default:
             break

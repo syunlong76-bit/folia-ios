@@ -588,9 +588,6 @@ final class MiniBarPetStage: UIView {
     /// 关心触发与停靠过期扫描，落地收尾后恢复。
     private var dropInActive = false
     private var lastGreetingIndex: [Bool: Int] = [:]
-    /// 4s 开启手势组件（attachOpenGesture 时建并由本层持有，
-    /// 组件对 stage 只弱引用、无环）。
-    private var openGestureComponent: MiniBarPetOpenGesture?
     private var transientBubbles: [UILabel] = []
 
     private var displayLink: CADisplayLink?
@@ -1453,18 +1450,6 @@ final class MiniBarPetStage: UIView {
         guestRotateAt = activeTime + 18
     }
 
-    // MARK: 4s 开启手势接线（(60) 第 8 条）
-
-    /// 宿主一行接线：把 4s 开启手势组件挂到点播台 bar 视图
-    /// 上（组件由本层持有，宿主无需另存）。触发语义、触摸
-    /// 域隔离与进度环全在 MiniBarPetOpenGesture 内自洽。
-    func attachOpenGesture(to barView: UIView) {
-        let component = MiniBarPetOpenGesture(stage: self)
-        openGestureComponent = component
-        component.attach(to: barView)
-        Breadcrumbs.log("pet.openGesture attach role=\(role == .wall ? "wall" : "stage")")
-    }
-
     // MARK: 三分交互（演员回调，语法与 (25) 同构）
 
     fileprivate func petTapped(_ actor: MiniPetActor, head: Bool) {
@@ -1573,6 +1558,26 @@ final class MiniBarPetStage: UIView {
         let leaving = allActors
         Breadcrumbs.log("pet.switch off via=gesture farewell=dismiss"
             + " cast=\(leaving.count)")
+        startFarewell(of: leaving, destination: .dismiss) { [weak self] in
+            guard let self else { return }
+            self.clearCast()
+            self.petsActive = false
+            self.isHidden = true
+            Breadcrumbs.log("pet.switch off done farewell=dismiss")
+        }
+    }
+
+    /// 全局召唤钮关闭落点（3.7 (70) B2 终版）：与长按宠物本
+    /// 体关闭（petPressCloseTriggered）同路的全员 dismiss
+    /// 告别离场，区别仅在触发源无具体演员。开关双写与
+    /// via=corner3s 面包屑由召唤钮落，本方法只管离场本体
+    /// （调用方须先写 off，否则 tick 会按开态重新补员）。
+    func performFarewellDismissAll70() {
+        guard petsActive, !farewellActive else { return }
+        pendingSpawns.removeAll()
+        batchActive = false
+        pendingForm = nil
+        let leaving = allActors
         startFarewell(of: leaving, destination: .dismiss) { [weak self] in
             guard let self else { return }
             self.clearCast()
@@ -2567,155 +2572,5 @@ final class MiniBarPetStage: UIView {
         bubbleB?.removeFromSuperview()
         bubbleA = nil
         bubbleB = nil
-    }
-}
-
-// MARK: - 4s 开启手势组件（(60) 第 8 条）
-
-/// 点播台宠物「长按 4 秒开启」组件：关闭态下宠物层
-/// isHidden 接不到触摸，开启识别器只能挂点播台本体（bar）。
-/// 宿主接线一行：`petStage.attachOpenGesture(to: bar)`（组件
-/// 由 MiniBarPetStage 持有）；也可自行建组件 attach（须自
-/// 行持有组件，识别器 target 与 delegate 均不强引组件）。
-///
-/// 手势域隔离（组件侧已做满）：
-/// - delegate shouldReceive 沿触摸视图祖先链查 UIControl：
-///   一切控件命中（播放/前后曲/模式/快排钮等）一律拒绝，
-///   只认台身空白背景域；进度环观察器共用同一 delegate、
-///   同一域限定，按在控件上不亮环。
-/// - 触发识别器 allowableMovement 与舞台 5s 轮换同值 12pt，
-///   漂移超限系统自动判失败、本次作废。
-/// 与台身既有 0.55s 切主题长按的域重叠在空白区仍存在（两
-/// 者都认空白域）——组件侧无权改宿主识别器，宿主接线时须
-/// 配合：在三处切主题 handler 里加开关门控（宠物关时切主
-/// 题长按不动作），否则开启按压会在 0.55s 先切一次主题。
-/// 详见交付报告 attach 建议。
-///
-/// 按压进度反馈：沿舞台 5s 轮换的现行做法——StageCycle-
-/// PressObserver（永不识别）驱动 StageCycleProgressRingView，
-/// 延迟 0.22s 出环（短点按不闪环）、填充时长 = 4s − 0.22s
-/// 与触发时刻对齐补满、漂移超限/抬手撤环、触发补满淡出。
-/// 宠物已开启时整组件静默（不亮环、不重复触发）。
-final class MiniBarPetOpenGesture: NSObject, UIGestureRecognizerDelegate {
-
-    static let holdDuration: TimeInterval = 4.0
-    private static let ringDelay: TimeInterval = 0.22
-
-    let recognizer: UILongPressGestureRecognizer
-    private weak var stage: MiniBarPetStage?
-    private weak var barView: UIView?
-
-    private var ring: StageCycleProgressRingView?
-    private var ringWorkItem: DispatchWorkItem?
-    private var pressPoint: CGPoint = .zero
-    private var pressActive = false
-    private var fired = false
-
-    init(stage: MiniBarPetStage) {
-        self.stage = stage
-        recognizer = UILongPressGestureRecognizer()
-        super.init()
-        recognizer.minimumPressDuration = Self.holdDuration
-        recognizer.allowableMovement = StageStyleCycleBag.pressMoveTolerance
-        recognizer.delegate = self
-        recognizer.addTarget(self, action: #selector(handleRecognizer(_:)))
-    }
-
-    func attach(to barView: UIView) {
-        self.barView = barView
-        barView.addGestureRecognizer(recognizer)
-        let observer = StageCyclePressObserver()
-        observer.cancelsTouchesInView = false
-        observer.delegate = self
-        observer.onPressBegan = { [weak self] point in
-            self?.pressBegan(at: point)
-        }
-        observer.onPressMoved = { [weak self] point in
-            self?.pressMoved(to: point)
-        }
-        observer.onPressEnded = { [weak self] in
-            self?.pressEnded()
-        }
-        barView.addGestureRecognizer(observer)
-    }
-
-    // MARK: 触摸域限定（识别器与观察器共用）
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldReceive touch: UITouch) -> Bool {
-        // 沿祖先链（止于所挂 bar 视图）任一 UIControl 命中即
-        // 拒绝：只认台身空白背景域。
-        var view: UIView? = touch.view
-        while let current = view, current !== gestureRecognizer.view {
-            if current is UIControl { return false }
-            view = current.superview
-        }
-        return true
-    }
-
-    // MARK: 触发
-
-    @objc private func handleRecognizer(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-        guard !StickerSettings.miniPetsEnabled else { return }
-        fired = true
-        ring?.dismiss(completed: true)
-        ring = nil
-        // 开关双写同源（与关闭路径同口径）：SettingsStore 新
-        // 键 + StickerSettings 旧键，设置页与 tick 读者一致。
-        SettingsStore.miniPetsEnabled = true
-        StickerSettings.miniPetsEnabled = true
-        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-        Breadcrumbs.log("pet.switch on via=longpress4s dropin")
-        stage?.performDropInEntrance()
-    }
-
-    // MARK: 进度环（舞台 5s 轮换同款做法）
-
-    private func pressBegan(at point: CGPoint) {
-        guard !StickerSettings.miniPetsEnabled else { return }
-        pressActive = true
-        fired = false
-        pressPoint = point
-        ringWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.pressActive, !self.fired,
-                  let barView = self.barView else { return }
-            self.ring?.dismiss(completed: false)
-            let ring = StageCycleProgressRingView()
-            self.ring = ring
-            let parent = barView.superview ?? barView
-            let center = parent === barView
-                ? self.pressPoint
-                : barView.convert(self.pressPoint, to: parent)
-            ring.show(at: center, in: parent,
-                      duration: Self.holdDuration - Self.ringDelay)
-        }
-        ringWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.ringDelay,
-                                      execute: work)
-    }
-
-    private func pressMoved(to point: CGPoint) {
-        guard pressActive, !fired else { return }
-        let drift = hypot(point.x - pressPoint.x, point.y - pressPoint.y)
-        if drift > StageStyleCycleBag.pressMoveTolerance {
-            pressActive = false
-            ringWorkItem?.cancel()
-            ringWorkItem = nil
-            ring?.dismiss(completed: false)
-            ring = nil
-        }
-    }
-
-    private func pressEnded() {
-        let wasActive = pressActive
-        pressActive = false
-        ringWorkItem?.cancel()
-        ringWorkItem = nil
-        if wasActive, !fired {
-            ring?.dismiss(completed: false)
-            ring = nil
-        }
     }
 }

@@ -1,0 +1,207 @@
+import UIKit
+
+/// 全局宠物召唤/关闭钮（3.7 (70) B2 终版，Miller 四度定版）。
+///
+/// 沿革：点播台 4s 长按开启（(60) 第 8 条）与台面切主题长
+/// 按同域打架、进度圆环干扰操作，(70) 整套撤除；召唤中途
+/// 案（舞台长按、舞台双指下滑——墙面要拖动）均作废，终案
+/// 为本钮：主窗口根层之上的右下角小爪印钮，主页墙/舞台/
+/// 详情/歌单等主页面同位可达（模态页盖住它可接受）。
+///
+/// 状态相关双阈值开关（阈值按按下瞬间的开关态设定，不存
+/// 在 3s 穿过 2s 的问题）：
+///  - 宠物关态：长按 2.0s → 召唤（开关双写 on＋当前面宠物
+///    掉落入场 performDropInEntrance＋中震动），面包屑
+///    pet.switch on via=corner2s。
+///  - 宠物开态：长按 3.0s → 关闭（开关双写 off＋当前面宠
+///    物走 dismiss 告别离场 performFarewellDismissAll70，
+///    与长按宠物本体关闭同路），面包屑 pet.switch off
+///    via=corner3s。长按宠物本体 3s 关闭的老路保留不动。
+///
+/// 纪律：
+///  - 短按不绑任何动作（防误触）；长按识别器
+///    cancelsTouchesInView=false，不拦页面其他手势。
+///  - 按压反馈只许钮自身：静置半透明低调；按压中随阈值时
+///    长渐亮＋轻微放大（线性填充属计时反馈、非转场动画，
+///    与旧进度环填充同口径），触发脉冲后系统弹簧回落。
+///    不许用圆环。
+///  - 几何：右下角、安全区内、底边在点播台展开态顶边
+///    （安全区底 +10 间距 +70 台高 = 80）之上再留 8pt
+///    （=88）；(68) 全宽条顶边为安全区底 +64，同被避开。
+///    横竖屏同式成立（点播台横屏居中同宽同高）。
+///  - 阈值新鲜度：开关无变更通知，阈值在每次 hitTest（触
+///    摸管线最前端、先于识别器计时）现读开关刷新，另在安
+///    装与每次触发后刷新——外部路径（设置/长按宠物）改过
+///    开关后，下一次按下读到的恒为现态。
+final class PetSummonButton70: UIView {
+
+    private static let diameter: CGFloat = 44
+    private static let bottomClearance: CGFloat = 88
+
+    private let circleView = UIView()
+    private let iconView = UIImageView()
+    private let pressRecognizer = UILongPressGestureRecognizer()
+    private var rampAnimator: UIViewPropertyAnimator?
+
+    static func install(in window: UIWindow) {
+        let button = PetSummonButton70()
+        window.addSubview(button)
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
+            button.widthAnchor.constraint(equalToConstant: diameter),
+            button.heightAnchor.constraint(equalToConstant: diameter),
+            button.trailingAnchor.constraint(
+                equalTo: window.safeAreaLayoutGuide.trailingAnchor,
+                constant: -14),
+            button.bottomAnchor.constraint(
+                equalTo: window.safeAreaLayoutGuide.bottomAnchor,
+                constant: -bottomClearance),
+        ])
+    }
+
+    private init() {
+        super.init(frame: CGRect(x: 0, y: 0,
+                                 width: Self.diameter, height: Self.diameter))
+        backgroundColor = .clear
+        alpha = 0.55
+
+        circleView.frame = bounds.insetBy(dx: 2, dy: 2)
+        circleView.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        circleView.layer.cornerRadius = circleView.bounds.width / 2
+        circleView.layer.borderWidth = 1
+        circleView.layer.borderColor =
+            UIColor.white.withAlphaComponent(0.25).cgColor
+        circleView.isUserInteractionEnabled = false
+        addSubview(circleView)
+
+        let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .medium)
+        iconView.image = UIImage(systemName: "pawprint.fill",
+                                 withConfiguration: config)
+        iconView.tintColor = UIColor.white.withAlphaComponent(0.9)
+        iconView.contentMode = .center
+        iconView.frame = bounds
+        iconView.isUserInteractionEnabled = false
+        addSubview(iconView)
+
+        pressRecognizer.minimumPressDuration = Self.currentThreshold()
+        pressRecognizer.allowableMovement = 12
+        pressRecognizer.cancelsTouchesInView = false
+        pressRecognizer.addTarget(self, action: #selector(handleLongPress(_:)))
+        addGestureRecognizer(pressRecognizer)
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private static func currentThreshold() -> TimeInterval {
+        StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+    }
+
+    private func refreshThreshold() {
+        pressRecognizer.minimumPressDuration = Self.currentThreshold()
+    }
+
+    /// hitTest 在触摸管线最前端（先于识别器开始计时）：
+    /// 每次按下前现读开关刷新阈值，阈值恒为按下瞬间的
+    /// 开关态。
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        if hit != nil { refreshThreshold() }
+        return hit
+    }
+
+    // MARK: 按压反馈（只许钮自身渐亮＋轻微放大，不用圆环）
+
+    override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesBegan(touches, with: event)
+        rampAnimator?.stopAnimation(true)
+        let ramp = UIViewPropertyAnimator(
+            duration: pressRecognizer.minimumPressDuration,
+            curve: .linear) { [weak self] in
+            guard let self else { return }
+            self.alpha = 1
+            self.transform = CGAffineTransform(scaleX: 1.15, y: 1.15)
+            self.circleView.backgroundColor =
+                UIColor.black.withAlphaComponent(0.55)
+        }
+        rampAnimator = ramp
+        ramp.startAnimation()
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        settleToIdle()
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesCancelled(touches, with: event)
+        settleToIdle()
+    }
+
+    private func settleToIdle() {
+        rampAnimator?.stopAnimation(true)
+        rampAnimator = nil
+        UIView.animate(withDuration: 0.3, delay: 0,
+                       usingSpringWithDamping: 0.8, initialSpringVelocity: 0,
+                       options: [.beginFromCurrentState]) { [weak self] in
+            guard let self else { return }
+            self.alpha = 0.55
+            self.transform = .identity
+            self.circleView.backgroundColor =
+                UIColor.black.withAlphaComponent(0.35)
+        }
+    }
+
+    // MARK: 触发（阈值到点，识别器 .began）
+
+    @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        // 触发脉冲：先冲到最亮最大，弹簧回落静置态。
+        rampAnimator?.stopAnimation(true)
+        rampAnimator = nil
+        alpha = 1
+        transform = CGAffineTransform(scaleX: 1.22, y: 1.22)
+        circleView.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        settleToIdle()
+
+        if StickerSettings.miniPetsEnabled {
+            // 关闭：开关双写 off＋当前面 dismiss 告别离场。
+            SettingsStore.miniPetsEnabled = false
+            StickerSettings.miniPetsEnabled = false
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Breadcrumbs.log("pet.switch off via=corner3s")
+            currentFacePetStage()?.performFarewellDismissAll70()
+        } else {
+            // 召唤：开关双写 on＋当前面掉落入场（写入场门控
+            // 读开关，故先写后调，与旧组件同序）。
+            SettingsStore.miniPetsEnabled = true
+            StickerSettings.miniPetsEnabled = true
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Breadcrumbs.log("pet.switch on via=corner2s")
+            currentFacePetStage()?.performDropInEntrance()
+        }
+        refreshThreshold()
+    }
+
+    /// 当前面宠物层：自本钮所在窗口的根沿 presented 链走
+    /// 到最顶层控制器，只在其视图子树内逆序（上层优先）
+    /// 找 MiniBarPetStage——墙在舞台之下时只命中舞台那
+    /// 只，模态页（无宠物层）时返回 nil（开关照写、入场/
+    /// 离场由各面自身同步兜底）。
+    private func currentFacePetStage() -> MiniBarPetStage? {
+        guard let root = window?.rootViewController else { return nil }
+        var top = root
+        while let presented = top.presentedViewController {
+            top = presented
+        }
+        return Self.findPetStage(in: top.view)
+    }
+
+    private static func findPetStage(in view: UIView) -> MiniBarPetStage? {
+        for subview in view.subviews.reversed() {
+            if let stage = subview as? MiniBarPetStage { return stage }
+            if let found = findPetStage(in: subview) { return found }
+        }
+        return nil
+    }
+}

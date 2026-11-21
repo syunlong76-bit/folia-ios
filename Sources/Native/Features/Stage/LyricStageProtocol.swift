@@ -255,70 +255,74 @@ struct LyricStageStyleInfo {
     var isLocked: Bool = false
 
     /// 网页运行位（3.7 (67) A3，只增计算属性）：本样式在网页
-    /// 端有原版实现（网页 17 式），可在原生台面内嵌网页运行
-    /// （运行位由 StageRuntimeStore 按式持久化、缺省原生）。
+    /// 端有原版实现（网页 17 式），在原生台面内嵌网页运行。
     /// 自有样式（原创三稿＋汪汪队）无网页实现，恒原生。
+    /// (70) 起 17 式的原生移植渲染已整删、运行位切换退役：
+    /// hasWebRuntime 为真即恒网页运行（StageRuntimeStore）。
     var hasWebRuntime: Bool {
         !["tuning", "corridor", "afterglow", "petconcert"].contains(id)
     }
 
+    /// 本台可呈现（3.7 (70)，只增计算属性）：有原生渲染器
+    /// （factory 非空），或有网页运行（台面内嵌）——二者皆
+    /// 无才走全屏网页舞台兜底。(70) 后注册表内已无此情形，
+    /// 兜底仅作防御保留。
+    var isStagePresentable: Bool { isNativeAvailable || hasWebRuntime }
+
     var sourceTag: String { "stage.\(id)" }
 }
 
-/// 样式注册表（网页 17 样式已全量原生化：classic、partita（(26)）
-/// 与 cadenza、fume、tilt、claddagh、cappella、still（(33) A 档）
-/// 为早期迁移，(57) 补齐 sonnet/tempera/lumiere/hanabi/machi/
-/// nebbia/pendolo/diorama 八样式并为六个仿写样式（cadenza/
-/// partita/fume/tilt/claddagh/cappella）按网页源码重对齐
-/// （styleVersion 3）；另加原创三稿 tuning/corridor/afterglow
-/// （(40)）与 petconcert（(53)）。各样式逐样式调参面板经
-/// tuningPanelFactory 挂选择器。选择器
+/// 样式注册表（沿革：网页 17 样式曾于 (26)/(33)/(57) 全量
+/// 原生化、原创三稿 tuning/corridor/afterglow（(40)）与
+/// petconcert（(53)）为自有原生。(67) 网页 17 式加台面内嵌
+/// 网页运行、与原生移植双运行并行；(70) Miller 真机验网页
+/// 切换后下令：17 式原生移植渲染整删、只走网页嵌入单路——
+/// 本表 17 式 factory=nil / isNativeAvailable=false /
+/// 无调参面板（调参存储与面板同为原生专属链路，经核不经桥
+/// 供网页运行，随渲染器一并删除，逐式清单见 (70) 交付
+/// 报告）；自有四式原生一行不动。选择器
 /// （StageStylePickerViewController）与 StageStyleStore 均直接
-/// 读本表，StageViewController 经 info.factory 分发渲染器，三
-/// 处无需另行登记。
+/// 读本表，StageViewController 对 17 式经 StageRuntimeStore
+/// 分流网页嵌入、对自有四式经 info.factory 分发渲染器。
 enum LyricStageRegistry {
     static let allStyles: [LyricStageStyleInfo] = [
-        .init(id: "sonnet",   displayName: "商籁", order: 10,  styleVersion: 1, isNativeAvailable: true,
-              factory: { SonnetStageRenderer() }, tuningPanelFactory: { SonnetTuning.makePanel() }),
-        .init(id: "tempera",  displayName: "凝彩", order: 20,  styleVersion: 1, isNativeAvailable: true,
-              factory: { TemperaStageRenderer() }, tuningPanelFactory: { TemperaTuning.makePanel() }),
-        .init(id: "lumiere",  displayName: "绘光", order: 25,  styleVersion: 1, isNativeAvailable: true,
-              factory: { LumiereStageRenderer() }, tuningPanelFactory: { LumiereTuning.makePanel() }),
-        .init(id: "hanabi",   displayName: "花火", order: 26,  styleVersion: 1, isNativeAvailable: true,
-              factory: { HanabiStageRenderer() }, tuningPanelFactory: { HanabiTuning.makePanel() }),
-        // (60) 第 4 条：machi 锁定禁用（Miller 改判：不删、代码与
-        // WebEffect 资源保留，用户选不到用不了）——isLocked=true，
-        // isNativeAvailable 保持 true 不动（置 false 会分流网页舞台）。
-        .init(id: "machi",    displayName: "町景", order: 27,  styleVersion: 1, isNativeAvailable: true,
-              factory: { MachiStageRenderer() }, tuningPanelFactory: { MachiTuning.makePanel() },
+        .init(id: "sonnet",   displayName: "商籁", order: 10,  styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "tempera",  displayName: "凝彩", order: 20,  styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "lumiere",  displayName: "绘光", order: 25,  styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "hanabi",   displayName: "花火", order: 26,  styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        // (60) 第 4 条：machi 锁定禁用（用户选不到、用不了）；
+        // (70) 原生渲染已删、WebEffect 资源保留，锁定语义不变。
+        .init(id: "machi",    displayName: "町景", order: 27,  styleVersion: 1, isNativeAvailable: false,
+              factory: nil,
               isLocked: true),
-        .init(id: "nebbia",   displayName: "雾笺", order: 29,  styleVersion: 1, isNativeAvailable: true,
-              factory: { NebbiaStageRenderer() }, tuningPanelFactory: { NebbiaTuning.makePanel() }),
-        .init(id: "classic",  displayName: "流光", order: 30,  styleVersion: 2, isNativeAvailable: true,
-              factory: { ClassicStageRenderer() },
-              tuningPanelFactory: { ClassicTuning.makePanel() }),
-        .init(id: "cadenza",  displayName: "心象", order: 40,  styleVersion: 3, isNativeAvailable: true,
-              factory: { CadenzaStageRenderer() }, tuningPanelFactory: { CadenzaTuning.makePanel() }),
-        .init(id: "partita",  displayName: "云阶", order: 50,  styleVersion: 3, isNativeAvailable: true,
-              factory: { PartitaStageRenderer() }, tuningPanelFactory: { PartitaTuning.makePanel() }),
-        .init(id: "fume",     displayName: "浮名", order: 60,  styleVersion: 3, isNativeAvailable: true,
-              factory: { FumeStageRenderer() }, tuningPanelFactory: { FumeTuning.makePanel() }),
-        .init(id: "tilt",     displayName: "倾诉", order: 70,  styleVersion: 3, isNativeAvailable: true,
-              factory: { TiltStageRenderer() }, tuningPanelFactory: { TiltTuning.makePanel() }),
-        .init(id: "claddagh", displayName: "回环", order: 80,  styleVersion: 3, isNativeAvailable: true,
-              factory: { CladdaghStageRenderer() }, tuningPanelFactory: { CladdaghTuning.makePanel() }),
-        .init(id: "monet",    displayName: "莫奈", order: 90,  styleVersion: 1, isNativeAvailable: true,
-              factory: { MonetStageRenderer() },
-              tuningPanelFactory: { MonetTuning.makePanel() }),
-        .init(id: "pendolo",  displayName: "时计", order: 100, styleVersion: 1, isNativeAvailable: true,
-              factory: { PendoloStageRenderer() }, tuningPanelFactory: { PendoloTuning.makePanel() }),
-        .init(id: "cappella", displayName: "群唱", order: 110, styleVersion: 3, isNativeAvailable: true,
-              factory: { CappellaStageRenderer() }, tuningPanelFactory: { CappellaTuning.makePanel() }),
-        .init(id: "diorama",  displayName: "镜台", order: 120, styleVersion: 1, isNativeAvailable: true,
-              factory: { DioramaStageRenderer() }, tuningPanelFactory: { DioramaTuning.makePanel() }),
-        .init(id: "still",    displayName: "静止", order: 130, styleVersion: 2, isNativeAvailable: true,
-              factory: { StillStageRenderer() },
-              tuningPanelFactory: { StillTuning.makePanel() }),
+        .init(id: "nebbia",   displayName: "雾笺", order: 29,  styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "classic",  displayName: "流光", order: 30,  styleVersion: 2, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "cadenza",  displayName: "心象", order: 40,  styleVersion: 3, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "partita",  displayName: "云阶", order: 50,  styleVersion: 3, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "fume",     displayName: "浮名", order: 60,  styleVersion: 3, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "tilt",     displayName: "倾诉", order: 70,  styleVersion: 3, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "claddagh", displayName: "回环", order: 80,  styleVersion: 3, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "monet",    displayName: "莫奈", order: 90,  styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "pendolo",  displayName: "时计", order: 100, styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "cappella", displayName: "群唱", order: 110, styleVersion: 3, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "diorama",  displayName: "镜台", order: 120, styleVersion: 1, isNativeAvailable: false,
+              factory: nil),
+        .init(id: "still",    displayName: "静止", order: 130, styleVersion: 2, isNativeAvailable: false,
+              factory: nil),
         .init(id: "tuning",   displayName: "调频", order: 140, styleVersion: 1, isNativeAvailable: true,
               factory: { TuningStageRenderer() }),
         .init(id: "corridor", displayName: "深廊", order: 150, styleVersion: 1, isNativeAvailable: true,
@@ -342,6 +346,12 @@ enum LyricStageRegistry {
     /// 样式是否被锁定禁用（3.7 (60) 第 4 条）：未登记 id 视为未锁。
     static func isLocked(_ styleId: String) -> Bool {
         info(for: styleId)?.isLocked ?? false
+    }
+
+    /// 样式能否在原生台面呈现（3.7 (70)）：原生渲染或网页
+    /// 嵌入任一通路即可；未登记 id 视为不可呈现。
+    static func isStagePresentable(_ styleId: String) -> Bool {
+        info(for: styleId)?.isStagePresentable ?? false
     }
 
     /// 协议默认样式（与网页侧 DEFAULT_VISUALIZER_MODE 对齐）。

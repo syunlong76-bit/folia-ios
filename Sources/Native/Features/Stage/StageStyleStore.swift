@@ -33,13 +33,15 @@ enum StageStyleStore {
         set { UserDefaults.standard.set(newValue, forKey: lastNativeKey) }
     }
 
-    /// 进原生舞台时应实际使用的样式：当前样式已迁且未锁定则用
-    /// 它，未迁/被锁定则用最近用过的已迁未锁样式（再无则默认
-    /// classic）。当前样式被锁定时同时把持久值改写为回退值并落
-    /// 面包屑（存量 machi 一次清净，后续读到的恒为回退值）。
+    /// 进原生舞台时应实际使用的样式：当前样式在本台可呈现
+    /// （原生渲染或网页嵌入，3.7 (70) 口径）且未锁定则用它，
+    /// 不可呈现/被锁定则用最近用过的已迁未锁样式（再无则默
+    /// 认 classic——(70) 后 classic 走网页嵌入、同样可呈现）。
+    /// 当前样式被锁定时同时把持久值改写为回退值并落面包屑
+    /// （存量 machi 一次清净，后续读到的恒为回退值）。
     static func effectiveStyleId() -> String {
         let current = currentStyleId
-        if LyricStageRegistry.nativeStyleIds.contains(current),
+        if LyricStageRegistry.isStagePresentable(current),
            !LyricStageRegistry.isLocked(current) { return current }
         let fallback = lastNativeStyleId ?? LyricStageRegistry.defaultStyleId
         if LyricStageRegistry.isLocked(current) {
@@ -59,8 +61,13 @@ enum StageStyleStore {
         _ = effectiveStyleId()
     }
 
-    static var currentStyleIsNative: Bool {
-        LyricStageRegistry.nativeStyleIds.contains(currentStyleId)
+    /// 当前记录样式能否在本台呈现（3.7 (70) 改名自
+    /// currentStyleIsNative）：(70) 后网页 17 式经台面嵌入
+    /// 呈现、「尚未原生化」提示的前提已不成立，判读改按可
+    /// 呈现（原生渲染或网页嵌入）——注册表内样式恒可呈现，
+    /// 提示条只剩未登记 id 的防御情形。
+    static var currentStyleIsPresentable: Bool {
+        LyricStageRegistry.isStagePresentable(currentStyleId)
     }
 
     // MARK: - 防卡死守卫（3.7 (44)）

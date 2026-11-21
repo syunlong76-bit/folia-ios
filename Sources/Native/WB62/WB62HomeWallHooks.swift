@@ -11,7 +11,8 @@ import UIKit
 ///   板 / 速记簿 / 搜索（手势快捷总开关关时不装）。
 /// - 长按工具条打开命令面板：长按手势挂在墙视图顶部工具条
 ///   区域（工具条本体由 WA/WC 维护，本钩子只认其帧区域）。
-/// - 触屏思索按钮：悬浮「?」钮（ponderTouchButtonEnabled）。
+/// - 触屏思索按钮：左上角悬浮小灯泡钮（ponderTouchButtonEnabled；
+///   (70) C 组由右下角「?」钮改版，见 installPonderButtonIfNeeded）。
 /// - 启动后直达播放界面：entryDidFinish 在入场播完/关闭的
 ///   落点调用，开关开且引擎已装载时走宿主既有
 ///   openNativeStageForBackgroundReturn 通路。
@@ -21,6 +22,9 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
 
     private weak var host: HomeWallViewController?
     private var ponderButton: UIButton?
+    /// 思索钮变淡计时（3.7 (70) C 组）：出现/交互后 3 秒无
+    /// 操作自动变淡，任一交互取消重排。
+    private var ponderDimWorkItem: DispatchWorkItem?
 
     static func install(in host: HomeWallViewController) {
         let key = ObjectIdentifier(host)
@@ -135,30 +139,80 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
         return nil
     }
 
-    // MARK: 思索按钮
+    // MARK: 思索按钮（(70) C 组改版：小灯泡·左上角·3 秒变淡）
+    //
+    // Miller 定版规格：原右下角紫色「?」圆钮改为小灯泡图
+    // 标（Lucide bulb 形态——包内无 Lucide 字体资产，以 SF
+    // Symbol lightbulb 的同形线框字形落，报告已注明）、移
+    // 左上角安全区内（右下角让给 (70) 全局宠物召唤钮）；
+    // tap 功能不变，仍走 Ponder62.presentList 导览入口。
+    // 显隐：出现/任一交互后全透明度，3 秒无操作自动变淡
+    // 到 0.25（仍可见、仍可点，不是隐藏/移除）；交互＝钮
+    // 自身点按＋墙面任意点按（不消费触摸的观察识别器），
+    // 每次交互恢复全透明并重新计时。动效守 iOS 口径：
+    // 恢复 0.2s、变淡 0.5s easeOut 缓动。
+
+    private static let ponderDimDelay: TimeInterval = 3
+    private static let ponderDimmedAlpha: CGFloat = 0.25
 
     private func installPonderButtonIfNeeded() {
         guard SettingsStore.ponderTouchButtonEnabled, let host else { return }
         let button = UIButton(type: .system)
-        button.setTitle("?", for: .normal)
-        button.titleLabel?.font = .systemFont(ofSize: 17, weight: .bold)
-        button.setTitleColor(.white, for: .normal)
+        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)
+        button.setImage(UIImage(systemName: "lightbulb", withConfiguration: config),
+                        for: .normal)
+        button.tintColor = .white
         button.backgroundColor = UIColor(red: 0.545, green: 0.486, blue: 0.941, alpha: 0.85)
         button.layer.cornerRadius = 20
         button.translatesAutoresizingMaskIntoConstraints = false
         button.addAction(UIAction { [weak self] _ in
-            guard let host = self?.host else { return }
+            guard let self, let host = self.host else { return }
+            self.pokePonderButton()
             Ponder62.presentList(from: host)
         }, for: .touchUpInside)
         host.view.addSubview(button)
         NSLayoutConstraint.activate([
             button.widthAnchor.constraint(equalToConstant: 40),
             button.heightAnchor.constraint(equalToConstant: 40),
-            button.trailingAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
-            button.bottomAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.bottomAnchor, constant: -96)
+            button.leadingAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.leadingAnchor, constant: 14),
+            button.topAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.topAnchor, constant: 10)
         ])
         ponderButton = button
+        // 墙面任意点按＝交互：不消费触摸的观察识别器，只
+        // 负责给变淡计时续命，不拦任何既有手势链。
+        let pokeTap = UITapGestureRecognizer(target: self, action: #selector(handlePonderPokeTap))
+        pokeTap.cancelsTouchesInView = false
+        pokeTap.delegate = self
+        host.view.addGestureRecognizer(pokeTap)
+        pokePonderButton()
         Breadcrumbs.log("ponder62.button installed")
+    }
+
+    @objc private func handlePonderPokeTap() {
+        pokePonderButton()
+    }
+
+    /// 交互落点：立即恢复全透明（已全透明时只续计时），
+    /// 并重排 3 秒变淡。
+    private func pokePonderButton() {
+        guard let button = ponderButton else { return }
+        ponderDimWorkItem?.cancel()
+        if button.alpha < 1 {
+            UIView.animate(withDuration: 0.2, delay: 0,
+                           options: [.curveEaseOut, .beginFromCurrentState]) {
+                button.alpha = 1
+            }
+        }
+        let work = DispatchWorkItem { [weak button] in
+            guard let button, button.window != nil else { return }
+            UIView.animate(withDuration: 0.5, delay: 0,
+                           options: [.curveEaseOut, .beginFromCurrentState]) {
+                button.alpha = Self.ponderDimmedAlpha
+            }
+        }
+        ponderDimWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.ponderDimDelay,
+                                      execute: work)
     }
 
     // MARK: UIGestureRecognizerDelegate

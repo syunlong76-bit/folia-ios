@@ -1223,8 +1223,11 @@ final class HomeWallViewController: UIViewController,
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
-        // (60) 第 8 条：4s 长按开启宠物手势挂台身空白域。
-        petStage.attachOpenGesture(to: bar)
+        // (70) B2：点播台 4s 长按开启宠物手势整套已撤（与切
+        // 主题长按同域打架、圆圈干扰操作，Miller 改令）——
+        // 台上不再挂任何宠物相关识别器；宠物开关改全局右
+        // 下角召唤钮（PetSummonButton70）＋设置开关，关闭
+        // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = 35
@@ -1666,11 +1669,11 @@ final class HomeWallViewController: UIViewController,
     /// 打开同主题。特效总开关关着时停用（设置页一键全关）。
     @objc private func miniBarLongPressed(_ gesture: UILongPressGestureRecognizer) {
         // 收起态不切主题（3.7 (21)）：细条只认点按展开。
-        // (60) 第 8 条手势域隔离：宠物关闭态下台身空白长按让给
-        // 4s 开启手势，切主题不动作（宠物开启态照常）。
+        // (70) B2：(60) 的宠物域隔离门控随 4s 开启手势整套
+        // 撤除——台身长按只剩切主题一职，宠物开关态不再
+        // 影响本识别器。
         guard gesture.state == .began, let bar = miniBar, !miniBarCollapsed,
-              MiniPlayerTheme.effectsEnabled,
-              StickerSettings.miniPetsEnabled else { return }
+              MiniPlayerTheme.effectsEnabled else { return }
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)

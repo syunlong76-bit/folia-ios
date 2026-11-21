@@ -72,6 +72,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             name: .foliaSettings62AChanged, object: nil)
         window.makeKeyAndVisible()
         self.window = window
+        // 全局宠物召唤/关闭钮（3.7 (70) B2 终版）：窗口根层
+        // 右下角小爪印钮，状态双阈值长按（关态 2.0s 召唤/
+        // 开态 3.0s 关闭）；本体见 PetSummonButton70。
+        PetSummonButton70.install(in: window)
 
         // 灵动岛宠物承载层（3.7 (32)）：独立穿透窗挂根级，
         // 导航不消失；宠物由墙台告别分流送达（PetIslandLayer）。

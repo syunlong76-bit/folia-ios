@@ -152,8 +152,8 @@ enum SettingsStore {
     // MARK: - 歌词组
 
     /// 逐词强调开关（原生既有，(49)）：经 StageEffectSettings
-    /// 门面供 GlowWordEngine / CadenzaStageRenderer /
-    /// StageTextKit 读。
+    /// 门面供 GlowWordEngine / StageTextKit 读（原读者之一
+    /// CadenzaStageRenderer 已随 (70) A 组删除）。
     static var wordEmphasisEnabled: Bool {
         get {
             boolValue(key: Key.wordEmphasisEnabled,
@@ -167,7 +167,9 @@ enum SettingsStore {
     }
 
     /// 粒子换行开关（原生既有，(49)）：经 StageEffectSettings
-    /// 门面供 ClassicStageRenderer / MonetStageRenderer 读。
+    /// 门面供原生渲染链读（原读者 ClassicStageRenderer /
+    /// MonetStageRenderer 已随 (70) A 组删除；网页侧粒子换
+    /// 行走网页自身参数、不经本键）。
     static var particleFlipEnabled: Bool {
         get {
             boolValue(key: Key.particleFlipEnabled,

@@ -619,8 +619,11 @@ final class WallPrototypeViewController: UIViewController,
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
-        // (60) 第 8 条：4s 长按开启宠物手势挂台身空白域。
-        petStage.attachOpenGesture(to: bar)
+        // (70) B2：点播台 4s 长按开启宠物手势整套已撤（与切
+        // 主题长按同域打架、圆圈干扰操作，Miller 改令）——
+        // 台上不再挂任何宠物相关识别器；宠物开关改全局右
+        // 下角召唤钮（PetSummonButton70）＋设置开关，关闭
+        // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = 35
@@ -1040,11 +1043,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 打开同主题。特效总开关关着时停用（设置页一键全关）。
     @objc private func miniBarLongPressed(_ gesture: UILongPressGestureRecognizer) {
         // 收起态不切主题（3.7 (21)）：细条只认点按展开。
-        // (60) 第 8 条手势域隔离：宠物关闭态下台身空白长按让给
-        // 4s 开启手势，切主题不动作（宠物开启态照常）。
+        // (70) B2：(60) 的宠物域隔离门控随 4s 开启手势整套
+        // 撤除——台身长按只剩切主题一职，宠物开关态不再
+        // 影响本识别器。
         guard gesture.state == .began, let bar = miniBar, !miniBarCollapsed,
-              MiniPlayerTheme.effectsEnabled,
-              StickerSettings.miniPetsEnabled else { return }
+              MiniPlayerTheme.effectsEnabled else { return }
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
@@ -1421,6 +1424,32 @@ final class WallPrototypeViewController: UIViewController,
     /// 形态几何（高度/轨道底距/圆角）：在动画块内调用即随
     /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
     /// 直接置位即瞬时生效。
+    /// 形态/几何出现边沿重同步（3.7 (70) B3）：(63) 自愈只
+    /// 挂 miniBarTapped——标志=展开、几何=细条的失同步态
+    /// 下，收起态单击识别器已被 sync 关掉，点按落进展开
+    /// 链的双击/长按判定里出不来、根本到不了自愈点（取证
+    /// uitaps C① 候选机制，拼贴墙细条点不开）。本方法把
+    /// 同一几何判读前移到出现边沿：以 bar 实际高度为真值
+    /// （≤20＝细条；≥展开高−4＝展开；中间值是动画中途帧，
+    /// 不干预），与标志不符时落 heal=geom、纠正标志并经
+    /// setMiniBarForm 收口（识别器启停随之重同步、
+    /// minibar.form 面包屑 recog= 三位同行落盘，供下次日
+    /// 志一行定案）。首帧未布局（高=0）跳过、不误判。
+    private func resyncMiniBarFormToGeometry70() {
+        guard let bar = miniBar else { return }
+        let height = bar.bounds.height
+        guard height > 0 else { return }
+        let settledCollapsed = height <= 20
+        let settledExpanded = height >= MiniBarQuickRowView.expandedBarHeight - 4
+        guard settledCollapsed || settledExpanded else { return }
+        let geometryCollapsed = settledCollapsed
+        guard geometryCollapsed != miniBarCollapsed else { return }
+        Breadcrumbs.log("minibar.form host=wallproto heal=geom"
+            + " h=\(Int(height)) flag=\(miniBarCollapsed ? 1 : 0) edge=appear")
+        miniBarCollapsed = geometryCollapsed
+        setMiniBarForm(collapsed: geometryCollapsed)
+    }
+
     private func setMiniBarForm(collapsed: Bool) {
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
@@ -1666,7 +1695,7 @@ final class WallPrototypeViewController: UIViewController,
             // 除，走 animateHeroExpansion 的非 hero 路径——布局
             // 弹簧重排落位）。
             self.wallLayout.expandedInstanceId = target.instanceId
-            self.animateHeroExpansion(heroSnapshot: nil, sourceFrame: nil,
+            self.animateHeroExpansion(heroImage: nil, sourceFrame: nil,
                                       targetInstanceId: target.instanceId) { [weak self] in
                 guard let self else { return }
                 self.emphasizeLocateLanding()
@@ -1784,7 +1813,7 @@ final class WallPrototypeViewController: UIViewController,
             // animateHeroExpansion 非 hero 路径（(62) 尾波第 6
             // 组已摘快照放大）。
             self.wallLayout.expandedInstanceId = target.instanceId
-            self.animateHeroExpansion(heroSnapshot: nil, sourceFrame: nil,
+            self.animateHeroExpansion(heroImage: nil, sourceFrame: nil,
                                       targetInstanceId: target.instanceId) { [weak self] in
                 guard let self else { return }
                 self.emphasizeLocateLanding()
@@ -1919,6 +1948,8 @@ final class WallPrototypeViewController: UIViewController,
         lyricClockDriver.start()
         progressDriver.start()
         miniThemeLayer?.setHostVisible(true)
+        // (70) B3：出现边沿先按几何核一次形态/识别器同步。
+        resyncMiniBarFormToGeometry70()
     }
 
     override func viewWillDisappear(_ animated: Bool) {
@@ -1941,6 +1972,9 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (70) B3：布局落定后再核一次（viewWillAppear 时帧
+        // 可能仍是旧值），失同步在此收口。
+        resyncMiniBarFormToGeometry70()
         Breadcrumbs.log("wall.appear kind=playlist")
         Breadcrumbs.log("tracks appear playlist=\(playlistId)")
         // (62) 尾波第 5 组：种子先于呈现落地时在此消费待定位
@@ -3052,14 +3086,16 @@ final class WallPrototypeViewController: UIViewController,
         let sourceCell = collectionView.cellForItem(at: indexPath) as? WallPosterCell
         sourceCell?.contentView.layer.removeAllAnimations()
         sourceCell?.contentView.transform = .identity
-        // hero 共享放大（3.7 (67) D 组）：突变前采被点卡快照
-        // 与帧（VC 视图坐标），飞行层与布局弹簧同曲线把封面
-        // 从原位长大到展开位（收起反向）；采集不到（cell 不
-        // 在场）传 nil 走无飞行回退，展开本体不变。
-        let heroSnapshot = sourceCell?.snapshotView(afterScreenUpdates: false)
-        let heroSourceFrame = sourceCell.map {
-            collectionView.convert($0.frame, to: view)
-        }
+        // hero 共享放大（3.7 (67) D 组立、(70) B1 重定）：
+        // 飞行对象是封面图本身——突变前取被点卡已加载的
+        // UIImage 与封面实际帧（VC 视图坐标），飞行层与布局
+        // 弹簧同曲线把封面从原位长大到展开位（收起反向）。
+        // (67) 飞整卡快照（连标题/控件拉伸＋落定硬换）是真
+        // 机「整个框慢慢放大＋回程卡一下」的定级根因（取证
+        // uitaps A）；图未加载到（占位态/cell 不在场）传
+        // nil 走无飞行回退，展开本体不变。
+        let heroImage = sourceCell?.coverImage
+        let heroSourceFrame = sourceCell.map { $0.coverFrame(in: view) }
         // 3.7 (3)：不再跳切相机居中（那是生硬感主源）——原地弹簧重排：
         // 被点卡在原地长大、同块卡让位，镜头不动。
         if wallLayout.expandedInstanceId == instance.instanceId {
@@ -3095,33 +3131,35 @@ final class WallPrototypeViewController: UIViewController,
             }
             prefetchExpandedNeighbors(queueIndex: instance.queueIndex)
         }
-        animateHeroExpansion(heroSnapshot: heroSnapshot,
+        animateHeroExpansion(heroImage: heroImage,
                              sourceFrame: heroSourceFrame,
                              targetInstanceId: instance.instanceId)
     }
 
-    /// 展开/收起衔接（3.7 (67) D 组重建 hero 共享放大）：
-    /// 点封面时飞行层（被点卡快照）与布局弹簧共用同一条
-    /// UIViewPropertyAnimator（0.45s / damping 0.86）——封面
-    /// 从原位平滑长大到展开位、其余卡同曲线让位；收起反向。
+    /// 展开/收起衔接（3.7 (67) D 组重建 hero 共享放大，
+    /// (70) B1 飞行对象改封面图本体）：点封面时飞行层
+    /// （封面图）与布局弹簧共用同一条 UIViewPropertyAnimator
+    /// （0.45s / damping 0.86）——封面从原位平滑长大到展开
+    /// 位、其余卡同曲线让位；收起反向。落定走交叉淡化
+    /// （HeroFlight67.finish），不再硬换。
     /// 围栏（(61)/(62) 旧失败模式）：①飞行层是纯叠加动画，
     /// 不碰实例集与 worldOrigin——展开态 rebase＋展开实例钉
     /// 入（WallLayout (62) 尾波第 2 组已落地）原样保留，飞
     /// 行中继续平移也不会与实例集脱节；②身份变化路径先
     /// reloadData＋layoutIfNeeded 落定最终帧再起飞，目标帧
-    /// 恒取刷新后属性帧，不存在飞向空位/纯黑页；③采集不到
-    /// 快照（另两处定位落点调用恒传 nil）走原无飞行路径，
-    /// 展开本体一字不变。按压 bounce 0.96 与定位落点强调
-    /// 是另两套代码，不在此列、保留不动。
-    private func animateHeroExpansion(heroSnapshot: UIView?,
+    /// 恒取刷新后属性帧，不存在飞向空位/纯黑页；③封面图
+    /// 未就绪（另两处定位落点调用恒传 nil）走原无飞行
+    /// 路径，展开本体一字不变。按压 bounce 0.96 与定位落
+    /// 点强调是另两套代码，不在此列、保留不动。
+    private func animateHeroExpansion(heroImage: UIImage?,
                                       sourceFrame: CGRect?,
                                       targetInstanceId: String?,
                                       completion: (() -> Void)? = nil) {
-        // 旧飞行未落定先瞬时收尾（审查修复）：复原被藏真卡，
-        // 本轮快照才截得到实卡、也不会双层同屏。
+        // 旧飞行未落定先瞬时收尾（审查修复）：复原被藏真卡、
+        // 立即摘旧层，本轮呈现不被旧层干扰、也不会双层同屏。
         if let stale = activeHeroFlight67 {
             activeHeroFlight67 = nil
-            stale.finish()
+            stale.finishImmediately()
         }
         // 身份判定改用 refreshInstances 返回值（展开/收起只换
         // expandedRects、实例序列不变）。
@@ -3134,7 +3172,7 @@ final class WallPrototypeViewController: UIViewController,
             collectionView.layoutIfNeeded()
         }
         let flight = makeHeroFlight67(
-            snapshot: heroSnapshot, sourceFrame: sourceFrame,
+            image: heroImage, sourceFrame: sourceFrame,
             targetInstanceId: targetInstanceId)
         if !identityChanged {
             if FoliaMotion62.reduced(.queueCollage) {
@@ -3181,11 +3219,13 @@ final class WallPrototypeViewController: UIViewController,
     /// 帧（CV 坐标→VC 视图坐标）；源/目标是同一张卡（展开与
     /// 收起都然，实例身份不变、下标不变），飞行期间藏真卡
     /// 防双影、落定复原。任一输入缺失/减动效/源=目标时返回
-    /// nil（走无飞行路径）。
-    private func makeHeroFlight67(snapshot: UIView?,
+    /// nil（走无飞行路径）。飞行视图以封面 UIImage 新建
+    /// （.scaleAspectFill＋圆角 8，与 cell 封面同式）——飞的
+    /// 是图本身，不是整卡位图（(70) B1）。
+    private func makeHeroFlight67(image: UIImage?,
                                   sourceFrame: CGRect?,
                                   targetInstanceId: String?) -> HeroFlight67? {
-        guard let snapshot, let sourceFrame, let targetInstanceId,
+        guard let image, let sourceFrame, let targetInstanceId,
               !FoliaMotion62.reduced(.queueCollage),
               let targetIndex = wallLayout.instances.firstIndex(
                 where: { $0.instanceId == targetInstanceId }),
@@ -3194,7 +3234,12 @@ final class WallPrototypeViewController: UIViewController,
         else { return nil }
         let targetFrame = collectionView.convert(attrs.frame, to: view)
         guard targetFrame != sourceFrame else { return nil }
-        let flight = HeroFlight67(snapshot: snapshot, targetFrame: targetFrame)
+        let flightView = UIImageView(image: image)
+        flightView.contentMode = .scaleAspectFill
+        flightView.clipsToBounds = true
+        flightView.layer.cornerRadius = 8
+        flightView.isUserInteractionEnabled = false
+        let flight = HeroFlight67(view: flightView, targetFrame: targetFrame)
         flight.view.frame = sourceFrame
         view.addSubview(flight.view)
         activeHeroFlight67 = flight
@@ -3209,16 +3254,17 @@ final class WallPrototypeViewController: UIViewController,
     }
 }
 
-/// hero 飞行层（3.7 (67) D 组）：被点卡的快照视图，从源帧
-/// 飞到目标帧（与布局弹簧同一 animator 曲线）；落定摘层并
-/// 复原被藏的真卡。纯叠加动画，不持有任何布局状态。
+/// hero 飞行层（3.7 (67) D 组立、(70) B1 改飞封面图）：
+/// 封面图视图从源帧飞到目标帧（与布局弹簧同一 animator
+/// 曲线）；落定交叉淡化摘层并复原被藏的真卡。纯叠加
+/// 动画，不持有任何布局状态。
 private final class HeroFlight67 {
     let view: UIView
     private let targetFrame: CGRect
     weak var hiddenCell: UICollectionViewCell?
 
-    init(snapshot: UIView, targetFrame: CGRect) {
-        view = snapshot
+    init(view: UIView, targetFrame: CGRect) {
+        self.view = view
         self.targetFrame = targetFrame
     }
 
@@ -3226,7 +3272,24 @@ private final class HeroFlight67 {
         view.frame = targetFrame
     }
 
+    /// 落定交叉淡化（3.7 (70) B1）：真卡先复原就位（其封
+    /// 面/控件已在终态），飞行层 0.12s easeOut 淡出再摘——
+    /// 消灭 (67) finish() 的一帧硬换（取证 uitaps A：回程
+    /// 末帧差 31.64→0.47 的截断收尾）。
     func finish() {
+        hiddenCell?.alpha = 1
+        let flying = view
+        UIView.animate(withDuration: 0.12, delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState]) {
+            flying.alpha = 0
+        } completion: { _ in
+            flying.removeFromSuperview()
+        }
+    }
+
+    /// 瞬时收尾（新一轮展开抢占未落定旧飞行时）：无淡化
+    /// 直接摘层＋复原真卡，不让旧层残影干扰新一轮呈现。
+    func finishImmediately() {
         view.removeFromSuperview()
         hiddenCell?.alpha = 1
     }
@@ -3258,6 +3321,18 @@ final class WallPosterCell: UICollectionViewCell {
     private var coverPlaceholder = false
     var hasPlaceholderCover: Bool { coverPlaceholder }
     var hasCoverImage: Bool { imageView.image != nil }
+
+    /// 封面图本体（3.7 (70) B1）：hero 飞行对象改封面图本身，
+    /// VC 取此图新建飞行视图（不再截整卡快照）。
+    var coverImage: UIImage? { imageView.image }
+
+    /// 封面图在目标视图坐标系中的实际帧（3.7 (70) B1）：
+    /// imageView 恒占满整卡（layoutSubviews 中 frame =
+    /// shadowView.bounds、展开/收起两态同式），故封面帧即
+    /// 整卡帧；换算走视图树转换，不假设嵌套层级。
+    func coverFrame(in target: UIView) -> CGRect {
+        imageView.convert(imageView.bounds, to: target)
+    }
 
     // 展开卡控件（详情 MVP 第一刀）：播放/暂停、红心、迷你进度条；
     // 未展开只留「正在播放」角标。回调由 VC 按实例注入，普通卡
