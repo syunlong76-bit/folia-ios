@@ -178,7 +178,7 @@ final class QQLoginClient {
             return false
         }
         let root = response.root
-        if let code = NativeJSON.int(root["code"]), code == 401 {
+        if NativeJSON.int(root["code"]) == 401 { // NativeJSON.int 为非可选 Int（集成修正）
             Breadcrumbs.log("login62.qq.refresh unauthorized")
             return false
         }
