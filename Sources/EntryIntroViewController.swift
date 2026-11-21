@@ -722,6 +722,12 @@ final class EntryIntroViewController: UIViewController {
     private let posterView = UIImageView()
     private let playerView = PlayerLayerView()
     private let closeButton = UIButton(type: .custom)
+    /// (66) ✕ 延迟淡入（Miller 18:12 亲令）：累计播放进度
+    /// （跨循环轮次累加，seek 回零不倒扣）与上次采样时刻、
+    /// 淡入已起跑旗标。计时只认 player 播放进度、不认墙钟。
+    private var closeButtonShown = false
+    private var playProgressSeconds: Double = 0
+    private var lastProgressSample: Double?
 
     /// 退出海报垫（由 Presenter 垫在 window 里、入场 VC 之下），退场序列用
     var exitVeil: UIView?
@@ -860,14 +866,21 @@ final class EntryIntroViewController: UIViewController {
         playerView.alpha = 0
         view.addSubview(playerView)
 
-        // 关闭按钮：横屏安全区右上角，入场开始即显示；点按 = 立即结束入场。
+        // 关闭按钮：横屏安全区右上角；点按 = 立即结束入场。
         // 画面其它位置点按不跳过（防误触），退出只认此按钮与自动到点。
+        // (66) Miller 18:12 改口径：✕ 不再从第一帧就在（还会
+        // 随竖→横旋转跟着转一面）——播放进度满 5.0s 前完全
+        // 隐藏（alpha 0、不接受点按、无障碍隐藏），到点后由
+        // noteCloseButtonProgress 以 0.9s ease-out 淡入。
         let symbol = UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)
         closeButton.setImage(UIImage(systemName: "xmark", withConfiguration: symbol), for: .normal)
         closeButton.tintColor = .white
         closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.45)
         closeButton.layer.cornerRadius = 17
         closeButton.clipsToBounds = true
+        closeButton.alpha = 0
+        closeButton.isUserInteractionEnabled = false
+        closeButton.accessibilityElementsHidden = true
         closeButton.accessibilityLabel = "关闭"
         closeButton.addTarget(self, action: #selector(handleCloseTap), for: .touchUpInside)
         closeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1014,6 +1027,7 @@ final class EntryIntroViewController: UIViewController {
                 self.noteFirstFrameIfNeeded()
                 self.checkDissolveGate()
                 self.checkLoopDataReadyExit()
+                self.noteCloseButtonProgress()
             }
         }
 
@@ -1370,6 +1384,35 @@ final class EntryIntroViewController: UIViewController {
                 guard let self, !self.isDismissing else { return }
                 self.player?.play()
             }
+        }
+    }
+
+    /// (66) ✕ 延迟淡入计时（Miller 18:12 亲令）：由 0.1s 周
+    /// 期观察者逐 tick 喂当前播放时刻——只累加正向增量
+    /// （暂停不涨、循环 seek 回零的大负跳不倒扣、新一轮自
+    /// 0 的正增量继续累加），即累计播放进度。满 5.0s 起跑
+    /// 0.9s ease-out 淡入，落 entry.x.fadein（累计进度秒）
+    /// 供录屏对账；淡入完成才恢复点按与无障碍可见，完成后
+    /// 行为与旧口径一致（点 ✕ 关闭等全不变）。
+    private func noteCloseButtonProgress() {
+        guard !closeButtonShown, !isDismissing,
+              let player, player.timeControlStatus == .playing else { return }
+        let now = player.currentTime().seconds
+        guard now.isFinite else { return }
+        if let last = lastProgressSample {
+            let delta = now - last
+            if delta > 0, delta < 1 { playProgressSeconds += delta }
+        }
+        lastProgressSample = now
+        guard playProgressSeconds >= 5.0 else { return }
+        closeButtonShown = true
+        Breadcrumbs.log("entry.x.fadein at=\(String(format: "%.1f", playProgressSeconds))")
+        UIView.animate(withDuration: 0.9, delay: 0, options: [.curveEaseOut]) {
+            self.closeButton.alpha = 1
+        } completion: { [weak self] _ in
+            guard let self, !self.isDismissing else { return }
+            self.closeButton.isUserInteractionEnabled = true
+            self.closeButton.accessibilityElementsHidden = false
         }
     }
 
