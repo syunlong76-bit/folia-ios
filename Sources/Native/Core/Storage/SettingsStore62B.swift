@@ -70,12 +70,12 @@ extension SettingsStore {
 
     // MARK: - 62B 读写原语（未写回默认，写后以落盘为准）
 
-    private static func bool62(_ key: String, default def: Bool) -> Bool {
+    private static func boolB62(_ key: String, default def: Bool) -> Bool {
         guard UserDefaults.standard.object(forKey: key) != nil else { return def }
         return UserDefaults.standard.bool(forKey: key)
     }
 
-    private static func setBool62(_ value: Bool, _ key: String) {
+    private static func setBoolB62(_ value: Bool, _ key: String) {
         UserDefaults.standard.set(value, forKey: key)
     }
 
@@ -89,7 +89,7 @@ extension SettingsStore {
         return UserDefaults.standard.double(forKey: key)
     }
 
-    private static func string62(_ key: String, default def: String) -> String {
+    private static func stringB62(_ key: String, default def: String) -> String {
         UserDefaults.standard.string(forKey: key) ?? def
     }
 
@@ -97,39 +97,39 @@ extension SettingsStore {
 
     /// 队列拼贴动效的独立降低动态开关（跟随系统关时生效）。
     static var reduceMotionQueueCollage: Bool {
-        get { bool62(Key62B.reduceQueueCollage, default: false) }
-        set { setBool62(newValue, Key62B.reduceQueueCollage) }
+        get { boolB62(Key62B.reduceQueueCollage, default: false) }
+        set { setBoolB62(newValue, Key62B.reduceQueueCollage) }
     }
 
     /// 混音过渡动效的独立降低动态开关。
     static var reduceMotionMixTransition: Bool {
-        get { bool62(Key62B.reduceMixTransition, default: false) }
-        set { setBool62(newValue, Key62B.reduceMixTransition) }
+        get { boolB62(Key62B.reduceMixTransition, default: false) }
+        set { setBoolB62(newValue, Key62B.reduceMixTransition) }
     }
 
     /// 歌单展开转场的独立降低动态开关。
     static var reduceMotionPlaylistExpand: Bool {
-        get { bool62(Key62B.reducePlaylistExpand, default: false) }
-        set { setBool62(newValue, Key62B.reducePlaylistExpand) }
+        get { boolB62(Key62B.reducePlaylistExpand, default: false) }
+        set { setBoolB62(newValue, Key62B.reducePlaylistExpand) }
     }
 
     /// Monet 背景漂移的独立降低动态开关（消费符号
     /// FoliaMotion62.reduced(.monetDrift)，渲染器在 WD 文件域）。
     static var reduceMotionMonetDrift: Bool {
-        get { bool62(Key62B.reduceMonetDrift, default: false) }
-        set { setBool62(newValue, Key62B.reduceMonetDrift) }
+        get { boolB62(Key62B.reduceMonetDrift, default: false) }
+        set { setBoolB62(newValue, Key62B.reduceMonetDrift) }
     }
 
     /// 界面微动效的独立降低动态开关。
     static var reduceMotionMicroEffects: Bool {
-        get { bool62(Key62B.reduceMicroEffects, default: false) }
-        set { setBool62(newValue, Key62B.reduceMicroEffects) }
+        get { boolB62(Key62B.reduceMicroEffects, default: false) }
+        set { setBoolB62(newValue, Key62B.reduceMicroEffects) }
     }
 
     /// 设置页平滑滚动的独立降低动态开关。
     static var reduceMotionSettingsScroll: Bool {
-        get { bool62(Key62B.reduceSettingsScroll, default: false) }
-        set { setBool62(newValue, Key62B.reduceSettingsScroll) }
+        get { boolB62(Key62B.reduceSettingsScroll, default: false) }
+        set { setBoolB62(newValue, Key62B.reduceSettingsScroll) }
     }
 
     // MARK: - §4.4 静态模式 / 主页动态背景 / 帧率 / 抗锯齿 / 后台节流 / 触摸光效 / 毛玻璃
@@ -138,21 +138,21 @@ extension SettingsStore {
     /// 停。消费：StageProgressDriver 停链 + 通知
     /// .foliaStaticModeChanged 供 StageVC（WA）停其 DisplayLink。
     static var staticModeEnabled: Bool {
-        get { bool62(Key62B.staticMode, default: false) }
-        set { setBool62(newValue, Key62B.staticMode) }
+        get { boolB62(Key62B.staticMode, default: false) }
+        set { setBoolB62(newValue, Key62B.staticMode) }
     }
 
     /// 主页动态背景（默认开）：关时 HomeWall 动态背景层停显
     /// （消费在 WB62HomeWallHooks 的层门控）。
     static var homeDynamicBackgroundEnabled: Bool {
-        get { bool62(Key62B.homeDynamicBackgroundEnabled, default: true) }
-        set { setBool62(newValue, Key62B.homeDynamicBackgroundEnabled) }
+        get { boolB62(Key62B.homeDynamicBackgroundEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.homeDynamicBackgroundEnabled) }
     }
 
     /// 实验性动画帧率限制开关（任务定死键名）。
     static var frameRateLimitEnabled: Bool {
-        get { bool62(Key62B.frameRateLimitEnabled, default: false) }
-        set { setBool62(newValue, Key62B.frameRateLimitEnabled) }
+        get { boolB62(Key62B.frameRateLimitEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.frameRateLimitEnabled) }
     }
 
     /// 帧率限制档位（30/60/120，越界回 60；任务定死键名）。
@@ -174,15 +174,15 @@ extension SettingsStore {
     /// （StageTextKit 烘焙入口的插值/抗锯齿口径）；逐样式
     /// antialias 调参仍优先于本全局键（见设置行 hint）。
     static var lyricAntialiasEnabled: Bool {
-        get { bool62(Key62B.lyricAntialiasEnabled, default: true) }
-        set { setBool62(newValue, Key62B.lyricAntialiasEnabled) }
+        get { boolB62(Key62B.lyricAntialiasEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.lyricAntialiasEnabled) }
     }
 
     /// 后台节流策略：standard（默认，仅生命周期代偿）/
     /// aggressive（进后台即停进度驱动并降采样）。
     static var backgroundThrottlePolicy: String {
         get {
-            let raw = string62(Key62B.backgroundThrottlePolicy, default: "standard")
+            let raw = stringB62(Key62B.backgroundThrottlePolicy, default: "standard")
             return raw == "aggressive" ? "aggressive" : "standard"
         }
         set {
@@ -193,8 +193,8 @@ extension SettingsStore {
 
     /// 播放页触摸光效开关（默认关）：消费 TouchGlow62。
     static var touchGlowEnabled: Bool {
-        get { bool62(Key62B.touchGlowEnabled, default: false) }
-        set { setBool62(newValue, Key62B.touchGlowEnabled) }
+        get { boolB62(Key62B.touchGlowEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.touchGlowEnabled) }
     }
 
     /// 触摸光效密度（0...1，默认 0.5）：决定并发光晕上限与
@@ -208,23 +208,23 @@ extension SettingsStore {
     /// 播放页原生毛玻璃背景开关（默认开 = 现状恒开行为）：
     /// 消费在 StageVC backdropBlur（WA 文件域），WA 读本访问器。
     static var stageBackdropBlurEnabled: Bool {
-        get { bool62(Key62B.stageBackdropBlurEnabled, default: true) }
-        set { setBool62(newValue, Key62B.stageBackdropBlurEnabled) }
+        get { boolB62(Key62B.stageBackdropBlurEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.stageBackdropBlurEnabled) }
     }
 
     // MARK: - §4.5 播放控制
 
     /// 智能过渡总开关（默认关）：消费 PlaybackEngine 双轨。
     static var smartTransitionEnabled: Bool {
-        get { bool62(Key62B.smartTransitionEnabled, default: false) }
-        set { setBool62(newValue, Key62B.smartTransitionEnabled) }
+        get { boolB62(Key62B.smartTransitionEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.smartTransitionEnabled) }
     }
 
     /// 过渡模式：crossfade（等功率音量斜坡）/ automix（按
     /// 下一首前奏提前量对齐，无能量数据时固定提前量近似）。
     static var transitionMode: String {
         get {
-            let raw = string62(Key62B.transitionMode, default: "crossfade")
+            let raw = stringB62(Key62B.transitionMode, default: "crossfade")
             return raw == "automix" ? "automix" : "crossfade"
         }
         set {
@@ -244,7 +244,7 @@ extension SettingsStore {
     /// easeInOut。
     static var transitionCurve: String {
         get {
-            let raw = string62(Key62B.transitionCurve, default: "equalPower")
+            let raw = stringB62(Key62B.transitionCurve, default: "equalPower")
             return ["equalPower", "linear", "easeInOut"].contains(raw) ? raw : "equalPower"
         }
         set {
@@ -258,7 +258,7 @@ extension SettingsStore {
     /// （卡片描边）。消费 TransitionAnim62（舞台顶层）。
     static var transitionAnimation: String {
         get {
-            let raw = string62(Key62B.transitionAnimation, default: "none")
+            let raw = stringB62(Key62B.transitionAnimation, default: "none")
             return ["none", "ring", "cardStroke"].contains(raw) ? raw : "none"
         }
         set {
@@ -270,8 +270,8 @@ extension SettingsStore {
 
     /// ReplayGain 开关（默认关）：消费 PlaybackEngine 音量链。
     static var replayGainEnabled: Bool {
-        get { bool62(Key62B.replayGainEnabled, default: false) }
-        set { setBool62(newValue, Key62B.replayGainEnabled) }
+        get { boolB62(Key62B.replayGainEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.replayGainEnabled) }
     }
 
     /// 暂停/播放淡入淡出时长（毫秒，0...1000，默认 200）。
@@ -285,22 +285,22 @@ extension SettingsStore {
     /// 本地转码（AVAssetExportSession → m4a）；流媒体不可播
     /// 仍走既有跳过逻辑（见 PlaybackEngine 转码通路注释）。
     static var autoTranscodeEnabled: Bool {
-        get { bool62(Key62B.autoTranscodeEnabled, default: false) }
-        set { setBool62(newValue, Key62B.autoTranscodeEnabled) }
+        get { boolB62(Key62B.autoTranscodeEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.autoTranscodeEnabled) }
     }
 
     /// 播放时阻止休眠（默认关）：消费 PlaybackEngine 按播放
     /// 态写 UIApplication.isIdleTimerDisabled。
     static var preventSleepWhilePlaying: Bool {
-        get { bool62(Key62B.preventSleepWhilePlaying, default: false) }
-        set { setBool62(newValue, Key62B.preventSleepWhilePlaying) }
+        get { boolB62(Key62B.preventSleepWhilePlaying, default: false) }
+        set { setBoolB62(newValue, Key62B.preventSleepWhilePlaying) }
     }
 
     /// 语音输入时暂停（默认关）：消费 PlaybackEngine 的音频
     /// 会话中断监听（Siri/语音输入中断到达即暂停且不自动恢复）。
     static var pauseOnVoiceInput: Bool {
-        get { bool62(Key62B.pauseOnVoiceInput, default: false) }
-        set { setBool62(newValue, Key62B.pauseOnVoiceInput) }
+        get { boolB62(Key62B.pauseOnVoiceInput, default: false) }
+        set { setBoolB62(newValue, Key62B.pauseOnVoiceInput) }
     }
 
     // MARK: - §4.6 歌词
@@ -308,8 +308,8 @@ extension SettingsStore {
     /// 自动使用最佳歌词（默认开 = 现行写死链行为）：关时恒
     /// 走行级 LRC、不合并 YRC。策略见 bestLyricStrategy。
     static var autoBestLyricEnabled: Bool {
-        get { bool62(Key62B.autoBestLyricEnabled, default: true) }
-        set { setBool62(newValue, Key62B.autoBestLyricEnabled) }
+        get { boolB62(Key62B.autoBestLyricEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.autoBestLyricEnabled) }
     }
 
     /// 最佳歌词策略：yrcFirst（默认，YRC 逐字优先）/
@@ -317,7 +317,7 @@ extension SettingsStore {
     /// 末行时刻与曲目跨度接近度择优）。消费 LyricRepository。
     static var bestLyricStrategy: String {
         get {
-            let raw = string62(Key62B.bestLyricStrategy, default: "yrcFirst")
+            let raw = stringB62(Key62B.bestLyricStrategy, default: "yrcFirst")
             return ["yrcFirst", "lrcFirst", "durationMatch"].contains(raw) ? raw : "yrcFirst"
         }
         set {
@@ -332,7 +332,7 @@ extension SettingsStore {
     /// timeFirst（按行时刻最近优先）。消费 LyricParsing 合并。
     static var lyricMatchPriority: String {
         get {
-            let raw = string62(Key62B.lyricMatchPriority, default: "exactFirst")
+            let raw = stringB62(Key62B.lyricMatchPriority, default: "exactFirst")
             return ["exactFirst", "foldedFirst", "timeFirst"].contains(raw) ? raw : "exactFirst"
         }
         set {
@@ -346,15 +346,15 @@ extension SettingsStore {
     /// 时合并后丢 words、退行级。消费 LyricRepository 出口与
     /// LyricParser.stageLines 出口双处同口径。
     static var keepPlatformWordLyrics: Bool {
-        get { bool62(Key62B.keepPlatformWordLyrics, default: true) }
-        set { setBool62(newValue, Key62B.keepPlatformWordLyrics) }
+        get { boolB62(Key62B.keepPlatformWordLyrics, default: true) }
+        set { setBoolB62(newValue, Key62B.keepPlatformWordLyrics) }
     }
 
     /// 本地歌曲歌词优先级：platformFirst（默认）/ localFirst。
     /// 消费 LyricRepository 的 LocalLyricSource62 钩子查询序。
     static var localLyricPriority: String {
         get {
-            let raw = string62(Key62B.localLyricPriority, default: "platformFirst")
+            let raw = stringB62(Key62B.localLyricPriority, default: "platformFirst")
             return raw == "localFirst" ? "localFirst" : "platformFirst"
         }
         set {
@@ -367,7 +367,7 @@ extension SettingsStore {
     /// "lrc,yrc,txt"）：供 WC 的 LocalLyricSource62 实现按序
     /// 探本地歌词文件；钩子协议见 Lyric62Hooks。
     static var localLyricFormatOrder: String {
-        get { string62(Key62B.localLyricFormatOrder, default: "lrc,yrc,txt") }
+        get { stringB62(Key62B.localLyricFormatOrder, default: "lrc,yrc,txt") }
         set { UserDefaults.standard.set(newValue, forKey: Key62B.localLyricFormatOrder) }
     }
 
@@ -383,7 +383,7 @@ extension SettingsStore {
     /// 过滤命中行；保存时经 LyricFilter62.validate 校验，非法
     /// 正则不落盘（设置行报错）。
     static var lyricFilterRegex: String {
-        get { string62(Key62B.lyricFilterRegex, default: "") }
+        get { stringB62(Key62B.lyricFilterRegex, default: "") }
         set { UserDefaults.standard.set(newValue, forKey: Key62B.lyricFilterRegex) }
     }
 
@@ -391,13 +391,13 @@ extension SettingsStore {
     /// 且端点已配置时对无戳行调 AISegment62；未配置端点时走
     /// 现有均分＋跨曲标定并如实落面包屑（不冒充 AI 分词）。
     static var aiSegmentEnabled: Bool {
-        get { bool62(Key62B.aiSegmentEnabled, default: false) }
-        set { setBool62(newValue, Key62B.aiSegmentEnabled) }
+        get { boolB62(Key62B.aiSegmentEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.aiSegmentEnabled) }
     }
 
     /// AI 分词服务端点（默认空 = 未配置）。
     static var aiSegmentEndpoint: String {
-        get { string62(Key62B.aiSegmentEndpoint, default: "") }
+        get { stringB62(Key62B.aiSegmentEndpoint, default: "") }
         set { UserDefaults.standard.set(newValue, forKey: Key62B.aiSegmentEndpoint) }
     }
 
@@ -408,7 +408,7 @@ extension SettingsStore {
     /// 全量本地化（报告如实标注）。
     static var appLanguage: String {
         get {
-            let raw = string62(Key62B.appLanguage, default: "zh-Hans")
+            let raw = stringB62(Key62B.appLanguage, default: "zh-Hans")
             return raw == "en" ? "en" : "zh-Hans"
         }
         set {
@@ -422,22 +422,22 @@ extension SettingsStore {
     /// 退场落点（WB62HomeWallHooks.entryDidFinish），无队列/
     /// 无装载时不直达。
     static var openPlayerOnLaunch: Bool {
-        get { bool62(Key62B.openPlayerOnLaunch, default: false) }
-        set { setBool62(newValue, Key62B.openPlayerOnLaunch) }
+        get { boolB62(Key62B.openPlayerOnLaunch, default: false) }
+        set { setBoolB62(newValue, Key62B.openPlayerOnLaunch) }
     }
 
     /// 思索教程提示（默认开）：消费 Ponder62（首访功能面一
     /// 次性气泡，已读态落盘）。
     static var ponderTipsEnabled: Bool {
-        get { bool62(Key62B.ponderTipsEnabled, default: true) }
-        set { setBool62(newValue, Key62B.ponderTipsEnabled) }
+        get { boolB62(Key62B.ponderTipsEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.ponderTipsEnabled) }
     }
 
     /// 触屏思索按钮（默认开）：墙面悬浮「?」钮，点开教程
     /// 提示列表面。消费 WB62HomeWallHooks 安装点。
     static var ponderTouchButtonEnabled: Bool {
-        get { bool62(Key62B.ponderTouchButtonEnabled, default: true) }
-        set { setBool62(newValue, Key62B.ponderTouchButtonEnabled) }
+        get { boolB62(Key62B.ponderTouchButtonEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.ponderTouchButtonEnabled) }
     }
 
     /// 思索已读集合（Ponder62 落盘面）。
@@ -458,16 +458,16 @@ extension SettingsStore {
     /// 手势快捷总开关（默认开）：iOS 无键盘场景的等价实现
     /// （可绑定手势动作表，见设置行与 WB62HomeWallHooks）。
     static var gestureShortcutsEnabled: Bool {
-        get { bool62(Key62B.gestureShortcutsEnabled, default: true) }
-        set { setBool62(newValue, Key62B.gestureShortcutsEnabled) }
+        get { boolB62(Key62B.gestureShortcutsEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.gestureShortcutsEnabled) }
     }
 
     /// 长按工具条打开命令面板（默认开）：§4.8 自定义快捷键
     /// 的至少一条真消费——消费在 WB62HomeWallHooks 给工具条
     /// 宿主视图挂的长按手势（经宿主既有命令面板入口）。
     static var longPressToolbarCommandPalette: Bool {
-        get { bool62(Key62B.longPressToolbarCommandPalette, default: true) }
-        set { setBool62(newValue, Key62B.longPressToolbarCommandPalette) }
+        get { boolB62(Key62B.longPressToolbarCommandPalette, default: true) }
+        set { setBoolB62(newValue, Key62B.longPressToolbarCommandPalette) }
     }
 
     /// 向左滑动打开的目标：commandPalette（默认）/
@@ -475,7 +475,7 @@ extension SettingsStore {
     /// 墙面左滑手势。
     static var swipeLeftTarget: String {
         get {
-            let raw = string62(Key62B.swipeLeftTarget, default: "commandPalette")
+            let raw = stringB62(Key62B.swipeLeftTarget, default: "commandPalette")
             return ["commandPalette", "sketchbook", "search", "none"].contains(raw)
                 ? raw : "commandPalette"
         }
@@ -491,8 +491,8 @@ extension SettingsStore {
     /// UIKeyCommand 消费在 HomeWall/WallPrototype 的
     /// keyCommands hunk（WB 簇小改，见报告）。
     static var posterWallSHotkeyEnabled: Bool {
-        get { bool62(Key62B.posterWallSHotkeyEnabled, default: true) }
-        set { setBool62(newValue, Key62B.posterWallSHotkeyEnabled) }
+        get { boolB62(Key62B.posterWallSHotkeyEnabled, default: true) }
+        set { setBoolB62(newValue, Key62B.posterWallSHotkeyEnabled) }
     }
 
     // MARK: - §4.9 WB 两项（连接与集成）
@@ -501,22 +501,22 @@ extension SettingsStore {
     /// 非空时 LyricRepository 先试该基址的 /lyric 兼容端点，
     /// 失败回落 EdgeOne 并落面包屑。
     static var lyricAPIBaseURL: String {
-        get { string62(Key62B.lyricAPIBaseURL, default: "") }
+        get { stringB62(Key62B.lyricAPIBaseURL, default: "") }
         set { UserDefaults.standard.set(newValue, forKey: Key62B.lyricAPIBaseURL) }
     }
 
     /// 舞台模式（外部舞台数据源总开关，默认关）：消费
     /// StageDataSource62 轮询客户端。
     static var stageModeEnabled: Bool {
-        get { bool62(Key62B.stageModeEnabled, default: false) }
-        set { setBool62(newValue, Key62B.stageModeEnabled) }
+        get { boolB62(Key62B.stageModeEnabled, default: false) }
+        set { setBoolB62(newValue, Key62B.stageModeEnabled) }
     }
 
     /// 舞台数据来源 URL（默认空）：StageDataSource62 按此
     /// 地址轮询 {title, artist, progress} JSON 映射到舞台信
     /// 息卡数据源（协议假设见 StageDataSource62 头注）。
     static var stageDataSourceURL: String {
-        get { string62(Key62B.stageDataSourceURL, default: "") }
+        get { stringB62(Key62B.stageDataSourceURL, default: "") }
         set { UserDefaults.standard.set(newValue, forKey: Key62B.stageDataSourceURL) }
     }
 }

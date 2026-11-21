@@ -23,12 +23,9 @@ import UIKit
 //   合理形态实现，集成时主聊天对齐）——同目录同名 .lrc/.txt
 //   伴随文件按「本地歌词格式顺序」键的次序取第一命中。
 
-protocol LocalLyricSource62: AnyObject {
-    /// 本地伴随歌词原文（LRC/TXT 文本）；无则 nil。
-    func localLyricText(for track: FoliaTrack) -> String?
-    /// 本地伴随歌词文件 URL；无则 nil。
-    func localLyricFileURL(for track: FoliaTrack) -> URL?
-}
+// 注：LocalLyricSource62 协议本体在 WB 的 Lyric62Hooks.swift
+// （songId 口径 + Registry 注册表）；本类按该口径遵循，下方
+// track 版两法是本类内部实现与对外查询面，不再自立协议。
 
 /// SQLite 文本绑定析构标记（与 DatabaseManager 同写法；该常量
 /// 在其文件内为 private，本文件自备一份）。
@@ -84,6 +81,8 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
         loadIndex()
         loadFolders()
         if SettingsStore.autoScanImportedFolders62 { rescanFolders() }
+        // (62) 集成对齐：向 WB 歌词钩子注册表登记本地歌词源。
+        LocalLyricSource62Registry.shared.source = self
     }
 
     // MARK: - 查询（四视图数据源）
@@ -359,6 +358,19 @@ final class LocalLibrary62: ObservableObject, LocalLyricSource62 {
     func localLyricText(for track: FoliaTrack) -> String? {
         guard let url = localLyricFileURL(for: track) else { return nil }
         return try? String(contentsOf: url, encoding: .utf8)
+    }
+
+    // (62) 集成对齐：WB 协议口径（songId 版）——按 id 定位本
+    // 地曲后转上方 track 版实现；逐字判定看命中文件扩展名。
+    func localLyricText(songId: String) -> String? {
+        guard let track = tracks.first(where: { $0.id == songId }) else { return nil }
+        return localLyricText(for: track)
+    }
+
+    func localLyricIsWordTimed(songId: String) -> Bool {
+        guard let track = tracks.first(where: { $0.id == songId }),
+              let url = localLyricFileURL(for: track) else { return false }
+        return url.pathExtension.lowercased() == "yrc"
     }
 
     // MARK: - 落盘
