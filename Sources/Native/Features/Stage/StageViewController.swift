@@ -44,6 +44,16 @@ final class StageViewController: UIViewController {
     private let noticeWebButton = UIButton(type: .system)
     private let noticeCloseButton = UIButton(type: .system)
     private let rendererContainer = UIView()
+    // (62) WA 预留：WD 簇墙后画面挂载点——位于背景层之上、
+    // renderer 容器之下；viewDidLoad 调 StageBackdrop62.attach。
+    let backdrop62Container = UIView()
+    // (62) WA 新增面：舞台歌曲卡 / 声线追踪 / 常显切歌箭头 / 顶栏模糊。
+    private let trackPill62 = TrackPill62()
+    private let soundTracing62 = SoundTracingView62()
+    private var headerBlur62: UIVisualEffectView?
+    private let alwaysPrev62 = UIButton(type: .system)
+    private let alwaysNext62 = UIButton(type: .system)
+    private var stageBarDragStartHeight62: CGFloat = 70
     // 底部字幕层已于 (60) 第 11 条整组删除（SubtitleOverlayView/
     // SubtitleSettingsPanel/SubtitleSettingsStore 三文件退役）：
     // 特效画面不再有宿主级小字行。汪汪队提词条 teleBar 是渲染
@@ -228,6 +238,8 @@ final class StageViewController: UIViewController {
     private func scheduleStageHeaderHide() {
         headerHideWorkItem?.cancel()
         headerHideWorkItem = nil
+        // (62) 自动隐藏控制栏设置化：关时顶栏常显、不排隐藏计时。
+        guard SettingsStore.headerAutoHideEnabled else { return }
         guard !headerChromeHidden else { return }
         let work = DispatchWorkItem { [weak self] in self?.hideStageHeader() }
         headerHideWorkItem = work
@@ -237,13 +249,17 @@ final class StageViewController: UIViewController {
     private func hideStageHeader() {
         guard !headerChromeHidden, view.window != nil else { return }
         headerChromeHidden = true
-        for v in stageHeaderViews { v.isUserInteractionEnabled = false }
+        // (62) 始终显示播放页返回按钮：closeButton 脱离自动隐藏组常显。
+        let targets = stageHeaderViews.filter {
+            !(SettingsStore.alwaysShowBackButton && $0 === closeButton)
+        }
+        for v in targets { v.isUserInteractionEnabled = false }
         UIView.animate(withDuration: 0.3, delay: 0,
                        options: [.curveEaseInOut, .beginFromCurrentState]) {
-            for v in self.stageHeaderViews { v.alpha = 0 }
+            for v in targets { v.alpha = 0 }
         } completion: { _ in
             if self.headerChromeHidden {
-                for v in self.stageHeaderViews { v.isHidden = true }
+                for v in targets { v.isHidden = true }
             }
         }
         Breadcrumbs.log("stage header auto-hide")
@@ -419,6 +435,9 @@ final class StageViewController: UIViewController {
             + " hostWordSync=\(LyricStageProtocolInfo.hostCapabilities.supportsWordSync ? 1 : 0)")
         view.backgroundColor = .black
         buildLayout()
+        // (62) WD 墙后画面挂载（WA 预留点，签名任务定死）。
+        StageBackdrop62.attach(to: backdrop62Container)
+        install62Chrome()
         // 自定义背景（3.7 (47)）：槽位有记录则装配并藏起宿主
         // 氛围层；播放由 viewWillAppear/Disappear 钩子管。
         refreshCustomBackground()
@@ -619,7 +638,29 @@ final class StageViewController: UIViewController {
         noticeBar.addSubview(noticeWebButton)
         noticeBar.addSubview(noticeCloseButton)
         view.addSubview(noticeBar)
+        // (62) 顶栏模糊背景：插在顶栏控件之下、画面之上。
+        let headerBlur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        headerBlur.isUserInteractionEnabled = false
+        headerBlur.isHidden = !SettingsStore.headerBlurEnabled
+        view.addSubview(headerBlur)
+        headerBlur62 = headerBlur
+        // (62) WD 挂载点与 62 新增面（层序：backdrop62 < renderer）。
+        backdrop62Container.isUserInteractionEnabled = false
+        view.addSubview(backdrop62Container)
         view.addSubview(rendererContainer)
+        view.addSubview(trackPill62)
+        soundTracing62.isHidden = !SettingsStore.soundTracingEnabled
+        view.addSubview(soundTracing62)
+        for (button, symbol, action) in [
+            (alwaysPrev62, "chevron.left.circle.fill", #selector(alwaysPrev62Tapped)),
+            (alwaysNext62, "chevron.right.circle.fill", #selector(alwaysNext62Tapped)),
+        ] as [(UIButton, String, Selector)] {
+            button.setImage(UIImage(systemName: symbol), for: .normal)
+            button.tintColor = UIColor.white.withAlphaComponent(0.85)
+            button.addTarget(self, action: action, for: .touchUpInside)
+            button.isHidden = !SettingsStore.alwaysShowSkipButtons
+            view.addSubview(button)
+        }
         // 点播台（3.7 (32)）：与墙台同规格的台体在此装配，
         // 三键仍走既有按钮与命令入口（handleCommand 同路）。
         // 附加功能浮层在 buildStageBar 内随台一并装配（锚台顶）。
@@ -647,6 +688,89 @@ final class StageViewController: UIViewController {
             name: .foliaMiniBarCommand, object: nil)
     }
 
+    // MARK: (62) WA 接线
+
+    private func install62Chrome() {
+        // 底部组件拖动调整：在点播台顶缘加一条 16pt 拖动带（不抢
+        // 台身既有手势域），纵向拖动改 bottomBarHeight 并落盘。
+        let handle = UIView()
+        handle.backgroundColor = .clear
+        handle.translatesAutoresizingMaskIntoConstraints = false
+        stageBar.addSubview(handle)
+        NSLayoutConstraint.activate([
+            handle.topAnchor.constraint(equalTo: stageBar.topAnchor),
+            handle.leadingAnchor.constraint(equalTo: stageBar.leadingAnchor),
+            handle.trailingAnchor.constraint(equalTo: stageBar.trailingAnchor),
+            handle.heightAnchor.constraint(equalToConstant: 16),
+        ])
+        let pan = UIPanGestureRecognizer(target: self, action: #selector(stageBarHeightDrag62(_:)))
+        handle.addGestureRecognizer(pan)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settings62AChanged),
+            name: .foliaSettings62AChanged, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(settings62AChanged),
+            name: .foliaTheme62Changed, object: nil)
+        refresh62Settings()
+        Breadcrumbs.log("stage62.install scene=\(SceneSystem62.params().label)"
+            + " soundTracing=\(SettingsStore.soundTracingEnabled ? 1 : 0)"
+            + " barH=\(Int(SettingsStore.bottomBarHeight))")
+    }
+
+    @objc private func settings62AChanged() {
+        refresh62Settings()
+        refreshCustomBackground()
+        view.setNeedsLayout()
+    }
+
+    /// (62) 设置即时消费：底栏高度/隐藏、顶栏模糊、常显箭头、声线、
+    /// 右侧按钮隐藏、主题强调色（点播台主题底色＋样式钮）。
+    private func refresh62Settings() {
+        if !stageBarCollapsed {
+            stageBarHeightConstraint?.constant = CGFloat(SettingsStore.bottomBarHeight)
+        }
+        stageBar.isHidden = SettingsStore.hideBottomBar
+        headerBlur62?.isHidden = !SettingsStore.headerBlurEnabled
+        alwaysPrev62.isHidden = !SettingsStore.alwaysShowSkipButtons
+        alwaysNext62.isHidden = !SettingsStore.alwaysShowSkipButtons
+        soundTracing62.isHidden = !SettingsStore.soundTracingEnabled
+        let hideRight = SettingsStore.hideRightButtons
+        likeButton.isHidden = hideRight
+        styleButton.isHidden = hideRight
+        // 主题消费：点播台玻璃底掺当前主题背景调、样式钮底掺强调色。
+        stageGlassTint?.backgroundColor =
+            ThemeSystem62.currentBackground.withAlphaComponent(0.45)
+        styleButton.backgroundColor =
+            ThemeSystem62.currentAccent.withAlphaComponent(0.25)
+        if !SettingsStore.headerAutoHideEnabled, headerChromeHidden {
+            showStageHeader(source: "62-autohide-off")
+        }
+    }
+
+    @objc private func stageBarHeightDrag62(_ gesture: UIPanGestureRecognizer) {
+        guard !stageBarCollapsed else { return }
+        switch gesture.state {
+        case .began:
+            stageBarDragStartHeight62 = CGFloat(SettingsStore.bottomBarHeight)
+        case .changed:
+            let dy = gesture.translation(in: view).y
+            // 上拖加高、下拖变矮（台锚底边，顶缘位移反向）。
+            SettingsStore.bottomBarHeight = Double(stageBarDragStartHeight62 - dy)
+            stageBarHeightConstraint?.constant = CGFloat(SettingsStore.bottomBarHeight)
+            view.layoutIfNeeded()
+        case .ended, .cancelled:
+            Breadcrumbs.log("stage62.barHeight drag= \(Int(SettingsStore.bottomBarHeight))")
+            NotificationCenter.default.post(
+                name: .foliaSettings62AChanged, object: nil,
+                userInfo: ["key": SettingsStore.Key62A.bottomBarHeight])
+        default:
+            break
+        }
+    }
+
+    @objc private func alwaysPrev62Tapped() { queueManager.playPrevious() }
+    @objc private func alwaysNext62Tapped() { queueManager.playNext(manual: true) }
+
     private func layoutStage() {
         let bounds = view.bounds
         let safe = view.safeAreaInsets
@@ -654,6 +778,7 @@ final class StageViewController: UIViewController {
         backdropImageView.frame = bounds
         backdropBlur.frame = bounds
         backdropTint.frame = bounds
+        backdrop62Container.frame = bounds
         let headerTop = safe.top + 6
         closeButton.frame = CGRect(x: 12, y: headerTop, width: 38, height: 38)
         likeButton.frame = CGRect(x: bounds.width - 50, y: headerTop, width: 38, height: 38)
@@ -685,7 +810,7 @@ final class StageViewController: UIViewController {
         stageBarWidthConstraint?.constant =
             min(bounds.width, bounds.height) - 24
         let barHeight: CGFloat = stageBarCollapsed ? 16
-            : MiniBarQuickRowView.expandedBarHeight
+            : CGFloat(SettingsStore.bottomBarHeight)
         let controlsTop = bounds.height - safe.bottom - 10 - barHeight
         // 全样式全幅（3.7 (60) 第 4 条，取代 (55)/(57) 的 petconcert
         // 独占全幅特判）：rendererContainer 对全部样式一律 = view
@@ -698,6 +823,19 @@ final class StageViewController: UIViewController {
         // 强行拉满，仍按各自内部几何走。
         rendererContainer.frame = bounds
         renderer?.view.frame = rendererContainer.bounds
+        // (62) 新增面几何：顶栏模糊带 / 歌曲卡（按位置设置）/ 声线框 /
+        // 常显切歌箭头（左右中段）。
+        headerBlur62?.frame = CGRect(x: 0, y: 0, width: bounds.width, height: headerTop + 52)
+        if !trackPill62.isHidden { trackPill62.place(in: view) }
+        soundTracing62.frame = CGRect(x: bounds.width - 188, y: headerTop + 78,
+                                      width: 176, height: 46)
+        alwaysPrev62.frame = CGRect(x: 6, y: bounds.height / 2 - 22, width: 44, height: 44)
+        alwaysNext62.frame = CGRect(x: bounds.width - 50, y: bounds.height / 2 - 22,
+                                    width: 44, height: 44)
+        for chrome62 in [trackPill62, soundTracing62, alwaysPrev62, alwaysNext62] as [UIView] {
+            view.bringSubviewToFront(chrome62)
+        }
+        if let hb = headerBlur62 { view.bringSubviewToFront(hb) }
         for chrome in [closeButton, likeButton,
                        titleLabel, artistLabel, styleButton,
                        noticeBar, stageBar] as [UIView] {
@@ -889,6 +1027,9 @@ final class StageViewController: UIViewController {
         // 点播台切歌边沿（3.7 (32)，与墙 refreshMiniBar 同
         // 构）：宠物切歌钩子 + 收起态先展开、否则重置计时。
         stagePetStage?.setTrack(id: track.id)
+        // (62) 舞台歌曲卡：切歌通知（显隐/时长/位置由卡内读设置）。
+        trackPill62.noteTrackChanged(track: track)
+        trackPill62.place(in: view)
         if stageBarCollapsed { expandStageBar() } else { resetStageIdleTimer() }
         // 顶栏（3.7 (46)）：切歌时顶栏已隐藏则短暂恢复亮出新
         // 歌名，5 秒后照常自动隐藏；可见时只重置计时。
@@ -989,7 +1130,18 @@ final class StageViewController: UIViewController {
         backdropTrackId = trackId
         backdropImageView.image = image
         palette = StagePalette.tokens(from: image)
-        backdropTint.backgroundColor = palette.background.withAlphaComponent(0.5)
+        // (62) 主题系统：封面到货生成歌曲主题（StagePalette 既有通路）；
+        // 优先自定义时以所选预设强调色覆写 palette accent（三处消费之一）。
+        ThemeSystem62.noteTrackArtwork(image: image, trackId: trackId)
+        if SettingsStore.preferCustomTheme {
+            palette.accent = ThemeSystem62.selectedPreset.accent
+            Breadcrumbs.log("theme62.stage palette accent=custom-preset")
+        } else if ThemeSystem62.songThemeActive {
+            Breadcrumbs.log("theme62.stage palette accent=song-theme")
+        }
+        // (62) 场景系统：tint alpha 走场景基线（影厅更暗、书房更柔）。
+        backdropTint.backgroundColor = palette.background
+            .withAlphaComponent(CGFloat(SceneSystem62.params().tintAlpha))
         let pixelWidth = Int(image.size.width * image.scale)
         let pixelHeight = Int(image.size.height * image.scale)
         let estMB = Double(pixelWidth * pixelHeight * 4) / 1_048_576
@@ -1646,7 +1798,7 @@ final class StageViewController: UIViewController {
         stageBarWidthConstraint = bar.widthAnchor.constraint(
             equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
         stageBarHeightConstraint = bar.heightAnchor.constraint(
-            equalToConstant: MiniBarQuickRowView.expandedBarHeight)
+            equalToConstant: CGFloat(SettingsStore.bottomBarHeight))
         stageBarWidthConstraint?.isActive = true
         stageBarHeightConstraint?.isActive = true
         NSLayoutConstraint.activate([
@@ -1764,8 +1916,14 @@ final class StageViewController: UIViewController {
     /// 两面墙台一致；收起态 alpha/交互名单含隐藏键无妨，
     /// isHidden 恒压过 alpha 与命中。
     private func applyStageBarSlots() {
-        applySlot(prevButton, visible: MiniBarSlotSettings.showPrev, width: 34)
-        applySlot(nextButton, visible: MiniBarSlotSettings.showNext, width: 34)
+        // (62) 槽位扩展集与既有三键取交集：barSlots62 决定候选集
+        // （prev/next/queue/like/mode/sleep），MiniBarSlotSettings
+        // 三键为既有显隐真源；mode 键管舞台主排模式钮，like/sleep
+        // 在舞台无独立钮（like 在顶栏、sleep 在面板），仅落面包屑。
+        let slots62 = SettingsStore.barSlots62
+        applySlot(prevButton, visible: MiniBarSlotSettings.showPrev && slots62.contains("prev"), width: 34)
+        applySlot(nextButton, visible: MiniBarSlotSettings.showNext && slots62.contains("next"), width: 34)
+        stageModeButton.isHidden = !slots62.contains("mode")
         // queue 键已迁顶栏隐藏排（(53) H 修正），不再受台面槽位
         // 显隐管辖；MiniBarSlotSettings.showQueue 对墙原型台与
         // MiniPlayerView 组件仍有效。
@@ -2053,7 +2211,7 @@ final class StageViewController: UIViewController {
     }
 
     private func setStageBarForm(collapsed: Bool) {
-        stageBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
+        stageBarHeightConstraint?.constant = collapsed ? 16 : CGFloat(SettingsStore.bottomBarHeight)
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in stageMainCenterY { constraint.constant = -5 }
         stageTrackBottomConstraint?.constant = collapsed ? -6 : -7
@@ -2173,6 +2331,10 @@ final class StageViewController: UIViewController {
         let position = positionNow()
         logStageLineIfChanged(position: position)
         renderer?.frameTick(position: position)
+        // (62) 声线追踪：开启时逐帧喂电平近似线（无真实频谱源，见视图头注）。
+        if SettingsStore.soundTracingEnabled {
+            soundTracing62.update(playing: engine.isPlaying, position: position)
+        }
         // 打开追踪·首帧存活（3.7 (61) 第 3 条）：渲染器首帧
         // tick 后的 CATransaction 完成回调 = 该帧已提交合成；
         // 只落一次（styleTraceFirstFrameLogged 锁存、每次装配
@@ -2440,15 +2602,26 @@ extension StageViewController: PHPickerViewControllerDelegate {
     /// 按槽位现状装配/卸下自定义背景，并同步宿主氛围三件套
     /// 显隐。viewDidLoad、选入成功、恢复样式背景三处调用。
     func refreshCustomBackground() {
-        if let entry = CustomBackgroundStore.current {
+        // (62) 视频层升格：独立开关开且视频层槽有内容时优先用视频层
+        // 槽（与 (47) 自定义背景槽分开）；否则沿 (47) 自定义背景槽。
+        let videoEntry = SettingsStore.videoLayerEnabled
+            ? CustomBackgroundStore.currentVideoLayer : nil
+        let entry = videoEntry ?? CustomBackgroundStore.current
+        if let entry {
             customBgView.apply(kind: entry.kind, url: entry.url)
+            // (62) 不透明度/填充方式真消费。
+            customBgView.applyLayerRendering(
+                opacity: SettingsStore.videoLayerOpacity,
+                fill: SettingsStore.videoLayerFillMode == 0)
             backdropImageView.isHidden = true
             backdropBlur.isHidden = true
             backdropTint.isHidden = true
-            Breadcrumbs.log("custombg.apply kind=\(entry.kind.rawValue)")
+            Breadcrumbs.log("custombg.apply kind=\(entry.kind.rawValue)"
+                + " layer=\(videoEntry != nil ? "video62" : "custom47")")
             if view.window != nil { customBgView.play() }
         } else {
             customBgView.clearContent()
+            customBgView.alpha = 1
             backdropImageView.isHidden = false
             backdropBlur.isHidden = false
             backdropTint.isHidden = false

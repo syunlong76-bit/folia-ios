@@ -201,6 +201,8 @@ final class HomeWallViewController: UIViewController,
     private var seamFilterBar: UIView?
     private var seamFilterField: UITextField?
     private var gridCollectionView: UICollectionView?
+    /// (62) 首页歌曲卡（trackPillShowOnHome 开时墙面同款小卡）。
+    private var homeTrackPill62: TrackPill62?
     private var seamGridMode = UserDefaults.standard.bool(forKey: "folia.wall.gridMode")
     private var seamImmersive = false
     private var seamImmersiveTapView: UIView?
@@ -240,7 +242,9 @@ final class HomeWallViewController: UIViewController,
         // 在帧缺位时会露成平绿画布，垫底只认海报图本体、不认
         // 平均色，与 (59) 黑场第一帧口径一致。
         view.backgroundColor = .black
-        overrideUserInterfaceStyle = .dark
+        // (62) 明暗模式：改读 SettingsStore.daylightMode（窗口级由
+        // SceneDelegate 统一 apply；本 VC 不再写死 .dark）。
+        overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride()
         // 播放台特效总开关/主题变更（设置页）即时同步。
         NotificationCenter.default.addObserver(
             self, selector: #selector(miniPlayerThemeSettingsChanged),
@@ -268,6 +272,10 @@ final class HomeWallViewController: UIViewController,
         NotificationCenter.default.addObserver(
             self, selector: #selector(seamHiddenPlaylistsChanged),
             name: .foliaHiddenPlaylistsChanged, object: nil)
+        // (62) WA 设置变更：侧栏分区显隐/资料库界面即时重读。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(home62SettingsChanged),
+            name: .foliaSettings62AChanged, object: nil)
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         // 同 view 底色口径（(61) 第 2 条）：墙画布未铺满/回弹露底时同为纯黑。
@@ -504,6 +512,12 @@ final class HomeWallViewController: UIViewController,
         seamToolbarTrailing?.constant =
             (rootCloseButton?.isHidden ?? true) ? -12 : -64
         seamRefreshAccount()
+        // (62) 每次露面重读资料库界面选择（设置页改动后回墙生效，
+        // 与工具条布局钮同状态源）＋侧栏分区显隐。
+        let wantGrid = SettingsStore.librarySuiteChoice == 1
+        if wantGrid != seamGridMode { seamToggleLayout() }
+        applyHomeTabs62Visibility()
+        refreshHomeTrackPill62()
         Breadcrumbs.log("wall.appear kind=home")
         Breadcrumbs.log("home appear")
         Breadcrumbs.samplerStart()
@@ -827,6 +841,18 @@ final class HomeWallViewController: UIViewController,
                 ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
             cell.configure(entry: entry, tier: tier)
             cell.playEntranceIfNeeded(key: entry.id)
+            // (62) 网格卡片样式消费：最小透明度（cell alpha 下限由
+            // 设置给，呈现取 max）＋3D 卡片（透视倾斜＋高光近似：
+            // 绕 X 轴轻倾 6°、m34 透视，诚实近似非真 3D 渲染）。
+            cell.alpha = CGFloat(SettingsStore.gridCardMinOpacity)
+            if SettingsStore.grid3DCardStyle {
+                var transform = CATransform3DIdentity
+                transform.m34 = -1.0 / 600
+                transform = CATransform3DRotate(transform, 6 * .pi / 180, 1, 0, 0)
+                cell.layer.transform = transform
+            } else {
+                cell.layer.transform = CATransform3DIdentity
+            }
             return cell
         }
         let instance = wallLayout.instances[indexPath.item]
@@ -1002,6 +1028,8 @@ final class HomeWallViewController: UIViewController,
             Breadcrumbs.log("wall.seam.explore play at=\(queueIndex) n=\(seamVisibleTracks.count)")
             QueueManager.shared.setQueue(
                 seamVisibleTracks, startingAt: queueIndex, source: "wall-explore")
+            // (62) 播放后进入的视图：起播后按设置路由（默认开台）。
+            routeAfterPlayback62()
             return
         }
         guard queueIndex < playlistIds.count, queueIndex < entries.count else { return }
@@ -2029,6 +2057,28 @@ final class HomeWallViewController: UIViewController,
         present(stage, animated: true)
     }
 
+    /// (62) 播放后进入的视图路由：点歌起播后按 playbackEntryView
+    /// 决定去向——stage 开台（默认）、detail 开台后打开播放面板、
+    /// stay 留在当前页。仅点歌路径（探段直点起播）走本路由；
+    /// 迷你台双击/回到播放页/后台点入等显式导航仍走
+    /// openNativeStageFromHome 原路、不受本设置管辖。
+    private func routeAfterPlayback62() {
+        switch PlaybackEntry62.current {
+        case .stay:
+            Breadcrumbs.log("entry62 route=stay")
+        case .detail:
+            Breadcrumbs.log("entry62 route=detail")
+            openNativeStageFromHome()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self else { return }
+                PlaybackEntry62.openPanelOnPresentedStage(from: self)
+            }
+        case .stage:
+            Breadcrumbs.log("entry62 route=stage")
+            openNativeStageFromHome()
+        }
+    }
+
     /// 后台点入直达（3.7 (31)）：SceneDelegate 在「曾进后台 + 有活跃
     /// 队列 + 本墙正是顶层」时调用，与本墙既有舞台入口同路。
     func openNativeStageForBackgroundReturn() {
@@ -2520,6 +2570,23 @@ extension HomeWallViewController {
                     subtitle: track.artist)
             }
         }
+        // (62) 记住主页卡片位置：开时按落盘顺序重排呈现集（已存
+        // 顺序优先、新条目随后），并把当前顺序回存。作用于条目
+        // 顺序与网格滚动原点，不动 BravaisFinite 几何本体。
+        if SettingsStore.rememberCardPositions, seamSegment != .explore {
+            let saved = SettingsStore.wallCardOrder
+            if !saved.isEmpty {
+                let rank = Dictionary(uniqueKeysWithValues:
+                    saved.enumerated().map { ($1, $0) })
+                let paired = zip(entries, playlistIds).sorted { a, b in
+                    (rank[a.0.id] ?? Int.max) < (rank[b.0.id] ?? Int.max)
+                }
+                entries = paired.map { $0.0 }
+                playlistIds = paired.map { $0.1 }
+            }
+            SettingsStore.wallCardOrder = entries.map { $0.id }
+            Breadcrumbs.log("wall62.cardOrder memory=1 n=\(entries.count)")
+        }
         wallLayout.totalEntries = entries.count
         // 数据变更点（(58)）：条目身份代指递增，实例集缓存随之
         // 失效重算（与 totalEntries 同批，此外无第二处赋值）。
@@ -2630,6 +2697,9 @@ extension HomeWallViewController {
     func seamToggleLayout() {
         seamGridMode.toggle()
         UserDefaults.standard.set(seamGridMode, forKey: "folia.wall.gridMode")
+        // (62) 资料库界面设置项同状态源：写 SettingsStore.librarySuiteChoice
+        //（其 setter 双写新键+旧键），设置页改动与工具条钮互跟随。
+        SettingsStore.librarySuiteChoice = seamGridMode ? 1 : 0
         seamToolbar?.setLayoutMode(grid: seamGridMode)
         Breadcrumbs.log("wall.seam.layout=\(seamGridMode ? "grid" : "bravais")")
         guard let grid = gridCollectionView else { return }
@@ -2666,10 +2736,77 @@ extension HomeWallViewController {
         // 只服务网格 flow 布局（墙面本体是自定义 WallLayout、
         // 不走本方法）。三列等宽方卡，封面内标题叠底（cell 本
         // 形），横屏按宽重算列宽、行数自然增减。
+        // (62) 网格卡片项消费：卡片最小尺寸决定列数下限；正方形
+        // 开关关时卡片改 4:5 竖幅；全画幅封面开时列数按整宽算。
         let width = collectionView.bounds.width
-        let available = width - 28 - 20
-        let side = max(60, floor(available / 3))
-        return CGSize(width: side, height: side)
+        let bleed = SettingsStore.gridFullBleedCover
+        let available = width - (bleed ? 0 : 28) - 20
+        let minSide = CGFloat(SettingsStore.gridCardMinSize)
+        let columns = max(2, min(4, Int(floor(available / minSide))))
+        let side = max(60, floor(available / CGFloat(columns)))
+        let height = SettingsStore.gridSquareCards ? side : side * 1.25
+        return CGSize(width: side, height: height)
+    }
+
+    // MARK: (62) WA 消费面
+
+    @objc func home62SettingsChanged() {
+        applyHomeTabs62Visibility()
+        refreshHomeTrackPill62()
+        // (62) 全画幅封面：开时网格边距收零、封面铺满列宽。
+        if let flow = gridCollectionView?.collectionViewLayout as? UICollectionViewFlowLayout {
+            flow.sectionInset = SettingsStore.gridFullBleedCover
+                ? UIEdgeInsets(top: 60, left: 0, bottom: 150, right: 0)
+                : UIEdgeInsets(top: 60, left: 14, bottom: 150, right: 14)
+        }
+        gridCollectionView?.collectionViewLayout.invalidateLayout()
+        gridCollectionView?.reloadData()
+    }
+
+    /// 顶部胶囊入口显隐（(62) §4.3）：侧栏分区行按总开关＋5 页签
+    /// 开关显隐——关掉的分区行不渲染（isHidden 于 UIStackView 即
+    /// 不占位）。映射：歌单→「歌单」、推荐→「电台」、探索→「搜索」、
+    /// 专辑→「专辑」、本地→「本地」（原生侧栏既有分区名）。
+    func applyHomeTabs62Visibility() {
+        guard let host = workbenchHost else { return }
+        let master = SettingsStore.homeTabsEnabled
+        let map: [String: Bool] = [
+            "歌单": master && SettingsStore.showHomeTabPlaylists,
+            "电台": master && SettingsStore.showHomeTabRecommend,
+            "搜索": master && SettingsStore.showHomeTabExplore,
+            "专辑": master && SettingsStore.showHomeTabAlbums,
+            "本地": master && SettingsStore.showHomeTabLocal,
+        ]
+        var applied = 0
+        func walk(_ v: UIView) {
+            if let button = v as? UIButton,
+               let label = button.accessibilityLabel,
+               let visible = map[label] {
+                button.isHidden = !visible
+                applied += 1
+            }
+            for sub in v.subviews { walk(sub) }
+        }
+        walk(host)
+        if applied > 0 {
+            Breadcrumbs.log("wall62.homeTabs master=\(master ? 1 : 0) applied=\(applied)")
+        }
+    }
+
+    /// 首页歌曲卡：开关开时墙面左上同款 TrackPill62 跟随当前曲。
+    func refreshHomeTrackPill62() {
+        guard SettingsStore.trackPillShowOnHome else {
+            homeTrackPill62?.removeFromSuperview()
+            homeTrackPill62 = nil
+            return
+        }
+        if homeTrackPill62 == nil {
+            let pill = TrackPill62()
+            view.addSubview(pill)
+            homeTrackPill62 = pill
+        }
+        homeTrackPill62?.noteTrackChanged(track: PlaybackEngine.shared.currentTrack)
+        if let pill = homeTrackPill62 { pill.place(in: view) }
     }
 
     // MARK: 长按隐藏（歌单卡上下文菜单）
