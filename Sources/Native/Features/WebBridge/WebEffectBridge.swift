@@ -127,9 +127,61 @@ final class FoliaBridgeLogStore {
 
     private var windowCounts: [String: (windowStart: Date, count: Int)] = [:]
     private var droppedCounts: [String: Int] = [:]
-    private var currentFileIndex = 0
 
-    private init() {}
+    /// 轮换下标落盘（3.7 (65) 件一，取证报告
+    /// forensics-2026-11-21-log-retention-and-selfcheck 定稿）：
+    /// (63) 前下标只存内存、每启动归零——文件 0 写满后每次
+    /// 启动首写都整删文件 1，上一会话（含崩溃判别 logSync
+    /// 行）在重启导出前被物理销毁。改从 UserDefaults 读初
+    /// 值、翻转时同步写回，轮换恢复为真滚动窗口。
+    private static let indexDefaultsKey = "folia.log.index"
+    private var currentFileIndex: Int
+
+    private init() {
+        currentFileIndex = UserDefaults.standard.integer(
+            forKey: Self.indexDefaultsKey)
+        // 上一会话尾巴转存（同报告件一）：必须在首写之前、
+        // 任何 appendToFile 之前执行一次（单例 init 即首访
+        // 问点，本进程只跑一次）。
+        preservePreviousSessionTail()
+    }
+
+    /// 上一会话尾巴转存：读两份轮换文件（按修改时间拼接、
+    /// 与 recentLogText 同序），取合并后最后 200 行覆写到
+    /// 同目录 folia-prev-tail.log（不参与轮换）；随后同步
+    /// 落一行 prevtail.save 进新会话头部作凭据。文件缺失/
+    /// 首装时尾巴为空、照常落 n=0。
+    private func preservePreviousSessionTail() {
+        let urls = [fileURL(index: 0), fileURL(index: 1)]
+            .filter { FileManager.default.fileExists(atPath: $0.path) }
+            .sorted {
+                let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                return a < b
+            }
+        var lines: [String] = []
+        for url in urls {
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                lines += text.split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+            }
+        }
+        let tail = Array(lines.suffix(200))
+        let tailURL = logDirectory
+            .appendingPathComponent("folia-prev-tail.log")
+        let body = tail.isEmpty ? "" : tail.joined(separator: "\n") + "\n"
+        try? body.write(to: tailURL, atomically: true, encoding: .utf8)
+        writeSync(level: "info", module: "crumb",
+                  message: "prevtail.save n=\(tail.count)")
+    }
+
+    /// 上一会话尾巴（设置页桥日志查看器置顶拼接用）：取证
+    /// 报告件一导出口径。无转存文件/为空返回空串。
+    func prevTailText() -> String {
+        let url = logDirectory.appendingPathComponent("folia-prev-tail.log")
+        guard let text = try? String(contentsOf: url, encoding: .utf8)
+        else { return "" }
+        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     private var logDirectory: URL {
         let dir = FileManager.default.urls(for:.cachesDirectory, in:.userDomainMask)[0]
@@ -219,6 +271,10 @@ final class FoliaBridgeLogStore {
         if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
         size.intValue >= maxFileBytes {
             currentFileIndex = 1 - currentFileIndex
+            // (65) 件一：翻转即落盘，下次启动接着当前文件写，
+            // 不再回零整删上一会话所在文件。
+            UserDefaults.standard.set(currentFileIndex,
+                                      forKey: Self.indexDefaultsKey)
             let next = fileURL(index: currentFileIndex)
             try? FileManager.default.removeItem(at: next)
             FileManager.default.createFile(atPath: next.path, contents: nil)

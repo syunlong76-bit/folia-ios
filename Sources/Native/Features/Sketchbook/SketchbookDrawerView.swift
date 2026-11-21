@@ -379,9 +379,15 @@ final class SketchbookDrawerView: UIView {
             .store(in: &cancellables)
     }
 
-    /// (62) 空态贴纸小图位（懒建）：entries 为空时作表背景。
-    private lazy var emptyArtView62: UIView = {
-        let container = UIView()
+    /// 空态贴纸小图（懒建）。(62) 时作表背景居中浮在列表
+    /// 上、正压「队列草稿」行；(65) B 组（Miller 17:05 截
+    /// 图指令）改固定挂面板左下角：直接作 drawerView 子
+    /// 视图、约束钉左下（距左 14、距安全区底 14、84×84），
+    /// 不压任何文字行；显隐由 refresh 按条目数切换，显示
+    /// 时列表底部补内边距让最后一行滚得过猫。横竖屏与面
+    /// 板展开/收起都走同一组约束（锚点在 drawerView 上），
+    /// 位置口径一致。
+    private lazy var cornerCatView65: UIView = {
         let imageView = UIImageView()
         if let url = Bundle.main.url(forResource: "cat-02",
                                      withExtension: "png",
@@ -389,21 +395,29 @@ final class SketchbookDrawerView: UIView {
             imageView.image = UIImage(contentsOfFile: url.path)
         }
         imageView.contentMode = .scaleAspectFit
+        imageView.isUserInteractionEnabled = false
+        drawerView.addSubview(imageView)
         imageView.translatesAutoresizingMaskIntoConstraints = false
-        container.addSubview(imageView)
         NSLayoutConstraint.activate([
-            imageView.centerXAnchor.constraint(equalTo: container.centerXAnchor),
-            imageView.topAnchor.constraint(equalTo: container.topAnchor, constant: 120),
-            imageView.widthAnchor.constraint(equalToConstant: 96),
-            imageView.heightAnchor.constraint(equalToConstant: 96),
+            imageView.leadingAnchor.constraint(
+                equalTo: drawerView.leadingAnchor, constant: 14),
+            imageView.bottomAnchor.constraint(
+                equalTo: drawerView.safeAreaLayoutGuide.bottomAnchor,
+                constant: -14),
+            imageView.widthAnchor.constraint(equalToConstant: 84),
+            imageView.heightAnchor.constraint(equalToConstant: 84),
         ])
-        return container
+        drawerView.bringSubviewToFront(imageView)
+        return imageView
     }()
 
     private func refresh() {
         let count = store.entries.count
-        // (62) 空态：空时表背景出贴纸小图，非空撤下。
-        tableView.backgroundView = count == 0 ? emptyArtView62 : nil
+        // (65) B 组：空态猫改面板左下角固定（cornerCatView65），
+        // 不再作列表背景居中压行；显示时给列表底部补 98pt
+        // 内边距（猫 84 + 上下各 7），最后一行可滚到猫之上。
+        cornerCatView65.isHidden = count != 0
+        tableView.contentInset.bottom = count == 0 ? 98 : 0
         expandedCountBadge.isHidden = count == 0
         expandedCountLabel.text = "\(count)"
         titleLabel.text = count > 0 ? "速记簿 · \(count)" : "速记簿"
@@ -1220,7 +1234,7 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
         let groupCount = store.groups.count
         let historyCount = store.history.count
         if store.entries.isEmpty {
-            // (62) 空态文案（贴纸小图位见 emptyArtView62）。
+            // 空态文案（贴纸小图在面板左下角，见 cornerCatView65）。
             return "\(Self.greeting62())\n这里还空着——在搜索、歌单、队列里点速记簿钮，歌就会收进这张纸。"
         }
         return "\(Self.greeting62())\n"

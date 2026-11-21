@@ -56,8 +56,8 @@ final class StageViewController: UIViewController {
     private var stageBarDragStartHeight62: CGFloat = 70
     // 底部字幕层已于 (60) 第 11 条整组删除（SubtitleOverlayView/
     // SubtitleSettingsPanel/SubtitleSettingsStore 三文件退役）：
-    // 特效画面不再有宿主级小字行。汪汪队提词条 teleBar 是渲染
-    // 器本体元素、不在本条范围，未动。
+    // 特效画面不再有宿主级小字行。汪汪队底部提词条 teleBar 已
+    // 于 (65) A 组在渲染器内整条摘除（v3b 定版无下胶囊条）。
     // 点播台（3.7 (32) 同步改造）：原固定 128pt 控制带（私有
     // 进度条 + 时间标签 + 44/64/44 三键）整体换成与墙台同规
     // 格的点播台——70pt 玻璃胶囊 + 同款主题层 + 可拖进度轨，
@@ -2451,8 +2451,8 @@ final class StageViewController: UIViewController {
             CATransaction.commit()
         }
         // 宿主级字幕层已于 (60) 第 11 条整组删除：frameStep 不再
-        // 逐帧喂行。汪汪队提词条 teleBar 在 PetConcertRenderer 内
-        // 自行随帧推进、不经宿主，不在本条范围。
+        // 逐帧喂行。汪汪队歌词呈现走渲染器内主胶囊（底部提词条
+        // 已于 (65) 摘除），同样不经宿主。
         // 防卡死守卫证明（3.7 (44) 建，(45) R-4 补口径）：
         // 帧条件（满 60 帧或存活满 2 秒）只置 framesOK，还须
         // 歌词首次 applied 才结算（via=frames+lyrics），覆

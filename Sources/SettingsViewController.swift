@@ -213,15 +213,40 @@ final class SettingsViewController: UIViewController {
         var failingTabs: [String] = []
         for tab in Self.tabTitles.indices {
             selectTab(tab)
-            view.layoutIfNeeded()
-            var bad = 0
-            for top in tabGroups[tab] {
-                if top.bounds.height <= 0 { bad += 1 }
-                if let card = top as? UIStackView {
-                    for row in card.arrangedSubviews where !row.isHidden {
-                        if row.bounds.height <= 0 { bad += 1 }
+            // (65) 件二（取证报告定稿）：两遍落定再量＋bad
+            // 记名。首遍 layout 后 CATransaction.flush 再
+            // layout，同一视图两遍都零高才计 bad——(63) 的
+            // tab8/9/10 共 9 行经逐行枚举无一构造性零高，
+            // 定性为首遍未落定的量测伪影，不为此改任何行
+            // 的布局；bad 逐行落 selfcheck.bad（t<签>
+            // c<卡序> r<行序，卡本体记 -1> <类名>），此后
+            // 可逐行点名。
+            func zeroHeightViews() -> [(card: Int, row: Int, view: UIView)] {
+                var out: [(card: Int, row: Int, view: UIView)] = []
+                for (cardIndex, top) in tabGroups[tab].enumerated() {
+                    if top.bounds.height <= 0 {
+                        out.append((cardIndex, -1, top))
+                    }
+                    if let card = top as? UIStackView {
+                        for (rowIndex, row) in card.arrangedSubviews.enumerated()
+                        where !row.isHidden && row.bounds.height <= 0 {
+                            out.append((cardIndex, rowIndex, row))
+                        }
                     }
                 }
+                return out
+            }
+            view.layoutIfNeeded()
+            let firstKeys = Set(zeroHeightViews().map { "\($0.card)/\($0.row)" })
+            CATransaction.flush()
+            view.layoutIfNeeded()
+            var bad = 0
+            for entry in zeroHeightViews()
+            where firstKeys.contains("\(entry.card)/\(entry.row)") {
+                bad += 1
+                Breadcrumbs.log("selfcheck.bad t\(tab) c\(entry.card)"
+                    + " r\(entry.row)"
+                    + " \(String(describing: type(of: entry.view)))")
             }
             if bad > 0 { failingTabs.append(Self.tabTitles[tab]) }
             tabParts.append("tab\(tab)[cards=\(tabGroups[tab].count) bad=\(bad)]")
@@ -267,6 +292,14 @@ final class SettingsViewController: UIViewController {
         // 基线 diff：失败集合（组名＋页签名）落盘比对。
         let failSet = failingGroups + failingTabs.map { "tab:\($0)" }
         let baselineKey = "folia.selfcheck.failBaseline"
+        // (65) 件二：清一次基线重建——旧基线已把 tab8/9/10
+        // 三签吞为已知失败，口径修正后不清则永不报警；一
+        // 次性标记防后续版本重复清。
+        let baselineResetKey = "folia.selfcheck.baselineReset65"
+        if !UserDefaults.standard.bool(forKey: baselineResetKey) {
+            UserDefaults.standard.removeObject(forKey: baselineKey)
+            UserDefaults.standard.set(true, forKey: baselineResetKey)
+        }
         if let baseline = UserDefaults.standard.stringArray(forKey: baselineKey) {
             let newFails = failSet.filter { !baseline.contains($0) }
             if !newFails.isEmpty {
@@ -1451,7 +1484,7 @@ final class BridgeLogViewController: UIViewController {
         header.alignment = .center
         header.translatesAutoresizingMaskIntoConstraints = false
         let title = UILabel()
-        title.text = "桥日志（最近 300 行）"
+        title.text = "桥日志（尾巴＋最近 1000 行）"
         title.font = .systemFont(ofSize: 16, weight: .semibold)
         title.textColor = .white
         let copyButton = UIButton(type: .system)
@@ -1488,7 +1521,15 @@ final class BridgeLogViewController: UIViewController {
             textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12)
         ])
 
-        let text = FoliaBridgeLogStore.shared.recentLogText(maxLines: 300)
+        // (65) 件一导出拼接（取证报告定稿）：上一会话尾巴
+        // （启动时已转存 folia-prev-tail.log）置顶，其后接
+        // 本会话最近 1000 行（原上限 300 一并提至 1000 作
+        // 保险）——崩溃会话尾部在重启后导出时带得出来。
+        let tail = FoliaBridgeLogStore.shared.prevTailText()
+        let recent = FoliaBridgeLogStore.shared.recentLogText(maxLines: 1000)
+        let text = tail.isEmpty ? recent
+            : "—— 上一会话尾巴（自动留存）——\n" + tail
+                + "\n—— 本会话 ——\n" + recent
         textView.text = text.isEmpty ? "（暂无日志）" : text
         // 打开即滚到底，最新留痕在最下面。
         DispatchQueue.main.async { [weak self] in

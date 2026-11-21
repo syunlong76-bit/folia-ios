@@ -304,6 +304,12 @@ final class StickerView: UIView {
 
     private(set) var assetName: String?
     private(set) var playMode: PlayMode = .loop
+    /// 起播相位偏移（秒，3.7 (65) 汪汪队前排副本错帧用）：
+    /// 每次 restart 落位后把游标沿帧时长表推进此偏移（对
+    /// 全长取模），同素材多副本帧不对齐。须在 setSticker
+    /// 之前赋值（解码完成回调走 restart 时读取）；缺省 0
+    /// ＝既有行为，其它落点不受影响。
+    var startPhaseOffset: TimeInterval = 0
     /// 播完回调（once / loops 模式；loop 模式不触发）。
     var onFinished: (() -> Void)?
     /// 面包屑落点标识（3.7 (29)）：各落点在创建视图时标注，
@@ -396,6 +402,20 @@ final class StickerView: UIView {
         loopsDone = 0
         lastTimestamp = 0
         isFinished = false
+        // (65) 相位偏移落位：沿帧时长表推进（循环取模），
+        // 与模板 frame_at 的 phase×137ms 帧偏移同义。
+        if startPhaseOffset > 0, let decoded, !decoded.frames.isEmpty {
+            let total = decoded.durations.reduce(0, +)
+            if total > 0 {
+                var rest = startPhaseOffset
+                    .truncatingRemainder(dividingBy: total)
+                while rest >= decoded.durations[frameIndex] {
+                    rest -= decoded.durations[frameIndex]
+                    frameIndex = (frameIndex + 1) % decoded.frames.count
+                }
+                frameElapsed = rest
+            }
+        }
         showCurrentFrame()
         play()
     }

@@ -105,9 +105,9 @@ enum PetConcertConst {
     /// 告别保底可见时长（(54) T 第 3 条，01:38 修正后仍适用：
     /// 尾段短于此值时起点向前借位补足，借位上限见下）。
     static let farewellMinSpan: TimeInterval = 2.4
-    /// 告别借位上限：最多侵入末行尾部 1.5s（此时歌词气泡在
-    /// 上方专区、告别气泡在头顶，位置分区不打架；提词条仍
-    /// 显示末行全文）。借位后仍不足保底的极端短尾按实长走。
+    /// 告别借位上限：最多侵入末行尾部 1.5s（此时歌词在主
+    /// 胶囊、告别气泡在头顶，位置分区不打架）。借位后仍不
+    /// 足保底的极端短尾按实长走。
     static let farewellMaxBorrow: TimeInterval = 1.5
 
     // MARK: 开场仪式（(54) T + 01:38 自适应口径）
@@ -283,16 +283,15 @@ enum PetConcertConst {
     static let curtainOpenXL: CGFloat = 96
     static let curtainBottomYL: CGFloat = 1020
     static let footlightYL: CGFloat = 1005
-    static let teleBarYL: CGFloat = 975
+    // teleBarYL（975）已随 (65) 底部提词条摘除退役；横屏独
+    // 唱脚位与提词区的 4.1 间隙口径随之作废（独唱位未动）。
 
-    // MARK: 气泡/提词条（v3 bubbles/teleprompter，参考 px 字号）
+    // MARK: 气泡（v3 bubbles，参考 px 字号）
+    // （65）A 组：提词条常量（teleFontMax/Min、teleBarY/H、
+    // teleBarYL）随底部提词小胶囊摘除一并退役。
     static let bubbleFontCaptain: CGFloat = 46
     static let bubbleFontChat: CGFloat = 36
     static let bubbleFontLyric: CGFloat = 44
-    static let teleFontMax: CGFloat = 40
-    static let teleFontMin: CGFloat = 28
-    static let teleBarY: CGFloat = 1790
-    static let teleBarH: CGFloat = 76
 
     // MARK: 内存红线（(53) J 规格 §6）
     /// 动图池：最多 8 只 StickerView，解码成本合计 ≤ 40MB

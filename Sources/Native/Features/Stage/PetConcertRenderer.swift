@@ -8,16 +8,19 @@ import CoreImage
 // 已被 (62) 胶囊歌词版取代（Miller 2026-11-21 验收 v2 样
 // 片）：主胶囊固定背景带（当前行逐词扫光 + 下一行预览 +
 // 物种爪印徽记），气泡只余仪式口令/闲聊/告别等非歌词言
-// 语；底部提词条同改小胶囊材质兜底（整行、不省略）。独
-// 唱位另立贴纸风立式麦克风（v2 样片 ×0.7）。53 只全员上台：静帧
-// atlas（首帧缩到 ≤160px，≈5.4MB）+ 动图池 ≤8 只 StickerView
-// （解码成本实测准入、合计 ≤40MB，见 PetConcertConst 红线）。
+// 语。(65) A 组按 v3b 定版再进一版：底部提词小胶囊整条
+// 摘除（歌词只走主胶囊）、独唱麦改迷你口径（0.55×独唱
+// 者身高、麦头胸口高）、前排整排换 cat-live 副本跳舞。
+// 53 只全员上台：静帧 atlas（首帧缩到 ≤160px，≈5.4MB）
+// + 动图池 ≤8 只 StickerView（解码成本实测准入、合计
+// ≤40MB，见 PetConcertConst 红线）；前排副本的 cat-live
+// 解码经 StickerStore 按名共享、全排一份、不占池预算。
 // 素材优先级：StickersCutout 抠图版 > 原贴纸（本来就透明底）。
 //
 // 时钟纪律与全舞台一致：只消费宿主 frameTick 的锚点位置；所
 // 有位置/相位/气泡都是 plan + position 的函数，seek 后自动
 // 重建。降级顺序：先砍氛围（光束/纸屑/闪烁 → 动图池转静帧），
-// 永不砍提词条与气泡（歌词可读性）。
+// 永不砍主胶囊与气泡（歌词可读性）。
 
 // MARK: - 缓动（v3 easing 口径）
 
@@ -69,7 +72,7 @@ final class PetConcertBubbleView: UIView {
     private var lastFollowStageSize: CGSize = .zero
 
     // (54) P 整行气泡布局常量（参考 px，1080×1920 参考系）。
-    /// 歌词字号下限：44 → 28（与提词条 teleFontMin 同口径，
+    /// 歌词字号下限：44 → 28（与原提词条字号下限同口径，
     /// 再小不可读）；步进 2 逐档试。
     static let lyricMinFontRef: CGFloat = 28
     /// 歌词最多 3 行换行。
@@ -343,6 +346,32 @@ private final class PetConcertActorView: UIView {
     /// 解码成本（动图准入核算；静帧为 atlas 估算不计入池预算）。
     var decodedCost = 0
 
+    // MARK: 前排副本呈现（3.7 (65) A 组，胶囊 v3b 定版）
+    //
+    // 前排（末行）整排换 cat-live 独立副本：副本只是一层
+    // 呈现——演员的槽位/跑位/气泡/发光等身份机制一概走本
+    // 体 asset（计划层零改动），仅「站在前排格位时」的画
+    // 面换成捂脸小猫。副本动图走专用 StickerView 播
+    // cat-live（解码经 StickerStore 按名共享、全排只解一
+    // 份），每只以 phase×137ms 帧偏移错开（模板口径）；
+    // 独唱跑位期间（copySuppressed）恢复本体呈现——独唱
+    // 者是它自己，离排即卸妆、归排即换回。氛围降级（内
+    // 存警告）摘副本动图后落副本静帧（copyImageView）。
+
+    /// 副本动图层（cat-live，相位偏移由渲染方注入）。
+    private(set) var copyStickerView: StickerView?
+    /// 副本静帧兜底层（降级/解码未到时）。
+    private let copyImageView = UIImageView()
+    private var copyStaticImage: UIImage?
+    /// 本演员在当前朝向是否居前排（渲染方按 plan 槽位行
+    /// 在建团/旋转时刷新）。
+    private(set) var frontRowCopy = false
+    /// 跑位中抑制副本（渲染方逐帧按 trip 在飞与否置位）。
+    var copySuppressed = false {
+        didSet { if copySuppressed != oldValue { refreshVisibility() } }
+    }
+    private var lastCopyPhaseMs: Double = -1
+
     init(asset: String) {
         self.asset = asset
         super.init(frame: .zero)
@@ -350,6 +379,10 @@ private final class PetConcertActorView: UIView {
         imageView.contentMode = .scaleAspectFit
         imageView.isUserInteractionEnabled = false
         addSubview(imageView)
+        copyImageView.contentMode = .scaleAspectFit
+        copyImageView.isUserInteractionEnabled = false
+        copyImageView.isHidden = true
+        addSubview(copyImageView)
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
@@ -357,11 +390,90 @@ private final class PetConcertActorView: UIView {
         super.layoutSubviews()
         imageView.frame = bounds
         stickerView?.frame = bounds
+        copyImageView.frame = bounds
+        copyStickerView?.frame = bounds
+    }
+
+    /// 显隐裁决（唯一出口）：副本在场且未被跑位抑制 →
+    /// 副本层（动图优先、静帧兜底）；否则本体层（动图池
+    /// 贴纸优先、静帧兜底）。attach/detach/副本开关都只改
+    /// 状态、末尾统一走本方法，杜绝多路显隐打架。
+    private func refreshVisibility() {
+        if frontRowCopy && !copySuppressed {
+            stickerView?.isHidden = true
+            if let copyStickerView {
+                copyStickerView.isHidden = false
+                copyImageView.isHidden = true
+                imageView.isHidden = true
+            } else {
+                copyImageView.isHidden = copyStaticImage == nil
+                imageView.isHidden = copyStaticImage != nil
+            }
+        } else {
+            copyStickerView?.isHidden = true
+            copyImageView.isHidden = true
+            if stickerView != nil {
+                stickerView?.isHidden = false
+                imageView.isHidden = true
+            } else {
+                imageView.isHidden = false
+            }
+        }
     }
 
     func setStaticImage(_ image: UIImage?) {
         imageView.image = image
-        if stickerView == nil { imageView.isHidden = false }
+        refreshVisibility()
+    }
+
+    /// 副本静帧（cat-live 首帧，全排共用一份，渲染方注入）。
+    func setCopyStaticImage(_ image: UIImage?) {
+        copyStaticImage = image
+        copyImageView.image = image
+        refreshVisibility()
+    }
+
+    /// 前排副本开关：开时按需建副本动图层（相位偏移注入
+    /// 后再 setSticker，保证解码完成 restart 时读到偏移）；
+    /// 相位变了（旋转换列数）重注入并 restart 对齐新相位。
+    /// animatedAvailable=false（氛围降级后）只留静帧兜底。
+    func setFrontRowCopy(active: Bool, phaseOffsetMs: Double,
+                         animatedAvailable: Bool) {
+        frontRowCopy = active
+        if active {
+            if animatedAvailable {
+                if let sticker = copyStickerView {
+                    if abs(phaseOffsetMs - lastCopyPhaseMs) > 1 {
+                        lastCopyPhaseMs = phaseOffsetMs
+                        sticker.startPhaseOffset = phaseOffsetMs / 1000
+                        sticker.restart()
+                    }
+                } else {
+                    let sticker = StickerView()
+                    sticker.crumbScene = "concert-copy"
+                    sticker.frame = bounds
+                    sticker.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+                    sticker.startPhaseOffset = phaseOffsetMs / 1000
+                    lastCopyPhaseMs = phaseOffsetMs
+                    addSubview(sticker)
+                    copyStickerView = sticker
+                    sticker.setSticker("cat-live", mode: .loop)
+                }
+            }
+        } else {
+            copyStickerView?.removeFromSuperview()
+            copyStickerView = nil
+            lastCopyPhaseMs = -1
+        }
+        refreshVisibility()
+    }
+
+    /// 氛围降级：摘副本动图（副本身份保留、落静帧兜底）。
+    func detachCopySticker() {
+        copyStickerView?.removeFromSuperview()
+        copyStickerView = nil
+        lastCopyPhaseMs = -1
+        refreshVisibility()
     }
 
     func attachSticker() {
@@ -373,13 +485,61 @@ private final class PetConcertActorView: UIView {
         addSubview(sticker)
         stickerView = sticker
         sticker.setSticker(asset, mode: .loop)
-        imageView.isHidden = true
+        refreshVisibility()
     }
 
     func detachSticker() {
         stickerView?.removeFromSuperview()
         stickerView = nil
-        imageView.isHidden = false
+        refreshVisibility()
+    }
+}
+
+// MARK: - 前排舞步（3.7 (65) A 组，胶囊 v3b 模板 star_dance 移植）
+//
+// 模板参数逐项对位（capsule-lyric-v3b-render.py star_dance /
+// build_pets）：弹跳节拍 BEAT=2.2 次/秒、偶数列全拍奇数列半
+// 拍，幅 12 参考 px；摇摆 x = sin(2π·1.1t + phase2)·9；倾斜
+// rot = 7°·sin(2π·1.1t + phase)；旋转一圈 period 4.4s、持续
+// 0.7s、逐列偏移 i·0.55s、easeInOut 推进 360°。相位按列错
+// 开：phase = i·τ/列数 + 0.35·(i mod 3)（模板 8 列除数取 8，
+// 本地按当前朝向实际列数等比），phase2 = i·1.13 + 0.5；帧
+// 偏移 = phase×137ms（副本 StickerView 的 startPhaseOffset）。
+// 全部是歌曲位置 t 的纯函数，seek 后自动重建（与计划层同
+// 纪律）。幅度用参考 px（横屏参考系与模板同为 1920 宽；竖
+// 屏沿本文件既有口径同值，如群唱蹦 10、间奏蹦 12）。
+private enum PetConcertFrontRow {
+    static func phase(column: Int, columns: Int) -> Double {
+        let tau = 2 * Double.pi
+        let raw = Double(column) * tau / Double(max(1, columns))
+            + 0.35 * Double(column % 3)
+        return raw.truncatingRemainder(dividingBy: tau)
+    }
+
+    static func phase2(column: Int) -> Double {
+        (Double(column) * 1.13 + 0.5)
+            .truncatingRemainder(dividingBy: 2 * Double.pi)
+    }
+
+    /// 帧偏移（毫秒）＝ phase × 137（模板 frame_at 口径）。
+    static func frameOffsetMs(column: Int, columns: Int) -> Double {
+        phase(column: column, columns: columns) * 137
+    }
+
+    static func dance(column: Int, columns: Int, at t: TimeInterval)
+        -> (dx: CGFloat, dy: CGFloat, rotation: CGFloat) {
+        let p1 = phase(column: column, columns: columns)
+        let p2 = phase2(column: column)
+        let beat = column % 2 == 0 ? 2.2 : 1.1
+        let dy = -abs(sin(Double.pi * beat * t + p1)) * 12
+        let dx = sin(2 * Double.pi * 1.1 * t + p2) * 9
+        var rotDeg = 7 * sin(2 * Double.pi * 1.1 * t + p1)
+        let period = 4.4, dur = 0.7, off = Double(column) * 0.55
+        let local = (t + off).truncatingRemainder(dividingBy: period)
+        if local < dur {
+            rotDeg += 360 * concertEaseInOut(local / dur)
+        }
+        return (CGFloat(dx), CGFloat(dy), CGFloat(rotDeg * Double.pi / 180))
     }
 }
 
@@ -408,14 +568,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     /// 独唱星点（(54) S）：12 颗小星形，绕独唱者确定性生灭。
     private let sparkleView = UIView()
     private var sparkleLayers: [CAShapeLayer] = []
-    private let teleBar = UIView()
-    private let teleLabel = UILabel()
-    /// 提词小胶囊材质（(62) 胶囊版）：模糊 + 白洗，与主胶囊同
-    /// 材质同缩比（480×72 参考 px），替原黑底条。
-    private let teleBlur = UIVisualEffectView(
-        effect: UIBlurEffect(style: .systemUltraThinMaterialLight))
-    private let teleWash = UIView()
-    /// 立式麦克风（(62) 胶囊版）：挂 petField 之上、独唱位。
+    /// 立式麦克风（(62) 胶囊版立、(65) 改迷你口径）：挂
+    /// petField 之上、独唱位。
     private let micView = PetConcertMicView()
     /// 主胶囊歌词板 + 上缘闪光（(62) 胶囊版）。
     private let capsuleView = PetConcertCapsuleView()
@@ -426,8 +580,6 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
 
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
-    /// (61) WC：歌词对比保护衬底（StagePalette 基础设施）。
-    private let lyricScrimView = LyricContrastScrimView()
     private var isActive = false
     private var plan: ConcertPlan?
     private var actors: [String: PetConcertActorView] = [:]
@@ -436,7 +588,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     private var lastPhase: ConcertPhase?
     private var lastSingerAsset: String?
     private var lastSingerLine: Int?
-    private var lastTeleLineId: Int?
+    /// 前排副本已按此朝向刷新过（(65) A 组）：nil＝未刷新，
+    /// 建团/旋转换向时据此重刷副本归属与相位。
+    private var copyOrientation: Bool?
     private var admittedAnimated: Set<String> = []
     private var admittedCost = 0
     private var poolSettled = false
@@ -453,8 +607,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         // 圈）→ lightView（全部环境光）→ petField（宠物本体；
         // 独唱轮廓发光在其内部贴本体身后）→ curtainView（幕
         // 布本体/点缀/脚灯灯体/纸屑——(55) B 后开口已让开全
-        // 部格位，不切宠物）→ bubble → teleBar。光层无一在
-        // 宠物之上，宠物像素不参与任何光层混合。
+        // 部格位，不切宠物）→ bubble（(65) 起底部提词条已
+        // 摘除、z 序尾即气泡）。光层无一在宠物之上，宠物像
+        // 素不参与任何光层混合。
         rootView.addSubview(lightView)
         petField.isUserInteractionEnabled = false
         rootView.addSubview(petField)
@@ -498,21 +653,13 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         // 除——气泡直接落独唱者头顶，归属由位置本身表达。
         rootView.addSubview(bubbleView)
         bubbleView.isHidden = true
-        // (62) 胶囊版：提词条改小胶囊材质（模糊 + 白洗 + 深
-        // 棕字），几何 480×72 参考 px 居中；内容口径不变（当
-        // 前行全文兜底、不截断）。
-        teleBar.backgroundColor = .clear
-        teleBar.clipsToBounds = true
-        teleBar.isUserInteractionEnabled = false
-        teleWash.backgroundColor = UIColor.white.withAlphaComponent(0.22)
-        teleBar.addSubview(teleBlur)
-        teleBar.addSubview(teleWash)
-        teleLabel.textColor = UIColor(
-            red: 62 / 255, green: 45 / 255, blue: 32 / 255, alpha: 1)
-        teleLabel.textAlignment = .center
-        teleLabel.lineBreakMode = .byWordWrapping
-        teleBar.addSubview(teleLabel)
-        rootView.addSubview(teleBar)
+        // (65) A 组：底部提词小胶囊（teleBar）已整条摘除——
+        // 它就是 v2 样片 TELE（480×72 @ 竖屏 y=1798）的同
+        // 物，(62) 给它换了小胶囊材质；v3b 定版模板已删
+        // 除下方胶囊条（ Miller 16:19/16:36 两度点名），
+        // 歌词呈现自此只走上方主胶囊。连同其材质层与
+        // (61) 提词区对比衬底一并摘除（衬底类本体是共享
+        // 基础设施、其它渲染器仍在用，不动）。
         rootView.onLayout = { [weak self] in self?.performLayout() }
         NotificationCenter.default.addObserver(
             self, selector: #selector(handleMemoryWarning),
@@ -601,7 +748,13 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             let base = (landscape ? PetConcertConst.petBaseL : PetConcertConst.petBase)
                 * (size.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW))
             actor.bounds = CGRect(x: 0, y: 0, width: base, height: base)
-            actor.transform = CGAffineTransform(scaleX: state.scale, y: state.scale)
+            // (65) A 组：变换 = 旋转∘缩放（前排舞步的倾斜/
+            // 旋转；rotation=0 时与旧纯缩放逐值一致）。
+            actor.transform = CGAffineTransform(rotationAngle: state.rotation)
+                .scaledBy(x: state.scale, y: state.scale)
+            // (65) A 组：跑位在飞时副本抑制（独唱者呈本体），
+            // 与 actorState 内部 trip 判定同源同窗。
+            actor.copySuppressed = state.onTrip
             if asset == singerAsset {
                 singerCenter = center
                 singerFeetY = center.y + base * state.scale / 2
@@ -631,7 +784,6 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         updateBubble(position: position, phase: phase, plan: plan,
                      singerAsset: singerAsset, soloLine: soloLine, size: size)
         updateCapsule(position: position, plan: plan, size: size)
-        updateTeleprompter(position: position, plan: plan, size: size)
     }
 
     func unmount() {
@@ -671,7 +823,7 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         lastPhase = nil
         lastSingerAsset = nil
         lastSingerLine = nil
-        lastTeleLineId = nil
+        copyOrientation = nil
 
         let duration = snapshot.track?.duration ?? 0
         let effectiveDuration = duration > 0 ? duration
@@ -714,6 +866,18 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             actorOrder.append(asset)
             petField.addSubview(actor)
             loadStaticImage(for: asset, into: actor)
+        }
+        // (65) A 组：副本静帧（cat-live 首帧，与全排共用同
+        // 一份 StickerStore 解码）注入每个演员——副本动图
+        // 解码未到或氛围降级摘动图时，副本落此静帧、不回
+        // 本体图。
+        StickerStore.shared.load("cat-live") { [weak self] decoded in
+            guard let self, let decoded, let cg = decoded.frames.first
+            else { return }
+            let image = Self.downscaled(UIImage(cgImage: cg))
+            for actor in self.actors.values {
+                actor.setCopyStaticImage(image)
+            }
         }
         admitAnimatedPool(plan: built)
         performLayout()
@@ -867,6 +1031,11 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         }
         admittedAnimated.removeAll()
         admittedCost = 0
+        // (65) A 组：副本动图同列降级——摘动图层、前排落
+        // 副本静帧（copyImageView），副本身份不丢。
+        for actor in actors.values {
+            actor.detachCopySticker()
+        }
         Breadcrumbs.log("concert.degrade reason=memoryWarning atmosphere=off animated=static")
     }
 
@@ -1070,7 +1239,7 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
 
     private func actorState(asset: String, at t: TimeInterval,
                             plan: ConcertPlan, landscape: Bool = false)
-        -> (center: CGPoint, scale: CGFloat) {
+        -> (center: CGPoint, scale: CGFloat, rotation: CGFloat, onTrip: Bool) {
         let base = basePosition(asset: asset, at: t, plan: plan, landscape: landscape)
         // (54) Q 透视：行缩放（后排 0.70 → 前排 1.00）；队长再乘 captainScale。
         // (54) U 横屏：行缩放走 L 表（0.78 → 1.00，5 行）。
@@ -1101,21 +1270,21 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             let nextTrip = plan.tripsByLine[trip.lineIndex + 1]
             if t >= trip.returnStart, let next = nextTrip,
                next.singer == asset, t >= next.depart {
-                return (solo, soloScaleValue)
+                return (solo, soloScaleValue, 0, true)
             }
             if t < trip.arrive {
                 let u = concertEaseInOut((t - trip.depart) / (trip.arrive - trip.depart))
                 let from = basePosition(asset: asset, at: trip.depart, plan: plan, landscape: landscape)
                 return (concertBezier(from, solo, lift: PetConcertConst.bezierLift, u),
-                        concertLerp(formScale, soloScaleValue, u))
+                        concertLerp(formScale, soloScaleValue, u), 0, true)
             }
             if t < trip.returnStart {
-                return (solo, soloScaleValue)
+                return (solo, soloScaleValue, 0, true)
             }
             let u = concertEaseInOut((t - trip.returnStart) / (trip.returnEnd - trip.returnStart))
             let to = basePosition(asset: asset, at: trip.returnEnd, plan: plan, landscape: landscape)
             return (concertBezier(solo, to, lift: PetConcertConst.bezierLift, u),
-                    concertLerp(soloScaleValue, formScale, u))
+                    concertLerp(soloScaleValue, formScale, u), 0, true)
         }
 
         // 通道预订（(60) 9③）：同一演员同一时间窗只许一个
@@ -1140,7 +1309,29 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         default:
             inFormation = false
         }
-        if inFormation {
+        // 前排舞步（(65) A 组，v3b 模板 star_dance）：演唱
+        // 相位下末行整排跳舞（弹跳/摇摆/倾斜/逐列错峰旋
+        // 转），替代本排的通用闲晃与下方群唱前排蹦；仪式
+        // 相位（招呼/耳语/告别）与间奏玩耍位不抢——那些
+        // 相位 dancing 恒假、既有编排原样。
+        let isFrontRow = slotRow == (landscape
+            ? PetConcertConst.gridRowsL - 1 : PetConcertConst.gridRows - 1)
+        let dancing = isFrontRow
+            && (phase == .singing1 || phase == .singing2)
+            && t >= plan.formAt
+        var rotation: CGFloat = 0
+        if dancing {
+            let cols = landscape ? PetConcertConst.gridColsL
+                : PetConcertConst.gridCols
+            let slot = landscape ? (plan.slotOfLandscape[asset] ?? 0)
+                : (plan.slotOf[asset] ?? 0)
+            let d = PetConcertFrontRow.dance(
+                column: slot % cols, columns: cols, at: t)
+            center.x += d.dx
+            center.y += d.dy
+            rotation = d.rotation
+        }
+        if inFormation && !dancing {
             let freqMul = phase == .farewell || phase == .ended ? 0.5 : 1.0
             center.x += 2 * CGFloat(sin(1.3 * t * freqMul + swayPhase))
             center.y += 1.5 * CGFloat(sin(1.7 * t * freqMul + swayPhase * 1.7))
@@ -1192,13 +1383,15 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             let amp = 12 * CGFloat(gap.intensity)
             center.y -= abs(CGFloat(sin(5 * t + swayPhase))) * amp
         }
-        // 群唱行：前排两排齐蹦。
+        // 群唱行：前排两排齐蹦。（65）前排本体在演唱相位
+        // 跳舞步（dancing），群唱蹦让位于它、只余倒数第二
+        // 排照旧。
         if let lineId = currentLine(at: t, plan: plan),
            plan.chorusLines.contains(lineId) {
             let row = landscape
                 ? (plan.slotOfLandscape[asset] ?? 0) / PetConcertConst.gridColsL
                 : (plan.slotOf[asset] ?? 0) / PetConcertConst.gridCols
-            if row >= (landscape ? PetConcertConst.gridRowsL - 2
+            if !dancing, row >= (landscape ? PetConcertConst.gridRowsL - 2
                           : PetConcertConst.gridRows - 2) {
                 center.y -= abs(CGFloat(sin(6 * t + swayPhase))) * 10
             }
@@ -1210,7 +1403,7 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             center.y += 13 * CGFloat(s)
             scale *= 1 - 0.03 * CGFloat(s)
         }
-        return (center, scale)
+        return (center, scale, rotation, false)
     }
 
     private func refToStage(_ point: CGPoint, size: CGSize,
@@ -1349,44 +1542,8 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         }
     }
 
-    private func updateTeleprompter(position: TimeInterval,
-                                    plan: ConcertPlan, size: CGSize) {
-        let lineId = currentLine(at: position, plan: plan)
-        guard let lineId, let line = plan.lines.first(where: { $0.id == lineId })
-        else {
-            teleBar.isHidden = true
-            lastTeleLineId = nil
-            return
-        }
-        teleBar.isHidden = false
-        if lineId != lastTeleLineId {
-            lastTeleLineId = lineId
-            teleLabel.text = line.text
-            // 字号：40 起、缩到 28 止（v3 口径）；仍放不下则
-            // 两行（提词条加高），任何情况下不截断、不省略。
-            let sx = size.width / (PetConcertConst.isLandscape(size)
-                                      ? PetConcertConst.refWL : PetConcertConst.refW)
-            // (62) 胶囊版：可用宽 = 小胶囊 480 参考 px − 两侧
-            // 各 24 留白（原全宽条口径已随几何变更作废）。
-            let maxW = (480 - 48) * sx
-            var fontSize = PetConcertConst.teleFontMax * sx
-            let minSize = PetConcertConst.teleFontMin * sx
-            teleLabel.numberOfLines = 1
-            while fontSize > minSize {
-                teleLabel.font = .systemFont(ofSize: fontSize, weight: .medium)
-                let w = (line.text as NSString).size(
-                    withAttributes: [.font: teleLabel.font!]).width
-                if w <= maxW { break }
-                fontSize -= 2 * sx
-            }
-            if fontSize <= minSize {
-                teleLabel.font = .systemFont(ofSize: minSize, weight: .medium)
-                let w = (line.text as NSString).size(
-                    withAttributes: [.font: teleLabel.font!]).width
-                if w > maxW { teleLabel.numberOfLines = 2 }
-            }
-        }
-    }
+    // (65) A 组：updateTeleprompter 随底部提词小胶囊一并
+    // 摘除（见 init 处注释）——歌词呈现只走上方主胶囊。
 
     // MARK: 布局
 
@@ -1418,12 +1575,11 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         petField.frame = bounds
         // (54) U 旋转重排：容器尺寸一变，全部站位在下一帧
         // frameTick 按新朝向参考系重算（plan + position 纯函
-        // 数，无运行期累积位置）；提词字号须按新 sx 重解，
-        // 故清 lastTeleLineId 强制下一帧重算字号/行数。
+        // 数，无运行期累积位置）。(65) A 组：朝向翻转时前
+        // 排副本归属/相位随新网格重刷（见本方法末尾）。
         if bounds.size != lastLayoutLoggedSize {
             let first = lastLayoutLoggedSize == .zero
             lastLayoutLoggedSize = bounds.size
-            lastTeleLineId = nil
             // (60) 5②：朝向翻转触发 concert.probe 采样列。
             let landNow = PetConcertConst.isLandscape(bounds.size)
             if let prev = probeOrientation, prev != landNow {
@@ -1456,48 +1612,82 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
         let landscape = PetConcertConst.isLandscape(bounds.size)
         let sx = bounds.width / (landscape ? PetConcertConst.refWL : PetConcertConst.refW)
         let sy = bounds.height / (landscape ? PetConcertConst.refHL : PetConcertConst.refH)
-        let twoLines = teleLabel.numberOfLines == 2
-        // (62) 胶囊版：提词小胶囊 480×72 参考 px 居中（v2 样
-        // 片口径，竖屏 y=1798）；高按朝向基准轴换算（横屏按
-        // sx，与 (54) U 条高口径同理），两行兜底 ×1.5 不变；
-        // 圆角 = 高/2 全胶囊形。
-        let barH = 72 * (landscape ? sx : sy) * (twoLines ? 1.5 : 1)
-        let barW = 480 * sx
-        teleBar.frame = CGRect(
-            x: (bounds.width - barW) / 2,
-            y: (landscape ? PetConcertConst.teleBarYL : 1798) * sy,
-            width: barW, height: barH)
-        teleBar.layer.cornerRadius = barH / 2
-        teleBlur.frame = teleBar.bounds
-        teleWash.frame = teleBar.bounds
-        teleLabel.frame = teleBar.bounds.insetBy(dx: 12 * sx, dy: 4)
         // (62) 胶囊版：主胶囊落背景带（竖屏参考 (210,300)
         // 660×164＝垂幔下沿 ~250 至地板起点 556 之间，不压
-        // 队形；横屏同带口径 (630,140) 660×130）；立麦落独
-        // 唱位（设计空间 110×210，独唱点映射本地 (80,95)）。
+        // 队形；横屏同带口径 (630,140) 660×130），(65) 不动。
         if landscape {
             capsuleView.frame = CGRect(x: 630 * sx, y: 140 * sy,
                                        width: 660 * sx, height: 130 * sy)
-            micView.frame = CGRect(
-                x: (PetConcertConst.soloXL - 80) * sx,
-                y: (PetConcertConst.soloYL - 95) * sy,
-                width: 110 * sx, height: 210 * sy)
         } else {
             capsuleView.frame = CGRect(x: 210 * sx, y: 300 * sy,
                                        width: 660 * sx, height: 164 * sy)
-            micView.frame = CGRect(
-                x: (PetConcertConst.soloX - 80) * sx,
-                y: (PetConcertConst.soloY - 95) * sy,
-                width: 110 * sx, height: 210 * sy)
         }
         capsuleSparkleView.frame = capsuleView.frame
             .insetBy(dx: 0, dy: -24 * sy)
         capsuleView.setNeedsLayout()
-        // (61) WC：提词条衬底——垫在 teleBar 之下、覆盖提词区，
-        // 舞台亮部透过提词条 0.45 黑底时再压一层自适应 scrim。
-        lyricScrimView.sync(in: rootView, palette: snapshot?.palette ?? .neutralDark,
-                            rect: teleBar.frame,
-                            at: rootView.subviews.firstIndex(of: teleBar) ?? 0)
+        // 迷你麦（(65) A 组，v3b 口径替 (62) 的 v2×0.7）：
+        // 全部尺寸由独唱者身高 singerH（petBase×soloScale，
+        // 参考 px）按比例推导、横竖屏同式——麦总高
+        // micH = 0.55·singerH；麦头半径 = 0.13·micH（绘图
+        // 侧设计空间 100×128 里 mic 段占 112，见
+        // PetConcertMicView）；杆轴落独唱点左 0.15·singerH；
+        // 底座中心落脚线下 0.06·singerH。麦头顶因此落在
+        // 独唱者身高约 45% 处＝胸口高（模板实测口径）。
+        let singerH = (landscape ? PetConcertConst.petBaseL
+                          : PetConcertConst.petBase)
+            * (landscape ? PetConcertConst.soloScaleL
+                  : PetConcertConst.soloScale)
+        let micH = 0.55 * singerH
+        let micFrameH = micH * (128.0 / 112.0)
+        let micFrameW = micFrameH * (100.0 / 128.0)
+        let soloRefX = landscape ? PetConcertConst.soloXL
+            : PetConcertConst.soloX
+        let soloRefY = landscape ? PetConcertConst.soloYL
+            : PetConcertConst.soloY
+        let poleRefX = soloRefX - 0.15 * singerH
+        let baseRefY = soloRefY + singerH / 2 + 0.06 * singerH
+        micView.frame = CGRect(
+            x: (poleRefX - 0.46 * micFrameW) * sx,
+            y: (baseRefY - (116.0 / 128.0) * micFrameH) * sy,
+            width: micFrameW * sx, height: micFrameH * sy)
+        micView.setNeedsDisplay()
+        // (65) A 组：前排副本按当前朝向刷新（内部按
+        // copyOrientation 自守，朝向未变时为空转）。
+        refreshFrontRowCopies()
+    }
+
+    /// 前排副本刷新（3.7 (65) A 组）：按当前朝向的槽位表
+    /// 判定末行成员，逐只开/关副本呈现并注入该列相位帧偏
+    /// 移；后排阵容、槽位分配、计划层一概不动。建团与旋
+    /// 转换向各走一次（copyOrientation 自守去重）。
+    private func refreshFrontRowCopies() {
+        guard let plan, rootView.bounds.width > 0 else { return }
+        let landscape = PetConcertConst.isLandscape(rootView.bounds.size)
+        guard copyOrientation != landscape else { return }
+        copyOrientation = landscape
+        let cols = landscape ? PetConcertConst.gridColsL
+            : PetConcertConst.gridCols
+        let rows = landscape ? PetConcertConst.gridRowsL
+            : PetConcertConst.gridRows
+        var count = 0
+        for (asset, actor) in actors {
+            let slot = (landscape ? plan.slotOfLandscape[asset]
+                : plan.slotOf[asset]) ?? 0
+            if slot / cols == rows - 1 {
+                count += 1
+                actor.setFrontRowCopy(
+                    active: true,
+                    phaseOffsetMs: PetConcertFrontRow.frameOffsetMs(
+                        column: slot % cols, columns: cols),
+                    animatedAvailable: !atmosphereReduced)
+            } else {
+                actor.setFrontRowCopy(
+                    active: false, phaseOffsetMs: 0,
+                    animatedAvailable: false)
+            }
+        }
+        Breadcrumbs.log("concert.copies n=\(count)"
+            + " orient=\(landscape ? "L" : "P")")
     }
 
     // MARK: (60) 5② concert.probe（横屏半幅未定级取证探针）
@@ -1559,7 +1749,6 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             + " bboxN=\(bboxN) bboxPx=\(bboxPx)"
             + " frames[curtain=\(rectStr(curtainView))"
             + "/floor=\(rectStr(backdropView))"
-            + "/tele=\(rectStr(teleBar))"
             + "/bubble=\(rectStr(bubbleView))"
             + "/spot=\(rectStr(lightView))"
             + "/bg=\(rectStr(backdropView))]"
@@ -1595,14 +1784,17 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     }
 }
 
-// MARK: - 立式麦克风（(62) 胶囊版追加，Miller 14:16 定、14:59 缩小）
+// MARK: - 立式麦克风（(62) 胶囊版立、(65) 改 v3b 迷你口径）
 //
 // 贴纸风立麦：奶油球形麦头（焦糖格栅）+ 焦糖杆身 + 圆形配
-// 重底座。几何按 v2 样片原稿 ×0.7 缩放（Miller 14:59 定版：
-// 整体七成、麦头高度随缩放自然降低、不再严格对嘴边）；设计
-// 空间 110×210（参考 px），独唱位映射到本地 (80, 95)。视图
-// 挂 petField 之上（样片口径：宠物先画、麦后画，独唱者站麦
-// 后），纯装饰、不吃手势。
+// 重底座。(62) 版为 v2 样片 ×0.7（麦高约与独唱者等高）；
+// (65) 按 v3b 定版改迷你口径：麦总高 = 0.55×独唱者身高、
+// 麦头半径 = 0.13×麦高、麦头顶落在胸口高（模板 draw_mic
+// 逐项比例）。设计空间 100×128：麦段（底座中心 y=116 到
+// 麦头顶 y=4）占 112 单位，渲染方按 micH 反推 frame（高
+// = micH×128/112、杆轴在本地 x=46）。视图挂 petField 之
+// 上（样片口径：宠物先画、麦后画，独唱者站麦后），纯装
+// 饰、不吃手势。
 
 final class PetConcertMicView: UIView {
     override init(frame: CGRect) {
@@ -1614,8 +1806,8 @@ final class PetConcertMicView: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     override func draw(_ rect: CGRect) {
-        let ux = bounds.width / 110
-        let uy = bounds.height / 210
+        let ux = bounds.width / 100
+        let uy = bounds.height / 128
         func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
             CGPoint(x: x * ux, y: y * uy)
         }
@@ -1623,61 +1815,53 @@ final class PetConcertMicView: UIView {
         let caramel = UIColor(red: 176 / 255, green: 128 / 255, blue: 74 / 255, alpha: 1)
         let caramelDark = UIColor(red: 146 / 255, green: 100 / 255, blue: 54 / 255, alpha: 1)
         let cream = UIColor(red: 250 / 255, green: 240 / 255, blue: 220 / 255, alpha: 1)
-        // 圆形配重底座（外圈深焦糖 + 内圈焦糖）。
-        let baseRect = CGRect(x: 14.5 * ux, y: 184 * uy, width: 73 * ux, height: 20 * uy)
-        let basePath = UIBezierPath(ovalIn: baseRect)
+        // 圆形配重底座：中心 (46,116)、宽 0.42·micH（设计
+        // 47）、高 13（外圈深焦糖 + 内圈焦糖）。
+        let basePath = UIBezierPath(ovalIn: CGRect(
+            x: 22.5 * ux, y: 109.5 * uy, width: 47 * ux, height: 13 * uy))
         caramelDark.setFill(); basePath.fill()
-        outline.setStroke(); basePath.lineWidth = 3.5 * ux; basePath.stroke()
+        outline.setStroke(); basePath.lineWidth = 3 * ux; basePath.stroke()
         let baseIn = UIBezierPath(ovalIn: CGRect(
-            x: 27 * ux, y: 187 * uy, width: 48 * ux, height: 12 * uy))
+            x: 31 * ux, y: 111 * uy, width: 30 * ux, height: 8 * uy))
         caramel.setFill(); baseIn.fill()
-        // 杆身（轮廓道 + 内道）。
+        // 杆身：自底座 (46,114) 直达麦头下缘 (46,31)（轮廓
+        // 道 + 内道，模板杆宽比同口径）。
         let pole = UIBezierPath()
-        pole.move(to: pt(51, 190)); pole.addLine(to: pt(51, 58))
-        outline.setStroke(); pole.lineWidth = 10 * ux; pole.stroke()
+        pole.move(to: pt(46, 114)); pole.addLine(to: pt(46, 31))
+        outline.setStroke(); pole.lineWidth = 8 * ux; pole.stroke()
         let poleIn = UIBezierPath()
-        poleIn.move(to: pt(51, 190)); poleIn.addLine(to: pt(51, 58))
-        caramel.setStroke(); poleIn.lineWidth = 5.5 * ux; poleIn.stroke()
-        //  clutch 领口（奶油圆角块）。
+        poleIn.move(to: pt(46, 114)); poleIn.addLine(to: pt(46, 31))
+        caramel.setStroke(); poleIn.lineWidth = 4.5 * ux; poleIn.stroke()
+        // 领口（奶油圆角块）：中心 (46,69)＝底座上 0.42·micH
+        // 处（模板 collar_y 口径），15×15。
         let collar = UIBezierPath(
-            roundedRect: CGRect(x: 42 * ux, y: 108 * uy, width: 18 * ux, height: 20 * uy),
-            cornerRadius: 5 * ux)
+            roundedRect: CGRect(x: 38.5 * ux, y: 61.5 * uy,
+                                width: 15 * ux, height: 15 * uy),
+            cornerRadius: 4 * ux)
         cream.setFill(); collar.fill()
-        outline.setStroke(); collar.lineWidth = 3 * ux; collar.stroke()
-        // 短颈（杆顶斜向麦头）。
-        let neck = UIBezierPath()
-        neck.move(to: pt(51, 60)); neck.addLine(to: pt(53, 48))
-        outline.setStroke(); neck.lineWidth = 10 * ux; neck.stroke()
-        let neckIn = UIBezierPath()
-        neckIn.move(to: pt(51, 60)); neckIn.addLine(to: pt(53, 48))
-        caramel.setStroke(); neckIn.lineWidth = 5 * ux; neckIn.stroke()
-        // 球形麦头：奶油球 + 焦糖格栅弧 + 中央带 + 高光。
+        outline.setStroke(); collar.lineWidth = 2.5 * ux; collar.stroke()
+        // 球形麦头：中心 (48,19)、半径 15（=0.13·112 设计
+        // 口径）；奶油球 + 焦糖横格栅弧（模板三弧 k=−0.55/
+        // 0/0.55）+ 中央带 + 高光。
         let head = UIBezierPath(ovalIn: CGRect(
-            x: 31 * ux, y: 7 * uy, width: 44 * ux, height: 44 * uy))
+            x: 33 * ux, y: 4 * uy, width: 30 * ux, height: 30 * uy))
         cream.setFill(); head.fill()
-        outline.setStroke(); head.lineWidth = 3.5 * ux; head.stroke()
+        outline.setStroke(); head.lineWidth = 3 * ux; head.stroke()
         caramel.setStroke()
-        for k in [-12, 0, 12] as [CGFloat] {
-            let hw = sqrt(max(1, 22 * 22 - k * k)) - 3
+        for k in [-0.55, 0, 0.55] as [CGFloat] {
+            let yy = 19 + k * 15
+            let half = sqrt(max(1, 1 - k * k)) * 12.5
             let arc = UIBezierPath()
-            arc.move(to: pt(53 - hw, 29 + k))
-            arc.addQuadCurve(to: pt(53 + hw, 29 + k),
-                             controlPoint: pt(53, 29 + k + 6))
-            arc.lineWidth = 2 * ux; arc.stroke()
-        }
-        for k in [-11, 11] as [CGFloat] {
-            let hh = sqrt(max(1, 22 * 22 - k * k)) - 3
-            let arc = UIBezierPath()
-            arc.move(to: pt(53 + k, 29 - hh))
-            arc.addQuadCurve(to: pt(53 + k, 29 + hh),
-                             controlPoint: pt(53 + k + 6, 29))
-            arc.lineWidth = 2 * ux; arc.stroke()
+            arc.move(to: pt(48 - half, yy))
+            arc.addQuadCurve(to: pt(48 + half, yy),
+                             controlPoint: pt(48, yy + 5))
+            arc.lineWidth = 1.8 * ux; arc.stroke()
         }
         let band = UIBezierPath()
-        band.move(to: pt(34, 29)); band.addLine(to: pt(72, 29))
-        caramelDark.setStroke(); band.lineWidth = 3.5 * ux; band.stroke()
+        band.move(to: pt(35, 19)); band.addLine(to: pt(61, 19))
+        caramelDark.setStroke(); band.lineWidth = 3 * ux; band.stroke()
         let shine = UIBezierPath(ovalIn: CGRect(
-            x: 40 * ux, y: 9 * uy, width: 9 * ux, height: 9 * uy))
+            x: 39.5 * ux, y: 7.5 * uy, width: 4.4 * ux, height: 4.4 * uy))
         UIColor.white.setFill(); shine.fill()
     }
 }

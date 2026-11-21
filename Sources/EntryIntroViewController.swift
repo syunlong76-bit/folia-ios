@@ -258,6 +258,27 @@ enum EntryPosterArt {
 ///   包屑 entry fadein begin / entry fadein done dur=1.0；
 ///   母带每 5 帧垫一帧是源文件自带（25fps 凑 30fps，主聊
 ///   天实测 60/299），播放器侧无解、不在本包范围。
+/// - 黑闪修复（3.7 (65) 工作流 D，Miller 17:14 录屏逐帧
+///   实测：亮度渐落后约 0.6s 纯黑、黑段靠前有极暗视频残
+///   影、其后 1.0s 淡入本身单调顺滑）：定性＝淡入没坏，
+///   病在淡入之前。(63) 日志同构序列实锤机制：VC 呈现时
+///   场景尚竖屏，先走一轮竖屏尺寸布局过渡（393x852），
+///   其完成回调只凭场景级 interfaceOrientation（几何请
+///   求获批即先翻值）抢发 landed 凭据——淡入在竖屏几何
+///   起跑（curveEaseOut 前段陡峭，低 alpha 先露影＝残
+///   影）；真横屏轮（852x393）随后才 begin，旋转合成把
+///   已露的淡入盖回黑场，两轮串行又把纯黑叠到约 0.6s。
+///   修法：①Presenter 改等落地再呈现——几何请求发出后
+///   轮询场景方向（40ms 间隔、600ms 封顶、命中后 100ms
+///   收尾）才 present，墙的旋转全程在黑 veil 下完成，
+///   VC 首帧即横屏几何、无竖屏布局轮与补转轮，起播门
+///   走 already-landscape 即时放行、黑段只剩一轮旋转＋
+///   首帧就绪的最短必要；超时回退旧路径。②landed 凭
+///   据改认本轮过渡目标尺寸为横屏形，竖屏轮永不发凭
+///   据（回退路径兜底）。③新面包屑 entry.fade.seq 记
+///   landed/veil 撤/淡入起止相对 sequenceT0 的毫秒，每
+///   呈现恰一行，供下次录屏逐帧对账。母带、关闭口径
+///   （只认关闭钮/自然播完）、墙一概未动。
 
 /// 入场播放器预热仓（3.7 (54) 工作流 O）：所有权与生命
 /// 周期——本枚举静态持有预热的 AVPlayer/AVPlayerItem；
@@ -381,6 +402,12 @@ enum EntryIntroPresenter {
     private static var suppressNextPresent = false
     private static weak var current: EntryIntroViewController?
 
+    /// 对账时钟（3.7 (65) 工作流 D）：veil 上垫时刻
+    /// （CACurrentMediaTime），VC 的 entry.fade.seq 以此
+    /// 为零点记相对毫秒（veil 上下/landed/淡入起止），供
+    /// 下次录屏逐帧对账。
+    static var sequenceT0: CFTimeInterval = 0
+
     /// 几何请求单发看门狗（3.7 (58) 定稿②）：(57) 的双发请求
     /// （present 前＋present 后）在日志里与系统纠正轮叠成开场
     /// 1.4s 两轮旋转。(58) 收敛为单一发点（present 前）＋看门
@@ -468,6 +495,7 @@ enum EntryIntroPresenter {
         // 转在黑下完成、视频就绪后 1.0s 淡入（见 VC
         // beginOpeningFadeIfReady，彼时撤垫）。不拦截触摸：
         // 哪怕残留也不会挡住墙交互（退场另有兜底移除）。
+        sequenceT0 = CACurrentMediaTime()
         let veil = UIView(frame: window.bounds)
         veil.backgroundColor = .black
         veil.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -508,29 +536,84 @@ enum EntryIntroPresenter {
             }
             rotateWatchdog = watchdog
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2, execute: watchdog)
-            let vc = EntryIntroViewController(url: url)
-            vc.exitVeil = veil
-            // overFullScreen（3.7 (23) 直溶前提）：呈现方（主页
-            // 墙）的 view 在入场全程留在窗口层级里，视频层溶
-            // 出时其下直接是墙；fullScreen 会在呈现完成后把墙
-            // view 移出层级，直溶无对象可溶。
-            vc.modalPresentationStyle = .overFullScreen
-            current = vc
-            presenter.present(vc, animated: false) {
-                // 墙首帧提交确认（3.7 (23)）：一笔空事务的完成
-                // 回调在墙首帧提交到渲染服务后触发——落面包屑
-                // 并武装叠化门控（门控未武装不起叠化，防溶到
-                // 未就绪的墙）。（(58)：原在此处的第二发几何请
-                // 求已删，见上方单发点注释。）
-                CATransaction.begin()
-                CATransaction.setCompletionBlock {
-                    Breadcrumbs.log("entry wall firstframe")
-                    vc.armDissolveGate()
-                }
-                CATransaction.commit()
-            }
+            // 等横屏落地再呈现（3.7 (65) 工作流 D，Miller
+            // 17:14 录屏逐帧定性：淡入没坏，病在淡入之前）：
+            // (63) 日志同构序列实锤旧链两宗——①VC 呈现时场
+            // 景尚竖屏，先走一轮竖屏尺寸的布局过渡（gen=1，
+            // 393x852），其完成回调只凭场景级
+            // interfaceOrientation 抢发 landed 凭据，淡入在
+            // 竖屏几何起跑；②真横屏轮（gen=2，852x393）随
+            // 后才 begin，旋转合成把已露头的淡入盖回黑场
+            // （残影），两轮串行又把纯黑叠到约 0.6s。改：
+            // 几何请求发出后先等场景真实落地横屏（轮询
+            // 40ms、600ms 封顶），墙的这一轮旋转全程在黑
+            // veil 之下完成，再把 VC 呈进已横屏的场景——
+            // VC 首帧即横屏几何、无竖屏布局轮、无补转轮，
+            // 起播门走 already-landscape 即时放行，淡入凭
+            // 据同刻成立，黑段只剩这一轮旋转＋首帧就绪的
+            // 最短必要。超时未落地照旧呈现（回退旧路径，
+            // VC 内 landed 已改尺寸凭据兜底，见
+            // viewWillTransition）。
+            presentWhenLandscapeReady(
+                window: window, presenter: presenter, url: url, veil: veil)
         }
         return true
+    }
+
+    /// 等落地呈现的轮询段：命中横屏后再留 100ms 让系统
+    /// 旋转动画收尾（interfaceOrientation 先于动画完结翻
+    /// 值，贴边呈现会把 VC 卷进旋转尾巴），随后走
+    /// performPresent 原呈现段；600ms 封顶回退不等。
+    private static func presentWhenLandscapeReady(window: UIWindow,
+                                                  presenter: UIViewController,
+                                                  url: URL, veil: UIView) {
+        let scene = window.windowScene
+        let deadline = CACurrentMediaTime() + 0.6
+        func attempt() {
+            guard isPresenting else { return }
+            if scene?.interfaceOrientation.isLandscape == true {
+                Breadcrumbs.log("entry waitland ms="
+                    + "\(Int((CACurrentMediaTime() - sequenceT0) * 1000))")
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                    guard isPresenting else { return }
+                    performPresent(presenter: presenter, url: url, veil: veil)
+                }
+            } else if CACurrentMediaTime() < deadline {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.04,
+                                              execute: attempt)
+            } else {
+                Breadcrumbs.log("entry waitland timeout")
+                performPresent(presenter: presenter, url: url, veil: veil)
+            }
+        }
+        attempt()
+    }
+
+    /// 呈现段（(65) 前与等落地轮询同处一异步块，本次拆出
+    /// 共用，语义一字未改）。
+    private static func performPresent(presenter: UIViewController,
+                                       url: URL, veil: UIView) {
+        let vc = EntryIntroViewController(url: url)
+        vc.exitVeil = veil
+        // overFullScreen（3.7 (23) 直溶前提）：呈现方（主页
+        // 墙）的 view 在入场全程留在窗口层级里，视频层溶
+        // 出时其下直接是墙；fullScreen 会在呈现完成后把墙
+        // view 移出层级，直溶无对象可溶。
+        vc.modalPresentationStyle = .overFullScreen
+        current = vc
+        presenter.present(vc, animated: false) {
+            // 墙首帧提交确认（3.7 (23)）：一笔空事务的完成
+            // 回调在墙首帧提交到渲染服务后触发——落面包屑
+            // 并武装叠化门控（门控未武装不起叠化，防溶到
+            // 未就绪的墙）。（(58)：原在此处的第二发几何请
+            // 求已删，见上方单发点注释。）
+            CATransaction.begin()
+            CATransaction.setCompletionBlock {
+                Breadcrumbs.log("entry wall firstframe")
+                vc.armDissolveGate()
+            }
+            CATransaction.commit()
+        }
     }
 
 }
@@ -589,6 +672,31 @@ final class EntryIntroViewController: UIViewController {
     /// 屏（already-landscape）时置位，淡入凭它起跑、日志
     /// 注明 gate=<来源>。
     private var fadeGateSource: String?
+    /// 对账时刻（3.7 (65) 工作流 D，相对 Presenter
+    /// sequenceT0 的毫秒）：entry.fade.seq 的四点——landed
+    /// 凭据成立、veil 撤除、淡入起、淡入止；每次呈现恰发
+    /// 一行（淡入完成时发全量，退场抢先则发部分、缺失
+    /// 记 -1），供下次录屏逐帧对账黑段构成。
+    private var seqLandedMs: Int?
+    private var seqVeilDownMs: Int?
+    private var seqFadeBeginMs: Int?
+    private var seqFadeEndMs: Int?
+    private var seqEmitted = false
+
+    private static func seqNowMs() -> Int {
+        let t0 = EntryIntroPresenter.sequenceT0
+        guard t0 > 0 else { return -1 }
+        return Int((CACurrentMediaTime() - t0) * 1000)
+    }
+
+    private func emitFadeSeqIfNeeded() {
+        guard !seqEmitted else { return }
+        seqEmitted = true
+        Breadcrumbs.log("entry.fade.seq land=\(seqLandedMs ?? -1)"
+            + " vDown=\(seqVeilDownMs ?? -1)"
+            + " fadeB=\(seqFadeBeginMs ?? -1)"
+            + " fadeE=\(seqFadeEndMs ?? -1)")
+    }
     /// 本入场激活过音频会话（3.7 (23) 双声纪律）：引擎播放
     /// 中进墙时入场不碰会话（归引擎），此旗标为假；teardown
     /// 只在旗标为真且引擎未播放时才 setActive(false)。
@@ -662,12 +770,22 @@ final class EntryIntroViewController: UIViewController {
             guard let self else { return }
             // 横屏落地放行起播门（3.7 (58) 定稿②）：首帧不再
             // 落在翻转中间；竖屏落地（退场轮）不放行。
-            if self.view.window?.windowScene?.interfaceOrientation.isLandscape == true {
+            // (65) 工作流 D：凭据改认本轮过渡的目标尺寸——
+            // (63) 日志实锤竖屏尺寸轮（393x852）的完成回调
+            // 曾凭场景级 interfaceOrientation（几何请求获批
+            // 后即先翻值）抢发 landed，淡入在竖屏几何起跑、
+            // 随即被真横屏轮的旋转合成盖回（残影＋黑段叠
+            // 加）。目标尺寸为横屏形（宽>高）才是本 VC 几何
+            // 真落地；场景方向只留在下方 landed 面包屑对账。
+            if size.width > size.height {
                 // 淡入 landed 凭据（(59) 硬要求）：起播门若已
                 // 被 timeout-300ms 兜底放行，releasePlaybackGate
                 // 会直接返回——凭据与淡入合流须在此独立补记，
                 // 迟到的横屏落地照样能起跑淡入（黑场等它）。
-                if self.fadeGateSource == nil { self.fadeGateSource = "landed" }
+                if self.fadeGateSource == nil {
+                    self.fadeGateSource = "landed"
+                    self.seqLandedMs = Self.seqNowMs()
+                }
                 self.releasePlaybackGate(reason: "landed")
                 self.beginOpeningFadeIfReady()
             }
@@ -912,7 +1030,9 @@ final class EntryIntroViewController: UIViewController {
         if view.window?.windowScene?.interfaceOrientation.isLandscape == true {
             // 开场即横屏：无旋转可等，淡入凭据同刻成立
             // （(59)：与 landed 同级，区别只在日志来源名）。
+            // (65) 起 present 已前置等落地，本路径为常态。
             fadeGateSource = "already-landscape"
+            seqLandedMs = Self.seqNowMs()
             releasePlaybackGate(reason: "already-landscape")
             return
         }
@@ -1072,6 +1192,10 @@ final class EntryIntroViewController: UIViewController {
         guard let gate = fadeGateSource, videoReady,
               !openingFadeBegan, !isDismissing else { return }
         openingFadeBegan = true
+        // (65) 工作流 D 对账两点：veil 撤除与淡入起跑在同
+        // 一同步段，时刻同记。
+        seqVeilDownMs = Self.seqNowMs()
+        seqFadeBeginMs = seqVeilDownMs
         exitVeil?.removeFromSuperview()
         exitVeil = nil
         Breadcrumbs.log("entry veil cleared")
@@ -1091,6 +1215,9 @@ final class EntryIntroViewController: UIViewController {
             self.view.backgroundColor = .clear
             Breadcrumbs.log("entry poster handoff backing=kept")
             Breadcrumbs.log("entry fadein done dur=1.0")
+            // (65) 工作流 D：淡入全程走完，发全量对账行。
+            self.seqFadeEndMs = Self.seqNowMs()
+            self.emitFadeSeqIfNeeded()
         })
     }
 
@@ -1232,6 +1359,9 @@ final class EntryIntroViewController: UIViewController {
         isDismissing = true
         Breadcrumbs.log("entry end \(reason)")
         Breadcrumbs.log("entry dismiss begin reason=\(reason)")
+        // (65) 工作流 D：淡入未走完就退场时补发部分对账行
+        // （已发过则为空转，保证每次呈现恰一行）。
+        emitFadeSeqIfNeeded()
         watchdog?.cancel()
         watchdog = nil
         view.isUserInteractionEnabled = false
