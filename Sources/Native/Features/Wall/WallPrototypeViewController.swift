@@ -182,6 +182,14 @@ final class WallPrototypeViewController: UIViewController,
     /// 毛玻璃/玻璃高光隐藏），只剩轨道+填充+发光圆点步进，
     /// 内容淡出且按钮禁交互。
     private var miniBarCollapsed = false
+    /// 点播台点按识别器组（3.7 (61) 第 7 条，与主页墙同构）：
+    /// 展开态单击（require 双击+长按失败）/展开态双击/收起态
+    /// 单击（无 require 链、即时展开）三件分工，启停由
+    /// setMiniBarForm 按形态同步；进度带即时 seek 走 seekHit
+    /// 自带识别器（miniSeekTapped），不进本组 require 链。
+    private var miniBarTapRecognizer: UITapGestureRecognizer?
+    private var miniBarDoubleTapRecognizer: UITapGestureRecognizer?
+    private var miniBarCollapsedTapRecognizer: UITapGestureRecognizer?
     /// 迷你台宠物层（3.7 (27)）：纯新增覆盖层，只经下面几处
     /// 一行钩子订阅台子的显隐/形态/切歌边沿，台子逻辑零改动。
     private var miniPetStage: MiniBarPetStage?
@@ -512,8 +520,9 @@ final class WallPrototypeViewController: UIViewController,
 
     /// 底部播放台（3.7 (13) #7；13.1 改版，Miller 2026-11-18 亲定）：
     /// 封面缩略 + 标题/歌手 + 上一曲/播放暂停/下一曲 + 顶部可拖进度。
-    /// 交互：点封面 = 定位到正在播放的歌曲；点台身 = 进播放详情页
-    /// （openStage 同路）；进度条可拖动 seek；按键只管切歌播停。
+    /// 交互（3.7 (61) 第 7 条起改全台统一规格，见 miniBarTapped）：
+    /// 单击（含封面）= 浮层开关、双击 = 进播放详情页、进度带单击
+    /// 即时 seek/可拖动 seek、收起态单击即时展开；按键只管切歌播停。
     private func buildMiniBar() {
         // 3.7 (13.3) E 液态玻璃版（Miller 在 A–I 九款里点选 E）：
         // 全圆角玻璃胶囊——超薄系统材质 + 亮边描边 + 顶部高光线
@@ -719,6 +728,11 @@ final class WallPrototypeViewController: UIViewController,
         miniSeekHit = seekHit
         let seekPan = UIPanGestureRecognizer(target: self, action: #selector(miniSeekPanned(_:)))
         seekHit.addGestureRecognizer(seekPan)
+        // 进度带单击即时 seek（3.7 (61) 第 7 条区域分域，与主
+        // 页墙同构）：seekHit 自带无 require 链的点按识别器，
+        // 点按当下即跳点；台身单击/双击对本带落点只做分域跳过。
+        let seekTap = UITapGestureRecognizer(target: self, action: #selector(miniSeekTapped(_:)))
+        seekHit.addGestureRecognizer(seekTap)
 
         // 宽度按竖屏定版（3.7 (21)）：居中 + 宽度约束存引用，
         // viewDidLayoutSubviews 按 min(宽,高)−24 更新——横屏时
@@ -802,16 +816,32 @@ final class WallPrototypeViewController: UIViewController,
         fill.transform = CGAffineTransform(scaleX: 0, y: 1)
 
         // 长按切主题（13.5）：tap 须等长按落空才触发（短点按
-        // 时触摸抬起即判长按失败，点按进播放页不加可感延迟）；
-        // seek 拖动不与长按互斥（长按静止触发时拖动尚未产生
-        // 位移，松手至多以长按点 seek 一次，与点按跳点同义）。
+        // 时触摸抬起即判长按失败）；seek 拖动不与长按互斥（长
+        // 按静止触发时拖动尚未产生位移，松手至多以长按点 seek
+        // 一次，与点按跳点同义）。
+        // 单击/双击统一规格（3.7 (61) 第 7 条，与主页墙同构）：
+        // 展开态单击 require(toFail:) 双击与长按两环；双击进
+        // 歌曲详情页；收起态细条走独立无链识别器即时展开。
+        // 三件启停按形态在 setMiniBarForm 同步。宠物层手势不
+        // 经台身、4s 开启手势仍挂台身链外，均不受影响。
         let longPress = UILongPressGestureRecognizer(
             target: self, action: #selector(miniBarLongPressed(_:)))
         longPress.minimumPressDuration = 0.55
         bar.addGestureRecognizer(longPress)
+        let doubleTap = UITapGestureRecognizer(target: self, action: #selector(miniBarDoubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        doubleTap.require(toFail: longPress)
+        bar.addGestureRecognizer(doubleTap)
+        miniBarDoubleTapRecognizer = doubleTap
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniBarTapped(_:)))
         tap.require(toFail: longPress)
+        tap.require(toFail: doubleTap)
         bar.addGestureRecognizer(tap)
+        miniBarTapRecognizer = tap
+        let collapsedTap = UITapGestureRecognizer(target: self, action: #selector(miniBarCollapsedTapped(_:)))
+        collapsedTap.isEnabled = false
+        bar.addGestureRecognizer(collapsedTap)
+        miniBarCollapsedTapRecognizer = collapsedTap
 
         applyMiniTheme()
         applyMiniBarSlots()
@@ -972,16 +1002,20 @@ final class WallPrototypeViewController: UIViewController,
         QueueManager.shared.playNext(manual: true)
     }
 
-    /// 台面点按分发（13.1 定版、13.3 进度带改点按跳点）：按键各自
-    /// 处理；封面 = 定位；底部进度带 = 跳到点按位置；其余台身
-    /// 空白区 = 呼出附加功能浮层（(60) 第 7 条新触发，取代旧
-    /// 「台身空白也进详情页」——双击台/封面定位等既有入口不
-    /// 动）。封面判定仍先于进度带（两者仅在封面下缘约
-    /// 2pt 相接，先判进度带会让点封面下缘变成跳进度）。
+    /// 台面单击分发（曲目墙版，3.7 (61) 第 7 条全台统一规格、
+    /// 与主页墙逐项镜像）：本识别器已 require(toFail:) 双击
+    /// 与 0.55s 长按，触发即「双击失败后的单击」。按键各自
+    /// 处理；进度带落点分域跳过（seek 已由 seekHit 自带识别
+    /// 器即时完成，见 miniSeekTapped）；封面与台身空白/标题
+    /// 区同规格——浮层开关（已开＝收起、不重出；未开＝呼
+    /// 出）。封面单击不再定位（locateCurrentTrack 仍保留其
+    /// 他入口），详情入口改双击（miniBarDoubleTapped）。
+    /// 注：宠物占位区的点按被宠物识别器整组接走，永远到不
+    /// 了台身——双击须落在台身空白/封面/标题区（验收口径）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
         guard let bar = miniBar else { return }
-        // 收起态点按（3.7 (21)）：只展开回完整形态并重新计时，
-        // 不走原分发（不 seek/不开台/不定位）。
+        // 收起态点按本应走无链的 collapsedTap 即时展开；此处
+        // 仅作识别器启停万一失同步时的兜底。
         if miniBarCollapsed {
             expandMiniBar()
             return
@@ -993,24 +1027,80 @@ final class WallPrototypeViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniModeButton.frame.contains(point) { return }
-        if miniCover.frame.contains(point) {
-            locateCurrentTrack()
+        // 进度带分域（封面优先于进度带：封面下缘与 seekHit
+        // 带约 2pt 重叠，该重叠落点归封面规格、不归 seek）。
+        if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
+            Breadcrumbs.log("minibar.tap host=wallproto zone=seekband action=skip")
             return
         }
-        if miniSeekHit.frame.contains(point) {
-            // 13.3 新增点按跳点：13.2 的点按被静默吞掉，是 Miller
-            // 「没办法拖进度」反馈的来源之一。比例按轨道实际
-            // 帧算，不按整条台面宽。
-            let track = miniProgressTrack.frame
-            let engine = PlaybackEngine.shared
-            guard track.width > 0, engine.duration > 0 else { return }
-            let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
-            setMiniProgress(Double(fraction))
-            engine.seek(to: Double(fraction) * engine.duration)
+        if miniQuickRowOverlay?.isShown == true {
+            hideMiniQuickRowOverlay(reason: "bar-tap")
+            Breadcrumbs.log("minibar.tap host=wallproto action=overlay-hide")
+        } else {
+            showMiniQuickRowOverlay()
+            Breadcrumbs.log("minibar.tap host=wallproto action=overlay-show")
+        }
+    }
+
+    /// 台面双击分发（曲目墙版，3.7 (61) 第 7 条）：双击进歌
+    /// 曲详情页——用本宿主既有路径 openNativeStageFromWall；
+    /// 封面同规格参与。进度带分域：双击落带内不触发详情
+    /// （每击已由 seekHit 识别器即时 seek）；按键区自理。
+    /// 宠物占位区双击被宠物识别器接走、到不了台身。
+    @objc private func miniBarDoubleTapped(_ gesture: UITapGestureRecognizer) {
+        guard let bar = miniBar, !miniBarCollapsed else { return }
+        resetMiniIdleTimer()
+        let point = gesture.location(in: bar)
+        if miniPlayButton.frame.contains(point)
+            || miniPrevButton.frame.contains(point)
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
+        if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
+            Breadcrumbs.log("minibar.doubletap host=wallproto zone=seekband action=skip")
             return
         }
-        // 台身空白区（(60) 第 7 条）：呼出附加功能浮层（五钮行）。
-        showMiniQuickRowOverlay()
+        Breadcrumbs.log("minibar.doubletap host=wallproto action=stage")
+        openNativeStageFromWall()
+    }
+
+    /// 收起态细条单击（3.7 (61) 第 7 条，与主页墙同构）：独
+    /// 立识别器、无任何 require 链，点按即时展开。
+    @objc private func miniBarCollapsedTapped(_ gesture: UITapGestureRecognizer) {
+        guard miniBarCollapsed else { return }
+        Breadcrumbs.log("minibar.tap host=wallproto collapsed=1 action=expand")
+        expandMiniBar()
+    }
+
+    /// 进度带单击即时 seek（3.7 (61) 第 7 条，与主页墙同
+    /// 构）：seekHit 自带识别器、无 require 链，触发即跳点
+    /// （比例按轨道实际帧算——13.3 口径，点按跳点本为治
+    /// 「没办法拖进度」反馈而设）。封面重叠落点归封面规格；
+    /// 按键区自理；收起态不 seek。
+    @objc private func miniSeekTapped(_ gesture: UITapGestureRecognizer) {
+        guard let bar = miniBar, !miniBarCollapsed else { return }
+        resetMiniIdleTimer()
+        let point = gesture.location(in: bar)
+        if miniPlayButton.frame.contains(point)
+            || miniPrevButton.frame.contains(point)
+            || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point) { return }
+        if miniCover.frame.contains(point) { return }
+        guard miniSeekHit.frame.contains(point) else { return }
+        let track = miniProgressTrack.frame
+        let engine = PlaybackEngine.shared
+        guard track.width > 0, engine.duration > 0 else { return }
+        let fraction = min(max((point.x - track.minX) / track.width, 0), 1)
+        setMiniProgress(Double(fraction))
+        engine.seek(to: Double(fraction) * engine.duration)
+        Breadcrumbs.log("minibar.seek host=wallproto via=seek-tap")
+    }
+
+    /// 点按识别器组按形态启停（3.7 (61) 第 7 条，与主页墙同
+    /// 构）：全部形态切换都经 setMiniBarForm 收口到这里。
+    private func syncMiniBarTapRecognizers(collapsed: Bool) {
+        miniBarTapRecognizer?.isEnabled = !collapsed
+        miniBarDoubleTapRecognizer?.isEnabled = !collapsed
+        miniBarCollapsedTapRecognizer?.isEnabled = collapsed
     }
 
     /// 进度拖动（13.1）：拖动中只更新填充，松手才 seek（防拖动
@@ -1260,6 +1350,9 @@ final class WallPrototypeViewController: UIViewController,
         miniBlurView?.isHidden = collapsed
         miniRimLight?.isHidden = collapsed
         miniGlassTint?.isHidden = collapsed
+        // 点按识别器组随形态启停（3.7 (61) 第 7 条）：收起态
+        // 只认无链单击即时展开，展开态才挂双击判定链。
+        syncMiniBarTapRecognizers(collapsed: collapsed)
         refreshMiniProgressChrome()
     }
 
