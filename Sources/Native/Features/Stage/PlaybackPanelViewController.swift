@@ -25,7 +25,7 @@ import UIKit
 final class PlaybackPanelViewController: UIViewController {
 
     enum Tab: Int, CaseIterable {
-        case cover, controls, queue, lyrics
+        case cover, controls, queue, lyrics, quality, local, navidrome
 
         var title: String {
             switch self {
@@ -33,6 +33,9 @@ final class PlaybackPanelViewController: UIViewController {
             case .controls: return "控制"
             case .queue: return "队列"
             case .lyrics: return "歌词"
+            case .quality: return "音质"
+            case .local: return "本地"
+            case .navidrome: return "Navidrome"
             }
         }
     }
@@ -63,6 +66,28 @@ final class PlaybackPanelViewController: UIViewController {
     private let controlsScroll = UIScrollView()
     private let queueContainer = UIView()
     private let lyricsContainer = UIView()
+    // (62) WC 簇三页签容器
+    private let qualityContainer = UIView()
+    private let localContainer = UIView()
+    private let navidromeContainer = UIView()
+    private let localTable = UITableView(frame: .zero, style: .insetGrouped)
+    private let navidromeTable = UITableView(frame: .zero, style: .insetGrouped)
+    private let navidromeStatusLabel = UILabel()
+    private var qualityChips: [UIButton] = []
+    private var naviRows: [NaviRow62] = []
+    private var naviLoaded = false
+
+    private enum NaviRow62 {
+        case playlist(NavidromePlaylist62)
+        case album(NavidromeAlbum62)
+        case track(FoliaTrack)
+        case back
+    }
+
+    private static let qualityLevels: [(level: String, label: String)] = [
+        ("standard", "标准"), ("higher", "较高"), ("exhigh", "极高"),
+        ("lossless", "无损"), ("hires", "Hi-Res"),
+    ]
 
     // 封面页签
     private let coverImageView = UIImageView()
@@ -103,6 +128,7 @@ final class PlaybackPanelViewController: UIViewController {
 
     override func viewDidLoad() {
         super.viewDidLoad()
+        WC62Bootstrap.startIfNeeded()
         view.backgroundColor = UIColor(red: 0.09, green: 0.09, blue: 0.11, alpha: 1)
         overrideUserInterfaceStyle = .dark
         buildViews()
@@ -149,7 +175,28 @@ final class PlaybackPanelViewController: UIViewController {
         tabSegment.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(tabSegment)
 
-        for container in [coverContainer, controlsScroll, queueContainer, lyricsContainer] {
+        // 关闭钮（(62) WC 消费 WA 键 showPanelCloseButton）：
+        // 开关关时不显钮，靠下滑手势关面板。
+        if SettingsStore.showPanelCloseButton {
+            let closeButton = UIButton(type: .system)
+            closeButton.setTitle("关闭", for: .normal)
+            closeButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+            closeButton.tintColor = .white
+            closeButton.translatesAutoresizingMaskIntoConstraints = false
+            closeButton.addAction(UIAction { [weak self] _ in
+                self?.dismiss(animated: true)
+            }, for: .touchUpInside)
+            view.addSubview(closeButton)
+            NSLayoutConstraint.activate([
+                closeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
+                closeButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+            ])
+        }
+
+        let allContainers: [UIView] = [coverContainer, controlsScroll, queueContainer,
+                                       lyricsContainer, qualityContainer,
+                                       localContainer, navidromeContainer]
+        for container in allContainers {
             container.translatesAutoresizingMaskIntoConstraints = false
             view.addSubview(container)
         }
@@ -160,7 +207,7 @@ final class PlaybackPanelViewController: UIViewController {
             tabSegment.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             tabSegment.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
         ])
-        for container in [coverContainer, controlsScroll, queueContainer, lyricsContainer] {
+        for container in allContainers {
             NSLayoutConstraint.activate([
                 container.topAnchor.constraint(equalTo: tabSegment.bottomAnchor, constant: 10),
                 container.leadingAnchor.constraint(equalTo: view.leadingAnchor),
@@ -171,6 +218,9 @@ final class PlaybackPanelViewController: UIViewController {
         buildCoverTab()
         buildControlsTab()
         buildLyricsTab()
+        buildQualityTab62()
+        buildLocalTab62()
+        buildNavidromeTab62()
         // 队列容器在切到队列页签时才挂子 VC（见 showTab），避免未
         // 访问先建整张队列表。
     }
@@ -360,9 +410,153 @@ final class PlaybackPanelViewController: UIViewController {
         controlsScroll.isHidden = tab != .controls
         queueContainer.isHidden = tab != .queue
         lyricsContainer.isHidden = tab != .lyrics
+        qualityContainer.isHidden = tab != .quality
+        localContainer.isHidden = tab != .local
+        navidromeContainer.isHidden = tab != .navidrome
         if tab == .queue { embedQueuePanelIfNeeded() }
         if tab == .lyrics { refreshLyricHighlight(scroll: true) }
+        if tab == .local { localTable.reloadData() }
+        if tab == .navidrome && !naviLoaded { loadNavidromeRoot62() }
         Breadcrumbs.log("stage.panel.tab=\(tab.title)")
+    }
+
+    // MARK: - (62) 音质页签
+
+    private func buildQualityTab62() {
+        let stack = UIStackView()
+        stack.axis = .vertical
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        qualityContainer.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.topAnchor.constraint(equalTo: qualityContainer.topAnchor, constant: 12),
+            stack.leadingAnchor.constraint(equalTo: qualityContainer.leadingAnchor, constant: 20),
+            stack.trailingAnchor.constraint(equalTo: qualityContainer.trailingAnchor, constant: -20),
+        ])
+        stack.addArrangedSubview(sectionLabel("取流音质（下一首生效）"))
+        let chipsStack = UIStackView()
+        chipsStack.axis = .horizontal
+        chipsStack.spacing = 8
+        chipsStack.distribution = .fillEqually
+        for entry in Self.qualityLevels {
+            let chip = makeChip(entry.label)
+            chip.addAction(UIAction { [weak self] _ in
+                SettingsStore.streamQuality62 = entry.level
+                Breadcrumbs.log("stage.panel.quality level=\(entry.level)")
+                self?.refreshQualityChips62()
+            }, for: .touchUpInside)
+            chipsStack.addArrangedSubview(chip)
+            qualityChips.append(chip)
+        }
+        stack.addArrangedSubview(chipsStack)
+        let hint = UILabel()
+        hint.text = "档位经取流参数 level 透传到网易云 /song/url/v1；无损/Hi-Res 是否给流取决于账号与后端，拿到空地址时按不可播处理并如实报错，不假装已生效。"
+        hint.font = .systemFont(ofSize: 12)
+        hint.textColor = UIColor.white.withAlphaComponent(0.5)
+        hint.numberOfLines = 0
+        stack.addArrangedSubview(hint)
+        refreshQualityChips62()
+    }
+
+    private func refreshQualityChips62() {
+        for (index, chip) in qualityChips.enumerated() {
+            styleChip(chip, selected: Self.qualityLevels[index].level == SettingsStore.streamQuality62)
+        }
+    }
+
+    // MARK: - (62) 本地页签
+
+    private func buildLocalTab62() {
+        localTable.backgroundColor = .clear
+        localTable.dataSource = self
+        localTable.delegate = self
+        localTable.register(UITableViewCell.self, forCellReuseIdentifier: "local62")
+        localTable.translatesAutoresizingMaskIntoConstraints = false
+        localContainer.addSubview(localTable)
+        NSLayoutConstraint.activate([
+            localTable.topAnchor.constraint(equalTo: localContainer.topAnchor),
+            localTable.leadingAnchor.constraint(equalTo: localContainer.leadingAnchor),
+            localTable.trailingAnchor.constraint(equalTo: localContainer.trailingAnchor),
+            localTable.bottomAnchor.constraint(equalTo: localContainer.bottomAnchor),
+        ])
+        // 歌词页签长按导出（歌词导出三入口之一）。
+        let longPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(lyricsLongPressed62(_:)))
+        lyricsTable.addGestureRecognizer(longPress)
+    }
+
+    @objc private func lyricsLongPressed62(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began,
+              let track = engine.currentTrack else { return }
+        Breadcrumbs.log("stage.panel.lyric.longpress export id=\(track.id)")
+        LyricExport62.export(track: track, from: self)
+    }
+
+    // MARK: - (62) Navidrome 页签
+
+    private func buildNavidromeTab62() {
+        navidromeTable.backgroundColor = .clear
+        navidromeTable.dataSource = self
+        navidromeTable.delegate = self
+        navidromeTable.register(UITableViewCell.self, forCellReuseIdentifier: "navi62")
+        navidromeTable.translatesAutoresizingMaskIntoConstraints = false
+        navidromeContainer.addSubview(navidromeTable)
+        navidromeStatusLabel.font = .systemFont(ofSize: 13)
+        navidromeStatusLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        navidromeStatusLabel.numberOfLines = 0
+        navidromeStatusLabel.textAlignment = .center
+        navidromeStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        navidromeContainer.addSubview(navidromeStatusLabel)
+        NSLayoutConstraint.activate([
+            navidromeTable.topAnchor.constraint(equalTo: navidromeContainer.topAnchor),
+            navidromeTable.leadingAnchor.constraint(equalTo: navidromeContainer.leadingAnchor),
+            navidromeTable.trailingAnchor.constraint(equalTo: navidromeContainer.trailingAnchor),
+            navidromeTable.bottomAnchor.constraint(equalTo: navidromeContainer.bottomAnchor),
+            navidromeStatusLabel.centerXAnchor.constraint(equalTo: navidromeContainer.centerXAnchor),
+            navidromeStatusLabel.centerYAnchor.constraint(equalTo: navidromeContainer.centerYAnchor),
+            navidromeStatusLabel.leadingAnchor.constraint(equalTo: navidromeContainer.leadingAnchor, constant: 32),
+            navidromeStatusLabel.trailingAnchor.constraint(equalTo: navidromeContainer.trailingAnchor, constant: -32),
+        ])
+    }
+
+    private func loadNavidromeRoot62() {
+        naviLoaded = true
+        guard SettingsStore.navidromeEnabled62, NavidromeClient62.shared.isConfigured else {
+            navidromeStatusLabel.text = "Navidrome 未开启或未配置（设置 → 连接与集成）"
+            return
+        }
+        navidromeStatusLabel.text = "加载中…"
+        Task { @MainActor in
+            do {
+                async let playlistsTask = NavidromeClient62.shared.fetchPlaylists()
+                async let albumsTask = NavidromeClient62.shared.fetchAlbumList()
+                let playlists = try await playlistsTask
+                let albums = try await albumsTask
+                let rows = playlists.map(NaviRow62.playlist) + albums.map(NaviRow62.album)
+                self.naviRows = rows
+                self.navidromeStatusLabel.text = rows.isEmpty ? "服务器上暂无歌单/专辑" : nil
+                self.navidromeTable.reloadData()
+            } catch {
+                self.navidromeStatusLabel.text = "加载失败：\(error.localizedDescription)"
+            }
+        }
+    }
+
+    private func loadNavidromeDirectory62(id: String) {
+        navidromeStatusLabel.text = "加载中…"
+        Task { @MainActor in
+            do {
+                let dir = try await NavidromeClient62.shared.fetchDirectory(id: id)
+                var rows: [NaviRow62] = [.back]
+                rows += dir.childAlbums.map(NaviRow62.album)
+                rows += dir.childTracks.map(NaviRow62.track)
+                self.naviRows = rows
+                self.navidromeStatusLabel.text = nil
+                self.navidromeTable.reloadData()
+            } catch {
+                self.navidromeStatusLabel.text = "加载失败：\(error.localizedDescription)"
+            }
+        }
     }
 
     private func embedQueuePanelIfNeeded() {
@@ -545,12 +739,67 @@ final class PlaybackPanelViewController: UIViewController {
 
 extension PlaybackPanelViewController: UITableViewDataSource, UITableViewDelegate {
 
+    func numberOfSections(in tableView: UITableView) -> Int {
+        // 本地页签两段（本地曲库/已缓存）；其余表一段。
+        tableView == localTable ? 2 : 1
+    }
+
+    func tableView(_ tableView: UITableView,
+                   titleForHeaderInSection section: Int) -> String? {
+        guard tableView == localTable else { return nil }
+        return section == 0 ? "本地曲库" : "已缓存歌曲"
+    }
+
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        lyricLines.count
+        if tableView == localTable {
+            return section == 0
+                ? LocalLibrary62.shared.sortedTracks().count
+                : MediaCache62.shared.cachedTracks().count
+        }
+        if tableView == navidromeTable { return naviRows.count }
+        return lyricLines.count
     }
 
     func tableView(_ tableView: UITableView,
                    cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if tableView == localTable {
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: "local62", for: indexPath)
+            let track = indexPath.section == 0
+                ? LocalLibrary62.shared.sortedTracks()[indexPath.row]
+                : MediaCache62.shared.cachedTracks()[indexPath.row]
+            var config = cell.defaultContentConfiguration()
+            config.text = track.title
+            config.secondaryText = "\(track.artist) · \(track.album)"
+            config.textProperties.color = .white
+            config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.5)
+            cell.contentConfiguration = config
+            cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+            return cell
+        }
+        if tableView == navidromeTable {
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: "navi62", for: indexPath)
+            var config = cell.defaultContentConfiguration()
+            switch naviRows[indexPath.row] {
+            case .back:
+                config.text = "‹ 返回歌单/专辑"
+            case .playlist(let playlist):
+                config.text = playlist.name
+                config.secondaryText = "歌单 · \(playlist.songCount) 首"
+            case .album(let album):
+                config.text = album.name
+                config.secondaryText = "专辑 · \(album.artist)"
+            case .track(let track):
+                config.text = track.title
+                config.secondaryText = "\(track.artist) · \(track.album)"
+            }
+            config.textProperties.color = .white
+            config.secondaryTextProperties.color = UIColor.white.withAlphaComponent(0.5)
+            cell.contentConfiguration = config
+            cell.backgroundColor = UIColor.white.withAlphaComponent(0.06)
+            return cell
+        }
         let cell = tableView.dequeueReusableCell(
             withIdentifier: "lyric", for: indexPath)
         let line = lyricLines[indexPath.row]
@@ -568,6 +817,36 @@ extension PlaybackPanelViewController: UITableViewDataSource, UITableViewDelegat
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: false)
+        if tableView == localTable {
+            if indexPath.section == 0 {
+                let tracks = LocalLibrary62.shared.sortedTracks()
+                guard tracks.indices.contains(indexPath.row) else { return }
+                QueueManager.shared.setQueue(tracks, startingAt: indexPath.row,
+                                             source: "panel-local62")
+                Breadcrumbs.log("stage.panel.local.play idx=\(indexPath.row)")
+            } else {
+                let tracks = MediaCache62.shared.cachedTracks()
+                guard tracks.indices.contains(indexPath.row) else { return }
+                QueueManager.shared.setQueue(tracks, startingAt: indexPath.row,
+                                             source: "panel-cache62")
+                Breadcrumbs.log("stage.panel.cache.play idx=\(indexPath.row)")
+            }
+            return
+        }
+        if tableView == navidromeTable {
+            guard naviRows.indices.contains(indexPath.row) else { return }
+            switch naviRows[indexPath.row] {
+            case .back:
+                loadNavidromeRoot62()
+            case .playlist(let playlist):
+                loadNavidromeDirectory62(id: playlist.id)
+            case .album(let album):
+                loadNavidromeDirectory62(id: album.id)
+            case .track(let track):
+                NavidromeBrowser62ViewController.playViaEngine(track: track)
+            }
+            return
+        }
         guard lyricLines.indices.contains(indexPath.row) else { return }
         let line = lyricLines[indexPath.row]
         engine.seek(to: line.start)

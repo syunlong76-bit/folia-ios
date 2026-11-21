@@ -5,7 +5,9 @@ import SwiftUI
 // 探索页：按 port-spec-home.md 逐项移植 folia-major 的 ExploreSurface。
 // 分区顺序照 neteaseExplore：自有分区（本机记录）→ 首页 blocks → 排行榜 →
 // 热门歌单（第一页）；触底续接相似货架 → 新歌速递/新碟上架 → 官方榜歌曲货架。
-// 每日推荐/每日推荐歌单依赖登录，本轮不出现（见移植报告）。
+// 每日推荐/每日推荐歌单（62 WC 簇补）：登录态已通后走既有
+// fetchDailySongs/fetchRecommendedPlaylists 通路补两货架；
+// 未登录时两架诚实不出现（不放假货架）。
 // 分区形态照源码：1 条且无更多 = solo、第一分区 = lead、其余 = row 横滑行。
 
 // MARK: - 数据模型
@@ -108,6 +110,32 @@ final class ExploreModel: ObservableObject {
         toplistCache = []
 
         var result: [Shelf] = ownShelves()
+
+        // 每日推荐两货架（62 WC）：仅登录态请求；任一路失败只空
+        // 该架，不拖垮第一页。
+        if NativeSessionStore.shared.load() != nil {
+            async let dailySongsTask = try? NativeDataClient.shared.fetchDailySongs()
+            async let dailyPlaylistsTask = try? NativeDataClient.shared.fetchRecommendedPlaylists()
+            if let dailySongs = await dailySongsTask, !dailySongs.isEmpty {
+                let items = dailySongs.map(workbenchFoliaTrack).map(ExploreItem.song)
+                result.append(makeShelf(id: "netease-daily-songs62",
+                                        title: "每日推荐歌曲", items: items))
+            }
+            if let dailyPlaylists = await dailyPlaylistsTask, !dailyPlaylists.isEmpty {
+                let items = dailyPlaylists.compactMap { summary -> ExploreItem? in
+                    guard let id = Int(summary.id) else { return nil }
+                    return .collection(ExploreCollection(
+                        kind: .playlist, id: id, name: summary.name,
+                        coverURL: summary.coverUrl.flatMap { URL(string: $0) },
+                        subtitle: summary.creatorName ?? "歌单"))
+                }
+                if !items.isEmpty {
+                    result.append(makeShelf(id: "netease-daily-playlists62",
+                                            title: "每日推荐歌单", items: items))
+                }
+            }
+            Breadcrumbs.log("explore62.daily shelves=\(result.count)")
+        }
 
         async let blocksTask = try? EdgeOneAPIClient.shared.fetchHomeBlockSections()
         async let toplistTask = try? EdgeOneAPIClient.shared.fetchToplist()

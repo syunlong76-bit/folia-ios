@@ -1192,7 +1192,7 @@ extension SettingsViewController {
         beginCheckGroup("帮助")
         let helpGroup = makeGroupCard()
         helpGroup.addArrangedSubview(makeGroupButton(
-            "发行说明（3.7 (55)）", #selector(releaseNotesTapped)))
+            "发行说明", #selector(releaseNotesTapped)))
         helpGroup.addArrangedSubview(makeHairline())
         helpGroup.addArrangedSubview(makeInfoRow(
             title: "社区 · QQ 群", valueLabel: qqGroupLabel))
@@ -1398,8 +1398,11 @@ extension SettingsViewController {
     }
 
     @objc private func releaseNotesTapped() {
+        // (62) WC §4.12 动态化：标题与正文读 ReleaseNotes62
+        // （版本自 Bundle，不再写死旧版号）。
         let page = SettingsTextPageViewController(
-            title: "发行说明 · 3.7 (55)", text: Self.releaseNotesText)
+            title: "发行说明 · \(ReleaseNotes62.versionText)",
+            text: ReleaseNotes62.bodyText)
         page.modalPresentationStyle = .overFullScreen
         present(page, animated: true)
     }
@@ -1408,18 +1411,6 @@ extension SettingsViewController {
         UIPasteboard.general.string = "1125072599"
         Breadcrumbs.log("settings.help qqCopied=1")
     }
-
-    private static let releaseNotesText = """
-        3.7 (55) 发行说明
-
-        · 设置按网页版页签全量重建：外观 / 播放页 / 主页与歌单 / 动画与性能 / 播放控制 / 歌词 / 通用 / 快捷操作 / 连接与集成 / 存储与备份 / 开发者 / 帮助；每签底部有只读「未接入」清单，逐项写明未迁项与原因。
-        · 歌词时间轴偏移做真：墙面展开卡歌词的判定与扫光即时按偏移平移（±2000 毫秒）。
-        · 速记簿把手三项设置落地：显示开关、把手高度、把手样式（线 / 点 / 图形）。
-        · 播放控制新增真开关：无法播放自动跳过（可关，关后停住报错）、加入队列默认位置（队尾 / 下一首）。
-        · 通用新增启动续播自动播放：冷启动有恢复队列时自动装载起播（默认关）。
-        · 存储与备份：封面缓存与歌单数据缓存可看大小、逐类清除；配置可导出为配置码、粘贴导入。
-        · 开发者新增当前内存读数；帮助新增发行说明与社区 QQ 群。
-        """
 }
 
 

@@ -210,6 +210,16 @@ final class LocalServer {
             return
         }
 
+        // OBS 浏览器源（3.7 (62) WC 簇 §4.9/§8）：正在播放的纯
+        // HTML 海报＋歌词页，OBS 浏览器源直读，5 秒自动刷新。
+        if rawPath == "/obs" {
+            handler.respond(status: 200, reason: "OK",
+                            headers: [("Content-Type", "text/html; charset=utf-8"),
+                                      ("Cache-Control", "no-cache")],
+                            body: Data(Self.obsPageHTML().utf8))
+            return
+        }
+
         // 主根 = 包内 WebEffect 目录（未迁样式的网页舞台兜底靠它加载
         // /index.html 与 assets）。(51) 起无回退根：目录缺失即 404，
         // 不再回退旧 OTA Web 根。
@@ -220,6 +230,58 @@ final class LocalServer {
                             headers: [("Content-Type", "text/plain; charset=utf-8")],
                             body: Data("Not Found".utf8))
         }
+    }
+
+    // MARK: - OBS 页（62 WC）
+
+    /// OBS 浏览器源页：当前曲封面/标题/歌手＋当前歌词行（仓库
+    /// 缓存命中才有歌词，未命中显示占位不造假）。透明背景由
+    /// settings.live.transparentStageBackground 决定 body 底色。
+    fileprivate static func obsPageHTML() -> String {
+        func esc(_ text: String) -> String {
+            text.replacingOccurrences(of: "&", with: "&amp;")
+                .replacingOccurrences(of: "<", with: "&lt;")
+                .replacingOccurrences(of: ">", with: "&gt;")
+                .replacingOccurrences(of: "\"", with: "&quot;")
+        }
+        let engine = PlaybackEngine.shared
+        let track = engine.currentTrack
+        let transparent = SettingsStore.transparentStageBackground62
+        let background = transparent ? "transparent" : "#101014"
+        var lyricHTML = "<p class=\"lyric dim\">暂无歌词</p>"
+        if let track,
+           let entry = LyricRepository.shared.cachedEntry(for: track.id),
+           !entry.lines.isEmpty {
+            let lines = LyricParser.stageLines(
+                from: entry.lines, trackDuration: track.duration,
+                singingRatio: entry.singingRatio)
+            let current = LyricParser.currentIndex(in: lines, at: engine.rawPlayhead())
+            lyricHTML = lines.enumerated().map { index, line in
+                let cls = index == current ? "lyric current" : "lyric"
+                return "<p class=\"\(cls)\">\(esc(line.text))</p>"
+            }.joined()
+        }
+        let cover = track?.artworkURL?.absoluteString ?? ""
+        return """
+        <!DOCTYPE html><html><head><meta charset="utf-8">
+        <meta http-equiv="refresh" content="5">
+        <title>Folia OBS</title>
+        <style>
+        body{background:\(background);color:#fff;font-family:-apple-system,sans-serif;
+        margin:0;padding:32px;text-align:center}
+        img{width:320px;height:320px;object-fit:cover;border-radius:16px}
+        h1{font-size:28px;margin:20px 0 6px}
+        h2{font-size:18px;font-weight:400;color:rgba(255,255,255,.65);margin:0 0 24px}
+        .lyric{font-size:16px;color:rgba(255,255,255,.45);margin:4px 0}
+        .lyric.current{font-size:20px;color:#fff;font-weight:600}
+        .dim{color:rgba(255,255,255,.4)}
+        </style></head><body>
+        \(cover.isEmpty ? "" : "<img src=\"\(esc(cover))\">")
+        <h1>\(esc(track?.title ?? "暂无播放"))</h1>
+        <h2>\(esc(track?.artist ?? ""))</h2>
+        \(lyricHTML)
+        </body></html>
+        """
     }
 
     // MARK: - 静态文件

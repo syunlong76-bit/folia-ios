@@ -1,3 +1,4 @@
+import SwiftUI
 import UIKit
 
 // 命令面板（3.7 (55) 工作流 D）：网页版 command-palette 的原生承接。
@@ -120,11 +121,12 @@ final class CommandPaletteViewController: UIViewController {
     // MARK: - 注册表（今晚有真后端的命令全集）
 
     private func buildRegistry() -> [Section] {
+        WC62Bootstrap.startIfNeeded()
         let track = engine.currentTrack
         let hasTrack = track != nil
         let liked = track.map { LikesStore.shared.isLiked($0.id) } ?? false
         let starred = track.map { StarStore.shared.isStarred($0.id) } ?? false
-        return [
+        var sections: [Section] = [
             Section(title: "播放", commands: [
                 Command(
                     id: "playback.toggle",
@@ -177,8 +179,14 @@ final class CommandPaletteViewController: UIViewController {
                     icon: "list.bullet",
                     isEnabled: true,
                     action: { host in
-                        host.finish(id: "queue.open",
-                                    then: host.onOpenQueuePanel)
+                        // (62) WC：宿主未注入时兜底直达面板队列签
+                        // （兼修 C2 墙面两宿主该命令空转）。
+                        if host.onOpenQueuePanel != nil {
+                            host.finish(id: "queue.open",
+                                        then: host.onOpenQueuePanel)
+                        } else {
+                            host.openPanel62(tab: .queue)
+                        }
                     }),
             ]),
             Section(title: "当前歌曲", commands: [
@@ -245,6 +253,297 @@ final class CommandPaletteViewController: UIViewController {
                     }),
             ]),
         ]
+        sections += buildRegistry62(track: track, hasTrack: hasTrack)
+        // 置顶槽位（§4.8）：WB 的 PinnedCommands62 未就绪时按任务
+        // 口径直读键 settings.shortcuts.pinnedCommandIds 兜底。
+        let pinnedIds = UserDefaults.standard.stringArray(
+            forKey: "settings.shortcuts.pinnedCommandIds") ?? []
+        if !pinnedIds.isEmpty {
+            let all = sections.flatMap { $0.commands }
+            let pinned = pinnedIds.compactMap { id in all.first { $0.id == id } }
+            if !pinned.isEmpty {
+                sections.insert(Section(title: "置顶", commands: pinned), at: 0)
+            }
+        }
+        return sections
+    }
+
+    // MARK: - (62) WC 簇命令全集（导航/面板/歌词/速记簿/目录/大肥鱼/场景/主题）
+
+    private func buildRegistry62(track: FoliaTrack?, hasTrack: Bool) -> [Section] {
+        [
+            Section(title: "导航", commands: [
+                Command(id: "nav.search", title: "去搜索", subtitle: "搜索工作区",
+                        icon: "magnifyingglass", isEnabled: true, action: { host in
+                    host.finish(id: "nav.search", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        SearchHostPresenter.presentSearch(from: top)
+                    })
+                }),
+                Command(id: "nav.settings", title: "打开设置", subtitle: nil,
+                        icon: "gearshape", isEnabled: true, action: { host in
+                    host.finish(id: "nav.settings", then: {
+                        MiniPlayerPanelPresenter.presentSettings()
+                    })
+                }),
+                Command(id: "nav.sketchbook", title: "打开速记簿", subtitle: "主页墙左缘抽屉",
+                        icon: "note.text", isEnabled: true, action: { host in
+                    host.openSketchbook62()
+                }),
+                Command(id: "nav.local", title: "本地曲库", subtitle: "工作台 · 本地分区",
+                        icon: "folder", isEnabled: true, action: { host in
+                    host.finish(id: "nav.local", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        let local = WorkbenchLocalViewController()
+                        local.modalPresentationStyle = .fullScreen
+                        top.present(local, animated: true)
+                    })
+                }),
+                Command(id: "nav.navidrome", title: "Navidrome", subtitle: "服务器歌单/专辑",
+                        icon: "server.rack", isEnabled: SettingsStore.navidromeEnabled62,
+                        action: { host in
+                    host.finish(id: "nav.navidrome", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        NavidromeBrowser62ViewController.present(from: top)
+                    })
+                }),
+                Command(id: "nav.cloud", title: "云盘", subtitle: "网易云云盘",
+                        icon: "cloud", isEnabled: true, action: { host in
+                    host.finish(id: "nav.cloud", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        let drive = CloudDriveViewController()
+                        drive.modalPresentationStyle = .fullScreen
+                        top.present(drive, animated: true)
+                    })
+                }),
+                Command(id: "nav.explore", title: "探索页", subtitle: "货架与每日推荐",
+                        icon: "safari", isEnabled: true, action: { host in
+                    host.finish(id: "nav.explore", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        let browse = UIHostingController(rootView: NativeBrowseView())
+                        browse.modalPresentationStyle = .fullScreen
+                        top.present(browse, animated: true)
+                    })
+                }),
+            ]),
+            Section(title: "面板", commands: [
+                Command(id: "panel.open", title: "打开播放面板", subtitle: "封面页签",
+                        icon: "square.grid.2x2", isEnabled: true, action: { host in
+                    host.openPanel62(tab: .cover)
+                }),
+                Command(id: "panel.quality", title: "播放面板 · 音质", subtitle: "取流档位",
+                        icon: "waveform", isEnabled: true, action: { host in
+                    host.openPanel62(tab: .quality)
+                }),
+                Command(id: "panel.local", title: "播放面板 · 本地", subtitle: "本地曲库/已缓存",
+                        icon: "internaldrive", isEnabled: true, action: { host in
+                    host.openPanel62(tab: .local)
+                }),
+                Command(id: "panel.navidrome", title: "播放面板 · Navidrome", subtitle: nil,
+                        icon: "server.rack", isEnabled: SettingsStore.navidromeEnabled62,
+                        action: { host in
+                    host.openPanel62(tab: .navidrome)
+                }),
+                Command(id: "panel.style", title: "样式选择器", subtitle: "歌词样式",
+                        icon: "sparkles", isEnabled: onOpenStylePicker != nil, action: { host in
+                    host.finish(id: "panel.style", then: host.onOpenStylePicker)
+                }),
+                Command(id: "panel.posterwall", title: "直播海报墙", subtitle: "全屏封面轮播",
+                        icon: "rectangle.on.rectangle", isEnabled: true, action: { host in
+                    host.finish(id: "panel.posterwall", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        LivePosterWall62ViewController.present(from: top)
+                    })
+                }),
+            ]),
+            Section(title: "歌词", commands: [
+                Command(id: "lyric.export", title: "导出歌词", subtitle: track?.title ?? "暂无播放",
+                        icon: "square.and.arrow.up", isEnabled: hasTrack, action: { host in
+                    host.finish(id: "lyric.export", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        LyricExport62.exportCurrentTrack(from: top)
+                    })
+                }),
+                Command(id: "lyric.offsetMinus", title: "歌词偏移 −100ms",
+                        subtitle: "当前 \(SettingsStore.globalLyricTimelineOffsetMs)ms",
+                        icon: "minus.circle", isEnabled: true, action: { host in
+                    SettingsStore.globalLyricTimelineOffsetMs -= 100
+                    host.finish(id: "lyric.offsetMinus",
+                                toast: "歌词偏移 \(SettingsStore.globalLyricTimelineOffsetMs)ms")
+                }),
+                Command(id: "lyric.offsetPlus", title: "歌词偏移 +100ms",
+                        subtitle: "当前 \(SettingsStore.globalLyricTimelineOffsetMs)ms",
+                        icon: "plus.circle", isEnabled: true, action: { host in
+                    SettingsStore.globalLyricTimelineOffsetMs += 100
+                    host.finish(id: "lyric.offsetPlus",
+                                toast: "歌词偏移 \(SettingsStore.globalLyricTimelineOffsetMs)ms")
+                }),
+                Command(id: "lyric.offsetReset", title: "歌词偏移归零", subtitle: nil,
+                        icon: "arrow.counterclockwise", isEnabled: true, action: { host in
+                    SettingsStore.globalLyricTimelineOffsetMs = 0
+                    host.finish(id: "lyric.offsetReset", toast: "歌词偏移已归零")
+                }),
+                Command(id: "lyric.checkin", title: "网易云听歌打卡", subtitle: "接口可用性待核对",
+                        icon: "checkmark.seal", isEnabled: true, action: { host in
+                    host.finish(id: "lyric.checkin")
+                    Task {
+                        let text = await Scrobble62.shared.performCheckIn()
+                        await MainActor.run {
+                            NativePlaybackFailureToast.show(message: text)
+                        }
+                    }
+                }),
+            ]),
+            Section(title: "速记簿", commands: [
+                Command(id: "sketch.open", title: "打开速记簿", subtitle: nil,
+                        icon: "note.text", isEnabled: true, action: { host in
+                    host.openSketchbook62()
+                }),
+                Command(id: "sketch.addCurrent", title: "收当前歌进速记簿",
+                        subtitle: track?.title ?? "暂无播放",
+                        icon: "plus.rectangle.on.folder", isEnabled: hasTrack, action: { host in
+                    guard let current = host.engine.currentTrack else { return }
+                    let added = SketchbookStore.shared.add(
+                        current, source: "command62", originLabel: "命令面板")
+                    host.finish(id: "sketch.addCurrent",
+                                toast: added ? "已收进速记簿" : "已在速记簿里")
+                }),
+                Command(id: "sketch.clear", title: "清空速记簿", subtitle: "需二次确认",
+                        icon: "trash", isEnabled: !SketchbookStore.shared.entries.isEmpty,
+                        action: { host in
+                    host.confirmClearSketchbook62()
+                }),
+            ]),
+            Section(title: "目录管理", commands: [
+                Command(id: "dir.rescanLocal", title: "重扫本地库", subtitle: "已导入文件夹",
+                        icon: "arrow.clockwise", isEnabled: true, action: { host in
+                    LocalLibrary62.shared.rescanFolders()
+                    host.finish(id: "dir.rescanLocal", toast: "已触发本地库重扫")
+                }),
+                Command(id: "dir.precache", title: "预缓存队列", subtitle: "当前曲＋后 5 首",
+                        icon: "arrow.down.circle", isEnabled: hasTrack, action: { host in
+                    host.finish(id: "dir.precache")
+                    Task {
+                        let done = await MediaCache62.shared.precacheQueue()
+                        await MainActor.run {
+                            NativePlaybackFailureToast.show(message: "预缓存完成 \(done) 首")
+                        }
+                    }
+                }),
+                Command(id: "dir.clearCache", title: "清除媒体缓存",
+                        subtitle: "\(MediaCache62.shared.cachedCount) 首",
+                        icon: "trash", isEnabled: true, action: { host in
+                    let freed = MediaCache62.shared.clearAll()
+                    host.finish(id: "dir.clearCache",
+                                toast: "已清除 \(SettingsCacheManager.sizeText(freed))")
+                }),
+                Command(id: "dir.clearStats", title: "清除听歌统计", subtitle: "分析数据",
+                        icon: "chart.bar.xaxis", isEnabled: true, action: { host in
+                    ListeningStats62.shared.clearAll()
+                    host.finish(id: "dir.clearStats", toast: "听歌统计已清除")
+                }),
+            ]),
+            Section(title: "大肥鱼", commands: [
+                Command(id: "dafeiyu.open", title: "打开陪伴面板", subtitle: "QQ 机器人 · 以 QQ 端为准",
+                        icon: "fish", isEnabled: true, action: { host in
+                    host.finish(id: "dafeiyu.open", then: {
+                        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+                        DafeiyuPanel62ViewController.present(from: top)
+                    })
+                }),
+                Command(id: "dafeiyu.copyGroup", title: "复制大肥鱼群号",
+                        subtitle: DafeiyuPanel62ViewController.groupQQ,
+                        icon: "doc.on.doc", isEnabled: true, action: { host in
+                    UIPasteboard.general.string = DafeiyuPanel62ViewController.groupQQ
+                    host.finish(id: "dafeiyu.copyGroup", toast: "群号已复制")
+                }),
+            ]),
+            Section(title: "场景与主题", commands: [
+                Command(id: "scene.cinema", title: "切换场景：影厅", subtitle: "场景键直写（WA 场景系统消费）",
+                        icon: "film", isEnabled: true, action: { host in
+                    host.applyScene62("cinema")
+                }),
+                Command(id: "scene.default", title: "切换场景：默认", subtitle: "场景键直写（WA 场景系统消费）",
+                        icon: "house", isEnabled: true, action: { host in
+                    host.applyScene62("default")
+                }),
+                Command(id: "theme.park", title: "打开主题乐园", subtitle: "设置 · 外观页签",
+                        icon: "paintpalette", isEnabled: true, action: { host in
+                    host.finish(id: "theme.park", then: {
+                        MiniPlayerPanelPresenter.presentSettings()
+                    })
+                }),
+                Command(id: "theme.workbench", title: "歌词样式工作台", subtitle: "经样式选择器进入",
+                        icon: "slider.horizontal.3", isEnabled: onOpenStylePicker != nil,
+                        action: { host in
+                    host.finish(id: "theme.workbench", then: host.onOpenStylePicker)
+                }),
+            ]),
+        ]
+    }
+
+    /// 场景切换（62）：WA 的 SceneSystem62 未就绪时按任务口径
+    /// 以设置键直写兜底（键 settings.appearance.scene），WA 就绪
+    /// 后由其消费同一键。面包屑标注 fallback=key。
+    private func applyScene62(_ scene: String) {
+        UserDefaults.standard.set(scene, forKey: "settings.appearance.scene")
+        Breadcrumbs.log("stage.palette.scene value=\(scene) fallback=key")
+        finish(id: "scene.\(scene)", toast: "场景已切换：\(scene == "cinema" ? "影厅" : "默认")")
+    }
+
+    /// 打开播放面板指定页签：宿主注入了队列回调也统一走面板
+    /// 直达（墙面宿主未注入时的兜底，兼修 C2 队列命令落点）。
+    private func openPanel62(tab: PlaybackPanelViewController.Tab) {
+        finish(id: "panel.open.\(tab.title)", then: {
+            guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+            PlaybackPanelViewController.present(from: top, initialTab: tab)
+        })
+    }
+
+    /// 打开速记簿：在窗口视图树里找已装配的 SketchbookDrawerView
+    /// 真调 setOpen；不在场（不在主页墙）时诚实 toast。
+    private func openSketchbook62() {
+        Breadcrumbs.log("stage.palette.exec id=sketch.open62")
+        dismiss(animated: true) { [weak self] in
+            guard let self else { return }
+            if let drawer = self.findSketchbookDrawer62() {
+                drawer.setOpen(true, source: "command62")
+            } else {
+                NativePlaybackFailureToast.show(message: "速记簿在主页墙左缘，请先回到主页墙")
+            }
+        }
+    }
+
+    private func findSketchbookDrawer62() -> SketchbookDrawerView? {
+        let scene = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .first { $0.activationState == .foregroundActive }
+            ?? UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }.first
+        for window in scene?.windows ?? [] {
+            if let found = searchDrawer62(in: window) { return found }
+        }
+        return nil
+    }
+
+    private func searchDrawer62(in view: UIView) -> SketchbookDrawerView? {
+        if let drawer = view as? SketchbookDrawerView { return drawer }
+        for sub in view.subviews {
+            if let found = searchDrawer62(in: sub) { return found }
+        }
+        return nil
+    }
+
+    private func confirmClearSketchbook62() {
+        let alert = UIAlertController(
+            title: "清空速记簿", message: "将移除全部暂存歌曲（历史保留）。",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "清空", style: .destructive) { [weak self] _ in
+            SketchbookStore.shared.clear(source: "command62")
+            self?.finish(id: "sketch.clear", toast: "速记簿已清空")
+        })
+        present(alert, animated: true)
     }
 
     private func sleepSubtitle() -> String {

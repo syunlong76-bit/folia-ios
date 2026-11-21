@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 // CollectionView.swift
 //
@@ -36,6 +37,10 @@ struct CollectionView: View {
     @State private var isStarred = false
     /// 收藏提示代次：连点时旧的延时清除不许抹掉新提示。
     @State private var hintGeneration = 0
+    /// (62) WC 歌单页操作：分享载荷与封面选择器显态。
+    @State private var shareItems62: [Any] = []
+    @State private var showShare62 = false
+    @State private var showCoverPicker62 = false
 
     /// 歌单全量 id（去重保序）与已消费到的位置，续拉/重试共用。
     @State private var allIds: [Int] = []
@@ -57,6 +62,15 @@ struct CollectionView: View {
     }
 
     var body: some View {
+        // (62) WC：歌手集合分流到歌手页本体（头图/热门/专辑分区）。
+        if collection.kind == .artist {
+            ArtistView62(collection: collection)
+        } else {
+            collectionBody
+        }
+    }
+
+    private var collectionBody: some View {
         ZStack(alignment: .top) {
             FoliaTheme.background.ignoresSafeArea()
 
@@ -108,8 +122,104 @@ struct CollectionView: View {
         }
         .task {
             isStarred = StarStore.shared.isStarred(starKey)
+            // (62) 自定义合集封面（本机展示）：有存档先覆盖。
+            if let saved = UserDefaults.standard.string(
+                forKey: "folia62.collectionCover.\(collection.kind.rawValue):\(collection.id)"),
+               let url = URL(string: saved) {
+                coverURL = url
+            }
             if phase == .loading { await load() }
         }
+        .sheet(isPresented: $showShare62) {
+            ActivityView62(items: shareItems62)
+        }
+        .sheet(isPresented: $showCoverPicker62) {
+            coverPicker62
+        }
+    }
+
+    // MARK: - (62) 歌单页操作
+
+    private func opsButton62(title: String, icon: String,
+                             action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            HStack(spacing: 4) {
+                Image(systemName: icon).font(.system(size: 11))
+                Text(title).font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(FoliaTheme.primary.opacity(0.85))
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(FoliaTheme.primary.opacity(0.08))
+            .clipShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .disabled(tracks.isEmpty)
+        .opacity(tracks.isEmpty ? 0.4 : 1)
+    }
+
+    /// 导出歌单：曲目清单文本（序号/歌名/歌手/专辑＋LRC 索引行）
+    /// 经系统分享。
+    private func exportPlaylist62() {
+        var text = "\(headerName)\n共 \(tracks.count) 首\n\n"
+        for (index, track) in tracks.enumerated() {
+            text += "\(index + 1). \(track.title) - \(track.artist)"
+            if !track.album.isEmpty { text += "《\(track.album)》" }
+            text += "\n"
+        }
+        shareItems62 = [text]
+        showShare62 = true
+        Breadcrumbs.log("collection62.export kind=\(collection.kind.rawValue) id=\(collection.id) n=\(tracks.count)")
+    }
+
+    /// 分享信息：名称/创建者/曲目数纯文本。
+    private func shareInfo62() {
+        var parts = [headerName]
+        if let creatorName { parts.append("创建者：\(creatorName)") }
+        parts.append("\(totalCount) 首")
+        if let descriptionText, !descriptionText.isEmpty {
+            parts.append(descriptionText)
+        }
+        shareItems62 = [parts.joined(separator: "\n")]
+        showShare62 = true
+    }
+
+    /// 设置合集封面选择器：列歌单内歌曲封面，点选即设为本机
+    /// 展示封面（LocalPlaylistStore/云端歌单头同口径：只影响
+    /// 本机展示，不回写云端）。
+    private var coverPicker62: some View {
+        NavigationStack {
+            List(tracks) { track in
+                Button {
+                    if let url = track.artworkURL {
+                        coverURL = url
+                        UserDefaults.standard.set(
+                            url.absoluteString,
+                            forKey: "folia62.collectionCover.\(collection.kind.rawValue):\(collection.id)")
+                        Breadcrumbs.log("collection62.setCover id=\(collection.id) track=\(track.id)")
+                    }
+                    showCoverPicker62 = false
+                } label: {
+                    HStack(spacing: 12) {
+                        NativeCoverView(url: track.artworkURL, targetPixels: 150)
+                            .frame(width: 44, height: 44)
+                            .clipShape(RoundedRectangle(cornerRadius: 6, style: .continuous))
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(track.title)
+                                .font(.system(size: 14))
+                                .foregroundColor(FoliaTheme.primary)
+                            Text(track.artist)
+                                .font(.system(size: 11))
+                                .foregroundColor(FoliaTheme.primary.opacity(0.55))
+                        }
+                    }
+                }
+                .buttonStyle(.plain)
+            }
+            .navigationTitle("选一首歌的封面")
+            .navigationBarTitleDisplayMode(.inline)
+        }
+        .preferredColorScheme(.dark)
     }
 
     /// StarStore 里的集合键：与歌曲星标同库、col: 前缀分命名空间。
@@ -314,6 +424,24 @@ struct CollectionView: View {
                         .font(.system(size: 12))
                         .foregroundColor(FoliaTheme.primary.opacity(0.6))
                         .padding(.top, 2)
+                }
+
+                // (62) WC 歌单页操作补全：导出/重扫/设封面/分享。
+                HStack(spacing: 8) {
+                    opsButton62(title: "导出歌单", icon: "square.and.arrow.up") {
+                        exportPlaylist62()
+                    }
+                    opsButton62(title: "重新扫描", icon: "arrow.clockwise") {
+                        Task { await load() }
+                    }
+                    if collection.kind == .playlist {
+                        opsButton62(title: "设置封面", icon: "photo") {
+                            showCoverPicker62 = true
+                        }
+                    }
+                    opsButton62(title: "分享信息", icon: "square.and.arrow.up.on.square") {
+                        shareInfo62()
+                    }
                 }
             }
             .padding(.top, 16)
@@ -631,4 +759,14 @@ private struct PolaroidCard: View {
                 .stroke(FoliaTheme.primary.opacity(0.05), lineWidth: 1))
         .shadow(color: .black.opacity(0.3), radius: 8, x: 0, y: 4)
     }
+}
+
+// MARK: - (62) 系统分享桥
+
+struct ActivityView62: UIViewControllerRepresentable {
+    let items: [Any]
+    func makeUIViewController(context: Context) -> UIActivityViewController {
+        UIActivityViewController(activityItems: items, applicationActivities: nil)
+    }
+    func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
 }
