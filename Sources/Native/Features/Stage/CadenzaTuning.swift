@@ -254,7 +254,7 @@ final class CadenzaTuningPanelViewController: UIViewController {
         slider.addTarget(self, action: #selector(sliderChanged(_:)), for: .valueChanged)
         sliders[key] = slider
         let row = makeRow(title: title, control: slider)
-        if let header = row.arrangedSubviews.first as? UIStackView,
+        if let header = (row as? UIStackView)?.arrangedSubviews.first as? UIStackView,
            let valueLabel = header.arrangedSubviews.last as? UILabel {
             valueLabels[key] = valueLabel
         }
