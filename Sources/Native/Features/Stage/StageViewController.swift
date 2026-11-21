@@ -1180,8 +1180,14 @@ final class StageViewController: UIViewController {
         mountRenderer(styleId: styleId)
         swapTransition.finish(newView: renderer?.view)
         if leavingWebEmbed {
+            // 代次校验（(67) 独立审查修复）：0.5s 内切回网页样式
+            // 时 armWebFade 已递增 webSwapGeneration，这发迟到的
+            // detach 不许误拆新一轮淡换（WebView 被摘＋alpha 停
+            // 0 ＝台面空白）。
+            let detachGeneration = webSwapGeneration
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
-                self?.detachWebEmbed()
+                guard let self, self.webSwapGeneration == detachGeneration else { return }
+                self.detachWebEmbed()
             }
         }
         refreshStyleButton()
@@ -1194,6 +1200,7 @@ final class StageViewController: UIViewController {
     /// 开台初始装配·网页运行：无旧帧垫底，WebView 先藏（alpha
     /// 0），首帧回执或超时后淡入——与换装淡换同一出口。
     private func mountWebRenderer(styleId: String) {
+        armWebStyleProof(styleId: styleId)
         embedWebView()
         WebEffectBridge.shared.webView.alpha = 0
         webEmbedStyleId = styleId
@@ -1215,6 +1222,7 @@ final class StageViewController: UIViewController {
         }
         let backing = renderer
         activeStyleId = styleId
+        armWebStyleProof(styleId: styleId)
         embedWebView()
         if backing != nil {
             WebEffectBridge.shared.webView.alpha = 0
@@ -1228,6 +1236,22 @@ final class StageViewController: UIViewController {
         Breadcrumbs.log("est.src style=\(styleId) est=web")
     }
 
+    /// 网页运行同样武装防卡死守卫（(67) 独立审查修复）：网页
+    /// 分支此前提前 return、守卫从未武装，页面加载失败/JS 崩
+    /// 溃时开台长期空白无回退。证明双路结算——首帧回执在
+    /// completeWebFade 的 ack 路径调 finishStyleProof；帧＋歌
+    /// 词窗口在 frameStep 同一出口兜底。未 proven 而进程被杀
+    /// 时，下次开台按 (44) 口径回退经典式。
+    private func armWebStyleProof(styleId: String) {
+        StageStyleStore.armStylePending(styleId)
+        styleProofStyleId = styleId
+        styleProofFrames = 0
+        styleProofArmedAt = CACurrentMediaTime()
+        styleProofFramesOK = false
+        styleProofLyricsApplied =
+            currentTrackId.flatMap { linesCache[$0] } != nil
+    }
+
     /// WebView 嵌入 rendererContainer（与原生渲染器同级）：
     /// 交互全关——手势穿透回原生台面（三击轮换等识别器挂在
     /// container 上，照常收触）。
@@ -1236,6 +1260,11 @@ final class StageViewController: UIViewController {
         if webView.superview !== rendererContainer {
             webView.removeFromSuperview()
             rendererContainer.addSubview(webView)
+            // 共享 WebView 的 translates 在 MainViewController/
+            // 全屏宿主侧被置 false，本处走 frame＋autoresizing
+            // 布局，必须显式置 true 才有约束保护（审查修复）；
+            // detach 时复原 false。
+            webView.translatesAutoresizingMaskIntoConstraints = true
             webView.frame = rendererContainer.bounds
             webView.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         }
@@ -1252,13 +1281,22 @@ final class StageViewController: UIViewController {
         webSwapGeneration += 1
         let generation = webSwapGeneration
         webFadeWorkItem?.cancel()
+        // 冷启放宽（(67) 独立审查修复）：页面尚在首装（bundle
+        // 解析＋桥握手）时 1.8s 必然迟到、会淡入未就绪页；页
+        // 面未 loaded 时放宽到 6s 并落 cold 面包屑区分。1.8s
+        // 口径只覆盖「页面已就绪、样式首帧慢」一件事。
+        let pageReady = WebEffectBridge.shared.isPageLoaded
+        let timeout: TimeInterval = pageReady ? 1.8 : 6.0
+        if !pageReady {
+            Breadcrumbs.log("webfx.cold style=\(webEmbedStyleId ?? "-")")
+        }
         let work = DispatchWorkItem { [weak self] in
             guard let self, generation == self.webSwapGeneration else { return }
             Breadcrumbs.log("webfx.ackto style=\(self.webEmbedStyleId ?? "-")")
             self.completeWebFade(generation: generation, via: "timeout")
         }
         webFadeWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + timeout, execute: work)
     }
 
     private func handleWebStyleFrame(_ styleId: String) {
@@ -1273,6 +1311,8 @@ final class StageViewController: UIViewController {
         webFadeWorkItem?.cancel()
         webFadeWorkItem = nil
         Breadcrumbs.log("webfx.fade via=\(via) style=\(webEmbedStyleId ?? "-")")
+        // 首帧回执到 = 网页样式存活证明（守卫结算，审查修复）。
+        if via == "ack" { finishStyleProof(via: "web-frame") }
         let webView = WebEffectBridge.shared.webView
         UIView.animate(withDuration: 0.35, delay: 0,
                        options: [.curveEaseOut, .beginFromCurrentState]) {
@@ -1302,6 +1342,9 @@ final class StageViewController: UIViewController {
         // 交互标志复原：嵌入态关交互是本台口径，全屏网页舞台
         // 宿主共用同一 WebView 实例，不许把关着的标志带过去。
         webView.isUserInteractionEnabled = true
+        // 布局标志复原（embed 时置 true 走 autoresizing，全屏
+        // 宿主/MainViewController 口径为 false 约束布局）。
+        webView.translatesAutoresizingMaskIntoConstraints = false
         WebEffectBridge.shared.isEmbeddedInStage = false
         webEmbedStyleId = nil
     }
@@ -1715,6 +1758,12 @@ final class StageViewController: UIViewController {
     private func jumpToWebStage(reason: String) {
         guard !webJumpFired else { return }
         webJumpFired = true
+        // 嵌入态先摘嵌（(67) 独立审查修复）：全屏宿主与台面嵌
+        // 入共用同一 WebView，带嵌入态跳走会把「关交互＋已摘
+        // 出容器」的中间态带进宿主，且宿主关闭后嵌入状态残
+        // 留、台面网页层消失。摘嵌后宿主自管该 WebView，关闭
+        // 时 onClosed 按需重装本台当前样式。
+        if webEmbedStyleId != nil { detachWebEmbed() }
         Breadcrumbs.log("stage fallback to web: \(reason)")
         // 跳网页舞台 = 程序化正当转移（3.7 (46)）：目的地仍是
         // 舞台，闸门放行并 settle route，不走守卫 veto。
@@ -1735,6 +1784,11 @@ final class StageViewController: UIViewController {
             self.webJumpFired = false
             if StageStyleStore.currentStyleId != returnStyleId {
                 StageStyleStore.currentStyleId = returnStyleId
+            }
+            // 跳走前若摘过嵌（审查修复）：台面已无任何呈现层，
+            // 按返回样式重装一遍（原生/网页由运行位分流）。
+            if self.webEmbedStyleId == nil && self.renderer == nil {
+                self.applyNativeStyleSelection(returnStyleId)
             }
             Breadcrumbs.log("webstage return style=\(returnStyleId)")
         }

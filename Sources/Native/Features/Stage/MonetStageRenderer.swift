@@ -713,12 +713,16 @@ final class MonetStageRenderer: NSObject, LyricStageRenderer {
                                incoming: incomingField, duration: 1.0)
         }
         particleView.tick()
-        // §0 呈现侧（3.7 (67) B 组）：轨道弹簧收敛点——焦点行
-        // presentation 层 y 与模型 y 差 <0.5pt 首次达成。
-        if let pending = probeUpPending67, let focusView = lineViews[focusIndex] {
-            let presented = focusView.layer.presentation()?.position.y
-                ?? focusView.layer.position.y
-            if abs(presented - focusView.layer.position.y) < 0.5 {
+        // §0 呈现侧（3.7 (67) B 组）：轨道弹簧收敛点——待收敛
+        // 行自身的 presentation 层 y 与模型 y 差 <0.5pt 首次达
+        // 成（审查修复：原判定读 focusIndex 行，与 pending 行
+        // 不保证同行、会系统性偏早）。
+        if let pending = probeUpPending67,
+           lineViews.indices.contains(pending) {
+            let pendingView = lineViews[pending]
+            let presented = pendingView.layer.presentation()?.position.y
+                ?? pendingView.layer.position.y
+            if abs(presented - pendingView.layer.position.y) < 0.5 {
                 probeUpPending67 = nil
                 Breadcrumbs.log("flip.up style=monet idx=\(pending) judge=\(SyncProbe67.fmt(position)) wall=\(SyncProbe67.fmt(CACurrentMediaTime()))")
             }

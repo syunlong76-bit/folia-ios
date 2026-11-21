@@ -113,6 +113,10 @@ final class WallPrototypeViewController: UIViewController,
     /// 展开卡打点去重：组串未变时跳过重复 log。
     private var lastExpandedCellCrumb: String?
     private let wallLayout = WallLayout()
+    /// hero 飞行在途引用（(67) 独立审查修复）：飞行未完又触
+    /// 发展开/收起时先把旧飞行瞬时收尾（复原真卡 alpha），防
+    /// 对已藏的卡再截空快照与双飞行层叠加。
+    private var activeHeroFlight67: HeroFlight67?
     /// 滚动帧统计（(58) 定稿③）：逐秒 wall.scroll 面包屑。
     private let scrollMetrics = WallScrollMetrics(wallName: "tracks")
     /// 旋转代际（(58) 补旋转冻结，与主页墙同款）：中途反向再
@@ -3104,6 +3108,12 @@ final class WallPrototypeViewController: UIViewController,
                                       sourceFrame: CGRect?,
                                       targetInstanceId: String?,
                                       completion: (() -> Void)? = nil) {
+        // 旧飞行未落定先瞬时收尾（审查修复）：复原被藏真卡，
+        // 本轮快照才截得到实卡、也不会双层同屏。
+        if let stale = activeHeroFlight67 {
+            activeHeroFlight67 = nil
+            stale.finish()
+        }
         // 身份判定改用 refreshInstances 返回值（展开/收起只换
         // expandedRects、实例序列不变）。
         let identityChanged = wallLayout.refreshInstances()
@@ -3131,7 +3141,12 @@ final class WallPrototypeViewController: UIViewController,
                 }
                 if let flight {
                     animator.addAnimations { flight.fly() }
-                    animator.addCompletion { _ in flight.finish() }
+                    animator.addCompletion { [weak self] _ in
+                        flight.finish()
+                        if self?.activeHeroFlight67 === flight {
+                            self?.activeHeroFlight67 = nil
+                        }
+                    }
                 }
                 animator.startAnimation()
             }
@@ -3141,7 +3156,12 @@ final class WallPrototypeViewController: UIViewController,
             let animator = UIViewPropertyAnimator(duration: 0.45, dampingRatio: 0.86) {
                 flight.fly()
             }
-            animator.addCompletion { _ in flight.finish() }
+            animator.addCompletion { [weak self] _ in
+                flight.finish()
+                if self?.activeHeroFlight67 === flight {
+                    self?.activeHeroFlight67 = nil
+                }
+            }
             animator.startAnimation()
         }
         refreshVisiblePlaybackUI()
@@ -3168,6 +3188,7 @@ final class WallPrototypeViewController: UIViewController,
         let flight = HeroFlight67(snapshot: snapshot, targetFrame: targetFrame)
         flight.view.frame = sourceFrame
         view.addSubview(flight.view)
+        activeHeroFlight67 = flight
         if let cell = collectionView.cellForItem(
             at: IndexPath(item: targetIndex, section: 0)) {
             cell.alpha = 0
