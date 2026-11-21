@@ -535,6 +535,8 @@ final class WallPrototypeViewController: UIViewController,
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
+        // (60) 第 8 条：4s 长按开启宠物手势挂台身空白域。
+        petStage.attachOpenGesture(to: bar)
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = 35
@@ -933,8 +935,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 打开同主题。特效总开关关着时停用（设置页一键全关）。
     @objc private func miniBarLongPressed(_ gesture: UILongPressGestureRecognizer) {
         // 收起态不切主题（3.7 (21)）：细条只认点按展开。
+        // (60) 第 8 条手势域隔离：宠物关闭态下台身空白长按让给
+        // 4s 开启手势，切主题不动作（宠物开启态照常）。
         guard gesture.state == .began, let bar = miniBar, !miniBarCollapsed,
-              MiniPlayerTheme.effectsEnabled else { return }
+              MiniPlayerTheme.effectsEnabled,
+              StickerSettings.miniPetsEnabled else { return }
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)

@@ -22,7 +22,6 @@ final class CommandPaletteViewController: UIViewController {
     /// 跨面板跳转注入（StageViewController 呈现时接线）：命令面板
     /// 自身关掉后由宿主在舞台上呈现目标面（样式选择需舞台的选样式
     /// 通路、队列需 PlaybackPanel 队列页签），不经面板叠面板。
-    var onOpenSubtitleSettings: (() -> Void)?
     var onOpenStylePicker: (() -> Void)?
     var onOpenQueuePanel: (() -> Void)?
 
@@ -211,16 +210,6 @@ final class CommandPaletteViewController: UIViewController {
                     isEnabled: true,
                     action: { host in
                         host.presentSleepMenu()
-                    }),
-                Command(
-                    id: "tool.subtitle",
-                    title: "字幕调节",
-                    subtitle: "底部字幕层设置",
-                    icon: "captions.bubble",
-                    isEnabled: true,
-                    action: { host in
-                        host.finish(id: "tool.subtitle",
-                                    then: host.onOpenSubtitleSettings)
                     }),
                 Command(
                     id: "tool.visualizer",
