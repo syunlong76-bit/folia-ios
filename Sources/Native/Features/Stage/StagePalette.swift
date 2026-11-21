@@ -212,6 +212,25 @@ final class LyricContrastScrimView: UIView {
     }
 }
 
+/// 颜色线性混合（3.7 (70) 迁入）：原定义在 FumeStageRenderer
+/// +Layout（浮名工具函数），但调用方含保留样式残光/调频
+/// （AfterglowStageRenderer / TuningStageRenderer）——(70)
+/// A 组删 Fume 文件时此函数必须留，故迁入本颜色工具文件；
+/// 函数名保留 fume 前缀作沿革（两处调用点一行未动）。
+func fumeMixColor(_ from: UIColor, _ to: UIColor, _ amount: CGFloat, alpha: CGFloat) -> UIColor {
+    var r1: CGFloat = 0, g1: CGFloat = 0, b1: CGFloat = 0, a1: CGFloat = 0
+    var r2: CGFloat = 0, g2: CGFloat = 0, b2: CGFloat = 0, a2: CGFloat = 0
+    from.getRed(&r1, green: &g1, blue: &b1, alpha: &a1)
+    to.getRed(&r2, green: &g2, blue: &b2, alpha: &a2)
+    return UIColor(
+        red: fumeMixF(r1, r2, amount), green: fumeMixF(g1, g2, amount),
+        blue: fumeMixF(b1, b2, amount), alpha: alpha)
+}
+
+func fumeMixF(_ from: CGFloat, _ to: CGFloat, _ amount: CGFloat) -> CGFloat {
+    from + (to - from) * amount
+}
+
 /// 调参面板的对比保护说明行（(61) WC 簇）：各样式 Tuning 面板
 /// 统一挂一行，文案与落点全样式一致。
 enum LyricContrastProtectionNote {

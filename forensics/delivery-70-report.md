@@ -46,7 +46,7 @@
 
 保留原生（不在删除面）：TuningStageRenderer / CorridorStageRenderer / AfterglowStageRenderer / PetConcert* 全部文件、GlowWordEngine / StageTextKit（保留四式共用引擎）、StagePalette、SyncProbe67（按 styleId 字符串工作、零渲染器类引用，实查）。
 
-删前安全核查：提取待删 35 文件全部 130 个顶层类型名逐个全仓反查，删除面之外**零代码引用**（仅注释提及，已逐处把写成「现行消费者」的注释改口径：SettingsStore 两处、StageEffectSettings 一处）；顶层自由函数仅 fume*（Fume 内部自用）、extension 仅挂被删类自身。
+删前安全核查：提取待删 35 文件全部 130 个顶层类型名逐个全仓反查，删除面之外**零代码引用**（仅注释提及，已逐处把写成「现行消费者」的注释改口径：SettingsStore 两处、StageEffectSettings 一处）；extension 仅挂被删类自身。**一处漏网（CI 首轮抓到后已修）**：删前扫描只提取了类型声明、漏了顶层自由函数——Fume 工具函数 `fumeMixColor` 被保留样式残光/调频调用（AfterglowStageRenderer:532、TuningStageRenderer:216），删 Fume 文件后 CI 报 cannot find in scope。已补救：fumeMixColor 与其依赖 fumeMixF 原样迁入 StagePalette.swift（调用点一行未动、函数名保留沿革），并补做全量自由函数扫描（35 个 fume* 函数逐个反查，外部引用仅此一例）。
 
 ---
 
@@ -109,7 +109,7 @@
 
 ## 自检口径
 
-- 删前类型扫描：待删 35 文件的 130 个顶层类型名逐个全仓反查，删除面外零代码引用后才动手（见 A 组）。
+- 删前类型扫描：待删 35 文件的 130 个顶层类型名逐个全仓反查，删除面外零代码引用后才动手（见 A 组）；自由函数一类首轮漏扫、CI 抓到 fumeMixColor 后补扫全量并迁留（见 A 组漏网条）。
 - 收口 grep（全仓 Sources）：attachOpenGesture / MiniBarPetOpenGesture / pet.openGesture 零命中；StageCyclePressObserver / StageCycleProgressRingView 仅剩 StageStyleCycleBag 文件头沿革注释；setRuntime / onPickRuntime 零代码命中（仅 StageRuntimeStore 沿革注释）；currentStyleIsNative 仅剩改名说明注释；showStyleCycleToast 仅剩 B5 沿革注释（teardown 残引用已一并摘除，初查时发现并修复）；130 个被删类型名仅剩注释提及（其中写成现行消费者的三处已改口径）。
 - 括号平衡：全部改动文件花括号差 = 0；圆括号差与 HEAD 逐文件一致（差值来自注释/字符串，非本次引入）。
 - 调用链走查：17 式进台路径（开台 resolveInitialStyle / 选择器 / 三击 / 每曲随机）全部先经 StageRuntimeStore.isWeb 分流网页嵌入，mountRenderer 的 factory 通路只剩自有四式可达；召唤钮双写顺序（先写开关后调入场/离场）与旧组件、petPressCloseTriggered 同序；B6 盖的武装/结算与 handleWebStyleFrame 的 webFadeWorkItem 非空判读兼容（armWebFade 在下发后即武装，回执不可能早于武装）。
