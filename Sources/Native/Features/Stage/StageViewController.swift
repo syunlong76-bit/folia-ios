@@ -94,6 +94,10 @@ final class StageViewController: UIViewController {
     private var stageKnobLeading: NSLayoutConstraint?
     private var stageTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var stageBarCollapsed = false
+    /// 台身双击识别器（3.7 (61) 第 7 条）：随台形态启停——收
+    /// 起态禁用以保细条单击即时展开（见 syncStageBarDouble-
+    /// TapEnabled）。
+    private var stageBarDoubleTap: UITapGestureRecognizer?
     private var stageBarPresented = false
     private var stageSeekDragging = false
     private var stageIdleWorkItem: DispatchWorkItem?
@@ -152,6 +156,12 @@ final class StageViewController: UIViewController {
     /// 开过又正常关掉 = 活过）。进程未及任一证明就消亡时，
     /// pending 留给下次启动的 runLaunchStyleGuard 回退。
     private var styleProofStyleId: String?
+    /// 样式打开追踪状态（3.7 (61) 第 3 条）：mountRenderer 每次
+    /// 装配重置；frameStep 首帧提交后落 style.firstFrame
+    /// .commit.alive 并推进 StyleOpenTrace 标记（只触发一次）。
+    private var styleTraceStyleId: String?
+    private var styleTraceDataHash = ""
+    private var styleTraceFirstFrameLogged = false
     private var styleProofFrames = 0
     private var styleProofArmedAt: CFTimeInterval = 0
     private var styleProofFramesOK = false
@@ -268,133 +278,60 @@ final class StageViewController: UIViewController {
         if !headerChromeHidden { scheduleStageHeaderHide() }
     }
 
-    // MARK: 样式长按轮换（3.7 (54) 工作流 R，Miller 01:32 定）
+    // MARK: 样式三击轮换（3.7 (61) 第 6 条，Miller 改判）
     //
-    // 舞台画面（rendererContainer 歌词/背景区）长按满 5 秒 →
+    // 舞台画面（rendererContainer 歌词/背景区）快速三击 →
     // 洗牌袋（StageStyleCycleBag）取下一只 → 走与样式选择器
     // 完全相同的选样式通路（applyNativeStyleSelection /
     // applyWebStyleSelection，含 StageStyleStore 持久化、
     // mountRenderer 的 style-guard 武装、汪汪队宠物迁移）。
     //
-    // 识别区纪律：两个识别器只挂 rendererContainer——点播台
+    // (54) 工作流 R 的 5 秒长按切样式本版退役：长按识别器与
+    // 进度环 observer（StageCyclePressObserver）接线已整组摘
+    // 除（observer/环类本体留在 StageStyleCycleBag.swift——
+    // 宠物 4s 开启手势（MiniBarPetStage）仍共用，非本包文件
+    // 不动）。三击识别器独立安装、不给任何既有识别器加
+    // require(toFail:)：双击顶栏恢复照常零延迟（三击途中第
+    // 2 击先触发顶栏恢复，无害、与切样式不冲突）。
+    //
+    // 识别区纪律：识别器只挂 rendererContainer——点播台
     // （stageBar 及其宠物层 stagePetStage）、顶栏按钮、提示
     // 条都是它的兄弟视图而非子孙，从它们上面起的手势天然
     // 不进本识别器；容器内的贴纸浮层（StickerView）一律
     // isUserInteractionEnabled=false、触摸穿透，无死点。
-    // 触发本体是 minimumPressDuration=5 的真长按：满时前
-    // 它停在 .possible 不识别、不取消触摸——单击/双击（顶
-    // 栏恢复）、莫奈轨道 pan/tap 在 5 秒内该触发照常触发；
-    // 指头漂移超 allowableMovement 它自动失败、本次作废。
-    // 等待期的进度环由 StageCyclePressObserver（永不识别的
-    // 观察器）驱动显隐，与触发识别器互不干扰。
 
-    private var styleCycleRing: StageCycleProgressRingView?
-    private var styleCycleRingWorkItem: DispatchWorkItem?
-    /// 进度环延迟出环：短点按与莫奈轨道滑动（< 0.22s）不闪
-    /// 环，环只服务于真正的按住等待；填充时长相应扣掉这段
-    /// 延迟，与 5 秒触发时刻对齐补满。
-    private let styleCycleRingDelay: TimeInterval = 0.22
-    private var styleCyclePressPoint: CGPoint = .zero
-    private var styleCyclePressActive = false
-    private var styleCycleFired = false
     private var styleCycleToast: UILabel?
     private var styleCycleToastWorkItem: DispatchWorkItem?
 
     private func installStyleCycleRecognizers() {
-        let hold = UILongPressGestureRecognizer(
-            target: self, action: #selector(styleCycleHoldFired(_:)))
-        hold.minimumPressDuration = StageStyleCycleBag.holdDuration
-        hold.allowableMovement = StageStyleCycleBag.pressMoveTolerance
-        hold.cancelsTouchesInView = false
-        rendererContainer.addGestureRecognizer(hold)
-        let observer = StageCyclePressObserver()
-        observer.cancelsTouchesInView = false
-        observer.onPressBegan = { [weak self] point in
-            self?.styleCyclePressBegan(at: point)
-        }
-        observer.onPressMoved = { [weak self] point in
-            self?.styleCyclePressMoved(to: point)
-        }
-        observer.onPressEnded = { [weak self] in
-            self?.styleCyclePressEnded()
-        }
-        rendererContainer.addGestureRecognizer(observer)
+        let tripleTap = UITapGestureRecognizer(
+            target: self, action: #selector(styleCycleTripleTapped))
+        tripleTap.numberOfTapsRequired = 3
+        tripleTap.cancelsTouchesInView = false
+        rendererContainer.addGestureRecognizer(tripleTap)
     }
 
-    private func styleCyclePressBegan(at point: CGPoint) {
-        guard view.window != nil, presentedViewController == nil else { return }
-        styleCyclePressActive = true
-        styleCycleFired = false
-        styleCyclePressPoint = point
-        styleCycleRingWorkItem?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.styleCyclePressActive, !self.styleCycleFired
-            else { return }
-            self.styleCycleRing?.dismiss(completed: false)
-            let ring = StageCycleProgressRingView()
-            self.styleCycleRing = ring
-            ring.show(at: self.styleCyclePressPoint, in: self.rendererContainer,
-                      duration: StageStyleCycleBag.holdDuration - self.styleCycleRingDelay)
-        }
-        styleCycleRingWorkItem = work
-        DispatchQueue.main.asyncAfter(
-            deadline: .now() + styleCycleRingDelay, execute: work)
+    @objc private func styleCycleTripleTapped() {
+        cycleToNextStyle(source: "tripleTap")
     }
 
-    private func styleCyclePressMoved(to point: CGPoint) {
-        guard styleCyclePressActive, !styleCycleFired else { return }
-        let drift = hypot(point.x - styleCyclePressPoint.x,
-                          point.y - styleCyclePressPoint.y)
-        if drift > StageStyleCycleBag.pressMoveTolerance {
-            // 漂移超限：触发识别器同步自动失败，这里先撤环，
-            // 本次长按整体作废（抬手时 PressEnded 再兜底清）。
-            styleCyclePressActive = false
-            styleCycleRingWorkItem?.cancel()
-            styleCycleRingWorkItem = nil
-            styleCycleRing?.dismiss(completed: false)
-            styleCycleRing = nil
-        }
-    }
-
-    private func styleCyclePressEnded() {
-        let wasActive = styleCyclePressActive
-        styleCyclePressActive = false
-        styleCycleRingWorkItem?.cancel()
-        styleCycleRingWorkItem = nil
-        if wasActive, !styleCycleFired {
-            // 未满 5 秒松手/系统取消：撤环、无任何副作用。
-            styleCycleRing?.dismiss(completed: false)
-            styleCycleRing = nil
-        }
-    }
-
-    @objc private func styleCycleHoldFired(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began, !styleCycleFired else { return }
-        styleCycleFired = true
-        styleCycleRingWorkItem?.cancel()
-        styleCycleRingWorkItem = nil
-        styleCycleRing?.dismiss(completed: true)
-        styleCycleRing = nil
-        cycleToNextStyle()
-    }
-
-    /// 长按轮换落点：向洗牌袋取下一只并经统一选样式通路
+    /// 三击轮换落点：向洗牌袋取下一只并经统一选样式通路
     /// 落地（持久化写在本方法、与选择器点选时的写点一致）；
     /// 触发瞬间中档触觉 + 样式名标签短暂浮现（自动消失、
     /// 不留常驻 UI），让用户知道切到了哪一只。落网页兜底
     /// 样式时与选择器点选未迁样式完全同路（跳网页舞台），
     /// 标签会被网页宿主盖住，切换事实以面包屑为准。
-    private func cycleToNextStyle() {
+    private func cycleToNextStyle(source: String) {
         let from = activeStyleId
         guard let draw = StageStyleCycleBag.shared.next(currentStyleId: from) else {
-            Breadcrumbs.log("style.cycle.skip from=\(from) reason=single-selectable")
+            Breadcrumbs.log("style.cycle.skip source=\(source) from=\(from) reason=single-selectable")
             return
         }
         guard let info = LyricStageRegistry.info(for: draw.styleId) else { return }
         StageStyleStore.currentStyleId = draw.styleId
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         showStyleCycleToast(name: info.displayName)
-        Breadcrumbs.log("style.cycle.switch from=\(from) to=\(draw.styleId)"
+        Breadcrumbs.log("style.cycle.switch source=\(source) from=\(from) to=\(draw.styleId)"
             + " round=\(draw.round) remaining=\(draw.remaining)")
         if info.isNativeAvailable {
             applyNativeStyleSelection(draw.styleId)
@@ -442,7 +379,7 @@ final class StageViewController: UIViewController {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
     }
 
-    /// 选样式统一落点·原生（样式选择器手选与长按轮换共用，
+    /// 选样式统一落点·原生（样式选择器手选与三击轮换共用，
     /// 结果完全一致）：袋子对账 + 藏未迁提示条 + 换装。
     /// 换装经 swapRenderer → 旧渲染器 unmount / 新渲染器
     /// mount+setLifecycle，汪汪队样式的宠物迁移
@@ -486,7 +423,8 @@ final class StageViewController: UIViewController {
         // 氛围层；播放由 viewWillAppear/Disappear 钩子管。
         refreshCustomBackground()
         installStageHeaderAutoHideRecognizers()
-        // 样式长按轮换（3.7 (54) 工作流 R）：5 秒长按切特效。
+        // 样式三击轮换（3.7 (61) 第 6 条）：rendererContainer
+        // 三击切特效；（54) 的 5 秒长按已退役。
         installStyleCycleRecognizers()
         context = LyricStageContext(
             sendCommand: { [weak self] command in self?.handleCommand(command) },
@@ -610,12 +548,8 @@ final class StageViewController: UIViewController {
     private func teardown() {
         guard !tornDown else { return }
         tornDown = true
-        // 长按轮换收尾（3.7 (54) 工作流 R）：进度环与样式名
-        // 标签不跨台残留（袋子轮次状态是进程级、保留不动）。
-        styleCycleRingWorkItem?.cancel()
-        styleCycleRingWorkItem = nil
-        styleCycleRing?.dismiss(completed: false)
-        styleCycleRing = nil
+        // 三击轮换收尾（3.7 (61) 第 6 条）：样式名标签不跨台
+        // 残留（袋子轮次状态是进程级、保留不动）。
         styleCycleToastWorkItem?.cancel()
         styleCycleToastWorkItem = nil
         styleCycleToast?.removeFromSuperview()
@@ -791,8 +725,9 @@ final class StageViewController: UIViewController {
         let recorded = StageStyleStore.currentStyleId
         activeStyleId = StageStyleStore.effectiveStyleId()
         mountRenderer(styleId: activeStyleId)
-        // 长按轮换对账（3.7 (54) 工作流 R）：开台初始样式即
-        // 当前样式，从洗牌袋本轮余量剔除（轮次跨开台保留）。
+        // 三击轮换对账（3.7 (54) 工作流 R 立、(61) 改三击）：
+        // 开台初始样式即当前样式，从洗牌袋本轮余量剔除（轮
+        // 次跨开台保留）。
         StageStyleCycleBag.shared.noteExternalSelection(activeStyleId)
         if !StageStyleStore.currentStyleIsNative && !noticeDismissed {
             let recordedName = LyricStageRegistry.info(for: recorded)?.displayName ?? recorded
@@ -810,6 +745,18 @@ final class StageViewController: UIViewController {
             jumpToWebStage(reason: "no renderer factory for \(styleId)")
             return
         }
+        // 打开追踪·装配开始（3.7 (61) 第 3 条，DS R61 Q2 定
+        // 案）：dataHash 取装配此刻的曲目+已缓存行表（与
+        // makeSnapshot 同源）；标记先行落盘——进程死在装配
+        // 中途时 lastMarker 停在 open。
+        let traceTrackId = engine.currentTrack?.id
+        let traceLines = traceTrackId.flatMap { linesCache[$0] } ?? []
+        let traceHash = StyleOpenTrace.dataHash(trackId: traceTrackId, lines: traceLines)
+        styleTraceStyleId = styleId
+        styleTraceDataHash = traceHash
+        styleTraceFirstFrameLogged = false
+        StyleOpenTrace.mark("open", styleId: styleId, dataHash: traceHash)
+        Breadcrumbs.log("style.open.begin style=\(styleId) dataHash=\(traceHash)")
         let next = factory()
         next.mount(context: context)
         // gate 解码图像清单（3.7 (26)，R40 Q4 口径）：本期两
@@ -828,6 +775,12 @@ final class StageViewController: UIViewController {
         renderer = next
         next.applySnapshot(makeSnapshot())
         next.setLifecycle(engine.isPlaying ? .playing : .paused, active: isViewLoaded && view.window != nil)
+        // 打开追踪·装配完成（3.7 (61) 第 3 条）：mount+apply-
+        // Snapshot+setLifecycle 全返回才落本行并推进标记；
+        // phys/avail/memWarn 为采样此刻值（Breadcrumbs 尾巴另
+        // 带同口径 availMB/footprintMB 可交叉对账）。
+        StyleOpenTrace.mark("assembly", styleId: styleId, dataHash: traceHash)
+        Breadcrumbs.log("style.assembly.done style=\(styleId) dataHash=\(traceHash) \(StyleOpenTrace.memoryFields())")
         StageStyleStore.lastNativeStyleId = styleId
         // 防卡死守卫武装（3.7 (44)）：样式装配即落 pending，
         // 待证明存活后清除（见 styleProof* 状态）。(45) R-4：
@@ -1504,7 +1457,7 @@ final class StageViewController: UIViewController {
     }
 
     @objc private func noticeWebTapped() {
-        // 回网页版看的正是当前记录样式：长按轮换袋子同步对
+        // 回网页版看的正是当前记录样式：三击轮换袋子同步对
         // 账（该样式本轮不再被递出，见工作流 R 对账规则）。
         StageStyleCycleBag.shared.noteExternalSelection(StageStyleStore.currentStyleId)
         jumpToWebStage(reason: "notice web jump style=\(StageStyleStore.currentStyleId)")
@@ -1782,9 +1735,23 @@ final class StageViewController: UIViewController {
             target: self, action: #selector(stageBarLongPressed(_:)))
         longPress.minimumPressDuration = 0.55
         bar.addGestureRecognizer(longPress)
+        // 单击/双击规格（3.7 (61) 第 7 条，镜像全台）：双击 →
+        // 进歌曲详情页（见 stageBarDoubleTapped 的宿主接法说
+        // 明）；单击 require(toFail: 双击)——既有 require 长按
+        // 一环保留、只加双击一环（代价 +~0.3s 换无回滚闪烁，
+        // 取证 §4 推荐案 a）。收起态细条单击须即时展开、不等
+        // 双击失败：双击识别器随形态启停（syncStageBarDouble-
+        // TapEnabled），收起时禁用、单击的 require 立即满足。
+        let doubleTap = UITapGestureRecognizer(
+            target: self, action: #selector(stageBarDoubleTapped(_:)))
+        doubleTap.numberOfTapsRequired = 2
+        bar.addGestureRecognizer(doubleTap)
+        stageBarDoubleTap = doubleTap
         let tap = UITapGestureRecognizer(target: self, action: #selector(stageBarTapped(_:)))
         tap.require(toFail: longPress)
+        tap.require(toFail: doubleTap)
         bar.addGestureRecognizer(tap)
+        syncStageBarDoubleTapEnabled()
 
         applyStageTheme()
         applyStageBarSlots()
@@ -1905,9 +1872,21 @@ final class StageViewController: UIViewController {
         resetStageIdleTimer()
     }
 
+    /// 双击识别器随形态启停（3.7 (61) 第 7 条）：收起态细条
+    /// 单击展开必须即时、不等双击失败——收起时禁用双击识别
+    /// 器，单击的 require(toFail:) 对禁用识别器立即满足；展
+    /// 开态启用，单击等双击落空才触发（+~0.3s）。形态变更点
+    /// （build/collapse/expand/在场复位）各调一次本方法收口。
+    private func syncStageBarDoubleTapEnabled() {
+        stageBarDoubleTap?.isEnabled = !stageBarCollapsed
+    }
+
     /// 台面点按分发（与墙同构）：收起态只展开；展开态按键
     /// 各自处理、底部进度带按轨道实际帧跳点、其余台身空白
-    /// 区呼出附加功能浮层（(60) 第 7 条）。任何点按重置无操作计时。
+    /// 区开关附加功能浮层（(60) 第 7 条呼出、(61) 第 7 条补
+    /// 「浮层开时单击＝收起」）。任何点按重置无操作计时。
+    /// 本识别器经 require(toFail:) 等双击落空后才触发（展开
+    /// 态，(61) 第 7 条）；收起态双击识别器禁用、即时触发。
     @objc private func stageBarTapped(_ gesture: UITapGestureRecognizer) {
         if stageBarCollapsed {
             expandStageBar()
@@ -1926,8 +1905,34 @@ final class StageViewController: UIViewController {
             performSeek(to: Double(fraction) * engine.duration, source: "stage.bar.tap")
             return
         }
-        // 台身空白区（(60) 第 7 条）：呼出附加功能浮层（五钮行）。
-        showStageQuickRowOverlay()
+        // 台身空白区：浮层已开 → 单击收起；未开 → 呼出。
+        if stageQuickRowOverlay?.isShown == true {
+            hideStageQuickRowOverlay(reason: "bar-tap")
+        } else {
+            showStageQuickRowOverlay()
+        }
+    }
+
+    /// 台身双击（3.7 (61) 第 7 条）：规格为「进歌曲详情页」。
+    /// 本宿主的实际接法：舞台宿主本体即歌曲详情页——主页台
+    /// 封面单击的详情路由（HomeWall.openNativeStageFromHome）
+    /// 呈现的正是 StageViewController，本台面无封面元素、亦
+    /// 无更深一层的独立详情路由；FullPlayerContainer 在现行
+    /// 代码中无 UIKit 呈现点（RenderStateCenter.isFullPlayer-
+    /// Open 仅记录字段、不参与呈现计算），故双击不叠加呈现，
+    /// 只落面包屑自证「已在详情页」。分域纪律与单击同构：
+    /// 按键区自理、进度带双击不进详情（保留给单击 seek 的域
+    /// 隔离，取证 §4 第 2 项）；宠物占位区点按归宠物识别器、
+    /// 到不了本识别器（结构事实，验收单明示口径同全台）。
+    @objc private func stageBarDoubleTapped(_ gesture: UITapGestureRecognizer) {
+        guard !stageBarCollapsed else { return }
+        resetStageIdleTimer()
+        let point = gesture.location(in: stageBar)
+        if playButton.frame.contains(point)
+            || prevButton.frame.contains(point)
+            || nextButton.frame.contains(point) { return }
+        if let seekHit = stageSeekHit, seekHit.frame.contains(point) { return }
+        Breadcrumbs.log("stage.bar doubletap detail=self-host track=\(currentTrackId ?? "-")")
     }
 
     /// 进度拖动（与墙同构）：拖动只更填充、松手才 seek；拖
@@ -2001,6 +2006,7 @@ final class StageViewController: UIViewController {
     private func collapseStageBarIdle() {
         guard stageBarPresented, !stageBarCollapsed, !stageSeekDragging else { return }
         stageBarCollapsed = true
+        syncStageBarDoubleTapEnabled()
         stagePetStage?.barFormChanged(collapsed: true)
         cancelStageIdleTimer()
         // 台收成细条时浮层同钟收起（(60) 第 7 条），不许悬在细条上方。
@@ -2027,6 +2033,7 @@ final class StageViewController: UIViewController {
             return
         }
         stageBarCollapsed = false
+        syncStageBarDoubleTapEnabled()
         stagePetStage?.barFormChanged(collapsed: false)
         Breadcrumbs.log("stage bar expand")
         setStageBarContentsInteractive(true)
@@ -2112,7 +2119,7 @@ final class StageViewController: UIViewController {
     }
 
     /// 点浮层外立即收起：观察式识别器（不消费触摸）——落点在浮
-    /// 层胶囊或点播台之内都不算「外」；舞台 5 秒长按切样式挂在
+    /// 层胶囊或点播台之内都不算「外」；舞台三击切样式挂在
     /// rendererContainer、台身 0.55s 长按切主题挂在台身上，本
     /// 识别器 cancelsTouchesInView=false 且不 require 任何互斥，
     /// 两者不被破坏。
@@ -2126,6 +2133,7 @@ final class StageViewController: UIViewController {
     /// 在场边沿的形态无动画复位：收起态不跨呈现周期残留。
     private func resetStageBarFormInstant() {
         stageBarCollapsed = false
+        syncStageBarDoubleTapEnabled()
         setStageBarForm(collapsed: false)
         setStageBarContentsAlpha(1)
         setStageBarContentsInteractive(true)
@@ -2165,6 +2173,21 @@ final class StageViewController: UIViewController {
         let position = positionNow()
         logStageLineIfChanged(position: position)
         renderer?.frameTick(position: position)
+        // 打开追踪·首帧存活（3.7 (61) 第 3 条）：渲染器首帧
+        // tick 后的 CATransaction 完成回调 = 该帧已提交合成；
+        // 只落一次（styleTraceFirstFrameLogged 锁存、每次装配
+        // 重置）。进程死在首帧提交前时本行缺失、lastMarker
+        // 停在 assembly，与 style.assembly.done 对位二分。
+        if !styleTraceFirstFrameLogged, let traceStyle = styleTraceStyleId {
+            styleTraceFirstFrameLogged = true
+            let traceHash = styleTraceDataHash
+            CATransaction.begin()
+            CATransaction.setCompletionBlock {
+                StyleOpenTrace.mark("firstFrame", styleId: traceStyle, dataHash: traceHash)
+                Breadcrumbs.log("style.firstFrame.commit.alive style=\(traceStyle) dataHash=\(traceHash) \(StyleOpenTrace.memoryFields())")
+            }
+            CATransaction.commit()
+        }
         // 宿主级字幕层已于 (60) 第 11 条整组删除：frameStep 不再
         // 逐帧喂行。汪汪队提词条 teleBar 在 PetConcertRenderer 内
         // 自行随帧推进、不经宿主，不在本条范围。
