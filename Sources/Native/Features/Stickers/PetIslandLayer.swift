@@ -224,6 +224,12 @@ final class PetIslandLayer: UIView {
             PetHomeRegistry.shared.onIslandDeparture = { [weak layer] asset in
                 layer?.releasePet(asset: asset)
             }
+            // (72)：登记表 reconcile 的落座执行口（与 departure
+            // 对称）——bootstrap/自愈落座从登记表当前帧位置接
+            // 走无出发点，走 receive 的无动画落座路。
+            PetHomeRegistry.shared.onIslandArrival = { [weak layer] asset in
+                layer?.receive(asset: asset, fromRect: nil)
+            }
         }
         layer.startRefrontGuard()
         // 冷启动时登记表为空；若已有岛民（重连场景）补落座。
@@ -397,6 +403,11 @@ final class PetIslandLayer: UIView {
     /// 不碰 StickerView 任何状态（帧推进逻辑仍归它本体）。
     private let stickerTickSelector = NSSelectorFromString("tick:")
 
+    /// (72) 驱动首 tick 自证旗：link 每次新建后首帧落一行
+    /// isl.drive tick，证明统一驱动真的在推进（防「落座成功
+    /// 但动画冻死」无据可查）。
+    private var driveTickLogged = false
+
     private func updateStickerDrive() {
         let needed = !pets.isEmpty || reactionView != nil
         if needed, stickerDriveLink == nil {
@@ -404,6 +415,8 @@ final class PetIslandLayer: UIView {
                                      selector: #selector(driveStickers(_:)))
             link.add(to: .main, forMode: .common)
             stickerDriveLink = link
+            driveTickLogged = false
+            Breadcrumbs.log("isl.drive on pets=\(pets.count)")
         } else if !needed {
             stickerDriveLink?.invalidate()
             stickerDriveLink = nil
@@ -411,6 +424,10 @@ final class PetIslandLayer: UIView {
     }
 
     @objc private func driveStickers(_ link: CADisplayLink) {
+        if !driveTickLogged {
+            driveTickLogged = true
+            Breadcrumbs.log("isl.drive tick pets=\(pets.count)")
+        }
         for pet in pets {
             _ = pet.stickerView.perform(stickerTickSelector, with: link)
         }
@@ -452,9 +469,13 @@ final class PetIslandLayer: UIView {
         // 在此拒收并落面包屑，口径与登记表一致、不打架。
         guard PetHomeRegistry.islandFixedDuo.contains(asset) else {
             Breadcrumbs.log("island.seat rejected=\(asset) resident=fixedDuo")
+            Breadcrumbs.log("isl.seat.no asset=\(asset) why=duo")
             return
         }
-        guard pets.count < PetHomeRegistry.islandCapacity else { return }
+        guard pets.count < PetHomeRegistry.islandCapacity else {
+            Breadcrumbs.log("isl.seat.no asset=\(asset) why=cap")
+            return
+        }
         let pet = IslandPetView(asset: asset, size: Self.petSize)
         pet.islandLayer = self
         addSubview(pet)
@@ -491,6 +512,9 @@ final class PetIslandLayer: UIView {
         // 真机一眼核「岛上恒为这对」。
         Breadcrumbs.log("island.resident asset=\(asset) resident=fixedDuo"
             + " seated=\(pets.map { $0.asset }.joined(separator: ","))")
+        // (72) 落座成功自证（短名）：与 isl.seat.no 成对，下
+        // 一份桥日志直接判「落岛成功/失败在哪一步」。
+        Breadcrumbs.log("isl.seat.ok asset=\(asset) n=\(pets.count)")
     }
 
     /// 撤下（被召回/点按回台）：小跳一下淡出。回台的「到场」

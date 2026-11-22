@@ -207,6 +207,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 岛层即时置顶（3.7 (41) 组1）：回前台先把岛层送回
         // 主窗最顶，不等 0.5s 守护拍；未安装时为空操作。
         PetIslandLayer.shared.refrontIfNeeded()
+        // (72)：回前台是岛民对账的稳定事件（入场未完成时
+        // 登记表内 isl.gate why=intro 挡下，不抢油画）。
+        PetHomeRegistry.shared.reconcileIsland(reason: "active")
         if routeState == .armed || routeState == .foregroundPending {
             didHandleFirstActivation = true
             beginRoute()

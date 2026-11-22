@@ -691,6 +691,32 @@ final class QueueManager: ObservableObject {
         }
     }
 
+    /// (72) 下一首预热：当前曲装载成功后，把可预判的下一首
+    /// （口径同 peekNextTrackForCrossfade：loopAll 取模、off
+    /// 未到末尾；repeatOne/shuffle 不可预判跳过）的取流地址、
+    /// 歌词、封面提前入缓存。(71) 真机日志实证：切歌
+    /// resolveMs 2325–3639ms 全花在现取上、歌词数据再迟
+    /// 2.1s——预热命中后切歌走 streamURLCache（10 分钟 TTL）
+    /// 与 LyricRepository 缓存直达，目标亚秒。预热全程静默：
+    /// 失败不落任何失败态（正取链自有恢复）。
+    private func prefetchUpcoming() {
+        guard let next = peekNextTrackForCrossfade() else { return }
+        prefetchStream(for: next)
+        Task { _ = await LyricRepository.shared.entry(for: next.id) }
+        if let raw = next.artworkURL?.absoluteString {
+            let loader = NativeCoverLoader.shared
+            let tier = NativeCoverLoader.wallTier(raw: raw, pixelExtent: 600)
+            if let proxied = loader.proxiedURLString(raw, tier: tier),
+               loader.cachedImage(for: proxied) == nil {
+                Task {
+                    _ = await loader.image(for: proxied, tier: tier,
+                                           priority: .prefetch)
+                }
+            }
+        }
+        Breadcrumbs.log("queue.prefetch next=\(next.id)")
+    }
+
     /// 解析下一首地址并交引擎预载到 B 轨（开关关/无下一首/
     /// 解析失败均静默放弃，完播链硬切兜底）。
     func prepareNextCrossfadeIfEnabled() {
@@ -876,6 +902,9 @@ final class QueueManager: ObservableObject {
                     self.engine.load(track: track, playableURL: playableURL, artwork: nil)
                     // (62) WB §4.5：装载成功后为智能过渡预载下一首。
                     self.prepareNextCrossfadeIfEnabled()
+                    // (72)：下一首全量预热（取流/歌词/封面），
+                    // 与智能过渡开关无关——切歌提速是普适诉求。
+                    self.prefetchUpcoming()
                     // 取流耗时埋点（DS26）：与失败分类成对，判冷热节点与缓存命中。
                     let resolveMs = Int(Date().timeIntervalSince(resolveStart) * 1000)
                     FoliaBridgeLogStore.shared.write(

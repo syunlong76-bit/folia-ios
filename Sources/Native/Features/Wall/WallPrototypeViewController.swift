@@ -1373,6 +1373,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 弹簧 0.5s；Reduce Motion 降级为仅 alpha 淡化、几何
     /// 瞬时切换。
     private func collapseMiniBarIdle() {
+        // (72) 单宿主仲裁：非最前宿主不许动形态（防双宿主同动）。
+        guard MiniBarSingleHost.shared.isActive("wallproto") else { return }
         guard miniBarPresented, !miniBarCollapsed, !miniSeekDragging,
               let bar = miniBar else { return }
         miniBarCollapsed = true
@@ -1398,6 +1400,8 @@ final class WallPrototypeViewController: UIViewController,
 
     /// 恢复完整形态（点细条/切歌触发）并重新计时。
     private func expandMiniBar() {
+        // (72) 单宿主仲裁（同 collapseMiniBarIdle）。
+        guard MiniBarSingleHost.shared.isActive("wallproto") else { return }
         guard miniBarCollapsed, let bar = miniBar else {
             resetMiniIdleTimer()
             return
@@ -1451,6 +1455,8 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     private func setMiniBarForm(collapsed: Bool) {
+        // (72) 形态收口同步共享旗标（单宿主交接的对齐源）。
+        MiniBarSingleHost.shared.sharedCollapsed = collapsed
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in miniMainCenterY { constraint.constant = -5 }
@@ -1945,6 +1951,18 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // (72) 单宿主认领：本页在前时迷你台形态归本宿主；
+        // 形态与共享旗标不一致时无动画对齐一次（交接不跳变）。
+        MiniBarSingleHost.shared.claim("wallproto")
+        if miniBarPresented,
+           miniBarCollapsed != MiniBarSingleHost.shared.sharedCollapsed {
+            let target = MiniBarSingleHost.shared.sharedCollapsed
+            miniBarCollapsed = target
+            miniPetStage?.barFormChanged(collapsed: target)
+            setMiniBarForm(collapsed: target)
+            setMiniBarContentsAlpha(target ? 0 : 1)
+            setMiniBarContentsInteractive(!target)
+        }
         lyricClockDriver.start()
         progressDriver.start()
         miniThemeLayer?.setHostVisible(true)
@@ -1954,6 +1972,8 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
+        // (72) 单宿主让位（底层宿主在自己的 appear 里接认领）。
+        MiniBarSingleHost.shared.release("wallproto")
         lyricClockDriver.stop()
         // 翻行 observer 随墙消失解绑防泄漏（回墙后 tick 重新绑定）。
         lyricFlipDriver.unbind()
@@ -3031,7 +3051,12 @@ final class WallPrototypeViewController: UIViewController,
         let tier = NativeCoverLoader.wallTier(raw: pic, pixelExtent: pixelExtent)
         guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { return }
         if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { return }
-        Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
+        // (72)：预取走低优先级——快滑时可见 cell 的取图恒
+        // 排在预取前面（加载器调度），不再互相堵死。
+        Task {
+            _ = await NativeCoverLoader.shared.image(
+                for: urlString, tier: tier, priority: .prefetch)
+        }
     }
 
     private func prefetchExpandedNeighbors(queueIndex: Int) {
@@ -3759,6 +3784,7 @@ final class WallPosterCell: UICollectionViewCell {
             currentUrl = nil
             coverPlaceholder = false
             imageView.image = nil
+            imageView.backgroundColor = .clear
             stopPlaceholderPulse()
             return
         }
@@ -3768,9 +3794,16 @@ final class WallPosterCell: UICollectionViewCell {
         if let cached = NativeCoverLoader.shared.cachedImage(for: urlString) {
             coverPlaceholder = false
             stopPlaceholderPulse()
+            imageView.backgroundColor = .clear
             imageView.image = cached
             return
         }
+        // (72) 主色占位：无目标档图时先垫色——任一档已解码图
+        // 的主色优先，再无缓存按地址哈希给暗调色，加载中不
+        // 许露纯黑（Miller (71)：歌单页滑快了还是黑屏）。
+        imageView.backgroundColor =
+            NativeCoverLoader.shared.dominantColorAnyTier(raw: pic, excludingTier: tier)
+            ?? NativeCoverLoader.placeholderColor(for: pic)
         if let placeholder = NativeCoverLoader.shared.cachedImageAnyTier(raw: pic, excludingTier: tier) {
             coverPlaceholder = true
             stopPlaceholderPulse()
@@ -3788,6 +3821,7 @@ final class WallPosterCell: UICollectionViewCell {
                 self.stopPlaceholderPulse()
                 if let image {
                     self.coverPlaceholder = false
+                    self.imageView.backgroundColor = .clear
                     self.imageView.image = image
                 }
             }

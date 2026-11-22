@@ -72,6 +72,26 @@ final class LocalServer {
         return isRunning
     }
 
+    /// 监听真活标志（(72)）：.ready 置真、.failed 置假。
+    /// port 在 failed 后不清零（同端口重试要沿用），故
+    /// isRunning（port!=0）测不出「端口在、监听死」的窗口
+    /// ——(71) 日志里歌单加载两轮 -1004 正是撞上同端口重试
+    /// 的 1 秒空窗。客户端自愈凭本标志判真活。
+    private(set) var listenerAlive = false
+
+    /// 等待监听真活（(72)）：语义同 waitUntilReady，但判据
+    /// 是 listenerAlive 而非 port。
+    func waitUntilAlive(timeout: TimeInterval) async -> Bool {
+        if listenerAlive { return true }
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+            if listenerAlive { return true }
+            if Task.isCancelled { return listenerAlive }
+        }
+        return listenerAlive
+    }
+
     private func attempt(port: UInt16, retriesLeft: Int) {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { return }
         let params = NWParameters.tcp
@@ -98,6 +118,7 @@ final class LocalServer {
             guard let self = self else { return }
             switch state {
             case .ready:
+                self.listenerAlive = true
                 self.port = port
                 self.samePortRetries = 0
                 Breadcrumbs.log("server ready port=\(port)")
@@ -114,6 +135,7 @@ final class LocalServer {
                     DispatchQueue.main.async { cb(port) }
                 }
             case .failed(let error):
+                self.listenerAlive = false
                 Breadcrumbs.log("server failed port=\(port)")
                 NSLog("[LocalServer] failed on \(port): \(error)")
                 FoliaBridgeLogStore.shared.write(

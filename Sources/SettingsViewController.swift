@@ -984,7 +984,12 @@ final class SettingsViewController: UIViewController {
     // 读者行为不变）。
     @objc private func companionSwitchChanged() {
         SettingsStore.miniPetsEnabled = companionSwitch.isOn
+        StickerSettings.miniPetsEnabled = companionSwitch.isOn
         Breadcrumbs.log("settings.miniPets value=\(companionSwitch.isOn)")
+        // (72)：设置页开关同为岛民对账的稳定事件（开→落座、
+        // 关→撤岛）；StickerSettings 显式同写，与召唤钮/长按
+        // 关闭两处既有双写口径一致。
+        PetHomeRegistry.shared.reconcileIsland(reason: "switch")
     }
 
     @objc private func loopModeChanged() {

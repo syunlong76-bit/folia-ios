@@ -575,6 +575,22 @@ final class HomeWallViewController: UIViewController,
         loadEntries()
     }
 
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        // (72) 单宿主认领：本页在前时迷你台形态归本宿主；
+        // 形态与共享旗标不一致时无动画对齐一次（交接不跳变）。
+        MiniBarSingleHost.shared.claim("homewall")
+        if miniBarPresented,
+           miniBarCollapsed != MiniBarSingleHost.shared.sharedCollapsed {
+            let target = MiniBarSingleHost.shared.sharedCollapsed
+            miniBarCollapsed = target
+            miniPetStage?.barFormChanged(collapsed: target)
+            setMiniBarForm(collapsed: target)
+            setMiniBarContentsAlpha(target ? 0 : 1)
+            setMiniBarContentsInteractive(!target)
+        }
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
         // (51) 换根后本墙可作窗口根：无呈现方时「关闭」是空操作死按钮，隐藏之；
@@ -620,6 +636,9 @@ final class HomeWallViewController: UIViewController,
             Breadcrumbs.log("transition entry->home appear source=intro-finish")
             // (62) WB §4.7：启动后直达播放界面（入场退场落点消费）。
             WB62HomeWallHooks.entryDidFinish(in: self)
+            // (72)：入场落定 = 灵动岛 bootstrap 的首发稳定
+            // 事件（油画期间不落座、防浮在入场画面上抢戏）。
+            PetHomeRegistry.shared.reconcileIsland(reason: "intro")
         } else if !didPlayEntryIntro {
             // present 受理才置位：资源缺失/呈现中被拒时不烧掉
             // 本实例唯一的一次，留待下次露面重试，不漏播真入口。
@@ -650,6 +669,8 @@ final class HomeWallViewController: UIViewController,
 
     override func viewDidDisappear(_ animated: Bool) {
         super.viewDidDisappear(animated)
+        // (72) 单宿主让位。
+        MiniBarSingleHost.shared.release("homewall")
         Breadcrumbs.samplerStop()
         progressDriver.stop()
         // 迷你台无操作计时随墙消失取消（回墙 viewDidAppear 续命）。
@@ -2037,6 +2058,8 @@ final class HomeWallViewController: UIViewController,
     /// 弹簧 0.5s；Reduce Motion 降级为仅 alpha 淡化、几何
     /// 瞬时切换。
     private func collapseMiniBarIdle() {
+        // (72) 单宿主仲裁：非最前宿主不许动形态（防双宿主同动）。
+        guard MiniBarSingleHost.shared.isActive("homewall") else { return }
         guard miniBarPresented, !miniBarCollapsed, !miniSeekDragging,
               let bar = miniBar else { return }
         miniBarCollapsed = true
@@ -2062,6 +2085,8 @@ final class HomeWallViewController: UIViewController,
 
     /// 恢复完整形态（点细条/切歌触发）并重新计时。
     private func expandMiniBar() {
+        // (72) 单宿主仲裁（同 collapseMiniBarIdle）。
+        guard MiniBarSingleHost.shared.isActive("homewall") else { return }
         guard miniBarCollapsed, let bar = miniBar else {
             resetMiniIdleTimer()
             return
@@ -2089,6 +2114,8 @@ final class HomeWallViewController: UIViewController,
     /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
     /// 直接置位即瞬时生效。
     private func setMiniBarForm(collapsed: Bool) {
+        // (72) 形态收口同步共享旗标（单宿主交接的对齐源）。
+        MiniBarSingleHost.shared.sharedCollapsed = collapsed
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in miniMainCenterY { constraint.constant = -5 }

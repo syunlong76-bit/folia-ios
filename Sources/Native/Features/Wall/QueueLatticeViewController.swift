@@ -182,8 +182,52 @@ final class QueueLatticeViewController: UIViewController,
             .store(in: &cancellables)
         PlaybackEngine.shared.$isPlaying
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.chrome.refreshPlayGlyph() }
+            .sink { [weak self] playing in
+                guard let self else { return }
+                self.enginePlaying = playing
+                self.chrome.refreshPlayGlyph()
+                // (72)：播放/暂停翻转要即时落到 now 环的呼吸
+                // 态上（此前只有 chrome 字形刷新、tile 不动）。
+                self.refreshVisiblePlaybackStates()
+            }
             .store(in: &cancellables)
+    }
+
+    /// 引擎播放态（(72)：now 环呼吸的驱动源，订阅回主线程写）。
+    private var enginePlaying = PlaybackEngine.shared.isPlaying
+
+    /// 可见 cell 播放态全量重配（段位/当前/呼吸）：只动覆层，
+    /// 不碰布局与封面。$currentIndex 定向刷牌与 $isPlaying
+    /// 翻转共用。
+    private func refreshVisiblePlaybackStates() {
+        for cell in collectionView.visibleCells {
+            guard let latticeCell = cell as? QueueLatticeCell,
+                  let item = collectionView.indexPath(for: cell)?.item,
+                  item < wallLayout.instances.count else { continue }
+            let queueIndex = wallLayout.instances[item].queueIndex
+            latticeCell.applyPlaybackState(
+                ordinal: queueIndex + 1,
+                isCurrent: queueIndex == currentIndex,
+                segment: segment(for: queueIndex),
+                playing: enginePlaying)
+        }
+    }
+
+    /// (72) 状态映射自证：当前下标 + 可见区里 now/played 的
+    /// 实际落点计数。下一份真机日志凭此一行判「状态没映射
+    /// 上」还是「映射上了但看不见」。
+    private func logLatticeState() {
+        var nowVisible = 0
+        var playedVisible = 0
+        for cell in collectionView.visibleCells {
+            guard let item = collectionView.indexPath(for: cell)?.item,
+                  item < wallLayout.instances.count else { continue }
+            let queueIndex = wallLayout.instances[item].queueIndex
+            if queueIndex == currentIndex { nowVisible += 1 }
+            if segment(for: queueIndex) == .played { playedVisible += 1 }
+        }
+        Breadcrumbs.log("lattice.state cur=\(currentIndex)"
+            + " nowVis=\(nowVisible) playedVis=\(playedVisible)")
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -254,6 +298,7 @@ final class QueueLatticeViewController: UIViewController,
                 collectionView.reloadData()
             }
         }
+        logLatticeState()
         syncChrome()
     }
 
@@ -267,16 +312,8 @@ final class QueueLatticeViewController: UIViewController,
         currentIndex = valid
         locateButton.isEnabled = valid >= 0
         locateButton.alpha = valid >= 0 ? 1 : 0.4
-        for cell in collectionView.visibleCells {
-            guard let latticeCell = cell as? QueueLatticeCell,
-                  let item = collectionView.indexPath(for: cell)?.item,
-                  item < wallLayout.instances.count else { continue }
-            let queueIndex = wallLayout.instances[item].queueIndex
-            latticeCell.applyPlaybackState(
-                ordinal: queueIndex + 1,
-                isCurrent: queueIndex == currentIndex,
-                segment: segment(for: queueIndex))
-        }
+        refreshVisiblePlaybackStates()
+        logLatticeState()
         syncChrome()
     }
 
@@ -412,7 +449,8 @@ final class QueueLatticeViewController: UIViewController,
         cell.applyPlaybackState(
             ordinal: instance.queueIndex + 1,
             isCurrent: instance.queueIndex == currentIndex,
-            segment: segment(for: instance.queueIndex))
+            segment: segment(for: instance.queueIndex),
+            playing: enginePlaying)
         return cell
     }
 
@@ -464,16 +502,7 @@ final class QueueLatticeViewController: UIViewController,
         // 展开块的文案字号随帧变（cell 在 layoutSubviews 按帧宽
         // 推导），帧变经布局失效自然重排；此处只补一轮可见 cell
         // 状态重配，保证序号牌/段位与展开帧同步。
-        for cell in collectionView.visibleCells {
-            guard let latticeCell = cell as? QueueLatticeCell,
-                  let item = collectionView.indexPath(for: cell)?.item,
-                  item < wallLayout.instances.count else { continue }
-            let queueIndex = wallLayout.instances[item].queueIndex
-            latticeCell.applyPlaybackState(
-                ordinal: queueIndex + 1,
-                isCurrent: queueIndex == currentIndex,
-                segment: segment(for: queueIndex))
-        }
+        refreshVisiblePlaybackStates()
         Breadcrumbs.log("lattice.tile exp=\(index ?? -1)")
         updateChromeVisibility(animated: true)
         syncChrome()
@@ -687,6 +716,12 @@ final class QueueLatticeCell: UICollectionViewCell {
 
     private let coverView = UIImageView()
     private let dimView = UIView()
+    /// (72) 正在播放的「亮」：accent 描边环 + 光晕 + 播放中
+    /// 呼吸。(71) 验收不过的根因之一：now 态此前只有序号牌
+    /// 数字染色，tile 本体毫无变化，肉眼等于没亮。本环为独
+    /// 立覆层（在文案之上、环外发光靠 shadow），isCurrent
+    /// 才显。
+    private let ringView = UIView()
     private let gradientView = UIView()
     private let gradientLayer = CAGradientLayer()
     private let badgeView = UIView()
@@ -710,6 +745,15 @@ final class QueueLatticeCell: UICollectionViewCell {
         dimView.alpha = 0
         dimView.isUserInteractionEnabled = false
         contentView.addSubview(dimView)
+
+        ringView.isUserInteractionEnabled = false
+        ringView.isHidden = true
+        ringView.layer.borderWidth = 3
+        ringView.layer.cornerRadius = 12
+        ringView.layer.shadowOffset = .zero
+        ringView.layer.shadowRadius = 10
+        ringView.layer.shadowOpacity = 0.55
+        contentView.addSubview(ringView)
 
         gradientLayer.colors = [
             UIColor.black.withAlphaComponent(0).cgColor,
@@ -754,6 +798,10 @@ final class QueueLatticeCell: UICollectionViewCell {
         currentUrl = nil
         trackId = nil
         coverView.image = nil
+        // (72)：播放态覆层随复用清零，防串到下一首的 tile。
+        dimView.alpha = 0
+        ringView.isHidden = true
+        ringView.layer.removeAnimation(forKey: "foliaNowPulse")
     }
 
     func configureEmpty() {
@@ -786,9 +834,15 @@ final class QueueLatticeCell: UICollectionViewCell {
         if currentUrl == urlString, coverView.image != nil { return }
         currentUrl = urlString
         if let cached = NativeCoverLoader.shared.cachedImage(for: urlString) {
+            coverView.backgroundColor = .clear
             coverView.image = cached
             return
         }
+        // (72) 主色占位（同 WallPosterCell 口径）：加载中垫
+        // 封面主色/哈希暗调色，不露空黑。
+        coverView.backgroundColor =
+            NativeCoverLoader.shared.dominantColorAnyTier(raw: raw, excludingTier: tier)
+            ?? NativeCoverLoader.placeholderColor(for: raw)
         coverView.image = NativeCoverLoader.shared.cachedImageAnyTier(
             raw: raw, excludingTier: tier)
         let wantedUrl = urlString
@@ -798,23 +852,58 @@ final class QueueLatticeCell: UICollectionViewCell {
             let image = await NativeCoverLoader.shared.image(for: urlString, tier: tier)
             guard let self, self.currentUrl == wantedUrl, self.trackId == wantedId,
                   let image else { return }
+            self.coverView.backgroundColor = .clear
             self.coverView.image = image
         }
     }
 
     /// 播放态面（序号牌/段位/当前 accent）：$currentIndex 定向
     /// 刷牌与 cellForItemAt 共用，只动覆层不动封面与布局。
-    func applyPlaybackState(ordinal: Int, isCurrent: Bool, segment: Segment) {
+    /// (72) now 态做实：accent 环 + 光晕（播放中呼吸）+ 序号
+    /// 牌反转为 accent 底黑字；played 压暗加深到 0.42 并把
+    /// 文案一并压暗一档，三段（played/now/upcoming）肉眼可分。
+    func applyPlaybackState(ordinal: Int, isCurrent: Bool, segment: Segment,
+                            playing: Bool) {
         let text = "\(ordinal)"
         if badgeLabel.text != text {
             badgeLabel.attributedText = NSAttributedString(
                 string: text,
                 attributes: [.kern: 1.2])
         }
-        badgeLabel.textColor = isCurrent ? ThemeSystem62.currentAccent : .white
-        badgeView.backgroundColor = UIColor.black.withAlphaComponent(isCurrent ? 0.78 : 0.62)
+        let accent = ThemeSystem62.currentAccent
+        badgeLabel.textColor = isCurrent ? .black : .white
+        badgeView.backgroundColor = isCurrent
+            ? accent
+            : UIColor.black.withAlphaComponent(0.62)
         // 段标记：played 压暗封面（覆层在图上、文案下）。
-        dimView.alpha = segment == .played ? 0.38 : 0
+        dimView.alpha = segment == .played ? 0.42 : 0
+        titleLabel.alpha = segment == .played ? 0.55 : 1
+        artistLabel.alpha = segment == .played ? 0.45 : 1
+        // now 环：显隐 + 配色随主题 accent；播放中呼吸、暂停静亮。
+        ringView.isHidden = !isCurrent
+        if isCurrent { contentView.bringSubviewToFront(ringView) }
+        if isCurrent {
+            ringView.layer.borderColor = accent.cgColor
+            ringView.layer.shadowColor = accent.cgColor
+            if playing {
+                if ringView.layer.animation(forKey: "foliaNowPulse") == nil {
+                    let pulse = CABasicAnimation(keyPath: "opacity")
+                    pulse.fromValue = 0.62
+                    pulse.toValue = 1
+                    pulse.duration = 1.15
+                    pulse.autoreverses = true
+                    pulse.repeatCount = .infinity
+                    pulse.timingFunction =
+                        CAMediaTimingFunction(name: .easeInEaseOut)
+                    ringView.layer.add(pulse, forKey: "foliaNowPulse")
+                }
+            } else {
+                ringView.layer.removeAnimation(forKey: "foliaNowPulse")
+                ringView.layer.opacity = 1
+            }
+        } else {
+            ringView.layer.removeAnimation(forKey: "foliaNowPulse")
+        }
         setNeedsLayout()
     }
 
@@ -823,6 +912,7 @@ final class QueueLatticeCell: UICollectionViewCell {
         let bounds = contentView.bounds
         coverView.frame = bounds
         dimView.frame = bounds
+        ringView.frame = bounds
         gradientView.frame = bounds
         gradientLayer.frame = bounds
 

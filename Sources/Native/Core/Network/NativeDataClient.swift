@@ -163,11 +163,13 @@ final class NativeDataClient {
     /// 业务码判定：code==200 或无 code 视为成功；301 走会话
     /// 失效路径（见 getJSONImpl 的 DS 第 5 点终案）。
     func getJSON(_ path: String, query: [String: String] = [:]) async throws -> [String: Any] {
-        try await getJSONImpl(path, query: query, retriedAfter301: false)
+        try await getJSONImpl(path, query: query, retriedAfter301: false,
+                              retriedAfterConnect: false)
     }
 
     private func getJSONImpl(_ path: String, query: [String: String],
-                             retriedAfter301: Bool) async throws -> [String: Any] {
+                             retriedAfter301: Bool,
+                             retriedAfterConnect: Bool) async throws -> [String: Any] {
         guard let base = baseURL else { throw DataError.serverNotReady }
         var components = URLComponents(url: base.appendingPathComponent(path), resolvingAgainstBaseURL: false)
         var items = query.map { URLQueryItem(name: $0.key, value: $0.value) }
@@ -190,6 +192,22 @@ final class NativeDataClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
+            // (72) -1004 断连自愈：LocalServer 监听 failed 后
+            // 同端口 1 秒重试的空窗里连接必被拒（(71) 日志两
+            // 个歌单各中招两轮才靠上层重试成功）。此处等监听
+            // 真活后整请求重发一次（start() 幂等：终局失败已
+            // 复位标志时顺带把服务拉起来），不再把空窗抛给
+            // 页面当加载失败。
+            if !retriedAfterConnect,
+               let urlError = error as? URLError,
+               urlError.code == .cannotConnectToHost {
+                LocalServer.shared.start()
+                _ = await LocalServer.shared.waitUntilAlive(timeout: 3)
+                Breadcrumbs.log("data.retry connect path=\(path)")
+                return try await getJSONImpl(
+                    path, query: query, retriedAfter301: retriedAfter301,
+                    retriedAfterConnect: true)
+            }
             throw DataError.transport(error)
         }
         if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
@@ -212,7 +230,8 @@ final class NativeDataClient {
                     if let reread,
                        NativeSessionStore.hash8(reread) != usedCookie.map(NativeSessionStore.hash8) {
                         return try await getJSONImpl(
-                            path, query: query, retriedAfter301: true)
+                            path, query: query, retriedAfter301: true,
+                            retriedAfterConnect: retriedAfterConnect)
                     }
                 }
                 if usedCookie != nil || NativeSessionStore.shared.load() != nil {

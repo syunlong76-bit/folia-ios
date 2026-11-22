@@ -17,9 +17,10 @@ import Foundation
 //    onIslandDeparture 回调触发 PetIslandLayer.releasePet 的
 //    既有小跳淡出撤下动画（PetIslandLayer 本文件零改动，其
 //    公开 API 足够，无需新钩子）。
-//  - 岛的恢复不瞬移回岛：按原有逻辑，岛居民由墙台告别分流
-//    在后续收起/批次轮换时自然重新落座（这正是「按原有逻辑
-//    恢复」——原逻辑里岛从来不是即时回填的）。
+//  - 岛的恢复：(72) 前按原有逻辑等墙台告别分流自然回填；
+//    (72) 实证该链几乎永不走完，改由登记表 reconcile 在
+//    endConcert 确定性回填（begin 先置 islandSuspended 冻结、
+//    end 清旗后触发），见 endConcert 内注。
 //
 // 状态不丢的论证：迁移不写任何持久键。seen 名单（UserDefaults
 // folia.minipets.seenAssets）、人格分配（PetPersonalities 静态
@@ -41,6 +42,9 @@ final class PetConcertRelocation {
     func beginConcert() {
         guard !active else { return }
         active = true
+        // (72)：先冻结岛回填再撤岛——防 reconcile 在撤场期
+        // 间把双人组送回岛（与本撤场令正面对撞）。
+        PetHomeRegistry.shared.islandSuspended = true
         // 灵动岛先撤：登记回池即触发岛层既有撤下动画。
         let islanders = PetHomeRegistry.shared.islandResidents
         for asset in islanders {
@@ -57,8 +61,14 @@ final class PetConcertRelocation {
     func endConcert() {
         guard active else { return }
         active = false
-        Breadcrumbs.log("concert.pets.restore surface=island mode=deferred-farewell-flow")
+        // (72)：岛恢复口径升级——不再等墙台告别分流「自然
+        // 回填」（(71) 实证该链几乎永不走完、岛恒空），改由
+        // 登记表 reconcile 确定性回填：先清冻结旗、台上恢复
+        // 先行、最后 reconcile 把仍在池中的双人组送回岛。
+        Breadcrumbs.log("concert.pets.restore surface=island mode=reconcile72")
         MiniBarPetStage.concertRestoreAll()
-        Breadcrumbs.log("concert.pets.restore island=deferred-farewell-flow")
+        PetHomeRegistry.shared.islandSuspended = false
+        PetHomeRegistry.shared.reconcileIsland(reason: "concert")
+        Breadcrumbs.log("concert.pets.restore island=reconcile72")
     }
 }

@@ -9,6 +9,14 @@ import UIKit
 /// 档位（源码定版 coverUrl.ts）：COVER_SIZE_STEPS [256, 512, 1024]
 /// + 顶档 1200；sizePx = max(宽,高) × 相机scale × DPR，向上取档。
 /// 内存层 NSCache 只是水位（规格 R2/DS 第十九轮）：内存警告时显式全清。
+///
+/// (72) 歌单页封面提速（Miller (71) 报：滑快了黑屏）：①在途
+/// 合并——同 URL 并发只发一份；②优先级调度——同时在途网络
+/// 取图 ≤4（解码并发硬线同值），可见 cell 的请求恒排在预取
+/// 前面，快滑时新行不再排在过期预取后面干等；③主色占位——
+/// 解码时顺带算 1px 平均色入色缓存，cell 无图时先垫封面主
+/// 色块（再无缓存则按地址哈希给暗调色），不许纯黑；④埋点
+/// cvr.stat 每 40 次网络取图汇总命中/慢载，断点可量。
 final class NativeCoverLoader {
 
     static let shared = NativeCoverLoader()
@@ -16,7 +24,54 @@ final class NativeCoverLoader {
     static let sizeSteps = [256, 512, 1024]
     static let maxSize = 1200
 
+    /// 取图优先级：可见 cell 高、视口外预取低（调度排序用）。
+    enum LoadPriority: Int {
+        case prefetch = 0
+        case visible = 1
+    }
+
+    /// 并发调度（actor 串行）：在途网络取图上限 4；等待者按
+    /// 优先级出队（同级 FIFO）。槽位在等待者间直接交接、
+    /// running 不增减，无等待者时 release 才减一。
+    private actor LoadScheduler {
+        private var running = 0
+        private let limit = 4
+        private var waiters: [(priority: Int,
+                                continuation: CheckedContinuation<Void, Never>)] = []
+
+        func acquire(priority: Int) async {
+            if running < limit {
+                running += 1
+                return
+            }
+            await withCheckedContinuation { continuation in
+                waiters.append((priority, continuation))
+                waiters.sort { $0.priority > $1.priority }
+            }
+        }
+
+        func release() {
+            if waiters.isEmpty {
+                running -= 1
+            } else {
+                waiters.removeFirst().continuation.resume()
+            }
+        }
+    }
+
     private let cache = NSCache<NSString, UIImage>()
+    /// (72) 主色缓存（与图缓存同键）：解码成功时顺带写入。
+    private let colorCache = NSCache<NSString, UIColor>()
+    private let scheduler = LoadScheduler()
+    /// (72) 在途合并表（同 URL 一份 Task，多方 await 同结果）。
+    private var inFlightLoads: [String: Task<UIImage?, Never>] = [:]
+    private let inFlightLock = NSLock()
+    /// (72) 埋点计数（网络取图口径）：hits/misses/slow(>800ms)。
+    private var statHits = 0
+    private var statMisses = 0
+    private var statSlow = 0
+    private var statLoadsSinceLog = 0
+    private let statLock = NSLock()
     private let session: URLSession
     private var memoryObserver: NSObjectProtocol?
 
@@ -31,6 +86,7 @@ final class NativeCoverLoader {
             object: nil, queue: .main
         ) { [weak self] _ in
             self?.cache.removeAllObjects()
+            self?.colorCache.removeAllObjects()
         }
     }
 
@@ -132,32 +188,172 @@ final class NativeCoverLoader {
         return nil
     }
 
+    /// (72) 某 URL 已解码图的主色（占位用）；未解码过为 nil。
+    func dominantColor(for urlString: String) -> UIColor? {
+        colorCache.object(forKey: urlString as NSString)
+    }
+
+    /// (72) 同图任一档的主色（目标档未解码时用低档色顶占位，
+    /// 与 cachedImageAnyTier 同口径）。
+    func dominantColorAnyTier(raw: String, excludingTier: Int) -> UIColor? {
+        var candidates = Self.sizeSteps + [Self.maxSize]
+        if raw.hasPrefix("/img/"), let embedded = Self.embeddedTier(in: raw) {
+            candidates.insert(embedded, at: 0)
+        }
+        for tier in candidates where tier != excludingTier {
+            guard let url = proxiedURLString(raw, tier: tier) else { continue }
+            if let color = colorCache.object(forKey: url as NSString) { return color }
+        }
+        return nil
+    }
+
+    /// (72) 无任何缓存时的兜底占位色：按地址哈希取暗调色
+    /// （低饱和、低明度），同图恒同色、不许纯黑。
+    static func placeholderColor(for raw: String) -> UIColor {
+        var hash: UInt64 = 5381
+        for byte in raw.utf8 { hash = (hash &* 33) &+ UInt64(byte) }
+        return UIColor(hue: CGFloat(hash % 360) / 360,
+                       saturation: 0.28, brightness: 0.23, alpha: 1)
+    }
+
+    private func noteStat(hit: Bool) {
+        statLock.lock()
+        if hit {
+            statHits += 1
+        } else {
+            statMisses += 1
+            statLoadsSinceLog += 1
+        }
+        let shouldLog = statLoadsSinceLog >= 40
+        if shouldLog { statLoadsSinceLog = 0 }
+        let snapshot = (statHits, statMisses, statSlow)
+        statLock.unlock()
+        if shouldLog {
+            Breadcrumbs.log("cvr.stat hit=\(snapshot.0)"
+                + " miss=\(snapshot.1) slow=\(snapshot.2)")
+        }
+    }
+
+    private func noteSlowLoad() {
+        statLock.lock()
+        statSlow += 1
+        statLock.unlock()
+    }
+
     /// 加载并按档降采样解码；同 URL 全局一份（NSCache）。
-    func image(for urlString: String, tier: Int) async -> UIImage? {
+    /// (72)：在途合并 + 优先级调度（见类头注）。
+    func image(for urlString: String, tier: Int,
+               priority: LoadPriority = .visible) async -> UIImage? {
         let key = urlString as NSString
-        if let cached = cache.object(forKey: key) { return cached }
+        if let cached = cache.object(forKey: key) {
+            noteStat(hit: true)
+            return cached
+        }
+        inFlightLock.lock()
+        if let existing = inFlightLoads[urlString] {
+            inFlightLock.unlock()
+            return await existing.value
+        }
+        let task = Task<UIImage?, Never> { [weak self] in
+            guard let self else { return nil }
+            return await self.loadFromNetwork(
+                urlString: urlString, tier: tier, priority: priority)
+        }
+        inFlightLoads[urlString] = task
+        inFlightLock.unlock()
+        let result = await task.value
+        inFlightLock.lock()
+        inFlightLoads[urlString] = nil
+        inFlightLock.unlock()
+        return result
+    }
+
+    private func loadFromNetwork(urlString: String, tier: Int,
+                                 priority: LoadPriority) async -> UIImage? {
+        let key = urlString as NSString
+        if let cached = cache.object(forKey: key) {
+            noteStat(hit: true)
+            return cached
+        }
         guard let url = URL(string: urlString) else { return nil }
+        noteStat(hit: false)
+        let started = Date()
+        await scheduler.acquire(priority: priority.rawValue)
+        let data: Data
+        let response: URLResponse
         do {
-            let (data, response) = try await session.data(from: url)
-            guard let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) else {
-                // 失败留痕（地址是 base64 载荷、无明文主机）：下次封面
-                // 问题凭日志定位，不靠猜。
-                FoliaFileLog.write("cover", "native load bad status tier=\(tier) url=\(urlString)")
-                return nil
-            }
-            let image = await Task.detached(priority: .utility) {
-                Self.downsample(data: data, targetPixels: tier)
-            }.value
-            if let image {
-                cache.setObject(image, forKey: key, cost: data.count)
-            } else {
-                FoliaFileLog.write("cover", "native decode failed tier=\(tier) url=\(urlString)")
-            }
-            return image
+            (data, response) = try await fetchDataWithConnectRetry(url)
         } catch {
+            await scheduler.release()
             FoliaFileLog.write("cover", "native load error tier=\(tier) url=\(urlString)")
             return nil
         }
+        await scheduler.release()
+        guard let http = response as? HTTPURLResponse,
+              (200...299).contains(http.statusCode) else {
+            // 失败留痕（地址是 base64 载荷、无明文主机）：下次封面
+            // 问题凭日志定位，不靠猜。
+            FoliaFileLog.write("cover", "native load bad status tier=\(tier) url=\(urlString)")
+            return nil
+        }
+        let decoded = await Task.detached(priority: .utility) {
+            (image: Self.downsample(data: data, targetPixels: tier),
+             color: Self.averageColor(data: data))
+        }.value
+        if Date().timeIntervalSince(started) > 0.8 { noteSlowLoad() }
+        if let image = decoded.image {
+            cache.setObject(image, forKey: key, cost: data.count)
+            if let color = decoded.color {
+                colorCache.setObject(color, forKey: key)
+            }
+        } else {
+            FoliaFileLog.write("cover", "native decode failed tier=\(tier) url=\(urlString)")
+        }
+        return decoded.image
+    }
+
+    /// (72) -1004 断连自愈（与 NativeDataClient 同口径）：
+    /// LocalServer 同端口重试的 1 秒空窗里封面取图必被拒，
+    /// 等监听真活后重发一次，不把空窗算成加载失败。
+    private func fetchDataWithConnectRetry(_ url: URL) async throws -> (Data, URLResponse) {
+        do {
+            return try await session.data(from: url)
+        } catch let error as URLError where error.code == .cannotConnectToHost {
+            LocalServer.shared.start()
+            _ = await LocalServer.shared.waitUntilAlive(timeout: 2)
+            return try await session.data(from: url)
+        }
+    }
+
+    /// (72) 1px 平均色：缩略图降到 1px 后读其唯一像素。
+    private static func averageColor(data: Data) -> UIColor? {
+        let options: [CFString: Any] = [kCGImageSourceShouldCache: false]
+        guard let source = CGImageSourceCreateWithData(
+            data as CFData, options as CFDictionary) else { return nil }
+        let thumbOptions: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+            kCGImageSourceThumbnailMaxPixelSize: 1
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(
+            source, 0, thumbOptions as CFDictionary) else { return nil }
+        var pixel: [UInt8] = [0, 0, 0, 255]
+        let drawn = pixel.withUnsafeMutableBytes { raw -> Bool in
+            guard let base = raw.baseAddress,
+                  let context = CGContext(
+                    data: base, width: 1, height: 1,
+                    bitsPerComponent: 8, bytesPerRow: 4,
+                    space: CGColorSpaceCreateDeviceRGB(),
+                    bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.draw(cgImage, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            return true
+        }
+        guard drawn else { return nil }
+        return UIColor(red: CGFloat(pixel[0]) / 255,
+                       green: CGFloat(pixel[1]) / 255,
+                       blue: CGFloat(pixel[2]) / 255, alpha: 1)
     }
 
     private static func downsample(data: Data, targetPixels: Int) -> UIImage? {

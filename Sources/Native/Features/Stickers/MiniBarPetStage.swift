@@ -973,6 +973,9 @@ final class MiniBarPetStage: UIView {
                 picked.append(asset)
                 unavailable.insert(asset)
             }
+            // (72) 选角占位：登记表 reconcile 凭 claim 跳过
+            // 已被选走（预排/入场中）的资产，防岛台抢人。
+            PetHomeRegistry.shared.claim(picked)
             return picked
         }
         // 墙台：未露面者优先（原口径）；灵动岛居民垫底——只
@@ -1012,6 +1015,8 @@ final class MiniBarPetStage: UIView {
         }
         for asset in picked { seenAssets.insert(asset) }
         persistSeen()
+        // (72) 选角占位（同详情页台分支）。
+        PetHomeRegistry.shared.claim(picked)
         return picked
     }
 
@@ -1552,6 +1557,8 @@ final class MiniBarPetStage: UIView {
         Breadcrumbs.log("pet.gesture state=close-trigger asset=\(actor.asset)")
         SettingsStore.miniPetsEnabled = false
         StickerSettings.miniPetsEnabled = false
+        // (72)：岛民随全局关撤下（reconcile off 分支）。
+        PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         pendingSpawns.removeAll()
         batchActive = false
         pendingForm = nil
@@ -1856,65 +1863,33 @@ final class MiniBarPetStage: UIView {
     /// 情页点播台等候。此处只打标，去向登记在离场瞬间写
     /// （见 stepFarewell），流被取消时标记随 cancelFlow 清除。
     ///
-    /// 3.7 (43) 路1 居民新规格（Miller 定版）：岛容量 3、目
-    /// 标构成恒向 {猫 2, 狗 1} 收敛、活泼优先。旧实现按数
-    /// 组序取前 round(n/3) 只——常驻恒为轮换狗，居民结构性
-    /// 偏狗且与猫狗配比/人格全无关（(41) 日志双狗双可爱即
-    /// 其必然产物）。本版：先读现有居民构成算缺口，缺口内
-    /// 按活泼序挑选（人格 .mischievous 调皮优先、.joker 爱
-    /// 开玩笑次之——「活泼」在代码里的唯一现存分类，Miller
-    /// 已认此口径）；islandCount 不再吃 round 取整，slots
-    /// 本身即上限；缺口外不送。兜底（已定开）：岛空置且本
-    /// 批无任何缺口匹配者时，送最佳可用 1 只（猫优先、活
-    /// 泼优先），不让岛长期空着。
+    /// (72) 选角归一（废 (43) 构成/活泼序）：(53) 起岛居民
+    /// 恒为固定双人组，登记表与岛层两道闸都只放行双人组；
+    /// 本处旧规按 {猫2狗1}+活泼序打标，与两道闸口径相反，
+    /// 被标记者几乎必被改道/拒收、双人组几乎永不入选——
+    /// (71) 真机日志 pet.farewell.dest 全程 0 次。本版：离
+    /// 场班底中的双人组成员（岛有空位时）打 divertToIsland，
+    /// 其余一律 divertToStageBar，三道闸口径归一。岛的常态
+    /// 人口由登记表 reconcile 确定性落座维持（见
+    /// PetHomeRegistry.reconcileIsland），本分流只负责「在台
+    /// 上的双人组离台后直接回岛」的连续性。
     private func prepareFarewellDestinations(_ actors: [MiniPetActor]) {
         guard role == .wall else { return }
         let registry = PetHomeRegistry.shared
         let residents = registry.islandResidents
-        let slots = max(0, PetHomeRegistry.islandCapacity - residents.count)
-        guard slots > 0 else {
-            for actor in actors { actor.divertToStageBar = true }
-            return
-        }
-        var needCats = max(0, 2 - residents.filter { $0.hasPrefix("cat") }.count)
-        var needDogs = max(0, 1 - residents.filter { $0.hasPrefix("dog") }.count)
-        func liveliness(_ actor: MiniPetActor) -> Int {
-            switch PetPersonalities.of(actor.asset) {
-            case .mischievous: return 0
-            case .joker: return 1
-            default: return 2
-            }
-        }
-        // sorted(by:) 稳定：同档内保持原数组序。
-        let cats = actors.filter { $0.isCat }
-            .sorted { liveliness($0) < liveliness($1) }
-        let dogs = actors.filter { !$0.isCat }
-            .sorted { liveliness($0) < liveliness($1) }
+        var slots = max(0, PetHomeRegistry.islandCapacity - residents.count)
         var islandBound: [MiniPetActor] = []
-        for cat in cats where islandBound.count < slots && needCats > 0 {
-            islandBound.append(cat)
-            needCats -= 1
-        }
-        for dog in dogs where islandBound.count < slots && needDogs > 0 {
-            islandBound.append(dog)
-            needDogs -= 1
-        }
-        if islandBound.isEmpty, residents.isEmpty {
-            // 兜底：猫优先、活泼优先的最佳可用 1 只。
-            let best = (cats + dogs)
-                .sorted { liveliness($0) < liveliness($1) }.first
-            if let best { islandBound = [best] }
-        }
-        let islandIds = Set(islandBound.map { ObjectIdentifier($0) })
         for actor in actors {
-            if islandIds.contains(ObjectIdentifier(actor)) {
+            if slots > 0, PetHomeRegistry.islandFixedDuo.contains(actor.asset) {
                 actor.divertToIsland = true
+                islandBound.append(actor)
+                slots -= 1
             } else {
                 actor.divertToStageBar = true
             }
         }
         if !islandBound.isEmpty {
-            Breadcrumbs.log("pet.farewell.dest slots=\(slots)"
+            Breadcrumbs.log("pet.farewell.dest slots=\(slots + islandBound.count)"
                 + " island=\(islandBound.map { $0.asset }.joined(separator: ","))")
         }
     }
@@ -2007,6 +1982,10 @@ final class MiniBarPetStage: UIView {
             let done = afterFarewell
             afterFarewell = nil
             done?()
+            // (72) 稳定事件：告别流落定后请登记表对账岛民
+            // （双人组若在本轮离台经分流回岛、或仍在池中待
+            // 落座，reconcile 一次判清；内部合并去抖）。
+            PetHomeRegistry.shared.reconcileIsland(reason: "farewell")
         }
     }
 

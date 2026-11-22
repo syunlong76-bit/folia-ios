@@ -162,8 +162,15 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
         button.setImage(UIImage(systemName: "lightbulb", withConfiguration: config),
                         for: .normal)
         button.tintColor = .white
-        button.backgroundColor = UIColor(red: 0.545, green: 0.486, blue: 0.941, alpha: 0.85)
+        // (72) 透明底（Miller (71) 验收点名：紫蓝底太丑）：
+        // 撤一切底色/圆底，只留白色灯泡字形本体；可读性靠
+        // 字形自身的深色柔影兜底（压在亮封面上也不消失）。
+        button.backgroundColor = .clear
         button.layer.cornerRadius = 20
+        button.imageView?.layer.shadowColor = UIColor.black.cgColor
+        button.imageView?.layer.shadowOffset = CGSize(width: 0, height: 1)
+        button.imageView?.layer.shadowRadius = 4
+        button.imageView?.layer.shadowOpacity = 0.65
         button.translatesAutoresizingMaskIntoConstraints = false
         button.addAction(UIAction { [weak self] _ in
             guard let self, let host = self.host else { return }

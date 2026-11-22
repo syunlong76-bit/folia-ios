@@ -90,6 +90,17 @@ final class WallLayout: UICollectionViewLayout {
     private var attributesCache: [UICollectionViewLayoutAttributes] = []
     /// 实例集缓存键（(58)：不含 worldOrigin，见类头注）。
     private var lastKey: String?
+    /// (72) 数据键（键中去掉尺寸类别的部分）：旋转只换尺寸
+    /// 类别、数据未变时走同键覆盖判定复用实例集，不全量重
+    /// 算（增量旋转，见 refreshInstances）。有限模式（队列
+    /// 拼贴墙）的场随 viewSize 变，不走此复用、仍按全键。
+    private var lastDataKey: String?
+    /// (72) 滚动期 rebase 延迟旗：滚动中漂移超限只记待办、
+    /// 纯平移呈现，停滚后由 flush 一次性补 rebase（(71) 日
+    /// 志实证滚动大帧与 rebase/reload 同秒相撞）。
+    private var pendingRebase = false
+    private var rebaseFlushWork: DispatchWorkItem?
+    private var lastDeferLogAt: TimeInterval = 0
     /// 当前实例集的锚点原点（计算该集时的 worldOrigin）。
     private var anchorOrigin = CGPoint(x: 34, y: 80)
     /// 当前实例集计算时用的 overscan（覆盖深度，世界单位）。
@@ -228,6 +239,63 @@ final class WallLayout: UICollectionViewLayout {
             + "|" + "\(cameraScale)"
             + "#" + sizeClass(for: collectionView.bounds.size)
             + "#" + (expandedInstanceId ?? "-")
+    }
+
+    /// (72) 数据键：cacheKey 去掉尺寸类别——旋转（纯尺寸变）
+    /// 时数据键不变，refreshInstances 据此走覆盖复用而非全量
+    /// 重算；数据/缩放/展开任一变，数据键变、照旧全量。
+    private func cacheDataKey() -> String {
+        [dataVersion, totalEntries].map { "\($0)" }.joined(separator: "|")
+            + "|" + "\(cameraScale)"
+            + "#" + (expandedInstanceId ?? "-")
+    }
+
+    /// (72) 可见世界窗是否仍被当前实例集完整覆盖（实例并集
+    /// 矩形 ⊇ 可见窗）：漂移超限只是代理量，覆盖实测说了算
+    /// ——覆盖仍足时旋转/滚动都不必 rebase，只前移锚点。
+    private func visibleRectCoveredByInstances() -> Bool {
+        guard let collectionView, !instances.isEmpty else { return false }
+        var minX = Double.greatestFiniteMagnitude
+        var minY = Double.greatestFiniteMagnitude
+        var maxX = -Double.greatestFiniteMagnitude
+        var maxY = -Double.greatestFiniteMagnitude
+        for instance in instances {
+            minX = min(minX, instance.rect.x)
+            minY = min(minY, instance.rect.y)
+            maxX = max(maxX, instance.rect.x + instance.rect.width)
+            maxY = max(maxY, instance.rect.y + instance.rect.height)
+        }
+        let visX = Double(worldOrigin.x)
+        let visY = Double(worldOrigin.y)
+        let visW = Double(collectionView.bounds.width) / max(cameraScale, 0.01)
+        let visH = Double(collectionView.bounds.height) / max(cameraScale, 0.01)
+        return minX <= visX && minY <= visY
+            && maxX >= visX + visW && maxY >= visY + visH
+    }
+
+    /// (72) 停滚补 rebase：滚动期延迟的 rebase 在此结清——
+    /// 仍在滚动则顺延再查；停稳后跑一次 refreshInstances
+    /// （内部走覆盖判定/rebase 本路），身份变了由本布局直
+    /// 接 reloadData（与 VC 在滚动回调里的处理同款）。
+    private func scheduleRebaseFlush() {
+        rebaseFlushWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.pendingRebase,
+                  let collectionView = self.collectionView else { return }
+            if collectionView.isDragging || collectionView.isDecelerating
+                || collectionView.isTracking {
+                self.scheduleRebaseFlush()
+                return
+            }
+            self.pendingRebase = false
+            if self.refreshInstances() {
+                collectionView.reloadData()
+            } else {
+                self.invalidateLayout()
+            }
+        }
+        rebaseFlushWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
     }
 
     private var expandedRects: [String: WallRectD] = [:]
@@ -371,6 +439,7 @@ final class WallLayout: UICollectionViewLayout {
             attributesCache = []
             expandedRects = [:]
             lastKey = nil
+            lastDataKey = nil
             lastIdentityChanged = changed
             return changed
         }
@@ -383,7 +452,13 @@ final class WallLayout: UICollectionViewLayout {
             return false
         }
         let key = cacheKey()
-        if key != lastKey {
+        let dataKey = cacheDataKey()
+        // (72) 增量旋转：键变但数据键不变（纯尺寸类别变，
+        // 典型为旋转）且非有限模式 → 不全量重算，落到下方
+        // 同键路径走覆盖判定（覆盖足只平移、不足才 rebase）。
+        let sizeOnlyChange = key != lastKey && dataKey == lastDataKey
+            && !finiteQueueMode
+        if key != lastKey && !sizeOnlyChange {
             let oldIds = instances.map(\.instanceId)
             let result = computeInstanceSet(anchor: worldOrigin)
             instances = result.list
@@ -391,12 +466,14 @@ final class WallLayout: UICollectionViewLayout {
             anchorOrigin = worldOrigin
             cacheOverscan = result.overscan
             lastKey = key
+            lastDataKey = dataKey
             Breadcrumbs.log("wall.cache compute overscan=\(Int(result.overscan)) instances=\(result.list.count)")
             rebuildAttributes()
             let changed = oldIds != instances.map(\.instanceId)
             lastIdentityChanged = changed
             return changed
         }
+        lastKey = key
         // 同键：覆盖检查。漂移 = 当前原点相对锚点的位移；缓存
         // 集覆盖锚点可见窗 ±cacheOverscan，留 120 世界单位安
         // 全边距（布局查询rect 恒为可见域本身，边距只防浮点
@@ -421,6 +498,36 @@ final class WallLayout: UICollectionViewLayout {
         let limit = CGFloat(cacheOverscan - 120)
         logRenderAudit(driftX: driftX, driftY: driftY, limit: limit)
         if driftX > limit || driftY > limit {
+            // (72) 滚动期禁 rebase：(71) 日志实证滚动大帧
+            // （max 125.8ms）与 rebase+reload 同秒相撞。滚动
+            // 中只记待办、纯平移呈现，停滚后 flush 结清（覆
+            // 盖外区域在停滚瞬间补齐，滚动中靠 overscan 兜底
+            // ——与 Miller (72) 口径一致：延到滚动停）。
+            if collectionView.isDragging || collectionView.isDecelerating
+                || collectionView.isTracking {
+                if !pendingRebase {
+                    pendingRebase = true
+                    scheduleRebaseFlush()
+                }
+                let now = CACurrentMediaTime()
+                if now - lastDeferLogAt >= 1 {
+                    lastDeferLogAt = now
+                    Breadcrumbs.log("wall.rebase.dfr drift=\(Int(max(driftX, driftY)))")
+                }
+                rebuildAttributes()
+                lastIdentityChanged = false
+                return false
+            }
+            // (72) 覆盖实测优先于漂移代理量：实例集仍完整覆
+            // 盖可见窗（旋转后常见）时不重算，只前移锚点把
+            // 漂移基准归零——旋转落地不再整墙重算 252 实例。
+            if visibleRectCoveredByInstances() {
+                anchorOrigin = worldOrigin
+                rebuildAttributes()
+                lastIdentityChanged = false
+                return false
+            }
+            pendingRebase = false
             let oldIds = instances.map(\.instanceId)
             let result = computeInstanceSet(anchor: worldOrigin)
             var newList = result.list

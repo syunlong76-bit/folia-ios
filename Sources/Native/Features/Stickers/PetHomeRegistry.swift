@@ -49,6 +49,38 @@ final class PetHomeRegistry {
 
     /// 宠物离开灵动岛（被召回/点按回台）时通知岛层撤下演员。
     var onIslandDeparture: ((String) -> Void)?
+    /// 宠物应落座灵动岛时通知岛层接走（(72) 新增，与
+    /// onIslandDeparture 对称：登记表只裁决、岛层只执行）。
+    var onIslandArrival: ((String) -> Void)?
+
+    /// 演唱会迁移期岛回填冻结（(72)，PetConcertRelocation
+    /// begin 置位、end 清除后才 reconcile，防撤场中途回岛）。
+    var islandSuspended = false
+    /// 入场油画已完成过一次（(72) bootstrap 门控：scene 激
+    /// 活触发在入场未落定前不落座，防宠物浮在油画上抢戏）。
+    private var introDone = false
+
+    /// 台上选角占位（(72)，DS 评审对账第 2 条）：pickAssets
+    /// 是所有取人的唯一出口，返回前对所选资产打时间戳；
+    /// 批次预排（pendingSpawns 错峰 ≤0.22×8≈1.8s）期间资产
+    /// 尚未 makeActor 写 home、未进在场表，reconcile 凭此
+    /// 跳过。3 秒过期自动失效，不需释放记账。
+    private var claimedAtMap: [String: TimeInterval] = [:]
+
+    func claim(_ assets: [String]) {
+        let now = Date().timeIntervalSince1970
+        for asset in assets { claimedAtMap[asset] = now }
+    }
+
+    private func isClaimed(_ asset: String) -> Bool {
+        guard let at = claimedAtMap[asset] else { return false }
+        return Date().timeIntervalSince1970 - at < 3
+    }
+
+    /// 任一台上当前在场（在场互斥表的全量视角）。
+    func isLiveAnywhere(_ asset: String) -> Bool {
+        liveByStage.values.contains { $0.contains(asset) }
+    }
 
     private init() {}
 
@@ -93,6 +125,77 @@ final class PetHomeRegistry {
     }
 
     var islandResidents: [String] { islandOrder }
+
+    // MARK: 灵动岛确定性落座（(72) 头条，DS 评审对账后定版）
+    //
+    // 背景：(71) 真机日志实证——上岛唯一路径（墙台收台告别
+    // →分流抽签→三闸放行）在真实使用里几乎永不走完（抽样
+    // 会话台上 cast=0、pet.move/pet.farewell.dest 均 0 次），
+    // 且 (43) 活泼序选角与 (53) 固定双人组闸口径相反。本版
+    // 改为：双人组的默认家就是岛，由本登记表在**稳定事件**
+    // 上裁决落座（reconcile），岛层只经 onIslandArrival 执行。
+    // 触发点（均为稳定态，不在 tick/选角中途跑）：入场完成
+    // (intro)、scene 激活 (active)、召唤开关切换 (switch)、
+    // 演唱会结束 (concert)、告别流完成 (farewell)。内部
+    // 0.5s 合并去抖，重复触发只跑最后一次。
+
+    private var reconcileWorkItem: DispatchWorkItem?
+
+    func reconcileIsland(reason: String) {
+        if FoliaBisect.pet32SubsystemsBypassed { return }
+        if reason == "intro" { introDone = true }
+        reconcileWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.runReconcile(reason: reason)
+        }
+        reconcileWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5, execute: work)
+    }
+
+    private func runReconcile(reason: String) {
+        // 全局关：只动岛民（在台上的双人组归台上 dismiss 流，
+        // 不在此强制改道，防归属与在场破裂）。
+        if !StickerSettings.miniPetsEnabled {
+            var departed = 0
+            for asset in Self.islandFixedDuo where home(of: asset) == .island {
+                setHome(asset, .pool)
+                departed += 1
+            }
+            Breadcrumbs.log("isl.boot r=\(reason) off departed=\(departed)")
+            return
+        }
+        if reason == "active", !introDone {
+            Breadcrumbs.log("isl.gate why=intro r=active")
+            return
+        }
+        if islandSuspended {
+            Breadcrumbs.log("isl.gate why=concert r=\(reason)")
+            return
+        }
+        var decisions: [String] = []
+        for asset in Self.islandFixedDuo {
+            switch home(of: asset) {
+            case .island:
+                // 已登记在岛：仍调 arrival 自愈（岛层 seatPet
+                // 对重复落座静默去重），防层重建后登记与画面脱钩。
+                onIslandArrival?(asset)
+                decisions.append("\(asset):isl")
+            case .pool:
+                if isLiveAnywhere(asset) {
+                    decisions.append("\(asset):onstage")
+                } else if isClaimed(asset) {
+                    decisions.append("\(asset):claimed")
+                } else {
+                    setHome(asset, .island)
+                    onIslandArrival?(asset)
+                    decisions.append("\(asset):seated")
+                }
+            case .wallBar, .stageBar:
+                decisions.append("\(asset):onstage")
+            }
+        }
+        Breadcrumbs.log("isl.boot r=\(reason) \(decisions.joined(separator: " "))")
+    }
     var stageBarResidents: [String] {
         homes.filter { $0.value == .stageBar }.map { $0.key }
     }

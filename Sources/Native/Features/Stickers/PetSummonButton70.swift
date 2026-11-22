@@ -1,12 +1,16 @@
 import UIKit
 
 /// 全局宠物召唤/关闭钮（3.7 (70) B2 终版，Miller 四度定版）。
+/// (72) 修订：①全局可达做实——(71) 真机证伪「同位可达」：
+/// 本钮是窗口子视图，presented 页的视图后入窗即盖住它，
+/// 实际只在主页够得着；本版加 0.5s 序位守护恒提最上（见
+/// frontGuardTimer）。②弱化存在感：36pt/静置 0.35/贴边
+/// （见类内 (72) 弱化定版注）。
 ///
 /// 沿革：点播台 4s 长按开启（(60) 第 8 条）与台面切主题长
 /// 按同域打架、进度圆环干扰操作，(70) 整套撤除；召唤中途
 /// 案（舞台长按、舞台双指下滑——墙面要拖动）均作废，终案
-/// 为本钮：主窗口根层之上的右下角小爪印钮，主页墙/舞台/
-/// 详情/歌单等主页面同位可达（模态页盖住它可接受）。
+/// 为本钮：主窗口根层之上的右下角小爪印钮。
 ///
 /// 状态相关双阈值开关（阈值按按下瞬间的开关态设定，不存
 /// 在 3s 穿过 2s 的问题）：
@@ -35,13 +39,24 @@ import UIKit
 ///    开关后，下一次按下读到的恒为现态。
 final class PetSummonButton70: UIView {
 
-    private static let diameter: CGFloat = 44
+    // (72) 弱化定版（Miller (71) 验收：坐在右下角太突兀）：
+    // 直径 44→36、静置 alpha 0.55→0.35、圆底 0.35→0.22、
+    // 右距 14→8 贴边。长按阈值与反馈语义不变。
+    private static let diameter: CGFloat = 36
     private static let bottomClearance: CGFloat = 88
+    private static let idleAlpha: CGFloat = 0.35
 
     private let circleView = UIView()
     private let iconView = UIImageView()
     private let pressRecognizer = UILongPressGestureRecognizer()
     private var rampAnimator: UIViewPropertyAnimator?
+    /// (72) 全局可达守护：本钮是窗口子视图，presented 页
+    /// （舞台/详情/歌单/设置）的视图后加进来会把它盖住——
+    /// (71) 真机「只在主页有、其他页面够不着」的根因。0.5s
+    /// 一拍（.common）核序位、非最上即提回（与岛层 graft 守
+    /// 护同思路；本钮只占右下角 36pt，与岛 proxy 的顶部带、
+    /// 停靠层的宠物拖拽区不重叠，提顶不抢任何手势）。
+    private var frontGuardTimer: Timer?
 
     static func install(in window: UIWindow) {
         let button = PetSummonButton70()
@@ -52,29 +67,42 @@ final class PetSummonButton70: UIView {
             button.heightAnchor.constraint(equalToConstant: diameter),
             button.trailingAnchor.constraint(
                 equalTo: window.safeAreaLayoutGuide.trailingAnchor,
-                constant: -14),
+                constant: -8),
             button.bottomAnchor.constraint(
                 equalTo: window.safeAreaLayoutGuide.bottomAnchor,
                 constant: -bottomClearance),
         ])
+        button.startFrontGuard()
+    }
+
+    private func startFrontGuard() {
+        guard frontGuardTimer == nil else { return }
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
+            guard let self, let window = self.window else { return }
+            if window.subviews.last !== self {
+                window.bringSubviewToFront(self)
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        frontGuardTimer = timer
     }
 
     private init() {
         super.init(frame: CGRect(x: 0, y: 0,
                                  width: Self.diameter, height: Self.diameter))
         backgroundColor = .clear
-        alpha = 0.55
+        alpha = Self.idleAlpha
 
         circleView.frame = bounds.insetBy(dx: 2, dy: 2)
-        circleView.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        circleView.backgroundColor = UIColor.black.withAlphaComponent(0.22)
         circleView.layer.cornerRadius = circleView.bounds.width / 2
         circleView.layer.borderWidth = 1
         circleView.layer.borderColor =
-            UIColor.white.withAlphaComponent(0.25).cgColor
+            UIColor.white.withAlphaComponent(0.18).cgColor
         circleView.isUserInteractionEnabled = false
         addSubview(circleView)
 
-        let config = UIImage.SymbolConfiguration(pointSize: 20, weight: .medium)
+        let config = UIImage.SymbolConfiguration(pointSize: 17, weight: .medium)
         iconView.image = UIImage(systemName: "pawprint.fill",
                                  withConfiguration: config)
         iconView.tintColor = UIColor.white.withAlphaComponent(0.9)
@@ -145,10 +173,10 @@ final class PetSummonButton70: UIView {
                        usingSpringWithDamping: 0.8, initialSpringVelocity: 0,
                        options: [.beginFromCurrentState]) { [weak self] in
             guard let self else { return }
-            self.alpha = 0.55
+            self.alpha = Self.idleAlpha
             self.transform = .identity
             self.circleView.backgroundColor =
-                UIColor.black.withAlphaComponent(0.35)
+                UIColor.black.withAlphaComponent(0.22)
         }
     }
 
@@ -171,6 +199,9 @@ final class PetSummonButton70: UIView {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             Breadcrumbs.log("pet.switch off via=corner3s")
             currentFacePetStage()?.performFarewellDismissAll70()
+            // (72)：岛民随全局关撤下（reconcile 的 off 分支
+            // 只动 home==.island 者，与台上 dismiss 流不打架）。
+            PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         } else {
             // 召唤：开关双写 on＋当前面掉落入场（写入场门控
             // 读开关，故先写后调，与旧组件同序）。
@@ -179,6 +210,8 @@ final class PetSummonButton70: UIView {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             Breadcrumbs.log("pet.switch on via=corner2s")
             currentFacePetStage()?.performDropInEntrance()
+            // (72)：全局开后岛民确定性落座（稳定事件触发）。
+            PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         }
         refreshThreshold()
     }
