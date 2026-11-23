@@ -165,6 +165,8 @@ final class HomeWallViewController: UIViewController,
     private var miniBarTapRecognizer: UITapGestureRecognizer?
     private var miniBarDoubleTapRecognizer: UITapGestureRecognizer?
     private var miniBarCollapsedTapRecognizer: UITapGestureRecognizer?
+    /// (78) 第 8 条：播放条根级认领（见 MiniBarRootTap78）。
+    private var miniBarRootTap78: MiniBarRootTap78?
     /// 迷你台宠物层（3.7 (27)）：纯新增覆盖层，只经下面几处
     /// 一行钩子订阅台子的显隐/形态/切歌边沿，台子逻辑零改动。
     private var miniPetStage: MiniBarPetStage?
@@ -248,6 +250,14 @@ final class HomeWallViewController: UIViewController,
         if StageExitGate.shared.shouldVetoDismiss(from: self) { return }
         super.dismiss(animated: flag, completion: completion)
     }
+
+    /// (78) 第 7 条宠物登顶（Miller 00:31 拍板）：本页顶部
+    /// 挂岛镜像宠物带——隐藏状态栏（系统时间），宠物占据
+    /// 顶部带完整显示、不被时间压。安全区顶在刘海机型由
+    /// 传感器 housing 决定、与状态栏显隐无关（恒 59pt），
+    /// 锚安全区的既有布局不跳位；逐页复核见 (78) 报告。
+    override var prefersStatusBarHidden: Bool { true }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -1295,6 +1305,14 @@ final class HomeWallViewController: UIViewController,
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
+        // (78) 第 8 条：根级认领——细条点按展开改由根视图识
+        // 别器按几何认领（mb.claim78→mb.disp78→expand），
+        // 不再只靠台身派发段（(77) 定案整段静默）。
+        miniBarRootTap78 = MiniBarRootTap78(
+            hostView: view, bar: bar, petStage: petStage,
+            hostTag: "homewall",
+            isCollapsed: { [weak self] in self?.miniBarCollapsed ?? false },
+            expand: { [weak self] in self?.expandMiniBar() })
         // (70) B2：点播台 4s 长按开启宠物手势整套已撤（与切
         // 主题长按同域打架、圆圈干扰操作，Miller 改令）——
         // 台上不再挂任何宠物相关识别器；宠物开关改全局右
@@ -2237,12 +2255,18 @@ final class HomeWallViewController: UIViewController,
     /// (77) ②底锚按形态落位（几何账与 wallproto 同注：
     /// 展开 −10、收起 +31.5 与 home indicator 中心重合、
     /// 无 indicator 机型回落 −10；宠物层按 bar.frame 跟随）。
+    /// (78) 第 1 条修正：收起常数 31.5→24.5——(77) 的严丝
+    /// 合缝重合做过头，系统小白线（屏底上方 8–13pt 带）整
+    /// 条压在轨道（同带 8–13）与宠物上。本版整条上抬 7pt：
+    /// 轨道中心升至屏底上方 17.5、轨道带 15–20，小白线只
+    /// 落在条身下部空白边距（条底 9.5–15 无轨道无宠物），
+    /// 与轨道之间留 2pt 净空。展开 −10 不变。
     private func applyMiniBarBottom77(collapsed: Bool) {
         guard let bottomC = miniBarBottomC else { return }
         let inset = view.window?.safeAreaInsets.bottom
             ?? view.safeAreaInsets.bottom
         bottomC.constant = collapsed
-            ? (inset > 0 ? 31.5 : -10) : -10
+            ? (inset > 0 ? 24.5 : -10) : -10
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -2854,6 +2878,11 @@ extension HomeWallViewController {
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         toolbar.wrapIslandEnabled = true
         toolbar.contentRowTop = 54
+        // (78) 第 4 条（仅主页）：平形态内容行下挪 30——控
+        // 件行心 52→67，分段上沿 52/头像上沿 51 与岛底 48
+        // 拉开 3–4pt 间距，不再贴岛干涉（(77)⑨ 的贴岛口径
+        // 只动了从不生效的绕岛形态、本条补到平形态本尊）。
+        toolbar.flatRowTop = 30
         if let drawer = sketchbookDrawer {
             view.insertSubview(toolbar, aboveSubview: drawer)
         } else {

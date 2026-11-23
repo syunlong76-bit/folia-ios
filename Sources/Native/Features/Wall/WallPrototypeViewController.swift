@@ -218,6 +218,8 @@ final class WallPrototypeViewController: UIViewController,
     private var miniBarTapRecognizer: UITapGestureRecognizer?
     private var miniBarDoubleTapRecognizer: UITapGestureRecognizer?
     private var miniBarCollapsedTapRecognizer: UITapGestureRecognizer?
+    /// (78) 第 8 条：播放条根级认领（见 MiniBarRootTap78）。
+    private var miniBarRootTap78: MiniBarRootTap78?
     /// 迷你台宠物层（3.7 (27)）：纯新增覆盖层，只经下面几处
     /// 一行钩子订阅台子的显隐/形态/切歌边沿，台子逻辑零改动。
     private var miniPetStage: MiniBarPetStage?
@@ -267,6 +269,13 @@ final class WallPrototypeViewController: UIViewController,
         if StageExitGate.shared.shouldVetoDismiss(from: self) { return }
         super.dismiss(animated: flag, completion: completion)
     }
+
+    /// (78) 第 7 条宠物登顶（Miller 00:31 拍板）：本页顶部
+    /// 同挂岛镜像宠物带，隐藏状态栏（系统时间）让宠物占顶
+    /// 部带完整显示。安全区顶恒 59pt（传感器 housing 决
+    /// 定、与状态栏显隐无关），既有布局不跳位。
+    override var prefersStatusBarHidden: Bool { true }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -624,6 +633,14 @@ final class WallPrototypeViewController: UIViewController,
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
+        // (78) 第 8 条：根级认领（mb.claim78→mb.disp78→
+        // expand），与主页同构——(77) 日志里本页正是细条点
+        // 按全灭的现场之一（wallproto 3 次点按 1 次在此）。
+        miniBarRootTap78 = MiniBarRootTap78(
+            hostView: view, bar: bar, petStage: petStage,
+            hostTag: "wallproto",
+            isCollapsed: { [weak self] in self?.miniBarCollapsed ?? false },
+            expand: { [weak self] in self?.expandMiniBar() })
         // (70) B2：点播台 4s 长按开启宠物手势整套已撤（与切
         // 主题长按同域打架、圆圈干扰操作，Miller 改令）——
         // 台上不再挂任何宠物相关识别器；宠物开关改全局右
@@ -1547,12 +1564,15 @@ final class WallPrototypeViewController: UIViewController,
     /// （安全区底 0）回落 −10 防台身出屏。宠物层按
     /// bar.frame 跟随（MiniBarPetStage.syncFrame），落位
     /// 变更自动带宠物、无需另动。
+    /// (78) 第 1 条修正（与主页同账）：收起 31.5→24.5，整
+    /// 条上抬 7pt——轨道带升至屏底上方 15–20，系统小白线
+    /// （8–13）只落条身下部空白边距、不压轨道与宠物。
     private func applyMiniBarBottom77(collapsed: Bool) {
         guard let bottomC = miniBarBottomC else { return }
         let inset = view.window?.safeAreaInsets.bottom
             ?? view.safeAreaInsets.bottom
         bottomC.constant = collapsed
-            ? (inset > 0 ? 31.5 : -10) : -10
+            ? (inset > 0 ? 24.5 : -10) : -10
     }
 
     override func viewSafeAreaInsetsDidChange() {

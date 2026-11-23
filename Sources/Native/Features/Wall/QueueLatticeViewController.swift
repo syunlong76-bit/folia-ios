@@ -68,6 +68,12 @@ final class QueueLatticeViewController: UIViewController,
 
     // MARK: - 生命周期
 
+    /// (78) 第 7 条宠物登顶（Miller 00:31 拍板）：本页同样
+    /// refront 岛镜像宠物层，隐藏状态栏（系统时间）让宠物
+    /// 占顶部带完整显示。安全区顶恒 59pt、既有布局不跳位。
+    override var prefersStatusBarHidden: Bool { true }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         view.backgroundColor = UIColor(white: 0.035, alpha: 1)

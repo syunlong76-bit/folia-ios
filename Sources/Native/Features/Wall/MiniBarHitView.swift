@@ -59,6 +59,16 @@ final class MiniBarHitView: UIView {
 
     override func touchesBegan(_ touches: Set<UITouch>,
                                with event: UIEvent?) {
+        // (78) 第 8 条交付链见证（无条件）：(77) 日志定案
+        // 派发段整段静默时，本视图 touchesBegan/Ended/
+        // Cancelled 三路全无声——连 Ended/Cancelled 里的无
+        // 条件回调（onDispatchUnclaimed/onDispatchCancelled）
+        // 都没响，证明触摸序列根本没交付到本视图。本版三
+        // 相位恒落 mb.tch78，与根级认领链（mb.claim78）对
+        // 位：根链响而 tch78 不响＝分支吞触摸坐实；都响＝
+        // 交付已通、问题在更下游。
+        Breadcrumbs.log("mb.tch78 b host=\(crumbHostTag)"
+            + " col=\(isCollapsedForm ? 1 : 0)")
         sequenceClaimed = false
         if isCollapsedForm {
             downTime = CACurrentMediaTime()
@@ -83,6 +93,8 @@ final class MiniBarHitView: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>,
                                with event: UIEvent?) {
+        Breadcrumbs.log("mb.tch78 e host=\(crumbHostTag)"
+            + " col=\(isCollapsedForm ? 1 : 0)")
         if isCollapsedForm { RouteInteractionHold.shared.end() }
         if !sequenceClaimed { onDispatchUnclaimed?() }
         super.touchesEnded(touches, with: event)
@@ -90,6 +102,8 @@ final class MiniBarHitView: UIView {
 
     override func touchesCancelled(_ touches: Set<UITouch>,
                                    with event: UIEvent?) {
+        Breadcrumbs.log("mb.tch78 c host=\(crumbHostTag)"
+            + " col=\(isCollapsedForm ? 1 : 0)")
         if isCollapsedForm {
             RouteInteractionHold.shared.end()
             onDispatchCancelled?()
@@ -117,5 +131,64 @@ final class MiniBarHitView: UIView {
             return super.point(inside: point, with: event)
         }
         return bounds.insetBy(dx: 0, dy: -hitExpansionY).contains(point)
+    }
+}
+
+/// (78) 第 8 条：播放条根级认领（(77)⑥未达验收的续案重做）。
+///
+/// (77) 会话日志定案：细条点按 3 次全数到达 hitTest 层
+/// （minibar.touch75 在场），但台身视图的 touches 全相位与
+/// 全部台身识别器整段零发声——触摸序列在「到达」与「认领」
+/// 之间丢失，(77) 挂在台身派发段上的三件修法（认领 hold、
+/// 取消救援、路由退避）随之全灭。本版把认领搬到宿主根视
+/// 图：根视图识别器俯瞰全部分支（台身/宠物台/浮层谁吞了
+/// 触摸都拦不住它），无 require 链、无 delegate 门、
+/// cancelsTouchesInView=false 不扰动原交付；命中判定全走
+/// 几何（收起态＋落点在细条命中带内＋宠物台未认领该点），
+/// 命中即落 mb.claim78→mb.disp78 并直接派发宿主展开——
+/// 展开不再依赖任何会被 cancel 的台身识别器链。自证链第
+/// 三环仍是既有 minibar expand。
+final class MiniBarRootTap78: NSObject {
+
+    private weak var bar: MiniBarHitView?
+    private weak var petStage: MiniBarPetStage?
+    private let hostTag: String
+    private let isCollapsed: () -> Bool
+    private let expand: () -> Void
+    private(set) var recognizer: UITapGestureRecognizer!
+
+    init(hostView: UIView, bar: MiniBarHitView,
+         petStage: MiniBarPetStage?, hostTag: String,
+         isCollapsed: @escaping () -> Bool,
+         expand: @escaping () -> Void) {
+        self.bar = bar
+        self.petStage = petStage
+        self.hostTag = hostTag
+        self.isCollapsed = isCollapsed
+        self.expand = expand
+        super.init()
+        let recognizer = UITapGestureRecognizer(
+            target: self, action: #selector(handleTap))
+        recognizer.cancelsTouchesInView = false
+        hostView.addGestureRecognizer(recognizer)
+        self.recognizer = recognizer
+    }
+
+    @objc private func handleTap() {
+        guard let bar, !bar.isHidden, isCollapsed() else { return }
+        let point = recognizer.location(in: bar)
+        // 命中带与台身 point(inside:) 同口径（视觉帧纵向外
+        // 扩 hitExpansionY，收起态 44pt 带）。
+        guard bar.bounds.insetBy(dx: 0, dy: -bar.hitExpansionY)
+            .contains(point) else { return }
+        // 宠物本体/对话框/气泡认领优先：落点在宠物面上归宠
+        // 物分支，本路不抢（宠物点按语义不变）。
+        if let petStage,
+           petStage.claimsPoint(recognizer.location(in: petStage)) {
+            return
+        }
+        Breadcrumbs.log("mb.claim78 host=\(hostTag)")
+        Breadcrumbs.log("mb.disp78 host=\(hostTag) via=root")
+        expand()
     }
 }

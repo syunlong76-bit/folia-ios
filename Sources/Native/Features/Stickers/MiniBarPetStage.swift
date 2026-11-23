@@ -924,6 +924,14 @@ final class MiniBarPetStage: UIView {
         return nil
     }
 
+    /// (78) 第 8 条：该点是否已被宠物面认领（宠物本体/对话
+    /// 框/关心气泡）——播放条根级认领（MiniBarRootTap78）
+    /// 据此让行，宠物点按语义不被条展开抢走。与 hitTest
+    /// 同口径。
+    func claimsPoint(_ point: CGPoint) -> Bool {
+        hitTest(point, with: nil) != nil
+    }
+
     // MARK: 层框与地面
 
     /// 层框跟随台子模型帧（底边对齐、等宽）；地面（台上

@@ -129,6 +129,8 @@ final class StageViewController: UIViewController {
     /// 起态禁用以保细条单击即时展开（见 syncStageBarDouble-
     /// TapEnabled）。
     private var stageBarDoubleTap: UITapGestureRecognizer?
+    /// (78) 第 8 条：播放条根级认领（见 MiniBarRootTap78）。
+    private var stageBarRootTap78: MiniBarRootTap78?
     private var stageBarPresented = false
     private var stageSeekDragging = false
     /// seek 落点保持窗（3.7 (70) B4）：.ended 发 seek 后、
@@ -2514,6 +2516,13 @@ final class StageViewController: UIViewController {
         let petStage = MiniBarPetStage(bar: bar, role: .stage)
         view.addSubview(petStage)
         stagePetStage = petStage
+        // (78) 第 8 条：根级认领（mb.claim78→mb.disp78→
+        // expand），与两墙同构。
+        stageBarRootTap78 = MiniBarRootTap78(
+            hostView: view, bar: bar, petStage: petStage,
+            hostTag: "stage",
+            isCollapsed: { [weak self] in self?.stageBarCollapsed ?? false },
+            expand: { [weak self] in self?.expandStageBar() })
         // (70) B2：点播台 4s 长按开启宠物手势整套已撤（与切
         // 主题长按同域打架、圆圈干扰操作，Miller 改令）——
         // 台上不再挂任何宠物相关识别器；宠物开关改全局右
@@ -3165,12 +3174,15 @@ final class StageViewController: UIViewController {
     /// (77) ②底锚按形态落位（几何账同两墙：展开 −10、
     /// 收起 +31.5 与 home indicator 中心重合、无
     /// indicator 机型回落 −10；宠物层按 bar.frame 跟随）。
+    /// (78) 第 1 条修正（与两墙同账）：收起 31.5→24.5，整
+    /// 条上抬 7pt——轨道带升至屏底上方 15–20，系统小白线
+    /// （8–13）只落条身下部空白边距、不压轨道与宠物。
     private func applyStageBarBottom77(collapsed: Bool) {
         guard let bottomC = stageBarBottomC else { return }
         let inset = view.window?.safeAreaInsets.bottom
             ?? view.safeAreaInsets.bottom
         bottomC.constant = collapsed
-            ? (inset > 0 ? 31.5 : -10) : -10
+            ? (inset > 0 ? 24.5 : -10) : -10
     }
 
     override func viewSafeAreaInsetsDidChange() {
