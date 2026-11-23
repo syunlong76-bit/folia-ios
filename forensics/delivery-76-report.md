@@ -109,6 +109,17 @@ Miller 22:17 确认：从没动过设置里的宠物开关。(75) 与更早会�
 - **未定案（不可再追、如实分级）：具体哪一次历史写入。** (76) 之前全部写入点无 src 打点、当时日志未留存至今，无法实锤。最可能为长按宠物静止 3 秒：其手势阶梯与「长按拖动」共用起手（0.35s 抓起 / 1.0s 可拖 / 移动 >10pt 转拖 / **静止满 3.0s 触发全局关闭**）——想拖宠物却没及时移动，3 秒一到静默关全局且无二次确认，宠物消失后用户无从知道原因。此为基于手势设计的推断、非实锤；与前科同型（旧 companionEnabled 键当年同样被无提示手势静默写 false 关死宠物系统，(29) 才换键）。
 - **处置（已落码）**：①一次性修复（AppDelegate 启动、标记键 `folia.miniPets.restore76Done` 防重复）：当前读为关 → 恢复为开（src=repair76)，置于 appStart 读痕之前使启动行即为修复后值；修复只跑一次、之后开关语义完全归用户、再关不自动恢复。②全写入收口：新增 `StickerSettings.setMiniPetsEnabled(_:src:)`，全部 6 个写入点迁移（settings / paw3s / paw2s / petPress3s / dragSeat / repair76)，每次写入落 `pet.switch76 src= v=`——值再变，日志当场留名。③手势关闭路径本身保留（属既定交互口径），但自此有痕可查。
 
+**⑨追加环：召唤手势链静态审（Miller 22:24 实证：长按 2 秒召唤与 3 秒告别都试了、两种都无宠物出现——断点不止状态层）**
+
+逐环结论（静态）：
+- **装配环：不存在「三宿主各一份爪印」。** 爪印是 SceneDelegate 装进 window 的单例窗口级按钮（PetSummonButton70.install)，三宿主共用同一实例、同一识别器、同一触发函数——「舞台页右下那只只有视觉、没接召唤链」的假设**结构上不成立**：他 22:14 在舞台页按的与主页是同一只钮，其在截图中可见即 frontGuard 提顶与入场抑制均正常。
+- **命中环：干净。** 岛层命中代理（PetHitProxyView）只覆盖窗口顶部带（y 0 起 proxyZoneHeight)，与右下角钮位零交集；岛渲染层不在视图树且交互关闭；钮自身 frontGuard 每 0.5s 对账序位。静态无遮挡/吞点点。
+- **识别器环：健全。** 长按识别器阈值在每次 hitTest 按当刻开关态现读（关态 2.0s)；触发时再读现态分流。关态下按满 2 秒必进召唤支（写 on → pet.switch on via=corner2s → paw.act75)，无 delegate、无失败依赖、cancelsTouchesInView=false——本环无静默吞点构造。
+- **定位/广播环：双路都有痕。** currentFacePetStage 沿 presented 链找最顶层 VC 子树——舞台宠物层确在 StageViewController.view 子树内（role=.stage、view.addSubview)，舞台为顶层时必命中；有模态压顶时定位落空改走广播 .foliaPawSummon75，各宠物层自查（barPresented && 开关已开 && !concertRelocated）后以 paw.act75 recv=stage 落痕入场。
+- **落座环：断点收窄在此。** performDropInEntrance 三道守卫全部带 skip 落痕（barNotPresented / petsDisabled / concertRelocated)，无静默死点；其中 petsDisabled 在召唤流里不可能触发（开关在调用前同拍已写 on)。剩余两个静态嫌疑：**(a) concertRelocated**——若他按爪印时正值汪汪队样式，台面宠物层处于迁移态、召唤被口径否决（宠物归演唱会、不落台），skip reason=concertRelocated 会留痕；**(b) barPresented 当刻为假**（定位到的层其台未呈）。两者都带面包屑、下份日志可直接判读。
+- **两次尝试的合成解释（推断）**：第一次 2 秒若触发成功，开关已写 on（哪怕落座被落座环否决）；第二次 3 秒在 on 态下走关闭支（阈值现读 3.0s）→ 告别离场无 cast 可送 + 开关写回 off——两次「什么都没发生」与「开关被写回关」彼此自洽，最终持久态仍为 false，与日志实证闭环。此推断的成立与否，下份日志看 paw.touch75 dn / paw.act75 / pet.dropin 三行即可定。
+- **(76) 后的操作口径变化（须知）**：repair76 首启把开关恢复为 on 后，爪印长按的语义随现态翻转——on 态下需 3.0s 才是关闭、2 秒无动作；要再召唤（off 态）才是 2 秒。本环不改链路代码（静态无断点可修），断点定案待下份含爪印操作的日志。
+
 ---
 
 ## iOS 适配自查
