@@ -131,6 +131,7 @@ final class HomeWallViewController: UIViewController,
     /// min(宽,高) 更新）、高度在完整/收起两形态间切换。
     private var miniBarWidthConstraint: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
+    private var miniBarBottomC: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
     /// (74) 小横线形态的轨道约束组：展开态 leading/trailing/
     /// height 在场；收起态换 centerX+固定宽 134（见
@@ -1270,6 +1271,25 @@ final class HomeWallViewController: UIViewController,
                 + " col=\(self.miniBarCollapsed ? 1 : 0)"
                 + " h=\(Int(bar.bounds.height))")
         }
+        // (77) ⑥：派发段见证补齐三宿主同构（(76) 只接了
+        // wallproto）＋认领/救援接线（claim77 在
+        // MiniBarHitView 内落、救援 disp77 via=rescue）。
+        bar.onDispatchCancelled = { [weak self] in
+            guard let self else { return }
+            Breadcrumbs.log("minibar.dead76 host=homewall at=cancel"
+                + " recog=\(self.miniTapBits())")
+        }
+        bar.onDispatchUnclaimed = { [weak self] in
+            guard let self, self.miniBarCollapsed else { return }
+            Breadcrumbs.log("minibar.dead76 host=homewall at=noRecog"
+                + " recog=\(self.miniTapBits())")
+        }
+        bar.crumbHostTag = "homewall"
+        bar.onCancelledTapRescue = { [weak self] in
+            guard let self, self.miniBarCollapsed else { return }
+            Breadcrumbs.log("minibar.disp77 host=homewall via=rescue")
+            self.expandMiniBar()
+        }
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
@@ -1474,15 +1494,17 @@ final class HomeWallViewController: UIViewController,
         miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
         miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
         miniTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 134)
+        miniBarBottomC = bar.bottomAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10)
         NSLayoutConstraint.activate([
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-            // (75) 第 5 项①：底锚 −10→−54——台身下缘恒在
-            // 爪印钮带（底 −10、高 36、顶 −46）之上 8pt，
-            // 展开/细条两态都不许盖钮（钮固定不动、台让位，
-            // Miller 20:39 定版；细条态钮在细条下方原地）。
-            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -54),
+            // (77) ②⑤：底锚存引用、按形态切换——展开 −10
+            // （窗口爪印退役后无需再让位 −54）；收起 +31.5
+            // 使轨道中心与 home indicator 中心重合（账见
+            // applyMiniBarBottom77）。先按展开值装配。
+            miniBarBottomC!,
 
             miniTrackLeadC!,
             miniTrackTrailC!,
@@ -1727,15 +1749,14 @@ final class HomeWallViewController: UIViewController,
         let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        // (74) 第 6 项进度单色：填充与轨道同色——轨道改用填
-        // 充色 25% 透明，不再白轨 + 彩填充的异色拼接（两形
-        // 态同口径；收起态用收起填充色、展开态用展开填充色，
-        // 整条恒一个色相）。
+        // (77) ②进度配色（推翻 (74) 同色 25% 透明轨）：全
+        // 条统一为现行后半段主题色，未填充轨改同色系实色
+        // 压暗（foliaDarkenedTrack77），明度差辨进度。
         let singleColor = miniBarCollapsed
             ? Self.miniCollapsedFillColor(for: miniTheme)
             : Self.miniFillColor(for: miniTheme)
         miniProgressFill.backgroundColor = singleColor
-        miniProgressTrack.backgroundColor = singleColor.withAlphaComponent(0.25)
+        miniProgressTrack.backgroundColor = singleColor.foliaDarkenedTrack77()
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
@@ -1927,11 +1948,14 @@ final class HomeWallViewController: UIViewController,
     /// require 链，点按即时展开回完整形态并重新计时（展开在
     /// expandMiniBar 内），不被双击判定拖延。
     @objc private func miniBarCollapsedTapped(_ gesture: UITapGestureRecognizer) {
+        (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
         guard miniBarCollapsed else {
             Breadcrumbs.log("minibar.dead75 host=homewall at=flag")
             return
         }
         Breadcrumbs.log("minibar.tap host=homewall collapsed=1 action=expand")
+        // (77) ⑥派发环自证（claim77→disp77→expand 三环）。
+        Breadcrumbs.log("minibar.disp77 host=homewall via=tap")
         expandMiniBar()
     }
 
@@ -1962,6 +1986,13 @@ final class HomeWallViewController: UIViewController,
     /// 单击（require 双击/长按）+双击、停收起单击；收起态反
     /// 之。全部形态切换都经 setMiniBarForm 收口到这里，启停
     /// 与形态严格同步。
+    /// (77) ⑥派发段见证的识别器启停位串（与 wallproto 同构）。
+    private func miniTapBits() -> String {
+        "\((miniBarTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarDoubleTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarCollapsedTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+    }
+
     private func syncMiniBarTapRecognizers(collapsed: Bool) {
         miniBarTapRecognizer?.isEnabled = !collapsed
         miniBarDoubleTapRecognizer?.isEnabled = !collapsed
@@ -2201,9 +2232,27 @@ final class HomeWallViewController: UIViewController,
     /// 形态几何（高度/轨道底距/圆角）：在动画块内调用即随
     /// 动画走；显隐边沿复位与 Reduce Motion 时在动画块外
     /// 直接置位即瞬时生效。
+    /// (77) ②底锚按形态落位（几何账与 wallproto 同注：
+    /// 展开 −10、收起 +31.5 与 home indicator 中心重合、
+    /// 无 indicator 机型回落 −10；宠物层按 bar.frame 跟随）。
+    private func applyMiniBarBottom77(collapsed: Bool) {
+        guard let bottomC = miniBarBottomC else { return }
+        let inset = view.window?.safeAreaInsets.bottom
+            ?? view.safeAreaInsets.bottom
+        bottomC.constant = collapsed
+            ? (inset > 0 ? 31.5 : -10) : -10
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        applyMiniBarBottom77(collapsed: miniBarCollapsed)
+    }
+
     private func setMiniBarForm(collapsed: Bool) {
         // (72) 形态收口同步共享旗标（单宿主交接的对齐源）。
         MiniBarSingleHost.shared.sharedCollapsed = collapsed
+        applyMiniBarBottom77(collapsed: collapsed)
+        (miniBar as? MiniBarHitView)?.isCollapsedForm = collapsed
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in miniMainCenterY { constraint.constant = -5 }
@@ -2220,7 +2269,10 @@ final class HomeWallViewController: UIViewController,
         miniTrackCenterXC?.isActive = collapsed
         miniTrackWidthC?.isActive = collapsed
         miniProgressTrack.layer.cornerRadius = collapsed ? 2.5 : 2
-        miniProgressKnob.isHidden = collapsed
+        // (77) ②③：四主题小圆点恢复收起态在场（(74) 以
+        // isHidden=collapsed 误删；皮肤两形态同挂、圆点
+        // 本体恒可见，(22)/(23) 旧制）。
+        miniProgressKnob.isHidden = false
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
