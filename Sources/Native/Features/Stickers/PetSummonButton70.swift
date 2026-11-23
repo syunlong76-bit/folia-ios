@@ -249,14 +249,35 @@ final class PetSummonButton70: UIView {
         circleView.backgroundColor = UIColor.black.withAlphaComponent(0.55)
         settleToIdle()
 
+        // (77) ⑤：触发本体抽为共享切换核（见下），本钮与
+        // 点播台台面爪印同路同语义，只 src/via/act 词根不同。
+        let enabled = StickerSettings.miniPetsEnabled
+        Self.performPawToggle77(
+            window: window,
+            src: enabled ? "paw3s" : "paw2s",
+            via: enabled ? "corner3s" : "corner2s",
+            actCrumb: "paw.act75")
+        refreshThreshold()
+    }
+
+    /// (77) ⑤宠物开关切换核（窗口爪印与点播台台面爪印共
+    /// 用）：按调用瞬间的开关态分岔——开态＝关闭（开关收
+    /// 口写 off＋当前面告别离场）；关态＝召唤（先写 on 再
+    /// 入场，当前面层缺席走广播兜底）。src/via/actCrumb
+    /// 由调用方按入口传入（窗口 paw3s/paw2s·corner3s/
+    /// corner2s·paw.act75；台面 deck3s/deck2s·deck3s/
+    /// deck2s·paw.act77），写入收口与落痕格式恒一致。
+    static func performPawToggle77(window: UIWindow?,
+                                   src: String, via: String,
+                                   actCrumb: String) {
         if StickerSettings.miniPetsEnabled {
             // 关闭：开关双写 off（(76) 收口带 src）＋当前面
             // dismiss 告别离场。
-            StickerSettings.setMiniPetsEnabled(false, src: "paw3s")
+            StickerSettings.setMiniPetsEnabled(false, src: src)
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            Breadcrumbs.log("pet.switch off via=corner3s")
-            let stage = currentFacePetStage()
-            Breadcrumbs.log("paw.act75 on=0 stage=\(stage != nil ? 1 : 0)")
+            Breadcrumbs.log("pet.switch off via=\(via)")
+            let stage = findPetStage(from: window)
+            Breadcrumbs.log("\(actCrumb) on=0 stage=\(stage != nil ? 1 : 0)")
             stage?.performFarewellDismissAll70()
             // (73)：岛民常驻不随全局关撤下（reconcile 已
             // 解耦），本调用仅作稳定事件对账。
@@ -265,16 +286,16 @@ final class PetSummonButton70: UIView {
             // 召唤：开关双写 on（(76) 收口带 src）＋当前面
             // 掉落入场（写入场门控读开关，故先写后调，与旧
             // 组件同序）。
-            StickerSettings.setMiniPetsEnabled(true, src: "paw2s")
+            StickerSettings.setMiniPetsEnabled(true, src: src)
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            Breadcrumbs.log("pet.switch on via=corner2s")
+            Breadcrumbs.log("pet.switch on via=\(via)")
             // (75) 第 6 项定案：召唤＝用户明确意图，开关已
             // 双写 on 在前，入场不许再被任何陈旧态拦死——
             // 当前面层找不到（stage=nil）时改走广播兜底，各
             // 宠物层自查在场且开关已开即自行入场（见
             // MiniBarPetStage 的 pawSummonObserver）。
-            let stage = currentFacePetStage()
-            Breadcrumbs.log("paw.act75 on=1 stage=\(stage != nil ? 1 : 0)")
+            let stage = findPetStage(from: window)
+            Breadcrumbs.log("\(actCrumb) on=1 stage=\(stage != nil ? 1 : 0)")
             if let stage {
                 stage.performDropInEntrance()
             } else {
@@ -283,22 +304,20 @@ final class PetSummonButton70: UIView {
             // (72)：全局开后岛民确定性落座（稳定事件触发）。
             PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         }
-        refreshThreshold()
     }
 
-    /// 当前面宠物层：自本钮所在窗口的根沿 presented 链走
-    /// 到最顶层控制器，只在其视图子树内逆序（上层优先）
-    /// 找 MiniBarPetStage——墙在舞台之下时只命中舞台那
-    /// 只，模态页（无宠物层）时返回 nil（开关照写、入场/
-    /// 离场由各面自身同步兜底）。
-    private func currentFacePetStage() -> MiniBarPetStage? {
+    /// 当前面宠物层定位（窗口根 → presented 链顶 → 子树逆
+    /// 序找 MiniBarPetStage）；窗口钮实例与共享切换核同路。
+    private static func findPetStage(from window: UIWindow?)
+        -> MiniBarPetStage? {
         guard let root = window?.rootViewController else { return nil }
         var top = root
         while let presented = top.presentedViewController {
             top = presented
         }
-        return Self.findPetStage(in: top.view)
+        return findPetStage(in: top.view)
     }
+
 
     private static func findPetStage(in view: UIView) -> MiniBarPetStage? {
         for subview in view.subviews.reversed() {

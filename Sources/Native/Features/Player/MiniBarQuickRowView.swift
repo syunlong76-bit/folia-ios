@@ -14,8 +14,9 @@ import UIKit
 ///   合 folia.starredTrackIDs），按当前歌曲实时显态、点按切
 ///   换；网页星标＝加入歌单（AddToPlaylist 本体未迁），本期
 ///   星标只落本地集合＋FoliaStarChanged 通知，不冒充入歌单。
-/// - 打乱队列：QueueManager.shuffleQueue，队列不足 2 首禁用。
-///   沿用 (54)。
+/// - 打乱队列：(77) ⑤撤下台面（原钮位由爪印接管），
+///   QueueManager.shuffleQueue 本体保留，入口存于队列面
+///   板与命令面板（去向见 (77) 报告⑤）。
 /// - 格子（面板）/ 命令键：本体在别的工作流，本视图只发信
 ///   号——点按 post .foliaMiniBarPanel / .foliaMiniBarCommand
 ///   （名称定死，宿主工作流按此订阅），并落同词根面包屑。
@@ -73,7 +74,12 @@ final class MiniBarQuickRowView: UIView {
     /// (68) A1：喜欢填充态（refreshLike 写、configurationUpdateHandler 读）。
     private var likeFilled = false
     private let starButton = UIButton(type: .system)
-    private let shuffleButton = UIButton(type: .system)
+    /// (77) ⑤：原打乱钮位由爪印接管（长按 2s 召唤/3s 告
+    /// 别，与退役的窗口爪印同一切换核 PetSummonButton70
+    /// .performPawToggle77）。打乱队列撤下台面——去向：
+    /// 队列面板与命令面板内仍可达（见 (77) 报告⑤）。
+    private let pawButton = UIButton(type: .system)
+    private let pawPressRecognizer = UILongPressGestureRecognizer()
     private let panelButton = UIButton(type: .system)
     private let commandButton = UIButton(type: .system)
 
@@ -100,9 +106,22 @@ final class MiniBarQuickRowView: UIView {
         configure(starButton, symbol: "star", pointSize: 16,
                   title: "星标", accessibility: "星标",
                   action: #selector(starTapped))
-        configure(shuffleButton, symbol: "shuffle", pointSize: 16,
-                  title: "打乱", accessibility: "打乱队列",
-                  action: #selector(shuffleTapped))
+        configure(pawButton, symbol: "pawprint.fill", pointSize: 16,
+                  title: "宠物", accessibility: "宠物开关（长按）",
+                  action: #selector(pawTapped))
+        // (77) ⑤爪印长按：阈值按按下瞬间开关态（开 3.0s
+        // 关/关 2.0s 召唤），在 hitTest 现读刷新（与窗口
+        // 爪印同纪律）；按下即回调宿主续命浮层 5 秒钟，
+        // 防长按未满先被闲置收起打断。
+        pawPressRecognizer.minimumPressDuration =
+            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+        pawPressRecognizer.allowableMovement = 12
+        pawPressRecognizer.cancelsTouchesInView = false
+        pawPressRecognizer.addTarget(
+            self, action: #selector(pawLongPressed(_:)))
+        pawButton.addGestureRecognizer(pawPressRecognizer)
+        pawButton.addTarget(self, action: #selector(pawTouchDown),
+                            for: .touchDown)
         configure(panelButton, symbol: "square.grid.2x2", pointSize: 16,
                   title: "面板", accessibility: "面板",
                   action: #selector(panelTapped))
@@ -120,7 +139,7 @@ final class MiniBarQuickRowView: UIView {
         // 五钮等宽平分整排：链式等宽＋首尾贴边，钮高撑满
         // 本排。等宽保证任一台宽下每钮命中宽一致（最窄台
         // 宽 353pt 时单钮 ≈70pt）。
-        let buttons = [likeButton, starButton, shuffleButton,
+        let buttons = [likeButton, starButton, pawButton,
                        panelButton, commandButton]
         for (index, button) in buttons.enumerated() {
             button.translatesAutoresizingMaskIntoConstraints = false
@@ -205,8 +224,9 @@ final class MiniBarQuickRowView: UIView {
         button.configuration = config
     }
 
-    /// 状态订阅：切歌刷新喜欢与星标、队列变化刷新打乱可用
-    /// 性、星标外部变更（他面切换）刷新星标——全部回主线程。
+    /// 状态订阅：切歌刷新喜欢与星标、星标外部变更（他面
+    /// 切换）刷新星标——全部回主线程。（77）⑤：原队列变
+    /// 化刷新打乱可用性随打乱钮撤下台面一并退役。
     private func bindState() {
         PlaybackEngine.shared.$currentTrack
             .receive(on: DispatchQueue.main)
@@ -214,10 +234,6 @@ final class MiniBarQuickRowView: UIView {
                 self?.refreshLike()
                 self?.refreshStar()
             }
-            .store(in: &cancellables)
-        QueueManager.shared.$queue
-            .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.refreshShuffle() }
             .store(in: &cancellables)
         NotificationCenter.default.addObserver(
             self, selector: #selector(starChanged),
@@ -227,7 +243,19 @@ final class MiniBarQuickRowView: UIView {
     func refreshAll() {
         refreshLike()
         refreshStar()
-        refreshShuffle()
+    }
+
+    /// (77) ⑤爪印阈值新鲜度（与窗口爪印同纪律）：触摸落
+    /// 到爪印钮前现读开关刷新长按阈值——外部路径（设置/
+    /// 长按宠物本体/另一台爪印）改过开关后，本钮下一次按
+    /// 下读到的恒为现态。
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        if hit === pawButton {
+            pawPressRecognizer.minimumPressDuration =
+                StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+        }
+        return hit
     }
 
     // MARK: - 回显
@@ -257,12 +285,6 @@ final class MiniBarQuickRowView: UIView {
                 ? UIColor(red: 1, green: 0.8, blue: 0.25, alpha: 1)
                 : UIColor.white.withAlphaComponent(0.75))
         starButton.accessibilityLabel = starred ? "取消星标" : "星标"
-    }
-
-    private func refreshShuffle() {
-        let enabled = QueueManager.shared.queue.count >= 2
-        shuffleButton.isEnabled = enabled
-        shuffleButton.alpha = enabled ? 1 : 0.35
     }
 
     @objc private func starChanged() {
@@ -350,11 +372,36 @@ final class MiniBarQuickRowView: UIView {
         host.present(nav, animated: true)
     }
 
-    @objc private func shuffleTapped() {
+    /// (77) ⑤爪印短按：无动作（防误触，与窗口爪印同纪
+    /// 律），只给一句长按提示——长按语义靠它可发现。
+    @objc private func pawTapped() {
         onUserInteraction?()
-        Breadcrumbs.log("minibar.webrow shuffleQueue")
-        QueueManager.shared.shuffleQueue()
-        NativePlaybackFailureToast.show(message: "已打乱队列")
+        Breadcrumbs.log("minibar.webrow paw tap=hint")
+        NativePlaybackFailureToast.show(
+            message: StickerSettings.miniPetsEnabled
+                ? "长按爪印 3 秒，送小宠物回家"
+                : "长按爪印 2 秒，召唤小宠物")
+    }
+
+    /// (77) ⑤爪印按下瞬间：先续命浮层闲置钟（长按 3s 不
+    /// 被 5 秒闲置收起从中打断）。
+    @objc private func pawTouchDown() {
+        onUserInteraction?()
+    }
+
+    /// (77) ⑤爪印长按触发：走共享切换核（与退役窗口爪印
+    /// 同实现、同 src 收口），src/via 按台面入口记 deck。
+    @objc private func pawLongPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        onUserInteraction?()
+        let enabled = StickerSettings.miniPetsEnabled
+        PetSummonButton70.performPawToggle77(
+            window: window,
+            src: enabled ? "deck3s" : "deck2s",
+            via: enabled ? "deck3s" : "deck2s",
+            actCrumb: "paw.act77")
+        pawPressRecognizer.minimumPressDuration =
+            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
     }
 
     /// 格子（面板）本体未在本文件域：只发定名信号，宿主工
