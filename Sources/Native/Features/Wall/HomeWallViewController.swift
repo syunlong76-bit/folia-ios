@@ -226,7 +226,9 @@ final class HomeWallViewController: UIViewController,
     private var homeTrackPill62: TrackPill62?
     private var seamGridMode = UserDefaults.standard.bool(forKey: "folia.wall.gridMode")
     private var seamImmersive = false
-    private var seamImmersiveTapView: UIView?
+    /// (77) ⑦沉浸退出识别器：挂根视图、仅沉浸期启用、
+    /// cancelsTouchesInView=false（点外穿透不吞触摸）。
+    private var seamImmersiveExitRecognizer: UITapGestureRecognizer?
     /// 沉浸期被中和的覆盖层原状态（3.7 (61) 第 1.5 条）：进入沉浸
     /// 时存速记簿 covered 态/工作台宿主/宠物层的交互开关，退出
     /// 时逐项恢复（原本就被侧栏 covered 的速记簿不代为解除）。
@@ -2913,7 +2915,7 @@ extension HomeWallViewController {
         seamToolbar = toolbar
 
         buildSeamFilterBar(below: toolbar)
-        buildSeamImmersiveTapView()
+        buildSeamImmersiveExitRecognizer77()
         Breadcrumbs.log("wall.seam.installed grid=\(seamGridMode)")
     }
 
@@ -2971,21 +2973,23 @@ extension HomeWallViewController {
         seamFilterBar = bar
     }
 
-    private func buildSeamImmersiveTapView() {
-        let tapView = UIView()
-        tapView.backgroundColor = .clear
-        tapView.isHidden = true
-        tapView.translatesAutoresizingMaskIntoConstraints = false
-        tapView.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(seamImmersiveTap(_:))))
-        view.addSubview(tapView)
-        NSLayoutConstraint.activate([
-            tapView.topAnchor.constraint(equalTo: view.topAnchor),
-            tapView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            tapView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tapView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-        ])
-        seamImmersiveTapView = tapView
+    /// (77) ⑦沉浸退出改结构（推翻 (61) 的全屏透明热区
+    /// 视图）：旧热区是根视图的一个子视图，靠
+    /// bringSubviewToFront 抢层位——(76) 真机实证全屏点
+    /// 按全灭（软锁，时段落在日志缺口内、具体覆盖者未定
+    /// 案）。新结构不设任何全屏覆盖视图：退出识别器直接
+    /// 挂根视图，根视图层级内一切子视图的点按都沿响应链
+    /// 到达它，与兄弟视图 z 序无关；cancelsTouchesInView
+    /// =false——退出点按不被吞、同一下继续穿透到墙面内
+    /// 容。识别器仅在沉浸期 isEnabled，任何中间态都不存
+    /// 在「全屏视图吞触摸」的构件。
+    private func buildSeamImmersiveExitRecognizer77() {
+        let recognizer = UITapGestureRecognizer(
+            target: self, action: #selector(seamImmersiveTap(_:)))
+        recognizer.cancelsTouchesInView = false
+        recognizer.isEnabled = false
+        view.addGestureRecognizer(recognizer)
+        seamImmersiveExitRecognizer = recognizer
     }
 
     // MARK: 数据装配（唯一装配点）
@@ -3371,16 +3375,24 @@ extension HomeWallViewController {
             }
             // (74) 工作台宿主已撤除，沉浸中和名单只剩宠物层。
             miniPetStage?.isUserInteractionEnabled = false
-            seamImmersiveTapView?.isHidden = false
-            if let tapView = seamImmersiveTapView {
-                view.bringSubviewToFront(tapView)
-            }
+            // (77) ⑦：退出识别器随沉浸启用（无覆盖视图、无
+            // 层位可抢），展开自证 seam.lock77 in（仅真边沿）。
+            seamImmersiveExitRecognizer?.isEnabled = true
+            if !wasImmersive { Breadcrumbs.log("seam.lock77 in") }
             Breadcrumbs.log("wall.seam.immersive zorder raised=1")
             rootCloseButton?.isHidden = true
             miniBar?.alpha = 0
             miniBar?.isUserInteractionEnabled = false
         } else {
-            seamImmersiveTapView?.isHidden = true
+            // (77) ⑦：退出自证——点按退出记 via=tap pass=1
+            // （识别器不取消触摸、同一下穿透到墙面内容）；
+            // 其他路径退出记 via=other。
+            seamImmersiveExitRecognizer?.isEnabled = false
+            if wasImmersive {
+                Breadcrumbs.log(traceEndReason == "exit-tap"
+                    ? "seam.lock77 out via=tap pass=1"
+                    : "seam.lock77 out via=other")
+            }
             if wasImmersive {
                 // 恢复原状态：速记簿原本就被外部（侧栏）covered
                 // 时不代为解除，只恢复沉浸自己加的那层。
@@ -3406,14 +3418,16 @@ extension HomeWallViewController {
     }
 
     @objc func seamImmersiveTap(_ gesture: UITapGestureRecognizer) {
-        guard seamImmersive, let tapView = seamImmersiveTapView else { return }
+        guard seamImmersive else { return }
         // (61) 第 1.5 条 trace：退出点按落一行判读料——触点、
         // 命中链前三层（自顶向下含点图层类名）、热区帧。
+        // (77) ⑦：热区帧 = 根视图 bounds（识别器挂根视图、
+        // 无独立热区视图）。
         let point = gesture.location(in: view)
         InteractionTrace.shared.recordImmersiveTap(
             point: point,
             hitViewChain: seamHitViewChain(at: point),
-            seamFrame: tapView.frame,
+            seamFrame: view.bounds,
             seamHit: true)
         Breadcrumbs.log("wall.seam.immersive exit-via-tap")
         applySeamImmersive(false, traceEndReason: "exit-tap")
