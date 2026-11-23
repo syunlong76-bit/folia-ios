@@ -1660,6 +1660,26 @@ final class MiniBarPetStage: UIView {
             return
         }
         let windowPoint = convert(point, to: dock)
+        // (75) 第 4 项：拖到岛框区域松手＝换住落座（竖屏、
+        // 落点 y≤100、x 在屏中 ±120 内；岛框几何与
+        // PetIslandLayer 同源）。命中不走停靠：先释放演员
+        // 回池（removeActor 同步在场表、sendToPool 写
+        // .pool），再由登记表 dragSeat 裁决落座（顺序反了
+        // .island 会被 sendToPool 冲掉）；dragSeat 拒收
+        // （汪汪队期间）时演员留池、落痕 island-denied。
+        if dock.bounds.width < dock.bounds.height,
+           windowPoint.y <= 100,
+           abs(windowPoint.x - dock.bounds.width / 2) <= 120 {
+            let side = windowPoint.x < dock.bounds.width / 2 ? 0 : 1
+            let asset = actor.asset
+            removeActor(actor, animated: false, sendToPool: true)
+            if PetHomeRegistry.shared.dragSeat(asset: asset, side: side) {
+                Breadcrumbs.log("pet.drag.end asset=\(asset) src=\(src) host=island")
+            } else {
+                Breadcrumbs.log("pet.drag.end asset=\(asset) src=\(src) host=island-denied")
+            }
+            return
+        }
         let cx = min(max(windowPoint.x, half), max(half, dock.bounds.width - half))
         let cy = min(max(windowPoint.y, half), max(half, dock.bounds.height - half))
         if actor.superview !== dock {
@@ -1906,7 +1926,7 @@ final class MiniBarPetStage: UIView {
         var slots = max(0, PetHomeRegistry.islandCapacity - residents.count)
         var islandBound: [MiniPetActor] = []
         for actor in actors {
-            if slots > 0, PetHomeRegistry.islandFixedDuo.contains(actor.asset) {
+            if slots > 0, registry.islandTargetDuo.contains(actor.asset) {
                 actor.divertToIsland = true
                 islandBound.append(actor)
                 slots -= 1

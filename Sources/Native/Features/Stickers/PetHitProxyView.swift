@@ -39,6 +39,15 @@ final class PetHitProxyView: UIView {
         double.numberOfTapsRequired = 2
         addGestureRecognizer(double)
         single.require(toFail: double)
+        // (75) 第 4 项：拖出召回——pan 只在宠物本体上起手
+        // （point(inside:) 已把本视图命中限定在目标矩形内，
+        // pan 落在本视图即起手于宠物/气泡；气泡起手由岛层
+        // 按属主资产认领同一只）。真实拖动（位移大）时点按
+        // 识别器自会因 allowableMovement 落空，不与点按打架。
+        let pan = UIPanGestureRecognizer(
+            target: self, action: #selector(handlePan(_:)))
+        pan.maximumNumberOfTouches = 1
+        addGestureRecognizer(pan)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -62,6 +71,33 @@ final class PetHitProxyView: UIView {
     @objc private func handleDoubleTap(_ recognizer: UITapGestureRecognizer) {
         forwardTap(recognizer, doubleTap: true)
     }
+
+    /// (75) pan 转发：起手点逆序查属主资产（同 forwardTap
+    /// 口径），全程转发岛层（跟手/召回判定都在岛层）。
+    @objc private func handlePan(_ recognizer: UIPanGestureRecognizer) {
+        guard let islandLayer else { return }
+        let point = recognizer.location(in: self)
+        switch recognizer.state {
+        case .began:
+            guard let target = islandLayer.hitTargets().reversed()
+                .first(where: { $0.rect.contains(point) }) else { return }
+            panAsset = target.asset
+            islandLayer.proxyDragBegan(asset: target.asset, at: point)
+        case .changed:
+            if let panAsset { islandLayer.proxyDragChanged(asset: panAsset, to: point) }
+        case .ended:
+            if let panAsset { islandLayer.proxyDragEnded(asset: panAsset, at: point) }
+            panAsset = nil
+        case .cancelled, .failed:
+            if let panAsset { islandLayer.proxyDragEnded(asset: panAsset, at: point) }
+            panAsset = nil
+        default:
+            break
+        }
+    }
+
+    /// 当前 pan 认领的资产（起手定、全程不变）。
+    private var panAsset: String?
 
     private func forwardTap(_ recognizer: UITapGestureRecognizer,
                             doubleTap: Bool) {

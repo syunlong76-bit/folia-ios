@@ -258,8 +258,8 @@ final class PetIslandLayer: UIView {
             layer.installProxy(in: window)
             Breadcrumbs.log("island.install host=window.layer"
                 + " z=\(Int(Self.petRootZPosition))"
-                + " resident=fixedDuo"
-                + " duo=\(PetHomeRegistry.islandFixedDuo.joined(separator: ","))"
+                + " resident=targetDuo"
+                + " duo=\(PetHomeRegistry.shared.islandTargetDuo.joined(separator: ","))"
                 + " residents=\(PetHomeRegistry.shared.islandResidents.count)")
             layer.logLayerState(reason: "install")
             PetHomeRegistry.shared.onIslandDeparture = { [weak layer] asset in
@@ -432,6 +432,48 @@ final class PetIslandLayer: UIView {
         if doubleTap { islandPetDoubleTapped(pet) } else { islandPetTapped(pet) }
     }
 
+    // MARK: (75) 第 4 项：岛上拖出召回（proxy pan 转发）
+
+    /// 拖拽中的岛民（proxy pan 全程同一只）。
+    private var dragOutPet: IslandPetView?
+
+    /// pan 起手：认领落点宠物、暂停其闲晃（tick 内 dragOut
+    /// 守卫让位）、提 z 序。
+    func proxyDragBegan(asset: String, at point: CGPoint) {
+        guard let pet = pets.first(where: { $0.asset == asset }) else { return }
+        dragOutPet = pet
+        bringSubviewToFront(pet)
+        hideBubble()
+        Breadcrumbs.log("isl.drag75 out.begin asset=\(asset)")
+    }
+
+    /// pan 移动：宠物中心跟手（proxy/岛层/窗口同坐标系）。
+    func proxyDragChanged(asset: String, to point: CGPoint) {
+        guard let pet = dragOutPet, pet.asset == asset else { return }
+        pet.center = point
+    }
+
+    /// pan 松手：中心 y 过 130（拖出岛区）＝召回——名单该
+    /// 侧回落缺省（registry.dragRecall），本体走既有回台
+    /// 路（有台回台、无台回池，setHome 触发 departure 撤
+    /// 演员）；未出区＝弹簧弹回座位。
+    func proxyDragEnded(asset: String, at point: CGPoint) {
+        guard let pet = dragOutPet, pet.asset == asset else { return }
+        dragOutPet = nil
+        if pet.center.y > 130 {
+            Breadcrumbs.log("isl.drag75 out asset=\(asset) y=\(Int(pet.center.y))")
+            PetHomeRegistry.shared.dragRecall(asset: asset)
+            if let target = PetHomeRegistry.shared.frontmostStage() {
+                target.receiveReturningPet(asset: asset)
+            } else {
+                PetHomeRegistry.shared.setHome(asset, .pool)
+            }
+        } else {
+            Breadcrumbs.log("isl.drag75 back asset=\(asset) y=\(Int(pet.center.y))")
+            reseatAll(animated: true)
+        }
+    }
+
     /// proxy 启停同步：岛上无宠物时整体停用（isHidden + 关
     /// interaction），hitTest 链根本不进 proxy；有宠物才启用。
     private func syncProxyState() {
@@ -518,8 +560,10 @@ final class PetIslandLayer: UIView {
         // 记表（setHome(.island) 已把非双人组改道回池，正常
         // 路径到不了这里）；万一有直达 receive 的非双人组，
         // 在此拒收并落面包屑，口径与登记表一致、不打架。
-        guard PetHomeRegistry.islandFixedDuo.contains(asset) else {
-            Breadcrumbs.log("island.seat rejected=\(asset) resident=fixedDuo")
+        // (75) 闸口径随登记表：认当前住客名单（拖拽定版
+        // 优先），名单外直达者仍拒收。
+        guard PetHomeRegistry.shared.islandTargetDuo.contains(asset) else {
+            Breadcrumbs.log("island.seat rejected=\(asset) resident=targetDuo")
             Breadcrumbs.log("isl.seat.no asset=\(asset) why=duo")
             return
         }
@@ -561,7 +605,7 @@ final class PetIslandLayer: UIView {
         logLayerState(reason: "seat")
         // (53) M：落座对账——resident=fixedDuo + 当前在座名单，
         // 真机一眼核「岛上恒为这对」。
-        Breadcrumbs.log("island.resident asset=\(asset) resident=fixedDuo"
+        Breadcrumbs.log("island.resident asset=\(asset) resident=targetDuo"
             + " seated=\(pets.map { $0.asset }.joined(separator: ","))")
         // (72) 落座成功自证（短名）：与 isl.seat.no 成对，下
         // 一份桥日志直接判「落岛成功/失败在哪一步」。
@@ -598,7 +642,9 @@ final class PetIslandLayer: UIView {
         // 钻回岛体正下方死区）。左右槽紧贴岛框边缘、脚底
         // 与岛框底对齐，整只在真像素带内。
         for pet in pets {
-            let duoIndex = PetHomeRegistry.islandFixedDuo
+            // (75) 拖出进行中：座位重排不碰被拖的那只。
+            if pet === dragOutPet { continue }
+            let duoIndex = PetHomeRegistry.shared.islandTargetDuo
                 .firstIndex(of: pet.asset) ?? 0
             let offset = duoIndex == 0 ? -Self.slotOffset : Self.slotOffset
             pet.seatFeet = CGPoint(x: cx + offset, y: Self.seatFeetY)
@@ -672,11 +718,12 @@ final class PetIslandLayer: UIView {
         let innerL = cx - Self.islandHalfWidth + 6
         let innerR = cx + Self.islandHalfWidth - 6
         let outerR = cx + Self.slotOffset + Self.petSize / 2 + 6
+        let targetDuo = PetHomeRegistry.shared.islandTargetDuo
         let hasLeft = pets.contains {
-            (PetHomeRegistry.islandFixedDuo.firstIndex(of: $0.asset) ?? 0) == 0
+            (targetDuo.firstIndex(of: $0.asset) ?? 0) == 0
         }
         let hasRight = pets.contains {
-            (PetHomeRegistry.islandFixedDuo.firstIndex(of: $0.asset) ?? 0) == 1
+            (targetDuo.firstIndex(of: $0.asset) ?? 0) == 1
         }
         backdropSegL?.frame = CGRect(x: outerL, y: Self.islandTopY,
                                      width: innerL - outerL,
@@ -781,7 +828,9 @@ final class PetIslandLayer: UIView {
             return
         }
         // 闲晃：每拍随机一只小幅漂移（落座点 ±3pt）。
-        if let pet = pets.randomElement(), Int.random(in: 0..<3) == 0 {
+        // (75) 拖出进行中的那只不入选（防 tick 与手势抢位）。
+        if let pet = pets.filter({ $0 !== dragOutPet }).randomElement(),
+           Int.random(in: 0..<3) == 0 {
             let target = CGPoint(
                 x: pet.seatFeet.x + .random(in: -3...3),
                 y: pet.seatFeet.y - Self.petSize / 2 + .random(in: -1...1))

@@ -40,6 +40,23 @@ final class PetHomeRegistry {
     /// 岛容量 = 固定双人组人数（(43) 的 3 退役）。
     static let islandCapacity = 2
 
+    /// (75) 第 4 项：用户拖拽定版的住客名单（[左, 右]，持久
+    /// 化）。nil = 没人拖过、走 islandFixedDuo 缺省。固定双
+    /// 人组门自此只辖自动路径（reconcile/告别分流/选角），
+    /// 用户拖拽经 dragSeat 越门换住——53 只全可。
+    private static let residentsKey75 = "folia.island.residents75"
+    private(set) var islandOverride75: [String]? = {
+        let saved = UserDefaults.standard.stringArray(forKey: PetHomeRegistry.residentsKey75)
+        return (saved?.count == 2) ? saved : nil
+    }()
+
+    /// 当前岛住客名单（[左, 右]）：拖拽定版优先、缺省双人组。
+    var islandTargetDuo: [String] { islandOverride75 ?? Self.islandFixedDuo }
+
+    /// 住客名单变更回调（(75)：真 Live Activity 侧据此同步
+    /// ContentState 的左右宠物 id）。
+    var onIslandLineupChanged: (([String]) -> Void)?
+
     /// 各宠物层当前在场名单（key = 层实例标识）。
     private var liveByStage: [ObjectIdentifier: Set<String>] = [:]
     /// 当前最前面的宠物层（舞台优先于墙）：岛上宠物点按回台
@@ -103,11 +120,14 @@ final class PetHomeRegistry {
         // 面包屑供真机对账（与 pet.farewell.dest 的 island=
         // 名单对照即知哪些被改道）。
         var target = newHome
-        if newHome == .island, !Self.islandFixedDuo.contains(asset) {
+        // (75) 闸口径：认当前住客名单（拖拽定版优先）——拖
+        // 拽换住先经 dragSeat 改名单再 setHome(.island)，不
+        // 被本闸改道；自动路径标来的名单外宠物照旧回池。
+        if newHome == .island, !islandTargetDuo.contains(asset) {
             target = .pool
             Breadcrumbs.log("island.resident.redirect asset=\(asset)"
-                + " resident=fixedDuo"
-                + " duo=\(Self.islandFixedDuo.joined(separator: ","))")
+                + " resident=targetDuo"
+                + " duo=\(islandTargetDuo.joined(separator: ","))")
         }
         let old = home(of: asset)
         guard old != target else { return }
@@ -125,6 +145,71 @@ final class PetHomeRegistry {
     }
 
     var islandResidents: [String] { islandOrder }
+
+    // MARK: (75) 第 4 项：拖拽换住 / 拖出召回
+
+    /// 拖拽落座：asset 占 side（0=左 leading、1=右
+    /// trailing）。名单按侧替换并持久化；被换下且在岛者回
+    /// 池（setHome 触发 onIslandDeparture 撤演员，说完告别
+    /// 词的呈现由岛层 releasePet 动画承接）；拖入者登记岛
+    /// 并经 onIslandArrival 由岛层落座。拖拽＝明确用户意
+    /// 图：顺带把台面宠物开关双写 on（与爪印召唤同路），
+    /// 不许陈旧 off 静默拦死落座。汪汪队期间
+    /// （islandSuspended）不落座、返回 false。
+    @discardableResult
+    func dragSeat(asset: String, side: Int) -> Bool {
+        guard side == 0 || side == 1 else { return false }
+        guard !islandSuspended else {
+            Breadcrumbs.log("isl.drag75 seat=\(asset) side=\(side) deny=concert")
+            return false
+        }
+        var duo = islandTargetDuo
+        let displaced = duo[side]
+        if displaced == asset {
+            Breadcrumbs.log("isl.drag75 seat=\(asset) side=\(side) same=1")
+            return true
+        }
+        duo[side] = asset
+        islandOverride75 = duo
+        UserDefaults.standard.set(duo, forKey: Self.residentsKey75)
+        if home(of: displaced) == .island {
+            setHome(displaced, .pool)
+        }
+        setHome(asset, .island)
+        onIslandArrival?(asset)
+        if !StickerSettings.miniPetsEnabled {
+            SettingsStore.miniPetsEnabled = true
+            StickerSettings.miniPetsEnabled = true
+            Breadcrumbs.log("isl.drag75 pets=on")
+        }
+        Breadcrumbs.log("isl.drag75 seat=\(asset) side=\(side) out=\(displaced)")
+        onIslandLineupChanged?(duo)
+        return true
+    }
+
+    /// 拖出召回的名单收口：被召回者所在侧回落缺省双人组
+    /// 同侧位（名单与缺省全同时撤 override 回纯缺省态）。
+    /// 宠物本体的离岛（回台/回池）由岛层走既有回台路执
+    /// 行，本方法只管名单。缺省成员在下个稳定事件被
+    /// reconcile 重新落座——召回的即时语义（离岛回台）不
+    /// 受影响。
+    func dragRecall(asset: String) {
+        guard var duo = islandOverride75,
+              let idx = duo.firstIndex(of: asset) else {
+            Breadcrumbs.log("isl.drag75 recall=\(asset) list=default")
+            return
+        }
+        duo[idx] = Self.islandFixedDuo[idx]
+        if duo == Self.islandFixedDuo {
+            islandOverride75 = nil
+            UserDefaults.standard.removeObject(forKey: Self.residentsKey75)
+        } else {
+            islandOverride75 = duo
+            UserDefaults.standard.set(duo, forKey: Self.residentsKey75)
+        }
+        Breadcrumbs.log("isl.drag75 recall=\(asset) side=\(idx)")
+        onIslandLineupChanged?(islandTargetDuo)
+    }
 
     // MARK: 灵动岛确定性落座（(72) 头条，DS 评审对账后定版）
     //
@@ -172,7 +257,7 @@ final class PetHomeRegistry {
             return
         }
         var decisions: [String] = []
-        for asset in Self.islandFixedDuo {
+        for asset in islandTargetDuo {
             switch home(of: asset) {
             case .island:
                 // 已登记在岛：仍调 arrival 自愈（岛层 seatPet
