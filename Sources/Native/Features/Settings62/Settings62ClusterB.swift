@@ -789,14 +789,9 @@ enum Settings62ClusterB {
             SettingsStore.longPressToolbarCommandPalette = $0
             Breadcrumbs.log("settings62.longPressToolbarPalette=\($0)")
         })
-        gestureGroup.addArrangedSubview(host.makeHairline())
-        gestureGroup.addArrangedSubview(segmentedRow(host: host, title: "向左滑动打开",
-            items: ["命令面板", "速记簿", "搜索", "无"],
-            selected: ["commandPalette", "sketchbook", "search", "none"]
-                .firstIndex(of: SettingsStore.swipeLeftTarget) ?? 0) {
-            SettingsStore.swipeLeftTarget = ["commandPalette", "sketchbook", "search", "none"][$0]
-            Breadcrumbs.log("settings62.swipeLeftTarget=\(SettingsStore.swipeLeftTarget)")
-        })
+        // (75)「向左滑动打开」行摘除：其唯一消费者（主页墙
+        // 左滑手势）已按 Miller 20:17 实报摘除，留行即假生
+        // 效设置。swipeLeftTarget 存储键保留备查、无消费者。
         gestureGroup.addArrangedSubview(host.makeHairline())
         gestureGroup.addArrangedSubview(switchRow(host: host, title: "海报墙 S 键打开命令窗口",
             isOn: SettingsStore.posterWallSHotkeyEnabled) {
@@ -805,7 +800,7 @@ enum Settings62ClusterB {
         })
         gestureGroup.addArrangedSubview(host.makeHairline())
         gestureGroup.addArrangedSubview(host.makeHintRow(
-            "S 键与自定义快捷键均为外接键盘场景的真绑定（海报墙/主页墙接外接键盘时生效）；触屏场景以手势快捷等价（左滑目标与长按工具条可绑动作如上）。手势开关变更下次进墙生效。"))
+            "S 键与自定义快捷键均为外接键盘场景的真绑定（海报墙/主页墙接外接键盘时生效）；触屏场景的命令面板入口为工具条「…」/命令键与长按工具条（上方开关）。主页墙左滑只平移墙面、不触发任何面板（(75) 摘除左滑打开）。手势开关变更下次进墙生效。"))
         stack.addArrangedSubview(gestureGroup)
         reg(gestureGroup, 7)
     }

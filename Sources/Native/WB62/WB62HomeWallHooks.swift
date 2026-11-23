@@ -7,8 +7,13 @@ import UIKit
 /// - 关闭主页动态背景：墙无独立动态背景层本体，消费落在墙
 ///   视图层树内「无限循环动画」的启停门控——关时把这类图层
 ///   动画 speed 归零（静态呈现保留），开时恢复。
-/// - 向左滑动打开：左滑手势按 swipeLeftTarget 分发到命令面
-///   板 / 速记簿 / 搜索（手势快捷总开关关时不装）。
+/// - 向左滑动打开：(75) 摘除（Miller 2026-11-23 20:17 真
+///   机实报：主页墙上左滑本应平移墙面，却被本手势抢去弹
+///   出命令面板、还自动聚焦搜索框拉起键盘）。墙面水平滑
+///   动自此归墙平移所有；命令面板只许从工具条明确入口
+///   （「…」/命令键）或长按工具条（自有开关）打开。
+///   swipeLeftTarget 存储键保留备查、自此无任何消费者，
+///   设置页「向左滑动打开」行已同步摘除（防假生效）。
 /// - 长按工具条打开命令面板：长按手势挂在墙视图顶部工具条
 ///   区域（工具条本体由 WA/WC 维护，本钩子只认其帧区域）。
 /// - 触屏思索按钮：(73) 撤除——独立浮灯泡收进工作台顶部
@@ -57,18 +62,19 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
             name: .foliaHomeDynamicBackgroundChanged, object: nil)
 
         if SettingsStore.gestureShortcutsEnabled {
-            let swipe = UISwipeGestureRecognizer(target: self, action: #selector(handleSwipeLeft(_:)))
-            swipe.direction = .left
-            swipe.delegate = self
-            host.view.addGestureRecognizer(swipe)
-
             let longPress = UILongPressGestureRecognizer(
                 target: self, action: #selector(handleToolbarLongPress(_:)))
             longPress.minimumPressDuration = 0.6
             longPress.delegate = self
             host.view.addGestureRecognizer(longPress)
-            Breadcrumbs.log("shortcuts62.gestures installed swipeLeft=\(SettingsStore.swipeLeftTarget) longPressPalette=\(SettingsStore.longPressToolbarCommandPalette)")
+            Breadcrumbs.log("shortcuts62.gestures installed longPressPalette=\(SettingsStore.longPressToolbarCommandPalette)")
         }
+        // (75) 左滑触发摘除自证：本钩子不再安装任何滑动识
+        // 别器——真机日志有此行即证明在跑的包里墙面左滑只
+        // 余墙体平移、无面板触发源。与「wall.menu.panel
+        // present kind=command62」对位：该行自此只许由工
+        // 具条入口/长按工具条/S 键触发。
+        Breadcrumbs.log("swipe75.off host=homewall")
         // (73) 独立浮灯泡已撤除（收进工作台控制台「导播
         // 台」行），此处不再安装任何悬浮钮。
     }
@@ -97,25 +103,9 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: 手势分发
 
-    @objc private func handleSwipeLeft(_ recognizer: UISwipeGestureRecognizer) {
-        guard recognizer.state == .recognized, let host else { return }
-        switch SettingsStore.swipeLeftTarget {
-        case "commandPalette":
-            host.miniBarPanelCommand()
-        case "search":
-            SearchHostPresenter.presentSearch(from: host)
-        case "sketchbook":
-            if let drawer = Self.findDrawer(in: host.view) {
-                drawer.setOpen(true, source: "swipeLeft62")
-            } else {
-                Breadcrumbs.log("shortcuts62.swipeLeft sketchbook-missing")
-                return
-            }
-        default:
-            return
-        }
-        Breadcrumbs.log("shortcuts62.swipeLeft target=\(SettingsStore.swipeLeftTarget)")
-    }
+    // (75) handleSwipeLeft 已整段摘除（见文件头）：连同其
+    // 独占的 findDrawer 递归查找一并删除，速记簿改走搜索
+    // 行尾按钮等既有明确入口，不再占墙面滑动。
 
     @objc private func handleToolbarLongPress(_ recognizer: UILongPressGestureRecognizer) {
         guard recognizer.state == .began,
@@ -127,14 +117,6 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
         guard point.y < host.view.safeAreaInsets.top + 64 else { return }
         host.miniBarPanelCommand()
         Breadcrumbs.log("shortcuts62.longPressToolbar palette=1")
-    }
-
-    private static func findDrawer(in view: UIView) -> SketchbookDrawerView? {
-        if let drawer = view as? SketchbookDrawerView { return drawer }
-        for subview in view.subviews {
-            if let found = findDrawer(in: subview) { return found }
-        }
-        return nil
     }
 
     // MARK: UIGestureRecognizerDelegate
