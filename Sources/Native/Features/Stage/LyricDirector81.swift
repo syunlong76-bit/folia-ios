@@ -45,8 +45,9 @@ final class LyricDirector81 {
     // MARK: - 判定入口（预备管线调用）
 
     /// 返回 (styleId, via)：via = local / ai。关开关、无候
-    /// 选、AI 失败 → nil（不写记录）。
-    func decide(track: FoliaTrack, lines: [LyricLine]) async -> (styleId: String, via: String)? {
+    /// 选、AI 失败 → nil（不写记录）。lines 为仓库原始行表
+    /// （LyricLineData：time/text），导演只需文本与行时序。
+    func decide(track: FoliaTrack, lines: [LyricLineData]) async -> (styleId: String, via: String)? {
         guard SettingsStore.directorEnabled81 else { return nil }
         let pool = Self.candidates
         guard !pool.isEmpty else { return nil }
@@ -79,7 +80,7 @@ final class LyricDirector81 {
     ]
 
     private func decideLocally(track: FoliaTrack,
-                               lines: [LyricLine],
+                               lines: [LyricLineData],
                                pool: [(id: String, name: String)]) -> String {
         let text = lines.map(\.text).joined(separator: "\n")
         var best: (name: String, style: String, score: Int)?
@@ -95,8 +96,9 @@ final class LyricDirector81 {
             Breadcrumbs.log("dir81.local track=\(track.id) mood=\(best.name) score=\(best.score)")
             return best.style
         }
-        // 节奏能量兜底：行密度（行/分钟）判快慢。
-        let span = max(lines.last?.end ?? track.duration, 1)
+        // 节奏能量兜底：行密度（行/分钟）判快慢。跨度取
+        // 末行起始时戳与曲目时长较大者（行表只有起始戳）。
+        let span = max(lines.last?.time ?? 0, track.duration, 1)
         let perMinute = Double(lines.count) / span * 60
         let fallback: String
         if perMinute >= 26 { fallback = "cadenza" }
@@ -111,7 +113,7 @@ final class LyricDirector81 {
     // MARK: - AI 模式（用户自备 OpenAI 兼容接口）
 
     private func decideByAI(track: FoliaTrack,
-                            lines: [LyricLine],
+                            lines: [LyricLineData],
                             pool: [(id: String, name: String)]) async -> String? {
         let endpoint = SettingsStore.directorEndpoint81
         let key = DirectorKeychain81.read()
