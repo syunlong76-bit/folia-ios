@@ -90,8 +90,8 @@ final class SeamToolbarView: UIView {
     /// Ponder62 导览入口改挂本条，宿主接 presentList。
     var onGuideTapped: (() -> Void)?
     var onLayoutTapped: (() -> Void)?
-    /// 「…」点按：回调带本钮作 action sheet 的锚点。
-    var onMoreTapped: ((UIView) -> Void)?
+    // (77) ④「…」菜单整页取消（Miller 23:02）：moreButton 与
+    // WallMoreMenu 一并摘除，连带功能去向见 (77) 报告④。
     var onFullscreenTapped: (() -> Void)?
 
     private let blurView = UIVisualEffectView(
@@ -110,7 +110,6 @@ final class SeamToolbarView: UIView {
     private let settingsButton = UIButton(type: .system)
     private let guideButton = UIButton(type: .system)
     private let layoutButton = UIButton(type: .system)
-    private let moreButton = UIButton(type: .system)
     private let fullscreenButton = UIButton(type: .system)
 
     // 双态（(60) 第 2 条）：grabber 横线 + 命中垫（收起态承接
@@ -161,7 +160,7 @@ final class SeamToolbarView: UIView {
     /// 全条内容视图组（双态只动这组的 alpha/transform）。
     private var contentViews: [UIView] {
         [blurView, avatarButton, avatarInitial, avatarImageView, segmentControl,
-         searchButton, settingsButton, guideButton, layoutButton, moreButton,
+         searchButton, settingsButton, guideButton, layoutButton,
          fullscreenButton]
     }
 
@@ -281,8 +280,6 @@ final class SeamToolbarView: UIView {
                       action: #selector(guideTapped))
         configureIcon(layoutButton, symbol: "square.grid.2x2", label: "切换布局",
                       action: #selector(layoutTapped))
-        configureIcon(moreButton, symbol: "ellipsis", label: "更多",
-                      action: #selector(moreTapped))
         configureIcon(fullscreenButton, symbol: "arrow.up.left.and.arrow.down.right",
                       label: "沉浸模式", action: #selector(fullscreenTapped))
 
@@ -304,18 +301,19 @@ final class SeamToolbarView: UIView {
             // 132 收至 104、图标钮 36 收至 33，整条内容
             // 6+32+8+104+4+6×33+4 = 356pt，竖屏 369 可用
             // 宽内成立；横屏更宽不顶。
-            segmentControl.widthAnchor.constraint(equalToConstant: 104),
+            // (77) ④：「…」钮摘除腾出 33pt，分段等量放宽
+            // 104→137（四格均宽 ≈34），总账不变仍 356pt。
+            segmentControl.widthAnchor.constraint(equalToConstant: 137),
             segmentControl.heightAnchor.constraint(equalToConstant: 30),
 
             searchButton.leadingAnchor.constraint(equalTo: segmentControl.trailingAnchor, constant: 4),
             settingsButton.leadingAnchor.constraint(equalTo: searchButton.trailingAnchor),
             guideButton.leadingAnchor.constraint(equalTo: settingsButton.trailingAnchor),
             layoutButton.leadingAnchor.constraint(equalTo: guideButton.trailingAnchor),
-            moreButton.leadingAnchor.constraint(equalTo: layoutButton.trailingAnchor),
-            fullscreenButton.leadingAnchor.constraint(equalTo: moreButton.trailingAnchor),
+            fullscreenButton.leadingAnchor.constraint(equalTo: layoutButton.trailingAnchor),
             fullscreenButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
         ])
-        for button in [searchButton, settingsButton, guideButton, layoutButton, moreButton, fullscreenButton] {
+        for button in [searchButton, settingsButton, guideButton, layoutButton, fullscreenButton] {
             NSLayoutConstraint.activate([
                 button.centerYAnchor.constraint(equalTo: rowGuide.centerYAnchor),
                 button.widthAnchor.constraint(equalToConstant: 33),
@@ -383,11 +381,15 @@ final class SeamToolbarView: UIView {
             && bounds.width < bounds.height
         if wrap != wrapActiveNow {
             wrapActiveNow = wrap
-            // (76) 绕岛态带身恒可见（收起 = 贴岛薄框、不是
-            // 消失）：毛玻璃 alpha 归带身管、不再随内容组
-            // 归零；回平形态恢复 (60) 双态口径。
-            blurView.alpha = wrap ? 1 : (isToolbarExpanded ? 1 : 0)
-            if wrap { blurView.transform = .identity }
+            // (77) ①：带身只存于绕岛收起态（贴岛薄框）；
+            // 展开态与平形态下面板面恒透明（控件直接浮
+            // 墙面），alpha 归带身组统一管（见
+            // applyToolbarState），此处只做形态切换落位。
+            let bandAlpha: CGFloat = (wrap && !isToolbarExpanded) ? 1 : 0
+            blurView.alpha = bandAlpha
+            bandTintView.alpha = bandAlpha
+            borderView.alpha = bandAlpha
+            blurView.transform = .identity
             Breadcrumbs.log("seam.wrap75 \(wrap ? "on" : "off")"
                 + " row=\(Int(contentRowTop))")
         }
@@ -401,12 +403,13 @@ final class SeamToolbarView: UIView {
             rowHeightConstraint?.constant = targetHeight
         }
         // 背景形态：绕岛态三层（毛玻璃 mask／色调填充／描
-        // 边）共用 (76) 单一连续轮廓路径、按当前双态取带
-        // 底（展开 = 全高、收起 = 贴岛薄框）；平形态回
-        // blurView 圆角＋自带 border。
+        // 边）共用 (76) 单一连续轮廓路径。(77) ①③：带底
+        // 恒为收起薄框 60——展开态带身整组淡出（全透明），
+        // 路径不再随双态形变（CASpring 路径形变摘除，见
+        // applyToolbarState 的 seam.flash77）；平形态回
+        // blurView 圆角＋自带 border（但 alpha 恒 0、不出面）。
         if wrap {
-            let bottom = isToolbarExpanded
-                ? bounds.height : Self.slimBandBottom
+            let bottom = Self.slimBandBottom
             let path = Self.bandOutlinePath(width: bounds.width,
                                             bottom: bottom)
             maskShapeLayer.frame = bounds
@@ -592,23 +595,28 @@ final class SeamToolbarView: UIView {
 
     private func applyToolbarState(expanded: Bool, animated: Bool, reason: String) {
         grabberHitView.isHidden = expanded
-        // (76) 绕岛态：带身走路径形变（三层同路径弹簧），
-        // 毛玻璃不进 alpha 组、不做 transform 缩放（带
-        // mask 的 UIVisualEffectView 被非恒等 transform 缩
-        // 放是闪帧嫌疑，(76) 闪屏审计定案项之一，见报告）。
+        // (77) ①③（Miller 22:58/23:02）：展开面全透明——
+        // 带身组（毛玻璃/色调/描边）只在绕岛收起态以贴岛
+        // 薄框存在，展开即整组淡出、控件直接浮墙面；平
+        // 形态两态皆无面。形变改走与内容组同一条系统弹
+        // 簧的 alpha 交叉淡化：(76) 的 CASpring 路径形变
+        // （对带 mask 的 UIVisualEffectView 逐帧改 mask
+        // 路径）是设置台点按闪屏的头号静态嫌疑，本版整
+        // 组摘除（证据链与定级见 (77) 报告③）。
         if wrapActiveNow {
-            applyWrapBandMorph(expanded: expanded, animated: animated)
+            Breadcrumbs.log("seam.morph76 \(expanded ? "exp" : "col")"
+                + " anim=\(animated ? 1 : 0)")
+            Breadcrumbs.log("seam.flash77 path=xfade")
         }
         let apply = { [self] in
             for view in contentViews {
-                if wrapActiveNow && view === blurView { continue }
+                if view === blurView { continue }
                 view.alpha = expanded ? 1 : 0
             }
-            if !wrapActiveNow {
-                blurView.transform = expanded
-                    ? .identity
-                    : CGAffineTransform(scaleX: 0.92, y: 0.55)
-            }
+            let bandAlpha: CGFloat = (wrapActiveNow && !expanded) ? 1 : 0
+            blurView.alpha = bandAlpha
+            bandTintView.alpha = bandAlpha
+            borderView.alpha = bandAlpha
             grabberView.alpha = expanded ? 0 : 1
         }
         let setInteraction = { [self] in
@@ -632,39 +640,6 @@ final class SeamToolbarView: UIView {
             setInteraction()
         }
         _ = reason
-    }
-
-    /// (76) 绕岛带形变：毛玻璃 mask／色调填充／描边三层
-    /// 共用同一连续轮廓路径，以 CASpringAnimation（系统
-    /// 弹簧语汇：刚度 210、阻尼 24、欠阻尼微过冲）从当
-    /// 前呈现路径形变到目标态（展开 = 全高带、收起 = 贴
-    /// 岛薄框 60）。轮廓命令序列两态同构、插值无跳变；
-    /// 非动画调用直接落位（init/沉浸/旋转兜底）。
-    private func applyWrapBandMorph(expanded: Bool, animated: Bool) {
-        let bottom = expanded ? bounds.height : Self.slimBandBottom
-        let target = Self.bandOutlinePath(width: bounds.width,
-                                          bottom: bottom)
-        Breadcrumbs.log("seam.morph76 \(expanded ? "exp" : "col")"
-            + " anim=\(animated ? 1 : 0)")
-        let layers: [CAShapeLayer] = [
-            maskShapeLayer, bandTintView.shapeLayer, borderView.shapeLayer,
-        ]
-        for layer in layers {
-            let from = (layer.presentation() as? CAShapeLayer)?.path
-                ?? layer.path
-            layer.path = target
-            if animated, from != target {
-                let spring = CASpringAnimation(keyPath: "path")
-                spring.fromValue = from
-                spring.toValue = target
-                spring.mass = 1
-                spring.stiffness = 210
-                spring.damping = 24
-                spring.initialVelocity = 0
-                spring.duration = spring.settlingDuration
-                layer.add(spring, forKey: "bandMorph76")
-            }
-        }
     }
 
     private func configureIcon(_ button: UIButton, symbol: String, label: String,
@@ -780,75 +755,10 @@ final class SeamToolbarView: UIView {
         InteractionTrace.shared.beginAction("layout")
         onLayoutTapped?()
     }
-    @objc private func moreTapped() { noteToolbarInteraction(); onMoreTapped?(moreButton) }
     @objc private func fullscreenTapped() {
         noteToolbarInteraction()
         InteractionTrace.shared.beginAction("immersive")
         onFullscreenTapped?()
-    }
-}
-
-/// 「…」菜单（3.7 (55) 工作流 E）：五项——喜欢的音乐 /
-/// 云盘 / 过滤当前页 / 管理隐藏 / 回到播放页。以 action
-/// sheet 呈现（iPad/横屏经锚点 popover 落位），每次点开按
-/// 当下状态现建：无队列时「回到播放页」置灰（UIAlertAction
-/// .isEnabled = false），过滤激活时该项带状态文案。动作全
-/// 部由宿主以闭包注入，本枚举只管菜单形态与面包屑词根。
-enum WallMoreMenu {
-
-    struct Actions {
-        var liked: () -> Void
-        var cloud: () -> Void
-        var filter: () -> Void
-        var manageHidden: () -> Void
-        var backToStage: () -> Void
-        /// (74) 工作台分区承接：原侧栏分区行（歌单/电台/专辑/
-        /// 本地）随工作台撤除收进本菜单，宿主按分区可见性
-        /// 设置过滤后注入（标题与原分区行同名）。
-        var sections: [(title: String, run: () -> Void)] = []
-    }
-
-    static func present(from host: UIViewController, anchor: UIView,
-                        hasQueue: Bool, filterActive: Bool, actions: Actions) {
-        Breadcrumbs.log("wall.menu.open hasQueue=\(hasQueue) filter=\(filterActive)")
-        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
-        sheet.addAction(UIAlertAction(title: "喜欢的音乐", style: .default) { _ in
-            Breadcrumbs.log("wall.menu.pick item=liked")
-            actions.liked()
-        })
-        sheet.addAction(UIAlertAction(title: "云盘", style: .default) { _ in
-            Breadcrumbs.log("wall.menu.pick item=cloud")
-            actions.cloud()
-        })
-        sheet.addAction(UIAlertAction(
-            title: filterActive ? "过滤当前页（已激活）" : "过滤当前页",
-            style: .default) { _ in
-            Breadcrumbs.log("wall.menu.pick item=filter")
-            actions.filter()
-        })
-        sheet.addAction(UIAlertAction(title: "管理隐藏", style: .default) { _ in
-            Breadcrumbs.log("wall.menu.pick item=hidden")
-            actions.manageHidden()
-        })
-        let back = UIAlertAction(title: "回到播放页", style: .default) { _ in
-            Breadcrumbs.log("wall.menu.pick item=stage")
-            actions.backToStage()
-        }
-        back.isEnabled = hasQueue
-        sheet.addAction(back)
-        for section in actions.sections {
-            sheet.addAction(UIAlertAction(title: section.title, style: .default) { _ in
-                Breadcrumbs.log("wall.menu.pick item=section-\(section.title)")
-                section.run()
-            })
-        }
-        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
-        if let popover = sheet.popoverPresentationController {
-            popover.sourceView = anchor
-            popover.sourceRect = anchor.bounds
-            popover.permittedArrowDirections = [.up, .down]
-        }
-        host.present(sheet, animated: true)
     }
 }
 
@@ -1026,7 +936,6 @@ enum SeamToolbarForwarding {
             Breadcrumbs.log("seam.lattice forward")
             QueueLatticeViewController.present(from: home)
         case "layout": home.seamToggleLayout()
-        case "more": home.seamMoreTapped(anchor: home.view)
         case "fullscreen": home.seamSetImmersive(true)
         default: break
         }

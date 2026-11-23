@@ -2857,9 +2857,6 @@ extension HomeWallViewController {
             Ponder62.presentList(from: self)
         }
         toolbar.onLayoutTapped = { [weak self] in self?.seamToggleLayout() }
-        toolbar.onMoreTapped = { [weak self] anchor in
-            self?.seamMoreTapped(anchor: anchor)
-        }
         toolbar.onFullscreenTapped = { [weak self] in self?.seamSetImmersive(true) }
         seamToolbar = toolbar
 
@@ -3467,93 +3464,10 @@ extension HomeWallViewController {
         }
     }
 
-    // MARK: 「…」菜单五项
-
-    func seamMoreTapped(anchor: UIView) {
-        let hasQueue = PlaybackEngine.shared.currentTrack != nil
-            || !QueueManager.shared.queue.isEmpty
-        // (74) 工作台分区承接：歌单/电台/专辑/本地四分区收进
-        // 本菜单（搜索已有工具条钮、设置已有齿轮、导览已有
-        // 灯泡，不重复列）；显隐读分区可见性映射（设置页
-        // 主页页签开关的消费点，applyHomeTabs62Visibility）。
-        var sections: [(title: String, run: () -> Void)] = []
-        let sectionDefs: [(String, () -> WorkbenchSectionViewController)] = [
-            ("歌单", { WorkbenchPlaylistListViewController() }),
-            ("电台", { WorkbenchRadioViewController() }),
-            ("专辑", { WorkbenchAlbumListViewController() }),
-            ("本地", { WorkbenchLocalViewController() }),
-        ]
-        for (title, make) in sectionDefs
-        where seamSectionVisibility62[title] ?? true {
-            sections.append((title: title, run: { [weak self] in
-                self?.seamOpenSection74(make())
-            }))
-        }
-        WallMoreMenu.present(
-            from: self, anchor: anchor,
-            hasQueue: hasQueue,
-            filterActive: !seamFilterText.isEmpty,
-            actions: WallMoreMenu.Actions(
-                liked: { [weak self] in self?.seamOpenLikedPlaylist() },
-                cloud: { [weak self] in
-                    guard let self else { return }
-                    let drive = CloudDriveViewController()
-                    drive.modalPresentationStyle = .fullScreen
-                    self.present(drive, animated: true)
-                },
-                filter: { [weak self] in self?.seamShowFilterBar() },
-                manageHidden: { [weak self] in
-                    guard let self else { return }
-                    let manage = HiddenPlaylistsViewController()
-                    manage.modalPresentationStyle = .fullScreen
-                    self.present(manage, animated: true)
-                },
-                backToStage: { [weak self] in self?.openNativeStageFromHome() },
-                sections: sections))
-    }
-
-    /// (74) 分区页呈现（与原工作台 openSection 同路：全屏 +
-    /// dismissToWall 关回墙）。
-    private func seamOpenSection74(_ vc: WorkbenchSectionViewController) {
-        vc.dismissToWall = { [weak self] in self?.dismiss(animated: true) }
-        vc.modalPresentationStyle = .fullScreen
-        present(vc, animated: true)
-    }
-
-    /// 喜欢的音乐：原始全量里 specialType=5 的那张（与工作台
-    /// 歌单列表同一判据），走既有歌单曲目墙通路；未登录/无此
-    /// 歌单时诚实提示，不造假入口。
-    private func seamOpenLikedPlaylist() {
-        guard let liked = seamRawPlaylists.first(where: { $0.isLikedCollection }) else {
-            Breadcrumbs.log("wall.menu.liked missing")
-            let alert = UIAlertController(
-                title: "未找到「我喜欢的音乐」",
-                message: "可能尚未登录网易云，或歌单还没加载完成。",
-                preferredStyle: .alert)
-            alert.addAction(UIAlertAction(title: "好", style: .default))
-            present(alert, animated: true)
-            return
-        }
-        Breadcrumbs.log("wall.menu.liked id=\(liked.id)")
-        seamPresentPlaylistWall(id: liked.id, title: liked.name, coverUrl: liked.coverUrl)
-    }
-
-    /// 歌单曲目墙呈现（与点卡同路：预加载 + 同族转场）。
-    private func seamPresentPlaylistWall(id: String, title: String, coverUrl: String?) {
-        let wall = WallPrototypeViewController(
-            playlistId: id, title: title, coverUrl: coverUrl)
-        wall.modalPresentationStyle = .fullScreen
-        wall.modalTransitionStyle = .crossDissolve
-        beginPosterTransition(source: "menu", playlistId: id)
-        wall.startPreload()
-        Task { [weak self] in
-            guard let self else { return }
-            let seed = await wall.awaitSeed(timeout: 0.25)
-            self.present(wall, animated: true) { [weak self] in
-                self?.endPosterTransition(source: "menu", seedReady: seed)
-            }
-        }
-    }
+    // (77) ④「…」菜单整页取消：seamMoreTapped 与其专属落点
+    // （喜欢歌单直达/分区页呈现）随页摘除；连带功能去向见
+    // (77) 报告④。过滤条与隐藏管理页本体保留（dormant，
+    // 无入口——报告已明示随页取消、不悄悄蒸发）。
 
     // MARK: 点播台面板通知（任务三）
     //

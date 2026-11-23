@@ -2217,10 +2217,6 @@ final class WallPrototypeViewController: UIViewController,
             guard let self else { return }
             SeamToolbarForwarding.forward("layout", from: self)
         }
-        toolbar.onMoreTapped = { [weak self] _ in
-            guard let self else { return }
-            SeamToolbarForwarding.forward("more", from: self)
-        }
         toolbar.onFullscreenTapped = { [weak self] in
             guard let self else { return }
             SeamToolbarForwarding.forward("fullscreen", from: self)

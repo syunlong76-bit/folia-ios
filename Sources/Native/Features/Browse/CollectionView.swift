@@ -29,9 +29,6 @@ struct SeamToolbarBridge: UIViewRepresentable {
         bar.onLayoutTapped = {
             SeamToolbarForwarding.activate("layout", from: bar)
         }
-        bar.onMoreTapped = { _ in
-            SeamToolbarForwarding.activate("more", from: bar)
-        }
         bar.onFullscreenTapped = {
             SeamToolbarForwarding.activate("fullscreen", from: bar)
         }

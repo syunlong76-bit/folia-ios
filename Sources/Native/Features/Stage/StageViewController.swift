@@ -2435,7 +2435,6 @@ final class StageViewController: UIViewController {
         toolbar.onGuideTapped = { [weak self] in self?.stageSeamForward74("guide") }
         toolbar.onLatticeTapped = { [weak self] in self?.stageSeamForward74("lattice") }
         toolbar.onLayoutTapped = { [weak self] in self?.stageSeamForward74("layout") }
-        toolbar.onMoreTapped = { [weak self] _ in self?.stageSeamForward74("more") }
         toolbar.onFullscreenTapped = { [weak self] in self?.stageSeamForward74("fullscreen") }
         stageSeamToolbar = toolbar
         Breadcrumbs.log("stage.seam74 installed")
