@@ -1579,8 +1579,7 @@ final class MiniBarPetStage: UIView {
     fileprivate func petPressCloseTriggered(_ actor: MiniPetActor) {
         guard petsActive, !farewellActive else { return }
         Breadcrumbs.log("pet.gesture state=close-trigger asset=\(actor.asset)")
-        SettingsStore.miniPetsEnabled = false
-        StickerSettings.miniPetsEnabled = false
+        StickerSettings.setMiniPetsEnabled(false, src: "petPress3s")
         // (73)：关台只辖台上 cast；岛民常驻不随全局关撤下
         // （reconcile 已解耦，见 PetHomeRegistry (73) 注），
         // 本调用仅作稳定事件对账（岛民维持落座自愈）。

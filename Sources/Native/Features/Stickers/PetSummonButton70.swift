@@ -250,9 +250,9 @@ final class PetSummonButton70: UIView {
         settleToIdle()
 
         if StickerSettings.miniPetsEnabled {
-            // 关闭：开关双写 off＋当前面 dismiss 告别离场。
-            SettingsStore.miniPetsEnabled = false
-            StickerSettings.miniPetsEnabled = false
+            // 关闭：开关双写 off（(76) 收口带 src）＋当前面
+            // dismiss 告别离场。
+            StickerSettings.setMiniPetsEnabled(false, src: "paw3s")
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             Breadcrumbs.log("pet.switch off via=corner3s")
             let stage = currentFacePetStage()
@@ -262,10 +262,10 @@ final class PetSummonButton70: UIView {
             // 解耦），本调用仅作稳定事件对账。
             PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         } else {
-            // 召唤：开关双写 on＋当前面掉落入场（写入场门控
-            // 读开关，故先写后调，与旧组件同序）。
-            SettingsStore.miniPetsEnabled = true
-            StickerSettings.miniPetsEnabled = true
+            // 召唤：开关双写 on（(76) 收口带 src）＋当前面
+            // 掉落入场（写入场门控读开关，故先写后调，与旧
+            // 组件同序）。
+            StickerSettings.setMiniPetsEnabled(true, src: "paw2s")
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             Breadcrumbs.log("pet.switch on via=corner2s")
             // (75) 第 6 项定案：召唤＝用户明确意图，开关已

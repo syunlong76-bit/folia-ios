@@ -178,8 +178,7 @@ final class PetHomeRegistry {
         setHome(asset, .island)
         onIslandArrival?(asset)
         if !StickerSettings.miniPetsEnabled {
-            SettingsStore.miniPetsEnabled = true
-            StickerSettings.miniPetsEnabled = true
+            StickerSettings.setMiniPetsEnabled(true, src: "dragSeat")
             Breadcrumbs.log("isl.drag75 pets=on")
         }
         Breadcrumbs.log("isl.drag75 seat=\(asset) side=\(side) out=\(displaced)")

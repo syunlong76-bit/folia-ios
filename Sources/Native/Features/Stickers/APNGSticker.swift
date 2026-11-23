@@ -539,4 +539,15 @@ enum StickerSettings {
         }
         set { UserDefaults.standard.set(newValue, forKey: miniPetsKey) }
     }
+
+    /// (76) ⑨写入收口：全部 miniPets 写入点改走此口（双
+    /// 存储同值双写，与既有各点口径一致），每次写入落
+    /// pet.switch76 src= 打点——值再变当场留名，不再出现
+    /// 「没人关过却为关」无从对账（审计与定案等级见
+    /// (76) 报告⑨）。
+    static func setMiniPetsEnabled(_ value: Bool, src: String) {
+        SettingsStore.miniPetsEnabled = value
+        miniPetsEnabled = value
+        Breadcrumbs.log("pet.switch76 src=\(src) v=\(value ? 1 : 0)")
+    }
 }

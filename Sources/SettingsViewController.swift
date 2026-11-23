@@ -995,8 +995,10 @@ final class SettingsViewController: UIViewController {
     // (53) 落盘改经 SettingsStore，同步写旧键，StickerSettings
     // 读者行为不变）。
     @objc private func companionSwitchChanged() {
-        SettingsStore.miniPetsEnabled = companionSwitch.isOn
-        StickerSettings.miniPetsEnabled = companionSwitch.isOn
+        // (76) ⑨：写入改走收口（双写不变、加 src=settings
+        // 打点 pet.switch76）。
+        StickerSettings.setMiniPetsEnabled(companionSwitch.isOn,
+                                           src: "settings")
         Breadcrumbs.log("settings.miniPets value=\(companionSwitch.isOn)")
         // (72)：设置页开关同为岛民对账的稳定事件（开→落座、
         // 关→撤岛）；StickerSettings 显式同写，与召唤钮/长按

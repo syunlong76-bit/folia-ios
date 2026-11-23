@@ -1,6 +1,6 @@
 # (76) 热修包交付报告 — 2026-11-23
 
-基线 release-75 → 分支 release-76（提交 515b63d9）。范围 = Miller 21:43–21:57 对 (75) 的真机否决与点名八项 + ③验收补条，共九个条目，无夹带。交付口径三档严格分开：本报告所述均为「代码已改」；验包结果见文末交付信息；全部条目均未真机验过。
+基线 release-75 → 分支 release-76。范围 = Miller 21:43–22:17 对 (75) 的真机否决与点名九项（①–⑨）+ ③验收补条 + 岛格局方案 A 收口，无夹带。交付口径三档严格分开：本报告所述均为「代码已改」；验包结果见文末交付信息；全部条目均未真机验过。
 
 ---
 
@@ -100,6 +100,15 @@
 
 摘除对象经代码定位确认：歌单页（WallPrototype）页级关闭钮 closeChrome 整件（34pt 毛玻璃圆 + 44pt 命中容器）——(75) 曾专门把它提到工具条带之上（展开带毛玻璃会盖住它），即 Miller 所指「与工具条控制区干涉」的实物。整件撤除：视觉、空占位、命中区三者全无；连带撤除其按压反馈 closePressBegan/Ended 与 (75) 的提层行。关闭路径完整性：左缘手势（④，与本项同批落地、落点即原 closeTapped 契约，加载态经背板 requestClose 同路可退）+ 背板 onPendingClose + 展开卡点卡外/下滑等既有路径全部保留——不存在无关闭路径的中间态。**入场动画页关闭钮不在此列，未动**（定版口径）。落痕改 `wall.chrome playlist close=removed76`。
 
+## ⑨ miniPets=false 非用户操作：存储审计 + 一次性修复 + 写入打点（定案等级单列）
+
+Miller 22:17 确认：从没动过设置里的宠物开关。(75) 与更早会话日志均实证 appStart 即 false、全程 petsActive=false。审计三靶逐项结论：
+
+- **已证实：不是 key/默认值/迁移问题（靶①③排除）。** 两存储源同源一致：StickerSettings 读键 `folia.stickers.miniPetsEnabled`，**键不存在 → 默认 true**（getter 显式判空）；SettingsStore 读新键 `settings.general.miniPetsEnabled`、缺失时回落 legacy 键（即同一个 folia.stickers 键）并顺手迁值、再缺失默认 true，写时双写两键。各读取源（pet.settings.read 的 src=appStart / src=barPresentation、台层门控）读的都是这一条链——不存在「某处读到另一个默认 false 的键」。
+- **已证实：false 是被持久化写入的值。** 键不存在必读 true，而设备上 appStart 即 false ⇒ 该键在某个历史时刻被写过 false 且跨版本持久（覆盖安装不清 UserDefaults）。现行写 false 的路径只有三条：设置页开关（SettingsViewController，Miller 确认从未用）、爪印长按关（paw3s；(75) 日志 paw 事件 0 次、本会话排除）、**长按宠物静止 3.0s 关（petPressCloseTriggered，(60) 起存在）**。
+- **未定案（不可再追、如实分级）：具体哪一次历史写入。** (76) 之前全部写入点无 src 打点、当时日志未留存至今，无法实锤。最可能为长按宠物静止 3 秒：其手势阶梯与「长按拖动」共用起手（0.35s 抓起 / 1.0s 可拖 / 移动 >10pt 转拖 / **静止满 3.0s 触发全局关闭**）——想拖宠物却没及时移动，3 秒一到静默关全局且无二次确认，宠物消失后用户无从知道原因。此为基于手势设计的推断、非实锤；与前科同型（旧 companionEnabled 键当年同样被无提示手势静默写 false 关死宠物系统，(29) 才换键）。
+- **处置（已落码）**：①一次性修复（AppDelegate 启动、标记键 `folia.miniPets.restore76Done` 防重复）：当前读为关 → 恢复为开（src=repair76)，置于 appStart 读痕之前使启动行即为修复后值；修复只跑一次、之后开关语义完全归用户、再关不自动恢复。②全写入收口：新增 `StickerSettings.setMiniPetsEnabled(_:src:)`，全部 6 个写入点迁移（settings / paw3s / paw2s / petPress3s / dragSeat / repair76)，每次写入落 `pet.switch76 src= v=`——值再变，日志当场留名。③手势关闭路径本身保留（属既定交互口径），但自此有痕可查。
+
 ---
 
 ## iOS 适配自查
@@ -120,6 +129,7 @@
 6. ⑥ 播放页横竖屏来回转：跟手度（对照主页）、汪汪队形态下双向各一次。
 7. ⑦ 播放页单击：歌名 + 返回键约 0.35s 后出现；三击切特效时歌名不闪。
 8. ⑧ 歌单页右上无 ✕、顶区干净；左缘能关、加载中能退。
+9. ⑨ (76) 首启后宠物应自动回来（一次性修复生效、appStart 日志 miniPets=true 且有 pet.switch76 src=repair76 一行）；此后在设置里关/开宠物应即时生效且不再自己变回去。
 
 ## 交付信息
 

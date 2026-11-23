@@ -36,6 +36,22 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         }
         Breadcrumbs.log("app.build short=\(shortVer) build=\(buildVer) dog11 \(dogDesc)")
         AppProcessMark.launchUptime = ProcessInfo.processInfo.systemUptime
+        // (76) ⑨一次性修复（审计与定案等级见 (76) 报告⑨）：
+        // miniPets 持久 false 非设置页操作（Miller 22:17 确
+        // 认从没动过设置开关）；双读取在键不存在时都默认
+        // 开——false 只能是历史手势路径（爪印长按关/长按宠
+        // 物静止 3 秒关，均无二次确认）的静默写入且跨版本
+        // 持久至今。只修一次（标记键防重复）：当前为关则
+        // 恢复为开并以 src=repair76 留名；修复后开关语义完
+        // 全归用户、再关不自动恢复。置于 appStart 读痕之
+        // 前，使启动行即为修复后值。
+        let restoreKey76 = "folia.miniPets.restore76Done"
+        if UserDefaults.standard.object(forKey: restoreKey76) == nil {
+            UserDefaults.standard.set(true, forKey: restoreKey76)
+            if !StickerSettings.miniPetsEnabled {
+                StickerSettings.setMiniPetsEnabled(true, src: "repair76")
+            }
+        }
         Breadcrumbs.log("pet.settings.read src=appStart"
             + " miniPets=\(StickerSettings.miniPetsEnabled)"
             + " legacyCompanion=\(StickerSettings.companionEnabled)")
