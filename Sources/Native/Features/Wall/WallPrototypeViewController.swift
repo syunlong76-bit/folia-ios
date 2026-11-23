@@ -3505,6 +3505,36 @@ enum WallPlayLoadState {
 
 /// 墙海报 cell：封面 + 底部标题。圆角用图层裁切、阴影用 shadowPath
 /// 挂在外层容器（规格 §4：禁止默认离屏渲染路径）。
+/// (78) 第 6 条砖面量测：cell 配置结果计数——同步出图 /
+/// 低档图占位 / 纯色占位（无图）三类，由 WallScrollMetrics
+/// 逐秒冲刷成 wall.tile78，与加载器 wall.dec78 对读区分
+/// 「砖未绘制」与「解码未完成」（判读口径见 NativeCover
+/// Loader 的 dec78 注释）。全局计数（两面墙＋拼贴共用同
+/// 一 cell 类），锁保护跨线程配置。
+enum WallTileStats78 {
+    private static let lock = NSLock()
+    private static var syncImg = 0
+    private static var phImg = 0
+    private static var phBlank = 0
+
+    static func note(sync: Bool, placeholderImage: Bool) {
+        lock.lock()
+        if sync { syncImg += 1 }
+        else if placeholderImage { phImg += 1 }
+        else { phBlank += 1 }
+        lock.unlock()
+    }
+
+    /// 取走并清零（无样本返回 nil）。
+    static func take() -> (sync: Int, phImg: Int, blank: Int)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard syncImg + phImg + phBlank > 0 else { return nil }
+        defer { syncImg = 0; phImg = 0; phBlank = 0 }
+        return (syncImg, phImg, phBlank)
+    }
+}
+
 final class WallPosterCell: UICollectionViewCell {
 
     static let reuseId = "WallPosterCell"
@@ -3968,6 +3998,7 @@ final class WallPosterCell: UICollectionViewCell {
             stopPlaceholderPulse()
             imageView.backgroundColor = .clear
             imageView.image = cached
+            WallTileStats78.note(sync: true, placeholderImage: false)
             return
         }
         // (72) 主色占位：无目标档图时先垫色——任一档已解码图
@@ -3980,10 +4011,12 @@ final class WallPosterCell: UICollectionViewCell {
             coverPlaceholder = true
             stopPlaceholderPulse()
             imageView.image = placeholder
+            WallTileStats78.note(sync: false, placeholderImage: true)
         } else {
             coverPlaceholder = false
             imageView.image = nil
             startPlaceholderPulse()
+            WallTileStats78.note(sync: false, placeholderImage: false)
         }
         loadTask = Task { [weak self] in
             let image = await NativeCoverLoader.shared.image(for: urlString, tier: tier)

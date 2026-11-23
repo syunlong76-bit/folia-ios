@@ -738,6 +738,13 @@ final class WallScrollMetrics: NSObject {
             + " events=\(panEventCount)"
             + " dx=\(Self.fmt(panAbsDx))"
             + " dy=\(Self.fmt(panAbsDy))")
+        // (78) 第 6 条：砖面占位计数同秒冲刷（与 wall.scroll
+        // /wall.dec78 对读，判读口径见 NativeCoverLoader）。
+        if let tile = WallTileStats78.take() {
+            Breadcrumbs.log("wall.tile78 wall=\(wallName)"
+                + " img=\(tile.sync) phimg=\(tile.phImg)"
+                + " blank=\(tile.blank)")
+        }
         windowStart = CACurrentMediaTime()
         intervalsMs = []
         didScrollMaxMs = 0

@@ -1063,7 +1063,11 @@ final class HomeWallViewController: UIViewController,
                 guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier)
                 else { continue }
                 if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { continue }
-                Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
+                // (78) 第 6 条：预取必须走低优先级（wallproto
+                // (72) 已落、本宿主漏）——默认 .visible 会让过期
+                // 预取占满 4 个取图槽、真可见 cell 在后面干等，
+                // 是快滑整墙占位的可疑堵点之一。
+                Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier, priority: .prefetch) }
             }
             return
         }
@@ -1078,7 +1082,8 @@ final class HomeWallViewController: UIViewController,
             let tier = NativeCoverLoader.wallTier(raw: pic, pixelExtent: pixelExtent)
             guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { continue }
             if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { continue }
-            Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier) }
+            // (78) 第 6 条：同上，预取走 .prefetch 低优先级。
+            Task { _ = await NativeCoverLoader.shared.image(for: urlString, tier: tier, priority: .prefetch) }
         }
     }
 

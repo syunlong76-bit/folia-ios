@@ -38,6 +38,10 @@ final class NativeCoverLoader {
         private let limit = 4
         private var waiters: [(priority: Int,
                                 continuation: CheckedContinuation<Void, Never>)] = []
+        /// (78) 第 6 条量测：等待队列峰值深度（dec78 汇总取
+        /// 走并清零）——快滑黑砖到底是不是堵在取图队列里，
+        /// 下轮日志凭此定案，不再靠猜。
+        private var peakWaiting = 0
 
         func acquire(priority: Int) async {
             if running < limit {
@@ -47,7 +51,13 @@ final class NativeCoverLoader {
             await withCheckedContinuation { continuation in
                 waiters.append((priority, continuation))
                 waiters.sort { $0.priority > $1.priority }
+                peakWaiting = max(peakWaiting, waiters.count)
             }
+        }
+
+        func takePeakWaiting() -> Int {
+            defer { peakWaiting = 0 }
+            return peakWaiting
         }
 
         func release() {
@@ -72,6 +82,19 @@ final class NativeCoverLoader {
     private var statSlow = 0
     private var statLoadsSinceLog = 0
     private let statLock = NSLock()
+    /// (78) 第 6 条解码侧量测（与 cvr.stat 分开记）：每 40 次
+    /// 网络取图汇总一行 wall.dec78——队列等待（排队深度与耗
+    /// 时）与解码耗时分开计，配合 cell 侧 wall.tile78（占位
+    /// 计数）区分「砖未绘制」与「解码未完成」：tile78 空占
+    /// 位多＋dec78 队列深＝取图/解码堵；tile78 空占位多＋
+    /// dec78 队列浅＝请求根本没发出去（查 cell 配置/实例
+    /// 集）；tile78 正常而画面黑＝绘制层问题（查实例/帧）。
+    private var decSamples = 0
+    private var decWaitSumMs = 0
+    private var decWaitMaxMs = 0
+    private var decTimeSumMs = 0
+    private var decTimeMaxMs = 0
+    private var decStarved = 0
     private let session: URLSession
     private var memoryObserver: NSObjectProtocol?
 
@@ -85,8 +108,15 @@ final class NativeCoverLoader {
             forName: UIApplication.didReceiveMemoryWarningNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
+            // (78) 第 6 条：内存警告落痕（wall.dec78 memwarn）
+            // ——整墙同时变占位的头号嫌疑事件之一（清缓存后
+            // 若同窗再遇 reloadData，全墙 cell 重新配置、全
+            // 部露占位约 1 秒，与 (77) 录屏的 1.2s 黑窗形态
+            // 吻合），下轮日志先看本行与黑窗时刻对不对位。
+            // 主色缓存本版起不清：它体量极小、正是占位救命
+            // 色，清了只会让占位退回哈希色、无任何收益。
+            Breadcrumbs.log("wall.dec78 memwarn=1")
             self?.cache.removeAllObjects()
-            self?.colorCache.removeAllObjects()
         }
     }
 
@@ -240,6 +270,45 @@ final class NativeCoverLoader {
         statLock.unlock()
     }
 
+    /// (78) 第 6 条：单次网络取图的队列等待＋解码耗时入账；
+    /// 满 40 个样本汇总一行 wall.dec78 并清零（队列峰值向
+    /// 调度器现取）。starve＝可见优先级在队列里干等 >500ms
+    /// 的次数——快滑时新行封面被堵在队列里的直接计数。
+    private func noteDec78(waitMs: Int, decMs: Int?,
+                           priority: LoadPriority) async {
+        statLock.lock()
+        decSamples += 1
+        decWaitSumMs += waitMs
+        decWaitMaxMs = max(decWaitMaxMs, waitMs)
+        if let decMs {
+            decTimeSumMs += decMs
+            decTimeMaxMs = max(decTimeMaxMs, decMs)
+        }
+        if priority == .visible && waitMs > 500 { decStarved += 1 }
+        let ready = decSamples >= 40
+        var snapshot: (n: Int, waitAvg: Int, waitMax: Int,
+                       decAvg: Int, decMax: Int, starved: Int)?
+        if ready {
+            snapshot = (decSamples,
+                        decWaitSumMs / max(decSamples, 1), decWaitMaxMs,
+                        decTimeSumMs / max(decSamples, 1), decTimeMaxMs,
+                        decStarved)
+            decSamples = 0
+            decWaitSumMs = 0
+            decWaitMaxMs = 0
+            decTimeSumMs = 0
+            decTimeMaxMs = 0
+            decStarved = 0
+        }
+        statLock.unlock()
+        guard let snapshot else { return }
+        let peak = await scheduler.takePeakWaiting()
+        Breadcrumbs.log("wall.dec78 n=\(snapshot.n) qpk=\(peak)"
+            + " wait=\(snapshot.waitAvg)/\(snapshot.waitMax)ms"
+            + " dec=\(snapshot.decAvg)/\(snapshot.decMax)ms"
+            + " starve=\(snapshot.starved)")
+    }
+
     /// 加载并按档降采样解码；同 URL 全局一份（NSCache）。
     /// (72)：在途合并 + 优先级调度（见类头注）。
     func image(for urlString: String, tier: Int,
@@ -278,13 +347,17 @@ final class NativeCoverLoader {
         guard let url = URL(string: urlString) else { return nil }
         noteStat(hit: false)
         let started = Date()
+        // (78) 第 6 条：队列等待单独计时（acquire 前后）。
+        let waitStart = Date()
         await scheduler.acquire(priority: priority.rawValue)
+        let waitMs = Int(Date().timeIntervalSince(waitStart) * 1000)
         let data: Data
         let response: URLResponse
         do {
             (data, response) = try await fetchDataWithConnectRetry(url)
         } catch {
             await scheduler.release()
+            await noteDec78(waitMs: waitMs, decMs: nil, priority: priority)
             FoliaFileLog.write("cover", "native load error tier=\(tier) url=\(urlString)")
             return nil
         }
@@ -293,13 +366,18 @@ final class NativeCoverLoader {
               (200...299).contains(http.statusCode) else {
             // 失败留痕（地址是 base64 载荷、无明文主机）：下次封面
             // 问题凭日志定位，不靠猜。
+            await noteDec78(waitMs: waitMs, decMs: nil, priority: priority)
             FoliaFileLog.write("cover", "native load bad status tier=\(tier) url=\(urlString)")
             return nil
         }
+        // (78) 第 6 条：解码耗时单独计时（降采样＋主色同段）。
+        let decStart = Date()
         let decoded = await Task.detached(priority: .utility) {
             (image: Self.downsample(data: data, targetPixels: tier),
              color: Self.averageColor(data: data))
         }.value
+        let decMs = Int(Date().timeIntervalSince(decStart) * 1000)
+        await noteDec78(waitMs: waitMs, decMs: decMs, priority: priority)
         if Date().timeIntervalSince(started) > 0.8 { noteSlowLoad() }
         if let image = decoded.image {
             cache.setObject(image, forKey: key, cost: data.count)
