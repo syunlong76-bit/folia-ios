@@ -102,6 +102,7 @@ final class StageViewController: UIViewController {
     // 队列入口保留点播台面板页签与命令面板，QueuePanel 本体不动。
     private var stageBarWidthConstraint: NSLayoutConstraint?
     private var stageBarHeightConstraint: NSLayoutConstraint?
+    private var stageBarBottomC: NSLayoutConstraint?
     private var stageTrackBottomConstraint: NSLayoutConstraint?
     /// (74) 小横线形态的轨道约束组（同两面墙台口径）。
     private var stageTrackLeadC: NSLayoutConstraint?
@@ -2473,6 +2474,25 @@ final class StageViewController: UIViewController {
                 + " col=\(self.stageBarCollapsed ? 1 : 0)"
                 + " h=\(Int(bar.bounds.height))")
         }
+        // (77) ⑥：派发段见证补齐三宿主同构＋认领/救援接
+        // 线。本宿主识别器位只有双击一位（单击走 require
+        // 链），recog 位按本宿主实有记。
+        bar.onDispatchCancelled = { [weak self] in
+            guard let self else { return }
+            Breadcrumbs.log("minibar.dead76 host=stage at=cancel"
+                + " recog=\((self.stageBarDoubleTap?.isEnabled ?? false) ? 1 : 0)")
+        }
+        bar.onDispatchUnclaimed = { [weak self] in
+            guard let self, self.stageBarCollapsed else { return }
+            Breadcrumbs.log("minibar.dead76 host=stage at=noRecog"
+                + " recog=\((self.stageBarDoubleTap?.isEnabled ?? false) ? 1 : 0)")
+        }
+        bar.crumbHostTag = "stage"
+        bar.onCancelledTapRescue = { [weak self] in
+            guard let self, self.stageBarCollapsed else { return }
+            Breadcrumbs.log("minibar.disp77 host=stage via=rescue")
+            self.expandStageBar()
+        }
         // 宠物层（细修 B）：详情页台班底，钩子与墙等价。
         let petStage = MiniBarPetStage(bar: bar, role: .stage)
         view.addSubview(petStage)
@@ -2617,6 +2637,8 @@ final class StageViewController: UIViewController {
         let seekPan = UIPanGestureRecognizer(target: self, action: #selector(stageSeekPanned(_:)))
         seekHit.addGestureRecognizer(seekPan)
 
+        stageBarBottomC = bar.bottomAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10)
         stageBarWidthConstraint = bar.widthAnchor.constraint(
             equalToConstant: min(UIScreen.main.bounds.width, UIScreen.main.bounds.height) - 24)
         stageBarHeightConstraint = bar.heightAnchor.constraint(
@@ -2633,9 +2655,9 @@ final class StageViewController: UIViewController {
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-            // (75) 第 5 项①：底锚 −10→−54，台身下缘恒在
-            // 爪印钮带之上 8pt（同主页墙注）。
-            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -54),
+            // (77) ②⑤：底锚按形态切换（展开 −10/收起
+            // +31.5 与 indicator 重合，见 applyStageBarBottom77）。
+            stageBarBottomC!,
 
             blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
@@ -2846,13 +2868,13 @@ final class StageViewController: UIViewController {
         let themed = stageKnobSkin != nil
         stageProgressKnob?.backgroundColor = themed ? .clear : .white
         stageProgressKnob?.layer.shadowOpacity = themed ? 0 : 0.9
-        // (74) 第 6 项进度单色（同两面墙台口径）：轨道 = 填
-        // 充同色 25% 透明，整条一个色相、两形态同规。
+        // (77) ②进度配色（同两墙）：全条统一主题色、未填
+        // 充轨同色系实色压暗（foliaDarkenedTrack77）。
         let singleColor = stageBarCollapsed
             ? Self.stageCollapsedFillColor(for: stageTheme)
             : Self.stageFillColor(for: stageTheme)
         stageProgressFill?.backgroundColor = singleColor
-        stageProgressTrack?.backgroundColor = singleColor.withAlphaComponent(0.25)
+        stageProgressTrack?.backgroundColor = singleColor.foliaDarkenedTrack77()
     }
 
     /// 与墙 miniFillColor 同值（主题填充色）。
@@ -2946,6 +2968,9 @@ final class StageViewController: UIViewController {
                 stageBarCollapsed = true
                 syncStageBarDoubleTapEnabled()
             }
+            // (77) ⑥派发环自证（claim77→disp77→expand）。
+            stageBar.noteRecognizerClaimed()
+            Breadcrumbs.log("minibar.disp77 host=stage via=tap")
             expandStageBar()
             return
         }
@@ -3120,7 +3145,25 @@ final class StageViewController: UIViewController {
         resetStageIdleTimer()
     }
 
+    /// (77) ②底锚按形态落位（几何账同两墙：展开 −10、
+    /// 收起 +31.5 与 home indicator 中心重合、无
+    /// indicator 机型回落 −10；宠物层按 bar.frame 跟随）。
+    private func applyStageBarBottom77(collapsed: Bool) {
+        guard let bottomC = stageBarBottomC else { return }
+        let inset = view.window?.safeAreaInsets.bottom
+            ?? view.safeAreaInsets.bottom
+        bottomC.constant = collapsed
+            ? (inset > 0 ? 31.5 : -10) : -10
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        applyStageBarBottom77(collapsed: stageBarCollapsed)
+    }
+
     private func setStageBarForm(collapsed: Bool) {
+        applyStageBarBottom77(collapsed: collapsed)
+        stageBar.isCollapsedForm = collapsed
         stageBarHeightConstraint?.constant = collapsed ? 16 : CGFloat(SettingsStore.bottomBarHeight)
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in stageMainCenterY { constraint.constant = -5 }
@@ -3134,7 +3177,9 @@ final class StageViewController: UIViewController {
         stageTrackCenterXC?.isActive = collapsed
         stageTrackWidthC?.isActive = collapsed
         stageProgressTrack?.layer.cornerRadius = collapsed ? 2.5 : 2
-        stageProgressKnob?.isHidden = collapsed
+        // (77) ②③：四主题小圆点恢复收起态在场（(74) 误删，
+        // 两形态恒可见、皮肤两形态同挂）。
+        stageProgressKnob?.isHidden = false
         let radius: CGFloat = collapsed ? 8 : 35
         stageBar.layer.cornerRadius = radius
         stageBlurView?.layer.cornerRadius = radius
