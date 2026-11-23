@@ -341,11 +341,24 @@ final class StageViewController: UIViewController {
             Breadcrumbs.log("stage.tap76 skip=triple")
             return
         }
-        headerShowWorkItem?.cancel()
+        // (77) 落点补全：重排期取消旧排期也落痕——(76) 日志
+        // 只有 gate 一行、sched 后无 fire/cancel 即属此类静
+        // 默路径，下轮判读须每条 sched 都有落点。
+        if headerShowWorkItem != nil {
+            headerShowWorkItem?.cancel()
+            Breadcrumbs.log("stage.tap76 cancel why=resched")
+        }
         let work = DispatchWorkItem { [weak self] in
-            guard let self, self.view.window != nil,
-                  CACurrentMediaTime() >= self.headerShowSuppressUntil
-            else { return }
+            guard let self else { return }
+            guard self.view.window != nil else {
+                Breadcrumbs.log("stage.tap76 cancel why=window")
+                return
+            }
+            guard CACurrentMediaTime() >= self.headerShowSuppressUntil
+            else {
+                Breadcrumbs.log("stage.tap76 cancel why=suppress")
+                return
+            }
             Breadcrumbs.log("stage.tap76 fire")
             self.showStageHeader(source: "tap76")
         }
@@ -823,6 +836,10 @@ final class StageViewController: UIViewController {
         cancelStageIdleTimer()
         headerHideWorkItem?.cancel()
         headerHideWorkItem = nil
+        // (77) 落点补全：离台取消待触发的单击 show 也落痕。
+        if headerShowWorkItem != nil {
+            Breadcrumbs.log("stage.tap76 cancel why=exit")
+        }
         headerShowWorkItem?.cancel()
         headerShowWorkItem = nil
         stageThemeLayer?.setHostVisible(false)
