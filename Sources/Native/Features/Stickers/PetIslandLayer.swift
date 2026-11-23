@@ -172,6 +172,30 @@ final class PetIslandLayer: UIView {
     private var islandBackdrop74: UIView?
     private var backdropSegL: UIView?
     private var backdropSegR: UIView?
+
+    /// (75) 真 Live Activity 互斥抑制：系统活动在跑时本层
+    /// （障眼法）整层让位——宠物隐藏、proxy 停用、框底撤
+    /// 下、tick 封口；活动结束/被系统收走后清抑制、本层
+    /// 按登记表名单自愈重现。状态独占归
+    /// IslandLiveActivityManager 写入（DS 对账 C），本层
+    /// 不自查 Activity.activities、二者恒互斥不叠影。
+    private(set) var liveActivitySuppressed = false
+
+    func setLiveActivitySuppressed(_ on: Bool) {
+        guard liveActivitySuppressed != on else { return }
+        liveActivitySuppressed = on
+        Breadcrumbs.log("isl.perch75 supp=\(on ? 1 : 0)")
+        if on {
+            hideBubble()
+            islandBackdrop74?.removeFromSuperview()
+            islandBackdrop74 = nil
+            backdropSegL = nil
+            backdropSegR = nil
+        }
+        updateVisibility()
+        syncProxyState()
+        if !on { reseatAll(animated: false) }
+    }
     /// 落点自证去重签名（isl.perch74 只在落点变化时落）。
     private var lastPerchSignature74 = ""
     private var tickTimer: Timer?
@@ -478,7 +502,7 @@ final class PetIslandLayer: UIView {
     /// interaction），hitTest 链根本不进 proxy；有宠物才启用。
     private func syncProxyState() {
         guard let proxy = hitProxy else { return }
-        let active = !pets.isEmpty
+        let active = !pets.isEmpty && !liveActivitySuppressed
         proxy.isHidden = !active
         proxy.isUserInteractionEnabled = active
     }
@@ -533,7 +557,8 @@ final class PetIslandLayer: UIView {
 
     private func updateVisibility() {
         // 横屏保守隐藏（岛不在顶部）；竖屏恢复。
-        let show = isPortrait
+        // (75) LA 抑制在场时恒隐藏（与真活动互斥）。
+        let show = isPortrait && !liveActivitySuppressed
         for pet in pets { pet.isHidden = !show }
         if !show {
             hideBubble()
@@ -681,7 +706,7 @@ final class PetIslandLayer: UIView {
     /// y/高/圆角与真岛框一致；单只在场时只亮本侧段。无宠
     /// 物时整件移除。垫在所有宠物之下。
     private func syncIslandBackdrop74() {
-        guard isPortrait, !pets.isEmpty else {
+        guard isPortrait, !pets.isEmpty, !liveActivitySuppressed else {
             islandBackdrop74?.removeFromSuperview()
             islandBackdrop74 = nil
             backdropSegL = nil
@@ -813,6 +838,9 @@ final class PetIslandLayer: UIView {
     }
 
     private func tick() {
+        // (75) LA 抑制期封口：气泡/停聊/闲晃全停（宠物已隐
+        // 藏，任何呈现都是与真活动的叠影）。
+        if liveActivitySuppressed { return }
         guard isPortrait, !pets.isEmpty else { return }
         let now = clockNow
         // 气泡过期。

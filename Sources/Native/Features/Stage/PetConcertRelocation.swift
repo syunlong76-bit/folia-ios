@@ -42,6 +42,9 @@ final class PetConcertRelocation {
     func beginConcert() {
         guard !active else { return }
         active = true
+        // (75) 汪汪队口径：真 Live Activity 同步结束（岛宠
+        // 物全撤含系统侧），切走后由 manager 防抖重拉。
+        IslandLiveActivityManager.shared.concertBegan()
         // (72)：先冻结岛回填再撤岛——防 reconcile 在撤场期
         // 间把双人组送回岛（与本撤场令正面对撞）。
         PetHomeRegistry.shared.islandSuspended = true
@@ -69,6 +72,8 @@ final class PetConcertRelocation {
         MiniBarPetStage.concertRestoreAll()
         PetHomeRegistry.shared.islandSuspended = false
         PetHomeRegistry.shared.reconcileIsland(reason: "concert")
+        // (75) LA 防抖重拉（manager 内 1s 去抖＋闸口径）。
+        IslandLiveActivityManager.shared.concertEnded()
         Breadcrumbs.log("concert.pets.restore island=reconcile72")
     }
 }

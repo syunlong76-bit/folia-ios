@@ -9,6 +9,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
         Breadcrumbs.log("scene.connect")
+        // (75) 真 Live Activity 协调器装配（认领既有活动+
+        // 订阅播放/名单边沿；拉起在 sceneDidBecomeActive
+        // 的闸上裁决，此处只装配不拉起）。
+        IslandLiveActivityManager.shared.start()
 
         // 0) 样式防卡死守卫（3.7 (44)）：必须在任何舞台呈现
         //    之前跑完——上次会话若有样式开台未及证明存活就
@@ -122,7 +126,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidDisconnect(_ scene: UIScene) {}
-    func sceneWillResignActive(_ scene: UIScene) {}
+    func sceneWillResignActive(_ scene: UIScene) {
+        // (75) LA 协调器场景边沿（拉起闸的 sceneActive 旗）。
+        IslandLiveActivityManager.shared.sceneWillResignActive()
+    }
 
     func sceneWillEnterForeground(_ scene: UIScene) {
         // 状态机 armed → foregroundPending：呈现决策等
@@ -204,6 +211,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        // (75) LA 回前台对账（活动被系统收走则清抑制回落
+        // 障眼法、按闸重拉；详见 IslandLiveActivityManager）。
+        IslandLiveActivityManager.shared.sceneBecameActive()
         // (73) 本地服务器回前台探活：监听的静默死亡正发生
         // 在挂起期（(72) 真机实证），回前台第一时间实测——
         // 活着零成本（一发回环连接），死了不等用户点歌单

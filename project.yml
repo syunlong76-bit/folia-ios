@@ -15,6 +15,8 @@ targets:
     deploymentTarget: "17.0"
     sources:
       - path: Sources
+      # (75) Live Activity 共享属性（与扩展同编一份，见 Widgets 注）
+      - path: Widgets/FoliaIslandActivity.swift
       # App 图标资产目录（AppIcon.appiconset，1024 满版 PNG）
       - path: Assets.xcassets
       # 原生特效面静态包（M2 剥离版播放页，folder reference，运行时定位 "WebEffect"）
@@ -49,7 +51,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Folia
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "73"
+        CFBundleVersion: "75"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -77,6 +79,9 @@ targets:
           - UIInterfaceOrientationLandscapeRight
         UIBackgroundModes:
           - audio
+        # (75) 真 Live Activity 总开关（缺此键系统恒不呈现
+        # 活动、request 直接失败）。
+        NSSupportsLiveActivities: true
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSExceptionDomains:
@@ -98,3 +103,35 @@ targets:
         # DatabaseManager 用 import SQLite3（系统库，需显式链接）
         OTHER_LDFLAGS: "-lsqlite3"
         ASSETCATALOG_COMPILER_APPICON_NAME: "AppIcon"
+    # (75) 嵌入 Widget 扩展（产物落 PlugIns/FoliaWidgets.appex）
+    dependencies:
+      - target: FoliaWidgets
+        embed: true
+
+  # (75) Widget 扩展：只承载灵动岛宠物 Live Activity。
+  # 图片走扩展包内 Assets.xcassets（53 只宠物首帧图），不
+  # 用 App Group（DS 对账 A：个人团队/SideStore 重签时自
+  # 选 group id 大概率注册失败，v1 渲染又不依赖共享容器）。
+  # Info.plist 显式在此配置（DS 对账工程条），generate 后
+  # 验包逐项核对 NSExtension 点与版本号。
+  FoliaWidgets:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "17.0"
+    sources:
+      - path: Widgets
+    info:
+      path: Widgets/Info.plist
+      properties:
+        CFBundleDisplayName: FoliaWidgets
+        CFBundleShortVersionString: "3.7"
+        CFBundleVersion: "75"
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.miller.folia.widgets
+        PRODUCT_NAME: FoliaWidgets
+        SWIFT_VERSION: "5.0"
+        TARGETED_DEVICE_FAMILY: "1,2"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
