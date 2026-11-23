@@ -1,9 +1,9 @@
 # Folia iOS 3.7 (81) 交付报告
 
-- 分支：release-81（自 release-80 拉出），提交 ff8f0de5
-- CI：run __CI_RUN__（__CI_RESULT__）
-- IPA：__IPA_BYTES__ 字节，落 ~/workspace/folia-deploy/build81/
-- 版本：主 app＋widgets 双 81 / ShortVersion 双 3.7（验包 __V1__）
+- 分支：release-81（自 release-80 拉出），头提交为导演类型修复（见 git log）
+- CI：run 45254068784 success（前两跑：45248935138 编译错误一处已修；45251268784 平台侧无日志取消、非代码问题，重跑即过）
+- IPA：48,659,131 字节，落 ~/workspace/folia-deploy/build81/Folia-81.ipa
+- 验包五项全过：①主 app 81/3.7＋widgets 81/3.7 双对齐；②WebEffect chunk 三基址 /api/netease、/api/qq、/api/kugou 各命中；③入场母带 7,848,834 字节、md5 8aed0fb4a5e9a0f500184f8a7dae45a9；④AppIcon 在位；⑤未签名结构（无 _CodeSignature/描述文件）
 - 下载：文叔叔由主聊天上传（本报告不含链接）
 
 ## 逐项（分级：全部为「代码已改待真机」，无一项冒充已证实）
