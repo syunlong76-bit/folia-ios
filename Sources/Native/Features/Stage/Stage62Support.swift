@@ -182,6 +182,11 @@ final class RandomStylePerSong62 {
                 self.lastTrackId = track.id
                 guard !isFirst else { return }
                 guard SettingsStore.randomPerSongEnabled62 else { return }
+                // (80) 逐歌记忆优先：本曲有记忆样式时不抽随
+                // 机——记忆是用户对这一首的显式选择，舞台侧
+                // 由 handleTrackChanged 的套用钩子落地；随机
+                // 只管没记忆的歌。
+                if SongStyleMemory80.shared.style(for: track.id) != nil { return }
                 let current = StageStyleStore.currentStyleId
                 guard let draw = StageStyleCycleBag.shared.next(currentStyleId: current)
                 else { return }

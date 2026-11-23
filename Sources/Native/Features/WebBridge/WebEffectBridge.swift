@@ -1236,6 +1236,17 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         webView.load(URLRequest(url: url))
     }
 
+    /// 下一首预备·网页样式预热（3.7 (80) 第 1 项）：下一首的
+    /// 记忆样式为网页运行时，提前确保特效页装载完成——首装
+    /// （本地服务起服＋页面加载＋桥自检）的耗时不压在切歌瞬
+    /// 间。已装载恒为空操作；不推任何视觉状态，当前曲呈现
+    /// 不受影响，切换仍走 pushVisual 原路。
+    func prewarmEffectPage80() {
+        guard !isPageLoaded else { return }
+        loadLocalEffectBundle()
+        Breadcrumbs.log("prep.web80 warm")
+    }
+
     /// 人工重试入口（诊断面板 / 设置页调用）：清退避计数与致命错误后重载。
     func retryAfterFatalError() {
         terminateDates.removeAll()

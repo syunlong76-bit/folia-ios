@@ -53,6 +53,10 @@ enum Breadcrumbs {
         // 收尾落痕、drop=isl.drop79 落座未命中落痕、
         // geo=isl.geo79 岛带几何、req=wall.req79 砖请求链。
         log("wit79.live sb=1 root=1 fin=1 drop=1 geo=1 req=1")
+        // (80) 名册续登：prep=prep.hit80/prep.ms80（下一首预
+        // 备命中与就绪延迟）、guard=style.guard80（洗牌袋最
+        // 近三首挡位）、mem=style.mem80（逐歌记忆记录/套用）。
+        log("wit80.live prep=1 guard=1 mem=1")
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。

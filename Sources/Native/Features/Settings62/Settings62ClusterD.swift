@@ -10,6 +10,8 @@ import UIKit
 //  - tab 1 播放页：「每首歌随机歌词动画」开关（§6）
 //  - tab 1 播放页：「舞台背景体系」模式选择 + 远程图地址（§6 背景）
 // 键见 SettingsStore62D（Key62D）。
+// (80) 第 3 项在本簇同组续落：「逐歌记忆特效」开关 + 「逐歌
+// 记忆」计数/清除行，键见 SettingsStore80（Key80）。
 
 enum Settings62ClusterD {
 
@@ -42,6 +44,36 @@ enum Settings62ClusterD {
         group.addArrangedSubview(host.makeHairline())
         group.addArrangedSubview(host.makeHintRow(
             "开启后每次切歌自动从洗牌袋（与舞台三击轮换同一袋）取下一只歌词样式，一轮内不重复。"))
+
+        group.addArrangedSubview(host.makeHairline())
+
+        // 逐歌记忆特效（3.7 (80) 第 3 项）：在一首歌里手动切
+        // 过的样式按 trackId 记住、重播时自动套用；与每首歌
+        // 随机同时开时记忆优先（RandomStylePerSong62 让行）。
+        let memorySwitch = UISwitch()
+        memorySwitch.isOn = SettingsStore.songStyleMemoryEnabled80
+        memorySwitch.addAction(UIAction { action in
+            guard let sender = action.sender as? UISwitch else { return }
+            SettingsStore.songStyleMemoryEnabled80 = sender.isOn
+        }, for: .valueChanged)
+        group.addArrangedSubview(switchRow(host: host,
+            title: "逐歌记忆特效", toggle: memorySwitch))
+        group.addArrangedSubview(host.makeHairline())
+
+        let memoryCountLabel = UILabel()
+        memoryCountLabel.text = "已记 \(SongStyleMemory80.shared.count) 首"
+        let clearMemoryButton = UIButton(type: .system)
+        clearMemoryButton.setTitle("清除", for: .normal)
+        clearMemoryButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+        clearMemoryButton.addAction(UIAction { [weak host] _ in
+            guard let host else { return }
+            presentClearMemoryConfirm(host: host, countLabel: memoryCountLabel)
+        }, for: .touchUpInside)
+        group.addArrangedSubview(labeledRow(host: host, title: "逐歌记忆",
+                                            valueLabel: memoryCountLabel,
+                                            button: clearMemoryButton))
+        group.addArrangedSubview(host.makeHintRow(
+            "在某首歌播放中手动切换的特效会被记住，这首歌再次播放时自动套用，下一首预备时连同预热。关闭开关只停记录与套用，存量保留；清除才删。"))
 
         group.addArrangedSubview(host.makeHairline())
 
@@ -132,6 +164,22 @@ enum Settings62ClusterD {
     }
 
     // MARK: - 选择/编辑呈现
+
+    /// 清除逐歌记忆确认（3.7 (80)）：破坏性动作先确认，清除
+    /// 后即时回写计数标签。
+    private static func presentClearMemoryConfirm(host: SettingsViewController,
+                                                  countLabel: UILabel) {
+        let alert = UIAlertController(
+            title: "清除逐歌记忆",
+            message: "清掉全部 \(SongStyleMemory80.shared.count) 首的记忆样式？清除后各首歌回到跟随当前样式。",
+            preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "清除", style: .destructive) { _ in
+            SongStyleMemory80.shared.clearAll()
+            countLabel.text = "已记 0 首"
+        })
+        host.present(alert, animated: true)
+    }
 
     private static func presentModePicker(host: SettingsViewController,
                                           valueLabel: UILabel) {

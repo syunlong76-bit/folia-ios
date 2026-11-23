@@ -201,6 +201,9 @@ final class StageViewController: UIViewController {
     private var backdropTrackId: String? = nil
     private var lyricsTask: Task<Void, Never>?
     private var backdropTask: Task<Void, Never>?
+    /// (80) 切歌边沿时刻（handleTrackChanged 入口记）：歌词
+    /// 就绪延迟 prep.ms80 的起点，与 loadLyrics 各落定路径对位。
+    private var lyricSwitchAt80: CFTimeInterval = 0
 
     // 贴纸层（3.7 (24)，纯新增视图层）：拉歌词角标（renderer
     // 容器右上）、无歌词陪衬（容器居中）、红心庆祝（容器右
@@ -571,6 +574,9 @@ final class StageViewController: UIViewController {
         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
         Breadcrumbs.log("style.cycle.switch source=\(source) from=\(from) to=\(draw.styleId)"
             + " round=\(draw.round) remaining=\(draw.remaining)")
+        // (80) 逐歌记忆：三击是用户在本曲的显式切换，记入
+        // 本曲记忆（自动通路不经此、不自记）。
+        noteSongStyleMemory80(draw.styleId)
         if info.isStagePresentable {
             applyNativeStyleSelection(draw.styleId)
         } else {
@@ -601,6 +607,35 @@ final class StageViewController: UIViewController {
     private func applyWebStyleSelection(_ info: LyricStageStyleInfo, reason: String) {
         StageStyleCycleBag.shared.noteExternalSelection(info.id)
         jumpToWebStage(reason: reason)
+    }
+
+    // MARK: 逐歌记忆（3.7 (80) 第 3 项）
+
+    /// 记录钩子：用户在本曲播放中手动切样式（选择器点选 /
+    /// 三击轮换）后把 trackId→styleId 存入 SongStyleMemory80。
+    /// 自动通路（每首歌随机 handleRandomStylePerSong62、记忆
+    /// 套用本身）不经此——不会自记自套。无当前曲时为空操作。
+    private func noteSongStyleMemory80(_ styleId: String) {
+        guard let track = engine.currentTrack else { return }
+        SongStyleMemory80.shared.record(trackId: track.id, styleId: styleId)
+    }
+
+    /// 套用钩子（切歌边沿，handleTrackChanged 内调）：本曲有
+    /// 记忆样式且与当前不同 → 走统一选样式通路切过去。不写
+    /// StageStyleStore.currentStyleId——记忆是逐歌的，不许污
+    /// 染「最近选择」的全局口径（下台重开时 sink 首发会再套
+    /// 一次，幂等）。不弹任何提示，事实以 style.mem80 为准。
+    private func applySongStyleMemory80(for track: FoliaTrack) {
+        guard let remembered = SongStyleMemory80.shared.style(for: track.id),
+              remembered != activeStyleId,
+              let info = LyricStageRegistry.info(for: remembered),
+              !LyricStageRegistry.isLocked(remembered) else { return }
+        Breadcrumbs.log("style.mem80 apply track=\(track.id) style=\(remembered)")
+        if info.isStagePresentable {
+            applyNativeStyleSelection(remembered)
+        } else {
+            applyWebStyleSelection(info, reason: "song-memory80 \(remembered)")
+        }
     }
 
     // MARK: 生命周期
@@ -1755,6 +1790,7 @@ final class StageViewController: UIViewController {
     }
 
     private func handleTrackChanged(to track: FoliaTrack) {
+        lyricSwitchAt80 = CACurrentMediaTime()
         currentTrackId = track.id
         backdropTrackId = nil
         palette = .neutralDark
@@ -1765,6 +1801,9 @@ final class StageViewController: UIViewController {
         reanchor(armSettle: true)
         pushSnapshot()
         loadLyrics(for: track)
+        // (80) 逐歌记忆套用：本曲有记忆样式则切过去（在取词
+        // 之后、与渲染器首帧同边沿；无记忆时为空操作）。
+        applySongStyleMemory80(for: track)
         loadBackdropFallback(for: track)
         Breadcrumbs.log("stage track \(track.id) title=\(track.title)")
         // 点播台切歌边沿（3.7 (32)，与墙 refreshMiniBar 同
@@ -1819,16 +1858,29 @@ final class StageViewController: UIViewController {
     /// 是否发网络请求。
     private func loadLyrics(for track: FoliaTrack) {
         if linesCache[track.id] != nil {
+            logPrepMeasure80(trackId: track.id, path: "cache", hit: false)
             pushSnapshot()
             noteStyleProofLyricsApplied()
             // 贴纸层（3.7 (24)，纯新增钩子）：缓存命中即已落定。
             stickerLyricsResolved(lines: linesCache[track.id] ?? [])
             return
         }
+        // (80) 下一首预备命中：协调器在上一首播放期间已预拉
+        // ＋预派生行表，直接落定（就绪延迟应 ≈0–数 ms，见
+        // logPrepMeasure80）；未命中照走下面原路，不更慢。
+        if let prepared = NextTrackPrep80.shared.consume(trackId: track.id) {
+            linesCache[track.id] = prepared.lines
+            logPrepMeasure80(trackId: track.id, path: "prep", hit: true)
+            pushSnapshot()
+            noteStyleProofLyricsApplied()
+            stickerLyricsResolved(lines: prepared.lines)
+            return
+        }
         if let hit = LyricRepository.shared.cachedEntry(for: track.id) {
             linesCache[track.id] = LyricParser.stageLines(
                 from: hit.lines, trackDuration: track.duration,
                 singingRatio: hit.singingRatio)
+            logPrepMeasure80(trackId: track.id, path: "repo", hit: false)
             pushSnapshot()
             noteStyleProofLyricsApplied()
             // 贴纸层（3.7 (24)，纯新增钩子）：仓库命中即已落定。
@@ -1846,6 +1898,7 @@ final class StageViewController: UIViewController {
             let lines = LyricParser.stageLines(from: entry.lines, trackDuration: duration,
                                                singingRatio: entry.singingRatio)
             self.linesCache[trackId] = lines
+            self.logPrepMeasure80(trackId: trackId, path: "net", hit: false)
             // wordLines（3.7 (50)，DS YRC50 评审）：证明真戳已
             // 进入舞台行表（与仓库 lrc source 的 withWords 对照，
             // 两处一致才算管线全通）。
@@ -1861,6 +1914,17 @@ final class StageViewController: UIViewController {
             // 贴纸层（3.7 (24)，纯新增钩子）：取词落定。
             self.stickerLyricsResolved(lines: lines)
         }
+    }
+
+    /// (80) 预备量测出口：自切歌边沿（lyricSwitchAt80）到行
+    /// 表落定 linesCache 的延迟，四条落定路径（cache/prep/
+    /// repo/net）各一行。prep.hit80 记命中与否、prep.ms80 记
+    /// 毫秒与路径——判读时 prep 路径的 ms 应≈个位数，net 路
+    /// 径即现拉全程（与 (71) 实测 2.1s 歌词迟到同口径对位）。
+    private func logPrepMeasure80(trackId: String, path: String, hit: Bool) {
+        let ms = Int((CACurrentMediaTime() - lyricSwitchAt80) * 1000)
+        Breadcrumbs.log("prep.hit80 hit=\(hit ? 1 : 0) track=\(trackId)")
+        Breadcrumbs.log("prep.ms80 ms=\(ms) path=\(path) track=\(trackId)")
     }
 
     private func loadBackdropFallback(for track: FoliaTrack) {
@@ -2205,6 +2269,7 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             StageStyleStore.currentStyleId = styleId
             self.dismiss(animated: true) { [weak self] in
+                self?.noteSongStyleMemory80(styleId)
                 self?.applyNativeStyleSelection(styleId)
             }
         }
@@ -2212,6 +2277,7 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             StageStyleStore.currentStyleId = info.id
             self.dismiss(animated: true) { [weak self] in
+                self?.noteSongStyleMemory80(info.id)
                 self?.applyWebStyleSelection(
                     info, reason: "picker web style \(info.id)")
             }
@@ -2339,6 +2405,7 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             StageStyleStore.currentStyleId = styleId
             self.dismiss(animated: true) { [weak self] in
+                self?.noteSongStyleMemory80(styleId)
                 self?.applyNativeStyleSelection(styleId)
             }
         }
@@ -2346,6 +2413,7 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             StageStyleStore.currentStyleId = info.id
             self.dismiss(animated: true) { [weak self] in
+                self?.noteSongStyleMemory80(info.id)
                 self?.applyWebStyleSelection(
                     info, reason: "palette web style \(info.id)")
             }
