@@ -47,6 +47,10 @@ final class PetSummonButton70: UIView {
     // 贴右下安全区。代价自知：点播台展开态（高 70、底距
     // 10）时本钮叠在台体右端之上（窗口层 z 序在本钮），
     // 收起态小横线居中不与本钮相干；按 Miller 定点执行。
+    // (75) 第 5 项①口径更正（Miller 20:39）：钮位置恒定不
+    // 动、改台让位——三宿主点播台底锚 −10→−54，台身下缘
+    // 恒在本钮带（底 −10、高 36）之上 8pt，展开/细条两态
+    // 均不与本钮重叠（上下邻居）。
     private static let diameter: CGFloat = 36
     private static let bottomClearance: CGFloat = 10
     private static let idleAlpha: CGFloat = 0.35
@@ -63,6 +67,9 @@ final class PetSummonButton70: UIView {
     private let iconView = UIImageView()
     private let pressRecognizer = UILongPressGestureRecognizer()
     private var rampAnimator: UIViewPropertyAnimator?
+    /// (75) 第 6 项全链埋点：本次按压是否已触发长按动作
+    /// （touchesEnded 落 up 行时对位短按/长按）。
+    private var pressTriggered = false
     /// (72) 全局可达守护：本钮是窗口子视图，presented 页
     /// （舞台/详情/歌单/设置）的视图后加进来会把它盖住——
     /// (71) 真机「只在主页有、其他页面够不着」的根因。0.5s
@@ -181,6 +188,11 @@ final class PetSummonButton70: UIView {
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesBegan(touches, with: event)
+        // (75) 到达自证：触摸真落到钮上即落一行（此前本钮
+        // 按压全链零面包屑，(75) 第 6 项日志实锤：整轮分不
+        // 清没按到/短按无语义/被门拒绝）。
+        pressTriggered = false
+        Breadcrumbs.log("paw.touch75 dn en=\(StickerSettings.miniPetsEnabled ? 1 : 0)")
         rampAnimator?.stopAnimation(true)
         let ramp = UIViewPropertyAnimator(
             duration: pressRecognizer.minimumPressDuration,
@@ -197,11 +209,16 @@ final class PetSummonButton70: UIView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesEnded(touches, with: event)
+        // (75) 抬手对位：trig=0 即短按（本钮短按无语义、只
+        // 有渐亮反馈，长按 2s/3s 才触发）——日志自此能分清
+        // 「用户短按了」与「压根没按到」。
+        Breadcrumbs.log("paw.touch75 up trig=\(pressTriggered ? 1 : 0)")
         settleToIdle()
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
         super.touchesCancelled(touches, with: event)
+        Breadcrumbs.log("paw.touch75 cancel")
         settleToIdle()
     }
 
@@ -223,6 +240,7 @@ final class PetSummonButton70: UIView {
 
     @objc private func handleLongPress(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .began else { return }
+        pressTriggered = true
         // 触发脉冲：先冲到最亮最大，弹簧回落静置态。
         rampAnimator?.stopAnimation(true)
         rampAnimator = nil
@@ -237,7 +255,9 @@ final class PetSummonButton70: UIView {
             StickerSettings.miniPetsEnabled = false
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             Breadcrumbs.log("pet.switch off via=corner3s")
-            currentFacePetStage()?.performFarewellDismissAll70()
+            let stage = currentFacePetStage()
+            Breadcrumbs.log("paw.act75 on=0 stage=\(stage != nil ? 1 : 0)")
+            stage?.performFarewellDismissAll70()
             // (73)：岛民常驻不随全局关撤下（reconcile 已
             // 解耦），本调用仅作稳定事件对账。
             PetHomeRegistry.shared.reconcileIsland(reason: "switch")
@@ -248,7 +268,18 @@ final class PetSummonButton70: UIView {
             StickerSettings.miniPetsEnabled = true
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             Breadcrumbs.log("pet.switch on via=corner2s")
-            currentFacePetStage()?.performDropInEntrance()
+            // (75) 第 6 项定案：召唤＝用户明确意图，开关已
+            // 双写 on 在前，入场不许再被任何陈旧态拦死——
+            // 当前面层找不到（stage=nil）时改走广播兜底，各
+            // 宠物层自查在场且开关已开即自行入场（见
+            // MiniBarPetStage 的 pawSummonObserver）。
+            let stage = currentFacePetStage()
+            Breadcrumbs.log("paw.act75 on=1 stage=\(stage != nil ? 1 : 0)")
+            if let stage {
+                stage.performDropInEntrance()
+            } else {
+                NotificationCenter.default.post(name: .foliaPawSummon75, object: nil)
+            }
             // (72)：全局开后岛民确定性落座（稳定事件触发）。
             PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         }
@@ -276,4 +307,10 @@ final class PetSummonButton70: UIView {
         }
         return nil
     }
+}
+
+extension Notification.Name {
+    /// (75) 爪印召唤兜底广播：当前面宠物层定位失败时发，
+    /// 各 MiniBarPetStage 自查在场＋开关已开后自行入场。
+    static let foliaPawSummon75 = Notification.Name("folia.paw.summon75")
 }

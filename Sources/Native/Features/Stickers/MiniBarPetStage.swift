@@ -659,6 +659,21 @@ final class MiniBarPetStage: UIView {
         // (53) J 迁移注册：活实例登记，供 PetConcertRelocation
         // 经类方法够到全部迷你台（墙/舞台角色）。
         Self.registerLiveInstance(self)
+        // (75) 爪印召唤广播兜底接收：召唤侧定位不到当前面
+        // 层时改走广播，本层自查在场＋开关已开＋非迁移中
+        // 才入场（performDropInEntrance 内另有同口径守卫
+        // 与 skip 留痕，双保险）。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(pawSummonBroadcast75),
+            name: .foliaPawSummon75, object: nil)
+    }
+
+    /// (75) 召唤广播接收端（见 init 注册处注）。
+    @objc private func pawSummonBroadcast75() {
+        guard barPresented, StickerSettings.miniPetsEnabled,
+              !concertRelocated else { return }
+        Breadcrumbs.log("paw.act75 recv=stage role=\(role)")
+        performDropInEntrance()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }

@@ -609,6 +609,13 @@ final class WallPrototypeViewController: UIViewController,
         bar.isHidden = true
         view.addSubview(bar)
         miniBar = bar
+        // (75) 点按到达自证（第 5 项②，同主页墙）。
+        bar.onHitLanded = { [weak self, weak bar] in
+            guard let self, let bar else { return }
+            Breadcrumbs.log("minibar.touch75 host=wallproto"
+                + " col=\(self.miniBarCollapsed ? 1 : 0)"
+                + " h=\(Int(bar.bounds.height))")
+        }
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
@@ -825,7 +832,9 @@ final class WallPrototypeViewController: UIViewController,
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+            // (75) 第 5 项①：底锚 −10→−54，台身下缘恒在
+            // 爪印钮带之上 8pt（同主页墙注）。
+            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -54),
 
             miniTrackLeadC!,
             miniTrackTrailC!,
@@ -939,7 +948,13 @@ final class WallPrototypeViewController: UIViewController,
     /// 时先落 heal 面包屑纠正标志再展开，与 expand 内的
     /// minibar expand 行成对构成「点中→展开」自证。
     @objc private func miniBarAgnosticTapped74(_ gesture: UITapGestureRecognizer) {
-        guard let bar = miniBar, bar.bounds.height <= 20 else { return }
+        guard let bar = miniBar else { return }
+        // (75) 死点留痕（同主页墙）：几何守卫拒绝不再静默。
+        guard bar.bounds.height <= 20 else {
+            Breadcrumbs.log("minibar.dead75 host=wallproto at=geom"
+                + " h=\(Int(bar.bounds.height))")
+            return
+        }
         if !miniBarCollapsed {
             Breadcrumbs.log("minibar.hit host=wallproto heal=flag74")
             miniBarCollapsed = true
@@ -1190,7 +1205,10 @@ final class WallPrototypeViewController: UIViewController,
     /// 收起态细条单击（3.7 (61) 第 7 条，与主页墙同构）：独
     /// 立识别器、无任何 require 链，点按即时展开。
     @objc private func miniBarCollapsedTapped(_ gesture: UITapGestureRecognizer) {
-        guard miniBarCollapsed else { return }
+        guard miniBarCollapsed else {
+            Breadcrumbs.log("minibar.dead75 host=wallproto at=flag")
+            return
+        }
         Breadcrumbs.log("minibar.tap host=wallproto collapsed=1 action=expand")
         expandMiniBar()
     }
@@ -1429,7 +1447,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 恢复完整形态（点细条/切歌触发）并重新计时。
     private func expandMiniBar() {
         // (72) 单宿主仲裁（同 collapseMiniBarIdle）。
-        guard MiniBarSingleHost.shared.isActive("wallproto") else { return }
+        // (75) 死点留痕：仲裁拒绝不再静默。
+        guard MiniBarSingleHost.shared.isActive("wallproto") else {
+            Breadcrumbs.log("minibar.dead75 host=wallproto at=arb")
+            return
+        }
         guard miniBarCollapsed, let bar = miniBar else {
             resetMiniIdleTimer()
             return

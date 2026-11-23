@@ -2348,6 +2348,13 @@ final class StageViewController: UIViewController {
         bar.layer.shadowOffset = CGSize(width: 0, height: 8)
         bar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(bar)
+        // (75) 点按到达自证（第 5 项②，同两面墙台）。
+        bar.onHitLanded = { [weak self, weak bar] in
+            guard let self, let bar else { return }
+            Breadcrumbs.log("minibar.touch75 host=stage"
+                + " col=\(self.stageBarCollapsed ? 1 : 0)"
+                + " h=\(Int(bar.bounds.height))")
+        }
         // 宠物层（细修 B）：详情页台班底，钩子与墙等价。
         let petStage = MiniBarPetStage(bar: bar, role: .stage)
         view.addSubview(petStage)
@@ -2508,7 +2515,9 @@ final class StageViewController: UIViewController {
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+            // (75) 第 5 项①：底锚 −10→−54，台身下缘恒在
+            // 爪印钮带之上 8pt（同主页墙注）。
+            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -54),
 
             blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
@@ -2787,7 +2796,12 @@ final class StageViewController: UIViewController {
     /// 识别器，几何细条（≤20）时先按几何纠正标志（含双击
     /// 启停收口）再展开，不等 require 链落空。
     @objc private func stageBarAgnosticTapped74(_ gesture: UITapGestureRecognizer) {
-        guard stageBar.bounds.height <= 20 else { return }
+        // (75) 死点留痕（同两面墙台）：几何守卫拒绝不再静默。
+        guard stageBar.bounds.height <= 20 else {
+            Breadcrumbs.log("minibar.dead75 host=stage at=geom"
+                + " h=\(Int(stageBar.bounds.height))")
+            return
+        }
         if !stageBarCollapsed {
             Breadcrumbs.log("minibar.hit host=stage heal=flag74")
             stageBarCollapsed = true

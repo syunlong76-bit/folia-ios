@@ -12,6 +12,19 @@ final class MiniBarHitView: UIView {
     /// 纵向单侧外扩量（pt）；0 = 不扩展（展开态恒 0）。
     var hitExpansionY: CGFloat = 0
 
+    /// (75) 第 5 项②「点按到达」前置自证钩子：hitTest 真拿
+    /// 到触摸（返回非 nil）时回调——宿主据此落 minibar
+    /// .touch75，与识别器触发行（minibar.hit）对位：无
+    /// touch75＝点按没进门（上层吞掉）；有 touch75 无 hit
+    /// ＝死在识别器/守卫环（各死点另有 minibar.dead75）。
+    var onHitLanded: (() -> Void)?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        if hit != nil { onHitLanded?() }
+        return hit
+    }
+
     override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
         guard hitExpansionY > 0 else {
             return super.point(inside: point, with: event)

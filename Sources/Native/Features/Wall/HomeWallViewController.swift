@@ -1262,6 +1262,14 @@ final class HomeWallViewController: UIViewController,
         bar.isHidden = true
         view.addSubview(bar)
         miniBar = bar
+        // (75) 点按到达自证（第 5 项②）：触摸真落到台身即
+        // 落一行，与 minibar.hit 对位分环（见 MiniBarHitView）。
+        bar.onHitLanded = { [weak self, weak bar] in
+            guard let self, let bar else { return }
+            Breadcrumbs.log("minibar.touch75 host=homewall"
+                + " col=\(self.miniBarCollapsed ? 1 : 0)"
+                + " h=\(Int(bar.bounds.height))")
+        }
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
@@ -1470,7 +1478,11 @@ final class HomeWallViewController: UIViewController,
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
+            // (75) 第 5 项①：底锚 −10→−54——台身下缘恒在
+            // 爪印钮带（底 −10、高 36、顶 −46）之上 8pt，
+            // 展开/细条两态都不许盖钮（钮固定不动、台让位，
+            // Miller 20:39 定版；细条态钮在细条下方原地）。
+            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -54),
 
             miniTrackLeadC!,
             miniTrackTrailC!,
@@ -1588,7 +1600,14 @@ final class HomeWallViewController: UIViewController,
     /// 志、再走既有 expandMiniBar（其内 minibar expand 一
     /// 行与本行 minibar.hit 成对，即「点中→展开」自证）。
     @objc private func miniBarAgnosticTapped74(_ gesture: UITapGestureRecognizer) {
-        guard let bar = miniBar, bar.bounds.height <= 20 else { return }
+        guard let bar = miniBar else { return }
+        // (75) 死点留痕：几何守卫拒绝不再静默——bounds 高
+        // 与形态面包屑的 h=（约束常数）对位即可判布局未落。
+        guard bar.bounds.height <= 20 else {
+            Breadcrumbs.log("minibar.dead75 host=homewall at=geom"
+                + " h=\(Int(bar.bounds.height))")
+            return
+        }
         if !miniBarCollapsed {
             Breadcrumbs.log("minibar.hit host=homewall heal=flag74")
             miniBarCollapsed = true
@@ -1908,7 +1927,10 @@ final class HomeWallViewController: UIViewController,
     /// require 链，点按即时展开回完整形态并重新计时（展开在
     /// expandMiniBar 内），不被双击判定拖延。
     @objc private func miniBarCollapsedTapped(_ gesture: UITapGestureRecognizer) {
-        guard miniBarCollapsed else { return }
+        guard miniBarCollapsed else {
+            Breadcrumbs.log("minibar.dead75 host=homewall at=flag")
+            return
+        }
         Breadcrumbs.log("minibar.tap host=homewall collapsed=1 action=expand")
         expandMiniBar()
     }
@@ -2147,7 +2169,12 @@ final class HomeWallViewController: UIViewController,
     /// 恢复完整形态（点细条/切歌触发）并重新计时。
     private func expandMiniBar() {
         // (72) 单宿主仲裁（同 collapseMiniBarIdle）。
-        guard MiniBarSingleHost.shared.isActive("homewall") else { return }
+        // (75) 死点留痕：仲裁拒绝不再静默（点按已到此环时
+        // 日志能直接判是仲裁卡住、不是命中链断）。
+        guard MiniBarSingleHost.shared.isActive("homewall") else {
+            Breadcrumbs.log("minibar.dead75 host=homewall at=arb")
+            return
+        }
         guard miniBarCollapsed, let bar = miniBar else {
             resetMiniIdleTimer()
             return
