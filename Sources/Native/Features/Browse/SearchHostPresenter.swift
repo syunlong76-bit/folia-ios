@@ -57,6 +57,13 @@ enum SearchHostPresenter {
             subtitle: collection.ownerName)
         let host = UIHostingController(rootView: CollectionView(collection: mapped))
         host.modalPresentationStyle = .fullScreen
+        // (76) ④左缘滑动返回（歌单详情）：本页关闭无特殊
+        // 契约，dismiss 直达；SwiftUI 内部滚动 pan 无法自
+        // UIKit 侧 require-to-fail 接线，左缘 ~20pt 起手带
+        // 与横向货架的残余冲突见 (76) 报告④冲突清单。
+        EdgeBack76.install(on: host) { [weak host] in
+            host?.dismiss(animated: true)
+        }
         presenter.present(host, animated: true)
     }
 }

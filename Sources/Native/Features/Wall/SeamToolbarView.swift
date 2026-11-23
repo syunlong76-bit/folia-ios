@@ -60,6 +60,16 @@ enum SeamSegment: Int, CaseIterable {
 /// 侧锚约束（岛在侧边），本形态以 bounds 宽<高判定、横
 /// 向自动不生效。命中纪律：收起态只认横线命中垫、展开
 /// 态只认内容控件，带内空域一律穿透（高带不吞页面点按）。
+///
+/// (76) 热修（Miller 21:43 录屏否决 (75) 形态）：(75) 的
+/// 凹口是 even-odd mask 镂空＋分离描边两条闭合子路径，
+/// 且收起时带身随内容组 alpha 归零消失、只剩孤线浮在
+/// 砖上——「没画出来」。本版改：带身是一条画出来的带，
+/// 单一连续轮廓（顶边下切 r8 fillet → 岛胶囊 +3pt 偏
+/// 移弧绕底 → 镜像上行）由毛玻璃 mask／色调填充／描边
+/// 三层共用；带身恒可见，收起时形变（CASpring 弹簧）
+/// 成贴岛薄框（带底 60），横线落在左臂带身上；展开同
+/// 路径形变回全高。几何取值见 bandOutlinePath 处常数。
 /// (75) 绕岛背景描边层载体：layer 本体即 CAShapeLayer，
 /// 只描边不填充，路径与背景 mask 同源（外轮廓＋凹口）。
 private final class SeamShapeBorderView: UIView {
@@ -131,7 +141,12 @@ final class SeamToolbarView: UIView {
     /// 绕岛态背景描边（与 mask 同路径 stroke；平形态由
     /// blurView 自带 border 承担、本层隐藏）。
     private let borderView = SeamShapeBorderView()
+    /// (76) 带身色调填充层：与描边/mask 同一连续轮廓路径
+    /// 的深色半透明填充（载体同 SeamShapeBorderView）。
+    private let bandTintView = SeamShapeBorderView()
     private let maskShapeLayer = CAShapeLayer()
+    /// (76) 布局尺寸变更面包屑去重（闪屏审计关连用）。
+    private var lastLayoutSize: CGSize = .zero
     private var grabberLeadingConstraint: NSLayoutConstraint?
     private var grabberCenterYConstraint: NSLayoutConstraint?
     private var grabberHitLeadingConstraint: NSLayoutConstraint?
@@ -171,6 +186,24 @@ final class SeamToolbarView: UIView {
             blurView.trailingAnchor.constraint(equalTo: trailingAnchor),
             blurView.topAnchor.constraint(equalTo: topAnchor),
             blurView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        // (76) 带身色调层：垫在毛玻璃之上、描边之下。同一
+        // 连续轮廓的深色半透明填充保证亮封面之上带身仍可
+        // 读——(75) 只靠 mask 镂空毛玻璃＋分离描边，亮底上
+        // 带身近乎不可见，是「没画出来」的成因之一。
+        bandTintView.isUserInteractionEnabled = false
+        bandTintView.isHidden = true
+        bandTintView.shapeLayer.fillColor =
+            UIColor.black.withAlphaComponent(0.22).cgColor
+        bandTintView.shapeLayer.strokeColor = UIColor.clear.cgColor
+        bandTintView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(bandTintView)
+        NSLayoutConstraint.activate([
+            bandTintView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            bandTintView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            bandTintView.topAnchor.constraint(equalTo: topAnchor),
+            bandTintView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
 
         // (75) 绕岛描边层：垫在背景之上、内容之下，初始隐
@@ -337,10 +370,24 @@ final class SeamToolbarView: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // (76) 闪屏审计关连埋点：布局尺寸真变更才落痕，
+        // 下轮日志可与点按时刻对位（ morph 中途有无重排）。
+        if bounds.size != lastLayoutSize {
+            if lastLayoutSize != .zero {
+                Breadcrumbs.log("seam.morph76 lay w=\(Int(bounds.width))"
+                    + " h=\(Int(bounds.height))")
+            }
+            lastLayoutSize = bounds.size
+        }
         let wrap = wrapIslandEnabled && bounds.width > 0
             && bounds.width < bounds.height
         if wrap != wrapActiveNow {
             wrapActiveNow = wrap
+            // (76) 绕岛态带身恒可见（收起 = 贴岛薄框、不是
+            // 消失）：毛玻璃 alpha 归带身管、不再随内容组
+            // 归零；回平形态恢复 (60) 双态口径。
+            blurView.alpha = wrap ? 1 : (isToolbarExpanded ? 1 : 0)
+            if wrap { blurView.transform = .identity }
             Breadcrumbs.log("seam.wrap75 \(wrap ? "on" : "off")"
                 + " row=\(Int(contentRowTop))")
         }
@@ -353,24 +400,31 @@ final class SeamToolbarView: UIView {
         if rowHeightConstraint?.constant != targetHeight {
             rowHeightConstraint?.constant = targetHeight
         }
-        // 背景形态：绕岛态 mask 切凹口＋独立描边层；平形态
-        // 回 blurView 圆角＋自带 border。
+        // 背景形态：绕岛态三层（毛玻璃 mask／色调填充／描
+        // 边）共用 (76) 单一连续轮廓路径、按当前双态取带
+        // 底（展开 = 全高、收起 = 贴岛薄框）；平形态回
+        // blurView 圆角＋自带 border。
         if wrap {
-            let path = Self.wrapBackgroundPath(bounds: bounds)
+            let bottom = isToolbarExpanded
+                ? bounds.height : Self.slimBandBottom
+            let path = Self.bandOutlinePath(width: bounds.width,
+                                            bottom: bottom)
             maskShapeLayer.frame = bounds
             maskShapeLayer.path = path
-            maskShapeLayer.fillRule = .evenOdd
             if blurView.layer.mask !== maskShapeLayer {
                 blurView.layer.mask = maskShapeLayer
             }
             blurView.layer.cornerRadius = 0
             blurView.layer.borderWidth = 0
+            bandTintView.shapeLayer.path = path
+            bandTintView.isHidden = false
             borderView.shapeLayer.path = path
             borderView.isHidden = false
         } else {
             if blurView.layer.mask != nil { blurView.layer.mask = nil }
             blurView.layer.cornerRadius = 22
             blurView.layer.borderWidth = 1
+            bandTintView.isHidden = true
             borderView.isHidden = true
         }
         // 横线对位：绕岛态落岛左近（线身右缘距岛左缘 14pt、
@@ -406,37 +460,66 @@ final class SeamToolbarView: UIView {
         }
     }
 
-    /// 绕岛背景路径：外轮廓（顶边平直贴屏幕顶、底角 22 圆
-    /// 角）＋凹口（岛宽＋两侧各 8 缝、底＝岛底＋8、底角 18
-    /// 圆角、自顶边切入），even-odd 合成后凹口即镂空。
-    private static func wrapBackgroundPath(bounds: CGRect) -> CGPath {
-        let w = bounds.width, h = bounds.height, r: CGFloat = 22
-        let path = UIBezierPath()
-        path.move(to: CGPoint(x: 0, y: 0))
-        path.addLine(to: CGPoint(x: w, y: 0))
-        path.addLine(to: CGPoint(x: w, y: h - r))
-        path.addArc(withCenter: CGPoint(x: w - r, y: h - r), radius: r,
-                    startAngle: 0, endAngle: .pi / 2, clockwise: true)
-        path.addLine(to: CGPoint(x: r, y: h))
-        path.addArc(withCenter: CGPoint(x: r, y: h - r), radius: r,
-                    startAngle: .pi / 2, endAngle: .pi, clockwise: true)
-        path.close()
+    // MARK: - (76) 凹口几何（画出来的带、单一连续轮廓）
+
+    /// 间隙：凹口轮廓与岛胶囊之间恒 3pt——偏移弧与岛弧
+    /// 同心（圆心同为 (±44.5, 29.5)）、半径差恰 3；顶
+    /// fillet 与其切点邻域间隙 ≥3（fillet 圆在偏移弧外侧
+    /// 相切接入）。
+    private static let notchGap: CGFloat = 3
+    /// 凹口半宽 = 岛半宽 63 + 间隙 3。
+    private static let notchHalf: CGFloat = 66
+    /// 凹口底 = 岛底 48 + 间隙 3。
+    private static let notchBottom: CGFloat = 51
+    /// 凹口弧半径 = 岛胶囊半径 18.5 + 间隙 3。
+    private static let notchArcR: CGFloat = 21.5
+    /// 凹口弧圆心横偏移 = 岛半宽 63 − 岛胶囊半径 18.5。
+    private static let notchArcDX: CGFloat = 44.5
+    /// 顶边下切 fillet 半径（凹角平滑过渡）。
+    private static let notchFilletR: CGFloat = 8
+    /// 收起态带底：凹口底 51 + 9 底衬 = 60——带身收成贴
+    /// 岛薄框、整带仍画在屏上，横线（中心高 29.5）落在
+    /// 左臂带身上、不再是浮在砖上的孤线。
+    private static let slimBandBottom: CGFloat = 60
+
+    /// (76) 绕岛带轮廓：单一连续路径一条到底——顶边自左
+    /// 行至岛左 → r8 凹 fillet 平滑下切 → 沿岛胶囊 +3pt
+    /// 偏移弧（r21.5）绕过岛底 → 右侧镜像上行回顶边 →
+    /// 续行至右缘 → 下行 → 底角 r22 → 底边 → 左缘闭合。
+    /// 不是 mask 镂空＋分离描边（(75) 形态被否）：填充、
+    /// 色调、描边三层共用本路径，凹口是轮廓本身的凹部。
+    /// bottom = 带底 y（展开 = 本条高、收起 = 60）；命令
+    /// 序列与 bottom 无关、恒定同构，故两态路径可由
+    /// CASpringAnimation 直接形变插值（形变衔接、非跳变）。
+    private static func bandOutlinePath(width w: CGFloat,
+                                        bottom h: CGFloat) -> CGPath {
         let cx = w / 2
-        let half = islandHalfWidth + 8
-        let bottom = islandBottom + 8
-        let nr: CGFloat = 18
-        path.move(to: CGPoint(x: cx - half, y: -4))
-        path.addLine(to: CGPoint(x: cx + half, y: -4))
-        path.addLine(to: CGPoint(x: cx + half, y: bottom - nr))
-        path.addArc(withCenter: CGPoint(x: cx + half - nr, y: bottom - nr),
-                    radius: nr, startAngle: 0, endAngle: .pi / 2,
-                    clockwise: true)
-        path.addLine(to: CGPoint(x: cx - half + nr, y: bottom))
-        path.addArc(withCenter: CGPoint(x: cx - half + nr, y: bottom - nr),
-                    radius: nr, startAngle: .pi / 2, endAngle: .pi,
-                    clockwise: true)
-        path.close()
-        return path.cgPath
+        let r: CGFloat = 22
+        let f = notchFilletR, ar = notchArcR, adx = notchArcDX
+        let cy = islandCenterY, nb = notchBottom
+        let p = UIBezierPath()
+        p.move(to: CGPoint(x: 0, y: 0))
+        p.addLine(to: CGPoint(x: cx - adx - f, y: 0))
+        p.addArc(withCenter: CGPoint(x: cx - adx - f, y: f), radius: f,
+                 startAngle: -.pi / 2, endAngle: 0, clockwise: true)
+        p.addArc(withCenter: CGPoint(x: cx - adx, y: cy), radius: ar,
+                 startAngle: -.pi / 2, endAngle: .pi / 2,
+                 clockwise: false)
+        p.addLine(to: CGPoint(x: cx + adx, y: nb))
+        p.addArc(withCenter: CGPoint(x: cx + adx, y: cy), radius: ar,
+                 startAngle: .pi / 2, endAngle: -.pi / 2,
+                 clockwise: false)
+        p.addArc(withCenter: CGPoint(x: cx + adx + f, y: f), radius: f,
+                 startAngle: .pi, endAngle: .pi * 1.5, clockwise: true)
+        p.addLine(to: CGPoint(x: w, y: 0))
+        p.addLine(to: CGPoint(x: w, y: h - r))
+        p.addArc(withCenter: CGPoint(x: w - r, y: h - r), radius: r,
+                 startAngle: 0, endAngle: .pi / 2, clockwise: true)
+        p.addLine(to: CGPoint(x: r, y: h))
+        p.addArc(withCenter: CGPoint(x: r, y: h - r), radius: r,
+                 startAngle: .pi / 2, endAngle: .pi, clockwise: true)
+        p.close()
+        return p.cgPath
     }
 
     /// 命中纪律（(75)）：收起态只认横线命中垫；展开态只认
@@ -454,6 +537,9 @@ final class SeamToolbarView: UIView {
     // MARK: - 双态（(60) 第 2 条）
 
     @objc private func grabberTapped() {
+        // (76) 闪屏审计埋点：点按时刻落痕，与 morph/lay
+        // 面包屑同轴对位（点按前后各帧状态可复原）。
+        Breadcrumbs.log("seam.morph76 tap")
         expandToolbar(reason: "tap")
     }
 
@@ -506,13 +592,23 @@ final class SeamToolbarView: UIView {
 
     private func applyToolbarState(expanded: Bool, animated: Bool, reason: String) {
         grabberHitView.isHidden = expanded
+        // (76) 绕岛态：带身走路径形变（三层同路径弹簧），
+        // 毛玻璃不进 alpha 组、不做 transform 缩放（带
+        // mask 的 UIVisualEffectView 被非恒等 transform 缩
+        // 放是闪帧嫌疑，(76) 闪屏审计定案项之一，见报告）。
+        if wrapActiveNow {
+            applyWrapBandMorph(expanded: expanded, animated: animated)
+        }
         let apply = { [self] in
             for view in contentViews {
+                if wrapActiveNow && view === blurView { continue }
                 view.alpha = expanded ? 1 : 0
             }
-            blurView.transform = expanded
-                ? .identity
-                : CGAffineTransform(scaleX: 0.92, y: 0.55)
+            if !wrapActiveNow {
+                blurView.transform = expanded
+                    ? .identity
+                    : CGAffineTransform(scaleX: 0.92, y: 0.55)
+            }
             grabberView.alpha = expanded ? 0 : 1
         }
         let setInteraction = { [self] in
@@ -528,6 +624,7 @@ final class SeamToolbarView: UIView {
                            options: [.allowUserInteraction, .beginFromCurrentState],
                            animations: apply) { [weak self] _ in
                 guard let self, self.isToolbarExpanded == expanded else { return }
+                Breadcrumbs.log("seam.morph76 done st=\(expanded ? 1 : 0)")
                 setInteraction()
             }
         } else {
@@ -535,6 +632,39 @@ final class SeamToolbarView: UIView {
             setInteraction()
         }
         _ = reason
+    }
+
+    /// (76) 绕岛带形变：毛玻璃 mask／色调填充／描边三层
+    /// 共用同一连续轮廓路径，以 CASpringAnimation（系统
+    /// 弹簧语汇：刚度 210、阻尼 24、欠阻尼微过冲）从当
+    /// 前呈现路径形变到目标态（展开 = 全高带、收起 = 贴
+    /// 岛薄框 60）。轮廓命令序列两态同构、插值无跳变；
+    /// 非动画调用直接落位（init/沉浸/旋转兜底）。
+    private func applyWrapBandMorph(expanded: Bool, animated: Bool) {
+        let bottom = expanded ? bounds.height : Self.slimBandBottom
+        let target = Self.bandOutlinePath(width: bounds.width,
+                                          bottom: bottom)
+        Breadcrumbs.log("seam.morph76 \(expanded ? "exp" : "col")"
+            + " anim=\(animated ? 1 : 0)")
+        let layers: [CAShapeLayer] = [
+            maskShapeLayer, bandTintView.shapeLayer, borderView.shapeLayer,
+        ]
+        for layer in layers {
+            let from = (layer.presentation() as? CAShapeLayer)?.path
+                ?? layer.path
+            layer.path = target
+            if animated, from != target {
+                let spring = CASpringAnimation(keyPath: "path")
+                spring.fromValue = from
+                spring.toValue = target
+                spring.mass = 1
+                spring.stiffness = 210
+                spring.damping = 24
+                spring.initialVelocity = 0
+                spring.duration = spring.settlingDuration
+                layer.add(spring, forKey: "bandMorph76")
+            }
+        }
     }
 
     private func configureIcon(_ button: UIButton, symbol: String, label: String,

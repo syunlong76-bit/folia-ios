@@ -127,9 +127,6 @@ final class WallPrototypeViewController: UIViewController,
     // 及其 showStatusNotice/statusTapped 一并删除——未登录入口归
     // 主页侧栏账户区、失败重试归失败贴纸点按、定位瞬时提示归窗口
     // 级 toast（NativePlaybackFailureToast.show(message:)）。
-    /// 关闭键 chrome 容器（3.7 (53) L 组 ✕ 毛玻璃圆钮）：按压
-    /// 反馈作用于整件（命中 44pt + 视觉圆 34pt）。
-    private var closeChromeView: UIView?
     private var backdrop: LoadingBackdropView?
     /// (62) 追加三：歌单页同款导航台（缝合工具条）。
     private var playlistSeamToolbar: SeamToolbarView?
@@ -337,55 +334,16 @@ final class WallPrototypeViewController: UIViewController,
         // 瞬时提示 → 窗口级 toast。歌单加载反馈仍由
         // LoadingBackdropView 的拍立得 + 捂脸哭小猫承担。
 
-        // 关闭键（3.7 (53) L 组）：文字胶囊「关闭」→ iOS 系统式
-        // ✕ 毛玻璃圆钮（与主页墙同构）。视觉圆 34pt（系统超薄
-        // 材质 + 亮边，与迷你台毛玻璃同款口径）居中于 44pt 命中
-        // 容器；锚点与旧胶囊一致（safeArea.top+8、trailing-12）。
-        // 关闭行为不变：仍走 closeTapped（拍立得背板
-        // requestClose 契约 + dismiss 回主页墙）。加载态（背板
-        // 在场）共用同一键，背板插在胶囊之下、键保持在背板之
-        // 上可点（原 z 序不变）。按压反馈见 closePressBegan/Ended。
-        let closeChrome = UIView()
-        closeChrome.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(closeChrome)
-        closeChromeView = closeChrome
-        let closeBlur = UIVisualEffectView(
-            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        closeBlur.layer.cornerRadius = 17
-        closeBlur.layer.borderWidth = 1
-        closeBlur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
-        closeBlur.clipsToBounds = true
-        closeBlur.isUserInteractionEnabled = false
-        closeBlur.translatesAutoresizingMaskIntoConstraints = false
-        closeChrome.addSubview(closeBlur)
-        let close = UIButton(type: .system)
-        close.setImage(UIImage(systemName: "xmark",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 13, weight: .semibold)),
-            for: .normal)
-        close.tintColor = .white
-        close.accessibilityLabel = "关闭"
-        close.translatesAutoresizingMaskIntoConstraints = false
-        close.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        close.addTarget(self, action: #selector(closePressBegan),
-                        for: [.touchDown, .touchDragEnter])
-        close.addTarget(self, action: #selector(closePressEnded),
-                        for: [.touchUpInside, .touchUpOutside, .touchCancel, .touchDragExit])
-        closeChrome.addSubview(close)
-        NSLayoutConstraint.activate([
-            closeChrome.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            closeChrome.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            closeChrome.widthAnchor.constraint(equalToConstant: 44),
-            closeChrome.heightAnchor.constraint(equalToConstant: 44),
-            closeBlur.centerXAnchor.constraint(equalTo: closeChrome.centerXAnchor),
-            closeBlur.centerYAnchor.constraint(equalTo: closeChrome.centerYAnchor),
-            closeBlur.widthAnchor.constraint(equalToConstant: 34),
-            closeBlur.heightAnchor.constraint(equalToConstant: 34),
-            close.topAnchor.constraint(equalTo: closeChrome.topAnchor),
-            close.bottomAnchor.constraint(equalTo: closeChrome.bottomAnchor),
-            close.leadingAnchor.constraint(equalTo: closeChrome.leadingAnchor),
-            close.trailingAnchor.constraint(equalTo: closeChrome.trailingAnchor)
-        ])
-        Breadcrumbs.log("wall.chrome playlist hintBar=removed close=glass-x")
+        // (76) ⑧右上角 ✕ 关闭钮摘除（Miller 21:52 截图点
+        // 名：钮太小难按、与上方工具条控制区干涉、④左缘返
+        // 回落地后没必要）：原 (53) L 组 ✕ 毛玻璃圆钮整件
+        // 撤除——不留视觉、不留空占位、不留命中区。关闭路
+        // 径不缺失：统一走 ④ 左缘手势（EdgeBack76，落点 =
+        // 本页既有 closeTapped：背板 requestClose 契约 +
+        // dismiss，加载态同路）；背板自带 onPendingClose 与
+        // 展开卡点卡外/下滑等既有关闭路径原样保留。入场动
+        // 画页关闭钮是另一页的定版口径，不在此列、未动。
+        Breadcrumbs.log("wall.chrome playlist close=removed76")
 
         // (74) 墙内独立设置齿轮撤除：设置入口统一收进缝合工
         // 具条齿轮（Miller 定：顶部工具条里已有设置，独立页
@@ -411,6 +369,25 @@ final class WallPrototypeViewController: UIViewController,
         backdrop = backdropView
 
         installPlaylistSeamToolbar()
+
+        // (76) ④左缘滑动返回（与 ⑧ 摘 ✕ 互为前提、同批落
+        // 地）：落点 = closeTapped 既有契约（背板在场时
+        // requestClose 先行、加载态同路可退）；点播台条带
+        // 内起手排除（防细条左端横拖被返回偷走）；墙面滚
+        // 动 pan 须等左缘识别器失败才起（左缘起手先判返
+        // 回、非左缘横滑照旧平移）。
+        let edgeBack76 = EdgeBack76.install(on: self,
+            shouldBeginAt: { [weak self] point in
+                guard let self, let bar = self.miniBar,
+                      !bar.isHidden else { return true }
+                return !bar.frame.contains(point)
+            },
+            onDismiss: { [weak self] in
+                self?.closeTapped()
+            })
+        if let edgePan = edgeBack76.pan {
+            collectionView.panGestureRecognizer.require(toFail: edgePan)
+        }
 
         // 转场落定：墙以 1.04 倍入场、viewDidAppear 里收回 1.0。
         collectionView.transform = CGAffineTransform(scaleX: 1.04, y: 1.04)
@@ -2213,9 +2190,6 @@ final class WallPrototypeViewController: UIViewController,
             SeamToolbarForwarding.forward("fullscreen", from: self)
         }
         playlistSeamToolbar = toolbar
-        // (75) 关闭键容器提至绕岛带之上：展开态毛玻璃不盖
-        // 关闭键（收起态带透明、本步无副作用）。
-        if let chrome = closeChromeView { view.bringSubviewToFront(chrome) }
         // (75) 加载页零帧（Miller 20:29 点名）：拍立得背板
         // 在场期间工具条整条隐藏——收起横线与展开条都不许
         // 出现在加载页上；背板淡出完成（onFadedOut）才恢复。
@@ -2240,30 +2214,8 @@ final class WallPrototypeViewController: UIViewController,
         dismiss(animated: true)
     }
 
-    /// 关闭键按压反馈（3.7 (53) L 组）：按下缩 0.86 + 压暗，
-    /// 松手系统弹簧回弹；只动 chrome 容器的 transform/alpha，
-    /// 不碰关闭语义。Reduce Motion 时不缩放（guard 直接返回，
-    /// ended 仍复位防残留）。
-    @objc private func closePressBegan() {
-        guard !FoliaMotion62.reduced(.microEffects),
-              let chrome = closeChromeView else { return }
-        UIView.animate(withDuration: 0.18, delay: 0,
-                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
-                       options: [.allowUserInteraction, .beginFromCurrentState]) {
-            chrome.transform = CGAffineTransform(scaleX: 0.86, y: 0.86)
-            chrome.alpha = 0.75
-        }
-    }
-
-    @objc private func closePressEnded() {
-        guard let chrome = closeChromeView else { return }
-        UIView.animate(withDuration: 0.35, delay: 0,
-                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.4,
-                       options: [.allowUserInteraction, .beginFromCurrentState]) {
-            chrome.transform = .identity
-            chrome.alpha = 1
-        }
-    }
+    // (76) ⑧：✕ 的按压反馈 closePressBegan/Ended 随钮一
+    // 并撤除（作用对象 closeChromeView 已不存在）。
 
     // (74) wallSettingsTapped 已随墙内独立齿轮一并撤除：
     // 本面设置入口 = 工具条齿轮（转发回主页开设置面板）。

@@ -255,6 +255,14 @@ final class StageViewController: UIViewController {
     private var syncProbeSweepLineIndex: Int?
     private var gateTimer: Timer?
     private var lastLayoutSize: CGSize = .zero
+    /// (76) 旋转管线对齐墙面 (73) 的四件：代际计数、冻结
+    /// 旗（冻结期 layoutStage 只记待办、不以中间 bounds
+    /// 反复全量重算）、待重排旗、本代 layoutStage 运行次
+    /// 数（落定自证 runs=，目标与墙面同级 = 1）。
+    private var stageRotationGeneration = 0
+    private var stageRotationFrozen = false
+    private var stageLayoutPending = false
+    private var stageLayoutRuns = 0
     private var lastTimeLabelSecond = -1
     private var tornDown = false
     private var webJumpFired = false
@@ -273,6 +281,10 @@ final class StageViewController: UIViewController {
     // 动隐藏三源。
 
     private var headerHideWorkItem: DispatchWorkItem?
+    /// (76) 单击显示歌名的时序门状态：待触发的 show 排期
+    /// 与三击抑制窗（见 stageHeaderSingleTapped74）。
+    private var headerShowWorkItem: DispatchWorkItem?
+    private var headerShowSuppressUntil: TimeInterval = 0
     private var headerChromeHidden = false
     /// (74) 第 9 项（更正口径）：单击显示歌名识别器——须等
     /// 三击识别失败才触发（require(toFail:)），故存引用待
@@ -292,13 +304,14 @@ final class StageViewController: UIViewController {
         // ①双击绑歌名的识别器已整路摘除（原 stageHeader-
         //   DoubleTapped 及其 view 级双击识别器删除）——双击
         //   不再有任何歌名行为；
-        // ②单击显示歌名：singleTap74 显示顶栏，但装配时在
-        //   installStyleCycleRecognizers 里给它加
-        //   require(toFail: 三击)——三击序列中单击被压住、
-        //   三击成功即单击作废，歌名全程不出现（治旧病：三
-        //   击途中点按被先行识别、切特效时歌名跟着闪）；真
-        //   单击在三击识别失败后触发，延迟约一个多击窗口
-        //   （≈0.35s，Miller 已认可接受范围）；
+        // ②单击显示歌名：singleTap74 的回调走 (76) 显式时
+        //   序门（排 0.35s、三击识别取消＋抑制窗）——三击
+        //   序列中歌名全程不出现（治旧病：三击途中点按被
+        //   先行识别、切特效时歌名跟着闪）；真单击延迟约
+        //   一个多击窗口（≈0.35s，Miller 已认可接受范围）。
+        //   原 (74) 的 require(toFail: 三击) 跨视图接线已
+        //   摘除（(76) ⑦静态审：接线完整但啮合不可证、真
+        //   机失效，见 stageHeaderSingleTapped74 注）；
         // ③单击观察器保留：不消费触摸、只在顶栏可见时即时
         //   顺延隐藏计时（不等 ②的延迟，防计时在延迟内到点）。
         let singleTap74 = UITapGestureRecognizer(
@@ -312,11 +325,33 @@ final class StageViewController: UIViewController {
         view.addGestureRecognizer(tapObserver)
     }
 
-    /// (74) 单击显示歌名：经 require(toFail: 三击) 的时序门
-    /// 后才到这里（见装配处注释）；showStageHeader 内部兼管
-    /// 已可见时只顺延计时、已隐藏时弹簧恢复并落面包屑。
+    /// 单击显示歌名。(74) 实现靠 require(toFail: 三击) 压
+    /// 住单击；(76) 静态审（报告⑦）：装配与接线在 (75) 后
+    /// 完整无损、(75) 也未改本链，但跨视图失败依赖的实际
+    /// 啮合取决于两识别器对同一触摸集的跟踪，落点不同即
+    /// 表现不同，静态不可证、真机已失效。改显式时序门：
+    /// 单击到达即排 0.35s 后 show（与 (74) 延迟同量级）；
+    /// 三击识别即取消排期并开 0.4s 抑制窗——无论两识别
+    /// 器同帧回调谁先谁后，三击序列里歌名都不出现（不
+    /// 闪）；真单击到点未被取消才 showStageHeader。
     @objc private func stageHeaderSingleTapped74() {
-        showStageHeader(source: "tap74")
+        let now = CACurrentMediaTime()
+        guard now >= headerShowSuppressUntil else {
+            Breadcrumbs.log("stage.tap76 skip=triple")
+            return
+        }
+        headerShowWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.view.window != nil,
+                  CACurrentMediaTime() >= self.headerShowSuppressUntil
+            else { return }
+            Breadcrumbs.log("stage.tap76 fire")
+            self.showStageHeader(source: "tap76")
+        }
+        headerShowWorkItem = work
+        Breadcrumbs.log("stage.tap76 sched")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35,
+                                      execute: work)
     }
 
     private func scheduleStageHeaderHide() {
@@ -404,15 +439,23 @@ final class StageViewController: UIViewController {
         tripleTap.cancelsTouchesInView = false
         rendererContainer.addGestureRecognizer(tripleTap)
         stageTripleTap74 = tripleTap
-        // (74) 第 9 项手势互斥：单击显示歌名必须等三击失败
-        // ——三击序列全程单击不触发、歌名不闪现（见顶栏装
-        // 配处长注）。接线在本处（三击本体所在）完成，装配
-        // 顺序为顶栏识别器先行（viewDidLoad :520/:523）。
-        stageHeaderSingleTap74?.require(toFail: tripleTap)
-        Breadcrumbs.log("stage.tapchain74 single=req3fail")
+        // (74) 第 9 项手势互斥曾在此接线：单击 require
+        // (toFail: 三击)。(76) ⑦改显式时序门（见
+        // stageHeaderSingleTapped74）：require 接线摘除，
+        // 三击识别时在 styleCycleTripleTapped 内取消单击
+        // 排期并开抑制窗。装配顺序仍为顶栏识别器先行。
+        Breadcrumbs.log("stage.tap76 gate=timer")
     }
 
     @objc private func styleCycleTripleTapped() {
+        // (76) 时序门：三击成立 → 单击的待触发 show 作废
+        // （歌名不闪），抑制窗盖住同帧回调次序差。
+        headerShowSuppressUntil = CACurrentMediaTime() + 0.4
+        if headerShowWorkItem != nil {
+            headerShowWorkItem?.cancel()
+            headerShowWorkItem = nil
+            Breadcrumbs.log("stage.tap76 cancel")
+        }
         cycleToNextStyle(source: "tripleTap")
     }
 
@@ -561,6 +604,21 @@ final class StageViewController: UIViewController {
         // (68) B 组出样：全宽控制条装配（开关关时仅装隐藏
         // 视图＋disabled 识别器，零行为差异）。
         installWideBar68()
+        // (76) ④左缘滑动返回：落点 = closeTapped →
+        // closeStage（StageExitGate 闸门登记后 dismiss，契
+        // 约不绕行；闸门 veto 时 EdgeBack76 自废交互并落
+        // edge.back76 veto）。起手排除点播台条带（台上宠
+        // 物拖拽/高度拖拽都在条带内）与顶栏区由系统边缘带
+        // 天然覆盖；舞台既有 tap 链（三击/单击）为离散手
+        // 势、与 pan 不共存于同一触摸序列，无接线冲突。
+        EdgeBack76.install(on: self,
+            shouldBeginAt: { [weak self] point in
+                guard let self else { return true }
+                return !self.stageBar.frame.contains(point)
+            },
+            onDismiss: { [weak self] in
+                self?.closeTapped()
+            })
         // 网页运行首帧回执（3.7 (67) A4）：桥转交本台处理淡换。
         WebEffectBridge.shared.onStyleFrame = { [weak self] styleId in
             self?.handleWebStyleFrame(styleId)
@@ -674,12 +732,55 @@ final class StageViewController: UIViewController {
 
     /// (75) 旋转时工具条朝向组随转场首帧切换（本类此前无
     /// viewWillTransition 重写，此为唯一新增用途）。
+    /// (76) 旋转管线对齐墙面 (73)（Miller 21:49 点名播放
+    /// 页转动不流畅）：此前本页旋转只有朝向切换一职——
+    /// viewDidLayoutSubviews 在转场期间被中间 bounds 反
+    /// 复触发、layoutStage 全量几何（渲染器帧/chrome 帧/
+    /// 贴纸定位/全员 bringToFront）一遍遍重算，关键路径
+    /// 还叠着岛层 refront。改与墙面同构：冻结（中间
+    /// bounds 只记待办）→ alongside 首帧以最终 bounds 解
+    /// 冻单次重排 → completion 恢复 refront 并补一拍；
+    /// 代际守卫防中途反向再转时旧代误解冻。演唱会几何仍
+    /// 由 layoutStage 按最终 bounds 一次算清（横竖屏双向
+    /// 独立成立的口径不变、只是不再中途反复算）。
     override func viewWillTransition(to size: CGSize,
         with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
+        guard viewIfLoaded != nil, size != view.bounds.size else {
+            coordinator.animate(alongsideTransition: { [weak self] _ in
+                self?.applySeamBandOrientation(
+                    portrait: size.width < size.height)
+            }, completion: nil)
+            return
+        }
+        stageRotationGeneration += 1
+        let generation = stageRotationGeneration
+        stageRotationFrozen = true
+        stageLayoutRuns = 0
+        // (73 墙面同款）岛层守护转场期暂停：旋转中途不许
+        // refront/reseat 抢主线程，落定后补一拍。
+        PetIslandLayer.setRefrontSuspended(true)
+        Breadcrumbs.log("stage.rotate freeze gen=\(generation)"
+            + " from=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
+            + " to=\(Int(size.width))x\(Int(size.height))")
         coordinator.animate(alongsideTransition: { [weak self] _ in
-            self?.applySeamBandOrientation(portrait: size.width < size.height)
-        }, completion: nil)
+            guard let self else { return }
+            self.applySeamBandOrientation(portrait: size.width < size.height)
+            guard generation == self.stageRotationGeneration else { return }
+            self.stageRotationFrozen = false
+            if self.stageLayoutPending {
+                self.stageLayoutPending = false
+                self.layoutStage()
+                self.pushSnapshot()
+            }
+        }) { [weak self] _ in
+            PetIslandLayer.setRefrontSuspended(false)
+            PetIslandLayer.shared.refrontIfNeeded()
+            guard let self,
+                  generation == self.stageRotationGeneration else { return }
+            Breadcrumbs.log("stage.rotate76 landed gen=\(generation)"
+                + " runs=\(self.stageLayoutRuns)")
+        }
     }
 
     override func viewDidAppear(_ animated: Bool) {
@@ -721,6 +822,8 @@ final class StageViewController: UIViewController {
         cancelStageIdleTimer()
         headerHideWorkItem?.cancel()
         headerHideWorkItem = nil
+        headerShowWorkItem?.cancel()
+        headerShowWorkItem = nil
         stageThemeLayer?.setHostVisible(false)
         stageThemeLayer?.setBarVisible(false)
         stagePetStage?.barPresentationChanged(false)
@@ -752,10 +855,17 @@ final class StageViewController: UIViewController {
 
     override func viewDidLayoutSubviews() {
         super.viewDidLayoutSubviews()
-        layoutStage()
+        // (76) 冻结期（旋转转场中）：不以中间 bounds 全量
+        // 重算，只记待办——alongside 首帧以最终 bounds 单
+        // 次补齐（layoutStage + pushSnapshot）。
+        if stageRotationFrozen {
+            stageLayoutPending = true
+        } else {
+            layoutStage()
+        }
         if view.bounds.size != lastLayoutSize {
             lastLayoutSize = view.bounds.size
-            pushSnapshot()
+            if !stageRotationFrozen { pushSnapshot() }
         }
     }
 
@@ -1077,6 +1187,7 @@ final class StageViewController: UIViewController {
     @objc private func alwaysNext62Tapped() { queueManager.playNext(manual: true) }
 
     private func layoutStage() {
+        stageLayoutRuns += 1
         let bounds = view.bounds
         let safe = view.safeAreaInsets
         customBgView.frame = bounds

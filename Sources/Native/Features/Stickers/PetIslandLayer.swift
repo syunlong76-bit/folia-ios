@@ -196,6 +196,57 @@ final class PetIslandLayer: UIView {
         syncProxyState()
         if !on { reseatAll(animated: false) }
     }
+
+    /// (76) ③镜像模式（Miller 21:54：同一个活动在动）：
+    /// 真活动在跑时本层只是活动的前台渲染面——名单/台
+    /// 词/播放态以 IslandLiveActivityManager 的
+    /// ContentState 为唯一真相（publishMirror 写入），本
+    /// 层自有抽词（islandHome 随机）与自有停聊
+    /// （PetChat）在镜像期停用，岛面只演活动的当前句；
+    /// 活动结束/不可用时协调器置 nil，本层回落自有逻辑
+    /// （回落障眼法口径）。名单与登记表同源，置入时仅作
+    /// 对账：已座名单与镜像名单不符才重座。
+    private(set) var islandMirror: (leftId: String, rightId: String,
+                                    phrase: String, isPlaying: Bool)?
+    private var mirrorSpeakLeft = true
+
+    func setIslandMirror(leftId: String?, rightId: String?,
+                         phrase: String?, isPlaying: Bool) {
+        if let leftId, let rightId, let phrase {
+            let lineupChanged = islandMirror?.leftId != leftId
+                || islandMirror?.rightId != rightId
+            let wasNil = islandMirror == nil
+            islandMirror = (leftId, rightId, phrase, isPlaying)
+            if wasNil { Breadcrumbs.log("isl.mirror76 on=1") }
+            if lineupChanged,
+               Set(pets.map { $0.asset }) != Set([leftId, rightId]) {
+                reseatAll(animated: false)
+            }
+        } else if islandMirror != nil {
+            islandMirror = nil
+            Breadcrumbs.log("isl.mirror76 on=0")
+        }
+    }
+
+    /// 岛面台词唯一出口：镜像期 = 活动的当前句（与后台
+    /// 系统渲染同一句）；非镜像期 = 既有到家库随机。
+    private func islandBubbleLine() -> String {
+        islandMirror?.phrase
+            ?? PetLines.islandHome.randomElement() ?? ""
+    }
+
+    /// 镜像期台词呈现：只演活动当前句，左右住客轮流开
+    /// 口（谁开口是呈现细节、句子本身与 ContentState 逐
+    /// 字一致）；本层不另抽词、不起自有停聊。
+    private func presentMirrorPhrase() {
+        guard let mirror = islandMirror, !mirror.phrase.isEmpty,
+              !pets.isEmpty else { return }
+        let want = mirrorSpeakLeft ? mirror.leftId : mirror.rightId
+        let speaker = pets.first { $0.asset == want } ?? pets[0]
+        mirrorSpeakLeft.toggle()
+        showBubble(mirror.phrase, above: speaker, duration: 2.6)
+        Breadcrumbs.log("isl.mirror76 say=\(speaker.asset)")
+    }
     /// 落点自证去重签名（isl.perch74 只在落点变化时落）。
     private var lastPerchSignature74 = ""
     private var tickTimer: Timer?
@@ -620,7 +671,7 @@ final class PetIslandLayer: UIView {
                     pet.center = target
                 }
             }
-            showBubble(PetLines.islandHome.randomElement() ?? "", above: pet, duration: 2.4)
+            showBubble(islandBubbleLine(), above: pet, duration: 2.4)
         }
         startTimerIfNeeded()
         updateStickerDrive()
@@ -773,7 +824,7 @@ final class PetIslandLayer: UIView {
         } else {
             // 没有点播台在场：留在岛上，小跳 + 一句到家词。
             hop(pet)
-            showBubble(PetLines.islandHome.randomElement() ?? "",
+            showBubble(islandBubbleLine(),
                        above: pet, duration: 1.8)
         }
     }
@@ -868,16 +919,26 @@ final class PetIslandLayer: UIView {
                 pet.center = target
             }
         }
-        // 居民停聊触发（≥2 只）。
+        // 居民停聊触发（≥2 只）。(76) 镜像期不起自有停
+        // 聊：同一节拍改为演活动当前句（左右轮流）。
         if pets.count >= 2, now >= nextChatAt {
-            startChat()
+            if islandMirror != nil {
+                nextChatAt = now + .random(in: 20...32)
+                presentMirrorPhrase()
+            } else {
+                startChat()
+            }
             return
         }
-        // 单/双宠日常冒泡（到家库）。
+        // 单/双宠日常冒泡（到家库；镜像期同为活动当前句）。
         if now >= nextBubbleAt, let pet = pets.randomElement() {
             nextBubbleAt = now + .random(in: 16...30)
-            showBubble(PetLines.islandHome.randomElement() ?? "",
-                       above: pet, duration: 2.4)
+            if islandMirror != nil {
+                presentMirrorPhrase()
+            } else {
+                showBubble(PetLines.islandHome.randomElement() ?? "",
+                           above: pet, duration: 2.4)
+            }
         }
     }
 
