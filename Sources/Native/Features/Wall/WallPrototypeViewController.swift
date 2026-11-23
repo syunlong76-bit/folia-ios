@@ -4072,6 +4072,9 @@ final class WallPosterCell: UICollectionViewCell {
                     let alive = await LocalServer.shared.ensureAlive(timeout: 3)
                     guard let self, alive else { return }
                     await MainActor.run {
+                        // cell 已被复用给别的 entry（currentUrl
+                        // 已立）时不许覆盖新内容。
+                        guard self.currentUrl == nil else { return }
                         self.configure(entry: retryEntry, tier: retryTier)
                     }
                 }
