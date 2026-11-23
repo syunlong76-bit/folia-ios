@@ -57,7 +57,17 @@ final class IslandLiveActivityManager {
     private var sceneActive = false
     private var concertSuspended = false
     private var resumeWorkItem: DispatchWorkItem?
-    private var phraseSerial = 0
+    /// (77) ⑩岛上对话引擎（台词唯一内容源，替 (75)/(76)
+    /// 的 islandHome 轮换——makeState 只读引擎当前句）。
+    private let dialogue = IslandDialogue77()
+    /// (77) ⑩台词节拍：45 秒一句（ActivityKit 预算内、
+    /// 几十秒量级下限侧），仅「活动在场＋后台＋播放中＋
+    /// 非汪汪队」时走拍（refreshSayTimer 收口）。
+    private var sayTimer: Timer?
+    private static let sayInterval: TimeInterval = 45
+    /// (77) ⑧细则：relevance 让位在场标记（让位/夺回边
+    /// 沿落 la.yield77/la.back77 去重用）。
+    private var relYielded = false
     /// (76) 已写入岛层的抑制值（applySuppression 去重）。
     private var suppressionApplied = false
     /// (76) 让位标记：stale/ended/dismissed 置位，重拉成
@@ -130,6 +140,13 @@ final class IslandLiveActivityManager {
         // (76) 退后台边沿：障眼法撤、系统活动接管（用户
         // 切到别家 App/锁屏后岛里是系统渲染的猫狗）。
         applySuppression()
+        // (77) ⑧细则：退后台且播放中 → 当即一发让位更新
+        // （relevance 降为让位值），不等下一次切歌/播放态
+        // 事件；台词节拍也自本边沿起走（refreshSayTimer
+        // 在 contentChanged 内收口）。
+        if activity != nil, PlaybackEngine.shared.isPlaying {
+            contentChanged(reason: "bg")
+        }
     }
 
     /// (76) 互斥收口：抑制有效值 = 有活动 && 非前台。
@@ -153,6 +170,10 @@ final class IslandLiveActivityManager {
     func concertBegan() {
         concertSuspended = true
         resumeWorkItem?.cancel()
+        // (77) ⑩：汪汪队期间岛宠物全撤、台词线随之关闭
+        // （引擎复位＋停拍）；活动 end 在下行。
+        dialogue.reset()
+        refreshSayTimer()
         guard let act = activity else { return }
         activity = nil
         applySuppression()
@@ -201,11 +222,17 @@ final class IslandLiveActivityManager {
     }
 
     private func request() {
+        // (77) ⑩：活动开场即开链——第一句（自嘲定稿链首
+        // 句）随 request 同发，展开岛/锁屏面一落地就有词。
+        if let first = dialogue.startIfNeeded() {
+            logSay77(first)
+        }
         let state = makeState()
+        let rel = relevanceScore(for: state)
         let content = ActivityContent(
             state: state,
             staleDate: staleDate(for: state),
-            relevanceScore: state.isPlaying ? 100 : 50)
+            relevanceScore: rel)
         do {
             let act = try Activity.request(
                 attributes: FoliaIslandAttributes(),
@@ -215,6 +242,8 @@ final class IslandLiveActivityManager {
             applySuppression()
             publishMirror(state)
             watch(act)
+            noteRelevance77(rel)
+            refreshSayTimer()
             if didYield {
                 didYield = false
                 Breadcrumbs.log("la.back76")
@@ -233,21 +262,95 @@ final class IslandLiveActivityManager {
             evaluate(reason: reason)
             return
         }
+        // (77) ⑩：换歌即换内容——聊歌段按新曲目重建余句。
+        if reason == "track" { dialogue.trackChanged() }
         let state = makeState()
         // (76) ③：新 ContentState 先同步给前台岛层（镜像
         // 同句词/同名单），再发系统更新——两渲染面同源。
         publishMirror(state)
+        let rel = relevanceScore(for: state)
         let content = ActivityContent(
             state: state,
             staleDate: staleDate(for: state),
-            relevanceScore: state.isPlaying ? 100 : 50)
+            relevanceScore: rel)
         Task { await act.update(content) }
+        noteRelevance77(rel)
+        refreshSayTimer()
         // (76) ③补：upd 落双 id——(75) 版 upd 不记名单，
         // 日志只能对账 request 时刻；补后每发更新可逐发判
         // 读 trailing id 是否在更新路径丢失（定案佐证）。
         Breadcrumbs.log("la.upd75 r=\(reason) play=\(state.isPlaying ? 1 : 0)"
-            + " rel=\(state.isPlaying ? 100 : 50)"
+            + " rel=\(Int(rel))"
             + " pets=\(state.leftPetId),\(state.rightPetId)")
+    }
+
+    // MARK: - (77) ⑧细则 relevance 让位 / ⑩台词节拍
+
+    /// relevance 口径（(77) ⑧细则，方案 A 的 app 外播放
+    /// 中场景）：播放＋后台＝让位低值 10——系统正在播放
+    /// 占大格、我方退到侧边小圆圈（minimal＝左住客猫图、
+    /// 狗暂退）；播放＋前台＝100（活动不被系统渲染、保
+    /// 位待退后台由 bg 边沿当即改判）；暂停＝50 恢复原
+    /// 口径夺回大格双宠物归位。升降最终由系统仲裁，本
+    /// 值只是偏置、不保证必达（报告同口径）。
+    private func relevanceScore(
+        for state: FoliaIslandAttributes.ContentState
+    ) -> Double {
+        if state.isPlaying && !sceneActive { return 10 }
+        return state.isPlaying ? 100 : 50
+    }
+
+    /// 让位/夺回边沿落痕（与 (76) la.yield76/la.back76 的
+    /// 活动生命周期让位分开记：本对是 relevance 偏置的
+    /// 进/出，值不变不重落）。
+    private func noteRelevance77(_ rel: Double) {
+        if rel == 10, !relYielded {
+            relYielded = true
+            Breadcrumbs.log("la.yield77 rel=10")
+        } else if rel != 10, relYielded {
+            relYielded = false
+            Breadcrumbs.log("la.back77 rel=\(Int(rel))")
+        }
+    }
+
+    private func logSay77(_ line: IslandDialogue77.Line) {
+        Breadcrumbs.log("la.say77 ch=\(dialogue.chainId)"
+            + " step=\(dialogue.step)"
+            + " side=\(line.isLeft ? "L" : "R") ph=\(line.phase)")
+    }
+
+    /// 台词节拍收口：仅活动在场＋后台＋播放中＋非汪汪队
+    /// 时走拍；任一条件失守即停拍（台词停在最后一句）。
+    /// 推进与让位/歌曲信息合并在同一发 contentChanged
+    /// 更新里出门（reason=say77），不为台词单发高频更新。
+    private func refreshSayTimer() {
+        let shouldRun = activity != nil && !sceneActive
+            && !concertSuspended && PlaybackEngine.shared.isPlaying
+        if shouldRun {
+            guard sayTimer == nil else { return }
+            let timer = Timer(timeInterval: Self.sayInterval,
+                              repeats: true) { [weak self] _ in
+                self?.sayTick77()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            sayTimer = timer
+        } else {
+            sayTimer?.invalidate()
+            sayTimer = nil
+        }
+    }
+
+    private func sayTick77() {
+        guard activity != nil, !sceneActive,
+              !concertSuspended,
+              PlaybackEngine.shared.isPlaying else {
+            refreshSayTimer()
+            return
+        }
+        if let line = dialogue.advance() {
+            logSay77(line)
+            contentChanged(reason: "say77")
+        }
     }
 
     /// (76) ③镜像发布：ContentState → 岛层前台渲染面；
@@ -278,10 +381,11 @@ final class IslandLiveActivityManager {
     private func makeState() -> FoliaIslandAttributes.ContentState {
         let duo = PetHomeRegistry.shared.islandTargetDuo
         let engine = PlaybackEngine.shared
-        phraseSerial += 1
-        let phrases = PetLines.islandHome
-        let phrase = phrases.isEmpty
-            ? "" : phrases[phraseSerial % phrases.count]
+        // (77) ⑩：台词只读对话引擎当前句（推进只发生在
+        // 45 秒节拍与开链两处，makeState 不再自行轮换——
+        // 任何合并更新都原样带当前句，不抢拍、不跳句）。
+        let phrase = dialogue.current?.text ?? ""
+        let phraseSide = (dialogue.current?.isLeft ?? true) ? 0 : 1
         // (76) ③补（Miller 21:57：播放中主岛 trailing 狗缺
         // 席）：双 id 完整性硬保证。静态审结论——名单结构
         // 恒 2 元（登记表 override 加载要求 count==2、
@@ -303,7 +407,8 @@ final class IslandLiveActivityManager {
             songTitle: engine.currentTrack?.title ?? "",
             artist: engine.currentTrack?.artist ?? "",
             isPlaying: engine.isPlaying,
-            phrase: phrase)
+            phrase: phrase,
+            phraseSide: phraseSide)
     }
 
     // MARK: 活动状态监听（清抑制的唯一真源）

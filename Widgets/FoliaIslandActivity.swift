@@ -19,9 +19,14 @@ struct FoliaIslandAttributes: ActivityAttributes {
         var songTitle: String
         var artist: String
         var isPlaying: Bool
-        /// 展开/锁屏面的一句宠物词（既有岛上语料
-        /// PetLines.islandHome 口径）；best-effort 字段，只
-        /// 随切歌/播放态更新同次刷新，不单独发 update。
+        /// 展开/锁屏面的一句宠物词；(77) ⑩起内容源改岛上
+        /// 专属对话引擎（IslandDialogue77：自嘲定稿链→聊
+        /// 当前歌→关心句→人格词库垫场），45 秒一拍随协调
+        /// 器合并更新推进，不单独高频发 update。
         var phrase: String
+        /// (77) ⑩台词说话侧：0 = 左住客、1 = 右住客。呈
+        /// 现侧据此把台词放在说话者一侧（归属呈现）；
+        /// compact/minimal 不读本字段（不放文字）。
+        var phraseSide: Int
     }
 }

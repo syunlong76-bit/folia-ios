@@ -30,6 +30,8 @@ private struct FoliaIslandActivityWidget: Widget {
                         .padding(.trailing, 4)
                 }
                 DynamicIslandExpandedRegion(.center) {
+                    // (77) ⑩：中央只留歌曲信息（歌名/歌手），
+                    // 台词移到底部独立行——不许挤掉歌曲信息。
                     VStack(spacing: 2) {
                         Text(context.state.songTitle)
                             .font(.headline)
@@ -38,23 +40,39 @@ private struct FoliaIslandActivityWidget: Widget {
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
-                        if !context.state.phrase.isEmpty {
-                            Text(context.state.phrase)
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                                .lineLimit(1)
-                        }
                     }
                 }
                 DynamicIslandExpandedRegion(.bottom) {
-                    HStack(spacing: 6) {
-                        Image(systemName: context.state.isPlaying
-                              ? "play.fill" : "pause.fill")
-                            .font(.caption2)
-                        Text(context.state.isPlaying ? "播放中" : "已暂停")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                        Spacer()
+                    VStack(spacing: 4) {
+                        // (77) ⑩台词独立行：按说话侧对齐呈现
+                        // 归属（左住客说的话靠左、右住客靠
+                        // 右），一眼看出是谁在说。
+                        if !context.state.phrase.isEmpty {
+                            HStack(spacing: 4) {
+                                if context.state.phraseSide == 1 {
+                                    Spacer()
+                                }
+                                Image(systemName: "pawprint.fill")
+                                    .font(.system(size: 8))
+                                    .foregroundStyle(.secondary)
+                                Text(context.state.phrase)
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .lineLimit(1)
+                                if context.state.phraseSide == 0 {
+                                    Spacer()
+                                }
+                            }
+                        }
+                        HStack(spacing: 6) {
+                            Image(systemName: context.state.isPlaying
+                                  ? "play.fill" : "pause.fill")
+                                .font(.caption2)
+                            Text(context.state.isPlaying ? "播放中" : "已暂停")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                            Spacer()
+                        }
                     }
                     .padding(.horizontal, 4)
                 }
@@ -98,27 +116,39 @@ private struct FoliaIslandLockScreenView: View {
     let state: FoliaIslandAttributes.ContentState
 
     var body: some View {
-        HStack(spacing: 10) {
-            FoliaPetImage(id: state.leftPetId, size: 40)
-            VStack(alignment: .leading, spacing: 2) {
-                Text(state.songTitle)
-                    .font(.headline)
-                    .lineLimit(1)
-                Text(state.artist)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                if !state.phrase.isEmpty {
+        VStack(spacing: 6) {
+            HStack(spacing: 10) {
+                FoliaPetImage(id: state.leftPetId, size: 40)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(state.songTitle)
+                        .font(.headline)
+                        .lineLimit(1)
+                    Text(state.artist)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Image(systemName: state.isPlaying ? "play.fill" : "pause.fill")
+                    .font(.body)
+                FoliaPetImage(id: state.rightPetId, size: 40)
+            }
+            // (77) ⑩台词独立行（锁屏面同岛口径）：按说话
+            // 侧对齐——左住客的话靠左、右住客的话靠右，
+            // 歌曲信息行不被挤占。
+            if !state.phrase.isEmpty {
+                HStack(spacing: 4) {
+                    if state.phraseSide == 1 { Spacer() }
+                    Image(systemName: "pawprint.fill")
+                        .font(.system(size: 8))
+                        .foregroundStyle(.secondary)
                     Text(state.phrase)
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
+                    if state.phraseSide == 0 { Spacer() }
                 }
             }
-            Spacer()
-            Image(systemName: state.isPlaying ? "play.fill" : "pause.fill")
-                .font(.body)
-            FoliaPetImage(id: state.rightPetId, size: 40)
         }
         .padding(12)
         .activityBackgroundTint(Color.black.opacity(0.55))

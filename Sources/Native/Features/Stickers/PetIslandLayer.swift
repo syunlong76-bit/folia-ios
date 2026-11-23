@@ -153,6 +153,53 @@ final class PetIslandLayer: UIView {
     private static let slotOffset: CGFloat =
         islandHalfWidth + 1 + petSize / 2
     private static let seatFeetY: CGFloat = islandTopY + islandHeight
+    /// (77) ⑧让位槽位：系统岛被正在播放/录屏指示撑宽时
+    /// （实测宽 ≈202、半宽 ≈101），镜像宠物外移到贴外
+    /// 沿：101 + 3 缝 + 宠物半宽 17 = 121。让位只动本层
+    /// 槽位与框底（系统岛缩不了），触发源见 refreshYield77。
+    private static let yieldSlotOffset: CGFloat = 121
+    /// (77) ⑧让位触发源：np＝镜像播放态（系统正在播放
+    /// 占岛变宽）；screen＝录屏/投屏占用岛（UIScreen
+    /// .isCaptured，Miller 23:18 录屏实证同被盖）。任一
+    /// 在场即让位、全清才回位。
+    private var yieldNP = false
+    private var yieldScreen = false
+    private var mirrorYielded = false
+    private var captureObserverInstalled = false
+    private var effectiveSlotOffset: CGFloat {
+        mirrorYielded ? Self.yieldSlotOffset : Self.slotOffset
+    }
+
+    /// (77) ⑧让位状态机：源集合变化即重算，有效值翻转
+    /// 才落痕＋弹簧重座（isl.yield77 带 src=np/screen/
+    /// np+screen 区分触发源，与 la.yield76/la.back76 的
+    /// 活动级让位分属两面、对位判读）。
+    private func refreshYield77() {
+        let on = yieldNP || yieldScreen
+        guard on != mirrorYielded else { return }
+        mirrorYielded = on
+        let srcs = [yieldNP ? "np" : nil,
+                    yieldScreen ? "screen" : nil]
+            .compactMap { $0 }.joined(separator: "+")
+        Breadcrumbs.log("isl.yield77 \(on ? "on" : "off")"
+            + " src=\(srcs.isEmpty ? "-" : srcs)")
+        reseatAll(animated: true)
+    }
+
+    @objc private func islandCaptureChanged77() {
+        yieldScreen = UIScreen.main.isCaptured
+        refreshYield77()
+    }
+
+    private func installCaptureObserver77() {
+        guard !captureObserverInstalled else { return }
+        captureObserverInstalled = true
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(islandCaptureChanged77),
+            name: UIScreen.capturedDidChangeNotification,
+            object: nil)
+        yieldScreen = UIScreen.main.isCaptured
+    }
     /// petRootLayer 的 zPosition（(53) G，DS 终审路线 c）：
     /// 与 window.layer 的其它直属子层（根视图层/呈现容器层）
     /// 同级竞争，10000 恒压其上。停靠层的 999 是窗口子视图
@@ -226,6 +273,11 @@ final class PetIslandLayer: UIView {
             islandMirror = nil
             Breadcrumbs.log("isl.mirror76 on=0")
         }
+        // (77) ⑧：np 让位源 = 镜像在场且播放中（系统正在
+        // 播放占岛变宽）；镜像撤除即清源。回位/让位由
+        // refreshYield77 与 screen 源合并裁决。
+        yieldNP = islandMirror != nil && isPlaying
+        refreshYield77()
     }
 
     /// 岛面台词唯一出口：镜像期 = 活动的当前句（与后台
@@ -308,6 +360,8 @@ final class PetIslandLayer: UIView {
 
     static func install(in windowScene: UIWindowScene) {
         let layer = PetIslandLayer.shared
+        // (77) ⑧：录屏占用岛的让位触发源观察（一次装配）。
+        layer.installCaptureObserver77()
         // 宿主窗（SceneDelegate 的 window 优先，key window 兜
         // 底）。(53) G：graft 不直属当前窗 layer（首装/scene
         // 重连换新窗）就重新 graft；落座几何口径不变。
@@ -722,7 +776,8 @@ final class PetIslandLayer: UIView {
             if pet === dragOutPet { continue }
             let duoIndex = PetHomeRegistry.shared.islandTargetDuo
                 .firstIndex(of: pet.asset) ?? 0
-            let offset = duoIndex == 0 ? -Self.slotOffset : Self.slotOffset
+            let offset = duoIndex == 0
+                ? -effectiveSlotOffset : effectiveSlotOffset
             pet.seatFeet = CGPoint(x: cx + offset, y: Self.seatFeetY)
             let target = CGPoint(x: pet.seatFeet.x,
                                  y: pet.seatFeet.y - Self.petSize / 2)
@@ -790,10 +845,10 @@ final class PetIslandLayer: UIView {
             sendSubviewToBack(container)
         }
         let cx = bounds.width / 2
-        let outerL = cx - Self.slotOffset - Self.petSize / 2 - 6
+        let outerL = cx - effectiveSlotOffset - Self.petSize / 2 - 6
         let innerL = cx - Self.islandHalfWidth + 6
         let innerR = cx + Self.islandHalfWidth - 6
-        let outerR = cx + Self.slotOffset + Self.petSize / 2 + 6
+        let outerR = cx + effectiveSlotOffset + Self.petSize / 2 + 6
         let targetDuo = PetHomeRegistry.shared.islandTargetDuo
         let hasLeft = pets.contains {
             (targetDuo.firstIndex(of: $0.asset) ?? 0) == 0
