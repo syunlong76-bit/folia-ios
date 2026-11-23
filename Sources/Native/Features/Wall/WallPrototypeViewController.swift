@@ -2142,8 +2142,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 闭键纵向零交叠），关闭键容器提至带上层（展开态不
     /// 被毛玻璃盖）；横屏回 (74) 侧锚组（top = safeArea
     /// .top + 56、leading 贴安全区左缘避岛、trailing −12）。
-    /// 动作语义＝转发回主页执行主页同名动作
-    /// （SeamToolbarForwarding），不在本面另造行为。
+    /// 动作语义（(75) 第 7 项修订）：全局面（设置/账户/
+    /// 搜索/导播台）在本面就地展开（SeamToolbarForwarding
+    /// .performInPlace）；主页墙状态动作（切段/布局/沉浸/
+    /// Lattice/更多）才转发回主页执行（forward），不在本
+    /// 面另造行为。
     /// (75) 加载页零帧：背板在场期间整条隐藏（见装配尾）。
     private func installPlaylistSeamToolbar() {
         let toolbar = SeamToolbarView()
@@ -2179,19 +2182,19 @@ final class WallPrototypeViewController: UIViewController,
         }
         toolbar.onAvatarTapped = { [weak self] in
             guard let self else { return }
-            SeamToolbarForwarding.forward("avatar", from: self)
+            SeamToolbarForwarding.performInPlace("avatar", from: self, toolbar: toolbar)
         }
         toolbar.onSearchTapped = { [weak self] in
             guard let self else { return }
-            SeamToolbarForwarding.forward("search", from: self)
+            SeamToolbarForwarding.performInPlace("search", from: self, toolbar: toolbar)
         }
         toolbar.onSettingsTapped = { [weak self] in
             guard let self else { return }
-            SeamToolbarForwarding.forward("settings", from: self)
+            SeamToolbarForwarding.performInPlace("settings", from: self, toolbar: toolbar)
         }
         toolbar.onGuideTapped = { [weak self] in
             guard let self else { return }
-            SeamToolbarForwarding.forward("guide", from: self)
+            SeamToolbarForwarding.performInPlace("guide", from: self, toolbar: toolbar)
         }
         toolbar.onLatticeTapped = { [weak self] in
             guard let self else { return }

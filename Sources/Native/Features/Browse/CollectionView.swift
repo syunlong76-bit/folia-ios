@@ -12,16 +12,16 @@ struct SeamToolbarBridge: UIViewRepresentable {
             SeamToolbarForwarding.activate("segment-\(segment.crumbName)", from: bar)
         }
         bar.onAvatarTapped = {
-            SeamToolbarForwarding.activate("avatar", from: bar)
+            SeamToolbarForwarding.activateGlobal("avatar", from: bar)
         }
         bar.onSearchTapped = {
-            SeamToolbarForwarding.activate("search", from: bar)
+            SeamToolbarForwarding.activateGlobal("search", from: bar)
         }
         bar.onSettingsTapped = {
-            SeamToolbarForwarding.activate("settings", from: bar)
+            SeamToolbarForwarding.activateGlobal("settings", from: bar)
         }
         bar.onGuideTapped = {
-            SeamToolbarForwarding.activate("guide", from: bar)
+            SeamToolbarForwarding.activateGlobal("guide", from: bar)
         }
         bar.onLatticeTapped = {
             SeamToolbarForwarding.activate("lattice", from: bar)

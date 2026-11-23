@@ -778,6 +778,77 @@ enum SeamToolbarForwarding {
         forward(action, from: host)
     }
 
+    // MARK: - (75) 第 7 项：全局面就地展开
+
+    /// 全局面动作集：设置/账户（扫码登录在账户卡内）/搜索/
+    /// 导播台——这些面与主页墙状态无关，任何页面点开都须
+    /// 在本页就地呈现，不许先关本页弹回主页（Miller 20:42
+    /// 点名：歌单页点设置被弹回主页再开是错的）。只有主页
+    /// 墙状态动作（segment-*/lattice/layout/fullscreen/
+    /// more）才许走 forward 关页转发。
+    static func isGlobalAction(_ action: String) -> Bool {
+        ["settings", "avatar", "search", "guide"].contains(action)
+    }
+
+    /// 就地呈现全局面（调用方先以 isGlobalAction 把关）。
+    /// 返回 true = 已就地处理；false = 非全局面、调用方应
+    /// 走 forward。呈现参数与主页 perform 同款（设置＝
+    /// SettingsViewController overFullScreen；账户卡＝
+    /// popover 锚本面工具条头像位、卡内登录走卡自有弹层；
+    /// 搜索/导播台＝各自呈现器从本面发出）。关掉后回到本
+    /// 面原位（呈现栈原样压在本面之上、dismiss 即回）。
+    @discardableResult
+    static func performInPlace(_ action: String,
+                               from vc: UIViewController,
+                               toolbar: SeamToolbarView?) -> Bool {
+        switch action {
+        case "settings":
+            Breadcrumbs.log("seam.inplace75 action=settings"
+                + " host=\(String(describing: type(of: vc)))")
+            let settings = SettingsViewController()
+            settings.modalPresentationStyle = .overFullScreen
+            vc.present(settings, animated: false)
+        case "avatar":
+            Breadcrumbs.log("seam.inplace75 action=avatar"
+                + " host=\(String(describing: type(of: vc)))")
+            let card = AccountCard62ViewController()
+            card.modalPresentationStyle = .popover
+            card.onLoginSuccess = { [weak toolbar] in
+                if let toolbar { applyAccountState(to: toolbar) }
+            }
+            card.onSessionChanged = { [weak toolbar] in
+                if let toolbar { applyAccountState(to: toolbar) }
+            }
+            if let pop = card.popoverPresentationController {
+                pop.sourceView = toolbar ?? vc.view
+                pop.sourceRect = CGRect(x: 6, y: 6, width: 32, height: 32)
+                pop.permittedArrowDirections = [.up]
+            }
+            vc.present(card, animated: true)
+        case "search":
+            Breadcrumbs.log("seam.inplace75 action=search"
+                + " host=\(String(describing: type(of: vc)))")
+            SearchHostPresenter.presentSearch(from: vc)
+        case "guide":
+            Breadcrumbs.log("seam.inplace75 action=guide"
+                + " host=\(String(describing: type(of: vc)))")
+            Ponder62.presentList(from: vc)
+        default:
+            return false
+        }
+        return true
+    }
+
+    /// 视图点按的全局面入口（SwiftUI 包装层用）：定位宿主
+    /// VC 后就地呈现，锚点即工具条本体。
+    static func activateGlobal(_ action: String, from view: UIView) {
+        guard let host = view.nearestViewController() else {
+            Breadcrumbs.log("seam.inplace75 action=\(action) host=none")
+            return
+        }
+        performInPlace(action, from: host, toolbar: view as? SeamToolbarView)
+    }
+
     /// 关本面回主页并执行主页工具条同名动作。关闭走当前面
     /// 自己的 dismiss 通路（曲目墙的 StageExitGate veto 拦截
     /// 不被绕过）；关后主页之上若仍有残余呈现层，再补一发

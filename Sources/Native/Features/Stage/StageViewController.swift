@@ -2333,7 +2333,15 @@ final class StageViewController: UIViewController {
     /// (74) 舞台工具条动作转发：先经 StageExitGate 程序化
     /// 放行（目的地是主页既有面、正当转移），再走统一转发
     /// （关本台回主页执行主页同名动作）。
+    /// (75) 第 7 项分流：全局面（设置/账户/搜索/导播台）在
+    /// 本页就地展开——不关台、不经闸门（闸门只管离台）；
+    /// 只有主页墙状态动作仍走关台转发。
     private func stageSeamForward74(_ action: String) {
+        if SeamToolbarForwarding.isGlobalAction(action) {
+            SeamToolbarForwarding.performInPlace(
+                action, from: self, toolbar: stageSeamToolbar)
+            return
+        }
         StageExitGate.shared.approveProgrammaticExit(stage: self, reason: "seam74-\(action)")
         SeamToolbarForwarding.forward(action, from: self)
     }
