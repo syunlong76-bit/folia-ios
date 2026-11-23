@@ -21,13 +21,20 @@ final class SongStyleMemory80 {
     static let shared = SongStyleMemory80()
 
     private static let storageKey = "folia.stage.songStyleMemory80"
+    /// (81) 第 11 条：来源标记——手动记录过的 trackId 集
+    /// （与 map 同存同清）。导演记录只写不在此集的曲目；
+    /// 读时非手动来源的记录受导演总开关收口。
+    private static let manualKey = "folia.stage.songStyleManual81"
 
     private let lock = NSLock()
     private var map: [String: String]
+    private var manualIds: Set<String>
 
     private init() {
         map = UserDefaults.standard.dictionary(forKey: Self.storageKey)
             as? [String: String] ?? [:]
+        manualIds = Set(UserDefaults.standard.stringArray(
+            forKey: Self.manualKey) ?? [])
     }
 
     var count: Int {
@@ -36,23 +43,35 @@ final class SongStyleMemory80 {
         return map.count
     }
 
-    /// 查某曲的记忆样式（开关关 / 无记录 → nil）。
+    /// 查某曲的记忆样式（开关关 / 无记录 → nil）。(81)：
+    /// 导演来源的记录另受导演总开关收口——导演关时其记
+    /// 录不套用，手动记录不受影响。
     func style(for trackId: String) -> String? {
         guard SettingsStore.songStyleMemoryEnabled80 else { return nil }
         lock.lock()
         defer { lock.unlock() }
-        return map[trackId]
+        guard let styleId = map[trackId] else { return nil }
+        if !manualIds.contains(trackId), !SettingsStore.directorEnabled81 {
+            return nil
+        }
+        return styleId
     }
 
     /// 记录一次手动选择（开关关时为空操作）。同曲同式重复
-    /// 记录不重复落盘/落屑。
+    /// 记录不重复落盘/落屑。(81)：手动记录同时落来源标
+    /// 记——导演此后不再覆盖本曲（recordDirector 收口）。
     func record(trackId: String, styleId: String) {
         guard SettingsStore.songStyleMemoryEnabled80 else { return }
         lock.lock()
         let changed = map[trackId] != styleId
+        let markedNew = !manualIds.contains(trackId)
         if changed {
             map[trackId] = styleId
             UserDefaults.standard.set(map, forKey: Self.storageKey)
+        }
+        if markedNew {
+            manualIds.insert(trackId)
+            UserDefaults.standard.set(Array(manualIds), forKey: Self.manualKey)
         }
         lock.unlock()
         if changed {
@@ -60,13 +79,36 @@ final class SongStyleMemory80 {
         }
     }
 
-    /// 清除全部逐歌记忆（设置页显式动作）。
+    /// (81) 第 11 条：导演判定写入。手动记过的曲目整发拒
+    /// 绝（dir81.keep 落痕）；同曲同式不重复落盘。
+    func recordDirector(trackId: String, styleId: String) {
+        lock.lock()
+        if manualIds.contains(trackId) {
+            lock.unlock()
+            Breadcrumbs.log("dir81.keep track=\(trackId) src=manual")
+            return
+        }
+        let changed = map[trackId] != styleId
+        if changed {
+            map[trackId] = styleId
+            UserDefaults.standard.set(map, forKey: Self.storageKey)
+        }
+        lock.unlock()
+        if changed {
+            Breadcrumbs.log("style.mem80 rec track=\(trackId) style=\(styleId) src=dir")
+        }
+    }
+
+    /// 清除全部逐歌记忆（设置页显式动作；(81)：来源标记
+    /// 同清）。
     func clearAll() {
         lock.lock()
         let had = map.count
         map = [:]
+        manualIds = []
         lock.unlock()
         UserDefaults.standard.removeObject(forKey: Self.storageKey)
+        UserDefaults.standard.removeObject(forKey: Self.manualKey)
         Breadcrumbs.log("style.mem80 clear n=\(had)")
     }
 }

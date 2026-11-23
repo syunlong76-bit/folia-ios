@@ -177,6 +177,23 @@ final class NextTrackPrep80 {
             let lines = LyricParser.stageLines(
                 from: entry.lines, trackDuration: duration,
                 singingRatio: entry.singingRatio)
+            // (81) 第 11 条：AI 歌词导演挂预备管线——无手
+            // 动记忆时才判定（手动优先的另一半在存储层
+            // recordDirector 收口）；判定在本曲播放期间完
+            // 成、写入逐歌记忆，切歌边沿由舞台既有套用钩
+            // 子读存储生效，槽内 styleId 同步供判读/预热。
+            var slotStyle = validStyle
+            if slotStyle == nil {
+                if let pick = await LyricDirector81.shared.decide(
+                    track: track, lines: entry.lines) {
+                    SongStyleMemory80.shared.recordDirector(
+                        trackId: track.id, styleId: pick.styleId)
+                    slotStyle = pick.styleId
+                    if StageRuntimeStore.isWeb(pick.styleId) {
+                        WebEffectBridge.shared.prewarmEffectPage80()
+                    }
+                }
+            }
             self.lock.lock()
             guard self.generation == gen else {
                 self.lock.unlock()
@@ -193,7 +210,7 @@ final class NextTrackPrep80 {
                 && self.slot?.trackId != track.id
             if !occupiedByCurrent {
                 self.slot = Prepared(trackId: track.id, lines: lines,
-                                     source: entry.source, styleId: validStyle,
+                                     source: entry.source, styleId: slotStyle,
                                      preparedAt: Date())
             }
             self.lock.unlock()

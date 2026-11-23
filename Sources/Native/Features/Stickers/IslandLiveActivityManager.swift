@@ -404,10 +404,14 @@ final class IslandLiveActivityManager {
         if let state {
             // (79) 第 5 条：镜像补传歌名/歌手（原只传宠物/
             // 台词/播放态，前台镜像层无歌名渲染位）。
+            // (81) 第 4 条：再补传封面图（PlaybackEngine 现
+            // 成 artwork，只走 app 内镜像通道、不进
+            // ContentState——活动属性须保持轻量可编码）。
             PetIslandLayer.shared.setIslandMirror(
                 leftId: state.leftPetId, rightId: state.rightPetId,
                 phrase: state.phrase, isPlaying: state.isPlaying,
-                songTitle: state.songTitle, artist: state.artist)
+                songTitle: state.songTitle, artist: state.artist,
+                artwork: PlaybackEngine.shared.currentArtwork)
         } else {
             PetIslandLayer.shared.setIslandMirror(
                 leftId: nil, rightId: nil, phrase: nil,

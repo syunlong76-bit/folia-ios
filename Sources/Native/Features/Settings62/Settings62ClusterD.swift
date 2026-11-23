@@ -77,6 +77,39 @@ enum Settings62ClusterD {
 
         group.addArrangedSubview(host.makeHairline())
 
+        // AI 歌词导演（3.7 (81) 第 11 条）：双模式——未配
+        // AI 接口时本地规则（节奏能量＋歌词关键词情感）配
+        // 式；配了用户自己的接口后本地关闭、由 AI 判。判
+        // 定挂下一首预备、写入逐歌记忆（手动改过的优先、
+        // 导演不覆盖）。
+        let directorSwitch = UISwitch()
+        directorSwitch.isOn = SettingsStore.directorEnabled81
+        directorSwitch.addAction(UIAction { action in
+            guard let sender = action.sender as? UISwitch else { return }
+            SettingsStore.directorEnabled81 = sender.isOn
+        }, for: .valueChanged)
+        group.addArrangedSubview(switchRow(host: host,
+            title: "AI 歌词导演", toggle: directorSwitch))
+        group.addArrangedSubview(host.makeHairline())
+
+        let directorStateLabel = UILabel()
+        directorStateLabel.text = LyricDirector81.aiConfigured
+            ? "AI 模式（\(SettingsStore.directorModel81)）" : "本地规则"
+        let directorButton = UIButton(type: .system)
+        directorButton.setTitle("配置", for: .normal)
+        directorButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+        directorButton.addAction(UIAction { [weak host] _ in
+            guard let host else { return }
+            presentDirectorEditor(host: host, stateLabel: directorStateLabel)
+        }, for: .touchUpInside)
+        group.addArrangedSubview(labeledRow(host: host, title: "导演接口",
+                                            valueLabel: directorStateLabel,
+                                            button: directorButton))
+        group.addArrangedSubview(host.makeHintRow(
+            "当前歌播放中提前为下一首选好特效，切歌瞬间套用。填入你自己的 AI 接口（OpenAI 兼容）地址与 key 后由 AI 读歌词判情感，key 只存本机钥匙串；不填则用本地规则。你手动三击改过的歌以手动为准，导演不覆盖。"))
+
+        group.addArrangedSubview(host.makeHairline())
+
         // 舞台背景体系（§6 背景）：模式选择走动作表（9 档放不进分段控）。
         let modeValueLabel = UILabel()
         modeValueLabel.text = backdropModes.first {
@@ -197,6 +230,54 @@ enum Settings62ClusterD {
         }
         sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
         host.present(sheet, animated: true)
+    }
+
+    /// 导演接口编辑（(81) 第 11 条）：三字段一弹层——接
+    /// 口地址（完整 chat/completions URL）/模型/key（安
+    /// 全字段、存 Keychain）；三项全空保存 = 清除配置、
+    /// 回本地规则模式。
+    private static func presentDirectorEditor(host: SettingsViewController,
+                                              stateLabel: UILabel) {
+        let alert = UIAlertController(
+            title: "导演接口（AI 模式）",
+            message: "填你自己的 OpenAI 兼容接口；歌词摘要会发往该接口判情感。留空保存则回到本地规则。",
+            preferredStyle: .alert)
+        alert.addTextField { field in
+            field.text = SettingsStore.directorEndpoint81
+            field.placeholder = "https://…/v1/chat/completions"
+            field.keyboardType = .URL
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addTextField { field in
+            field.text = SettingsStore.directorModel81
+            field.placeholder = "模型名，如 gpt-4o-mini"
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addTextField { field in
+            field.text = DirectorKeychain81.read()
+            field.placeholder = "API key（存本机钥匙串）"
+            field.isSecureTextEntry = true
+            field.autocapitalizationType = .none
+            field.autocorrectionType = .no
+        }
+        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
+        alert.addAction(UIAlertAction(title: "保存", style: .default) { _ in
+            let fields = alert.textFields ?? []
+            let endpoint = (fields.count > 0 ? fields[0].text : nil)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let model = (fields.count > 1 ? fields[1].text : nil)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let key = (fields.count > 2 ? fields[2].text : nil) ?? ""
+            SettingsStore.directorEndpoint81 = endpoint
+            SettingsStore.directorModel81 = model
+            DirectorKeychain81.write(key)
+            stateLabel.text = LyricDirector81.aiConfigured
+                ? "AI 模式（\(SettingsStore.directorModel81)）" : "本地规则"
+            Breadcrumbs.log("dir81.set configured=\(LyricDirector81.aiConfigured ? 1 : 0)")
+        })
+        host.present(alert, animated: true)
     }
 
     private static func presentURLEditor(host: SettingsViewController) {

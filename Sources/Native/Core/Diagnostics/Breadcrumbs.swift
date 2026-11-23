@@ -57,6 +57,15 @@ enum Breadcrumbs {
         // 备命中与就绪延迟）、guard=style.guard80（洗牌袋最
         // 近三首挡位）、mem=style.mem80（逐歌记忆记录/套用）。
         log("wit80.live prep=1 guard=1 mem=1")
+        // (81) 名册续登：form=minibar.form 的 tw= 两态轨宽
+        // （第 1 条）、cov=isl.cov81 岛中封面（第 4 条）、
+        // geo=isl.geo81 岛带收窄（第 5 条）、machi=
+        // webfx.machi81 町景触摸放行（第 6 条）、deck=
+        // deck.size81 三宿主统一尺寸（第 9 条）、paw=
+        // paw.tap81/paw.act81 爪印单击（第 10 条）、dir=
+        // dir81.pick 导演判定（第 11 条）、rot=webfx.rot81
+        // 特效页旋转量测（第 3 条）。
+        log("wit81.live form=1 cov=1 geo=1 machi=1 deck=1 paw=1 dir=1 rot=1")
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。

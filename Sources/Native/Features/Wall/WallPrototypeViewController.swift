@@ -240,6 +240,10 @@ final class WallPrototypeViewController: UIViewController,
     private var miniModeButton: UIButton!
     /// (79) 第 1 条：台面常驻爪印钮（主排右端簇，模式钮左侧）。
     private var miniPawButton: DeckPawButton79!
+    /// (81) 第 9 条：播放台全页统一补件——爱心/列表钮
+    /// （与主页墙同构，详注见 HomeWallViewController）。
+    private var miniHeartButton: UIButton!
+    private var miniListButton: UIButton!
     private var miniSeekHit: UIView!
     private var miniProgressFill: UIView!
     /// 进度拖动中：心跳不覆盖填充，松手 seek 后恢复。
@@ -559,15 +563,16 @@ final class WallPrototypeViewController: UIViewController,
     private func refreshMiniModeButton() {
         guard let button = miniModeButton else { return }
         let mode = QueueManager.shared.playMode
-        let symbol: String
+        // (81) 第 8 条：字形走主题图标集四档（与主页墙同
+        // 映射、四档各异）。
+        let glyph81: DeckGlyph81
         switch mode {
-        case .off: symbol = "list.bullet"
-        case .loopAll: symbol = "repeat"
-        case .repeatOne: symbol = "repeat.1"
-        case .shuffle: symbol = "shuffle"
+        case .off: glyph81 = .modeSequence
+        case .loopAll: glyph81 = .modeRepeat
+        case .repeatOne: glyph81 = .modeRepeatOne
+        case .shuffle: glyph81 = .modeShuffle
         }
-        button.setImage(UIImage(systemName: symbol,
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 14, weight: .semibold)),
+        button.setImage(DeckIconSet81.image(glyph81, theme: miniTheme, pointSize: 14),
             for: .normal)
         button.tintColor = mode == .off
             ? UIColor.white.withAlphaComponent(0.45) : .white
@@ -793,24 +798,22 @@ final class WallPrototypeViewController: UIViewController,
 
         miniPlayButton = UIButton(type: .system)
         miniPlayButton.tintColor = .white
-        miniPlayButton.setImage(UIImage(systemName: "play.fill",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)), for: .normal)
+        // (81) 第 8 条：字形走主题图标集（全台同套）。
+        miniPlayButton.setImage(DeckIconSet81.image(.play, theme: miniTheme, pointSize: 19), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
         bar.addSubview(miniPlayButton)
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
-        miniPrevButton.setImage(UIImage(systemName: "backward.end.fill",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+        miniPrevButton.setImage(DeckIconSet81.image(.prev, theme: miniTheme, pointSize: 15), for: .normal)
         miniPrevButton.translatesAutoresizingMaskIntoConstraints = false
         miniPrevButton.addTarget(self, action: #selector(miniPrevTapped), for: .touchUpInside)
         bar.addSubview(miniPrevButton)
 
         miniNextButton = UIButton(type: .system)
         miniNextButton.tintColor = .white
-        miniNextButton.setImage(UIImage(systemName: "forward.end.fill",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 15, weight: .semibold)), for: .normal)
+        miniNextButton.setImage(DeckIconSet81.image(.next, theme: miniTheme, pointSize: 15), for: .normal)
         miniNextButton.translatesAutoresizingMaskIntoConstraints = false
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
@@ -831,6 +834,24 @@ final class WallPrototypeViewController: UIViewController,
         miniPawButton.translatesAutoresizingMaskIntoConstraints = false
         miniPawButton.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
         bar.addSubview(miniPawButton)
+
+        // (81) 第 9 条：统一台补件——爱心/列表钮（与主页
+        // 墙同构；本宿主即 Miller 点名的「歌曲页缺列表
+        // 钮」本尊，本版补齐）。
+        miniHeartButton = UIButton(type: .system)
+        miniHeartButton.tintColor = .white
+        miniHeartButton.accessibilityLabel = "喜欢"
+        miniHeartButton.translatesAutoresizingMaskIntoConstraints = false
+        miniHeartButton.addTarget(self, action: #selector(miniHeartTapped81), for: .touchUpInside)
+        bar.addSubview(miniHeartButton)
+        miniListButton = UIButton(type: .system)
+        miniListButton.tintColor = .white
+        miniListButton.accessibilityLabel = "播放列表"
+        miniListButton.translatesAutoresizingMaskIntoConstraints = false
+        miniListButton.addTarget(self, action: #selector(miniListTapped81), for: .touchUpInside)
+        bar.addSubview(miniListButton)
+        refreshMiniHeart81()
+        miniListButton.setImage(DeckIconSet81.image(.list, theme: miniTheme, pointSize: 15), for: .normal)
 
         // 播放列表图标已删（3.7 (60) 第 10 条）：顶部 chrome 的
         // miniQueueButton 整钮移除，设置齿轮位置不补位；队列入
@@ -910,11 +931,20 @@ final class WallPrototypeViewController: UIViewController,
             miniModeButton.widthAnchor.constraint(equalToConstant: 30),
             miniModeButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniPawButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
+            // (81) 第 9 条：统一右簇（与主页墙逐项同值）。
+            miniListButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
+            miniListButton.widthAnchor.constraint(equalToConstant: 30),
+            miniListButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniPawButton.trailingAnchor.constraint(equalTo: miniListButton.leadingAnchor, constant: -2),
             miniPawButton.widthAnchor.constraint(equalToConstant: 30),
             miniPawButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: miniPawButton.leadingAnchor, constant: -2),
+            miniHeartButton.trailingAnchor.constraint(equalTo: miniPawButton.leadingAnchor, constant: -2),
+            miniHeartButton.widthAnchor.constraint(equalToConstant: 30),
+            miniHeartButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniNextButton.trailingAnchor.constraint(equalTo: miniHeartButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
@@ -939,7 +969,8 @@ final class WallPrototypeViewController: UIViewController,
         // （70 台旧口径，封面 44 居 y 8..52、轨道顶 59 不重叠）；
         // 收起态同 −5。模式钮（(55) E 修正项）同入本组。
         // 形态切换在 setMiniBarForm 里统一改这组常量。
-        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniPawButton, miniModeButton].map {
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton,
+                           miniPawButton, miniHeartButton, miniListButton, miniModeButton].map {
             $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
@@ -1071,6 +1102,61 @@ final class WallPrototypeViewController: UIViewController,
     private func applyMiniTheme() {
         miniThemeLayer?.apply(theme: miniTheme)
         refreshMiniProgressChrome()
+        // (81) 第 8 条：整套字形随主题切换。
+        refreshDeckIcons81()
+    }
+
+    /// (81) 第 8/9 条：统一台字形整套重刷＋爱心/列表动作
+    /// （与主页墙同构，详注见 HomeWallViewController）。
+    private func refreshDeckIcons81() {
+        guard miniPlayButton != nil else { return }
+        miniPrevButton.setImage(DeckIconSet81.image(.prev, theme: miniTheme, pointSize: 15), for: .normal)
+        miniNextButton.setImage(DeckIconSet81.image(.next, theme: miniTheme, pointSize: 15), for: .normal)
+        miniListButton.setImage(DeckIconSet81.image(.list, theme: miniTheme, pointSize: 15), for: .normal)
+        miniPlayButton.setImage(
+            DeckIconSet81.image(
+                PlaybackEngine.shared.playbackState == .playing ? .pause : .play,
+                theme: miniTheme, pointSize: 19),
+            for: .normal)
+        refreshMiniModeButton()
+        refreshMiniHeart81()
+    }
+
+    private func refreshMiniHeart81() {
+        guard miniHeartButton != nil else { return }
+        let liked = PlaybackEngine.shared.currentTrack
+            .map { LikesStore.shared.isLiked($0.id) } ?? false
+        miniHeartButton.setImage(
+            DeckIconSet81.image(liked ? .heartFill : .heart,
+                                theme: miniTheme, pointSize: 15),
+            for: .normal)
+        miniHeartButton.tintColor = liked
+            ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 1) : .white
+    }
+
+    @objc private func miniHeartTapped81() {
+        resetMiniIdleTimer()
+        guard let track = PlaybackEngine.shared.currentTrack else { return }
+        let id = track.id
+        let newState = LikesStore.shared.toggle(id)
+        refreshMiniHeart81()
+        NativePlaybackFailureToast.show(
+            message: newState ? "已喜欢" : "已取消喜欢")
+        Breadcrumbs.log("deck.like81 host=wall id=\(id) on=\(newState ? 1 : 0)")
+        Task {
+            do {
+                _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+            } catch {
+                LikesStore.shared.toggle(id)
+                await MainActor.run { self.refreshMiniHeart81() }
+            }
+        }
+    }
+
+    @objc private func miniListTapped81() {
+        resetMiniIdleTimer()
+        Breadcrumbs.log("deck.list81 host=wall")
+        QueueLatticeViewController.present(from: self)
     }
 
     /// 进度填充与圆点配色的形态收口（3.7 (22) 立、(23) 修）：
@@ -1627,15 +1713,25 @@ final class WallPrototypeViewController: UIViewController,
         // 居中 134×5 小横线、圆点收起；台体容器与命中带不
         // 动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
         miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
-        miniTrackHeightC?.constant = 5
-        // (79) 第 2 条：展开轨与收起轨同尺寸——恒居中
-        // 134×5（与 home indicator 一模一样，横屏同规、
-        // 不拉长），两形态不再切换全宽轨。
-        miniTrackLeadC?.isActive = false
-        miniTrackTrailC?.isActive = false
-        miniTrackCenterXC?.isActive = true
-        miniTrackWidthC?.isActive = true
-        miniProgressTrack.layer.cornerRadius = 2.5
+        // (81) 第 1 条两态口径（盖过 (79) 的恒 134，与主
+        // 页墙同账）：收起态居中 134×5 短轨；展开态还原
+        // 台内全宽长 seek 轨（lead/trail ±20、高 4、圆角
+        // 2，装配原值）。花朵圆点把手两态恒在场。
+        if collapsed {
+            miniTrackLeadC?.isActive = false
+            miniTrackTrailC?.isActive = false
+            miniTrackCenterXC?.isActive = true
+            miniTrackWidthC?.isActive = true
+            miniTrackHeightC?.constant = 5
+            miniProgressTrack.layer.cornerRadius = 2.5
+        } else {
+            miniTrackCenterXC?.isActive = false
+            miniTrackWidthC?.isActive = false
+            miniTrackLeadC?.isActive = true
+            miniTrackTrailC?.isActive = true
+            miniTrackHeightC?.constant = 4
+            miniProgressTrack.layer.cornerRadius = 2
+        }
         // (77) ②③：四主题小圆点恢复收起态在场——(74) 细
         // 条改素线时以 isHidden=collapsed 误删；皮肤在
         // refreshMiniProgressChrome 两形态同挂，圆点本体
@@ -1666,9 +1762,14 @@ final class WallPrototypeViewController: UIViewController,
         // 高/三识别器启停位同行落盘，供失同步判读。
         Breadcrumbs.log("minibar.form host=wallproto collapsed=\(collapsed ? 1 : 0)"
             + " h=\(Int(miniBarHeightConstraint?.constant ?? -1))"
+            + " tw=\(collapsed ? 134 : Int(miniBarWidthConstraint?.constant ?? 0) - 40)"
             + " recog=\((miniBarTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
             + "\((miniBarDoubleTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
             + "\((miniBarCollapsedTapRecognizer?.isEnabled ?? false) ? 1 : 0)")
+        // (81) 第 9 条：统一尺寸自证（与主页墙同式）。
+        Breadcrumbs.log("deck.size81 host=wall"
+            + " w=\(Int(miniBarWidthConstraint?.constant ?? -1))"
+            + " h=\(Int(miniBarHeightConstraint?.constant ?? -1))")
         refreshMiniProgressChrome()
     }
 
@@ -1678,14 +1779,16 @@ final class WallPrototypeViewController: UIViewController,
         // 附加功能行已迁浮层（(60) 第 7 条），不入台形态名单：
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniPawButton, miniModeButton]
+                                miniPrevButton, miniNextButton, miniPawButton,
+                                miniHeartButton, miniListButton, miniModeButton]
         for view in views {
             view?.alpha = alpha
         }
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniPawButton, miniModeButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniPawButton,
+                                    miniHeartButton, miniListButton, miniModeButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
@@ -1764,9 +1867,10 @@ final class WallPrototypeViewController: UIViewController,
         miniTitle.text = track.title
         miniArtist.text = track.artist
         miniPlayButton.setImage(
-            UIImage(systemName: engine.playbackState == .playing ? "pause.fill" : "play.fill",
-                    withConfiguration: UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)),
+            DeckIconSet81.image(engine.playbackState == .playing ? .pause : .play,
+                                theme: miniTheme, pointSize: 19),
             for: .normal)
+        refreshMiniHeart81()
         if let art = engine.currentArtwork {
             miniCover.image = art
         } else if let url = track.artworkURL {
@@ -1837,7 +1941,12 @@ final class WallPrototypeViewController: UIViewController,
 
     private func locateCurrentTrack() {
         locateGeneration += 1
-        guard let current = PlaybackEngine.shared.currentTrack else { return }
+        guard let current = PlaybackEngine.shared.currentTrack else {
+            // (81) 第 2 条：无在播曲目不静默，给可见反馈。
+            Breadcrumbs.log("locate miss81 fb=none")
+            NativePlaybackFailureToast.show(message: "现在没有正在播放的歌曲")
+            return
+        }
         let currentId = current.id
         // 全部匹配都数：id 若重复，firstIndex 会命中第一个而非本曲，
         // sameId>1 时面包屑立现（DS34 字段清单）。
@@ -1850,9 +1959,13 @@ final class WallPrototypeViewController: UIViewController,
             + "queueIndex=\(matches.first ?? -1) sameId=\(matches.count) "
             + "ui=\(miniTitle.text ?? "") entries=\(entries.count)/\(wallLayout.totalEntries)")
         guard let queueIndex = matches.first else {
-            // 瞬时提示（3.7 (54) 工作流 L）：胶囊撤除后改走窗口
-            // 级 toast（自动消失、墙面不留条），文案不变。
-            NativePlaybackFailureToast.show(message: "当前歌曲不在这个歌单里")
+            // (81) 第 2 条改绑：在播曲不在本歌单时不再只弹
+            // toast 留在原地——按「切换到正在播放的歌曲」
+            // 口径直达其呈现：打开当前曲的舞台详情页（本
+            // 宿主既有开台路径，与双击同路）。
+            Breadcrumbs.log("locate miss81 fb=stage target=\(currentId)")
+            Breadcrumbs.logSync("tap.dispatch host=wallproto via=cover81")
+            openNativeStageFromWall()
             return
         }
         let scale = wallLayout.cameraScale

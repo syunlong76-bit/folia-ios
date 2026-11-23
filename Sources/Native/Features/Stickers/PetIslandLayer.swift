@@ -150,20 +150,26 @@ final class PetIslandLayer: UIView {
     /// 槽位中心偏移：岛半宽 + 1pt 缝 + 宠物半宽（=81）；
     /// 左槽中心 x=cx−81（框 cx−98…cx−64，距岛框左缘 1pt），
     /// 右槽对称。脚底线与岛框底对齐（48）。
+    /// (81) 第 5 条再收窄（Miller (79) 验收「还要再缩小
+    /// 一点」）：缝 1→0 且宠物内缘压岛框 5pt（app 内岛体
+    /// 是纯黑相机区，宠物剪影与岛框本就接成一带，压边不
+    /// 露馅；中央封面＋音符簇宽 ≈47、内缘距中心 ≥58pt
+    /// 不相撞）——偏移 81→75。
     private static let slotOffset: CGFloat =
-        islandHalfWidth + 1 + petSize / 2
+        islandHalfWidth - 5 + petSize / 2
     private static let seatFeetY: CGFloat = islandTopY + islandHeight
     /// (77) ⑧让位槽位：系统岛被正在播放/录屏指示撑宽时
     /// （实测宽 ≈202、半宽 ≈101），镜像宠物外移到贴外
     /// 沿：101 + 3 缝 + 宠物半宽 17 = 121。让位只动本层
     /// 槽位与框底（系统岛缩不了），触发源见 refreshYield77。
-    /// (79) 第 4 条收窄：Miller (78) 真机判黑剪影 288pt
-    /// 远宽于真岛 126「不协调」——让位偏移 121→90（app 内
-    /// 系统不渲染自家活动、无真扩岛要躲，让位只是镜像
-    /// 姿态，贴真岛基准收），框底外延 6→2（见
-    /// syncIslandBackdrop74），让位总宽 288→218、平形态
-    /// 208→200；几何落痕 isl.geo79。
-    private static let yieldSlotOffset: CGFloat = 90
+    /// (79) 第 4 条收窄：让位偏移 121→90、框底外延 6→2，
+    /// 让位总宽 288→218、平形态 208→200。
+    /// (81) 第 5 条续收：让位偏移 90→84、框底外延 2→1
+    /// （见 syncIslandBackdrop74）——平形态总宽 200→186、
+    /// 让位 218→204，向真岛 126 继续贴近（两只 34pt 宠
+    /// 物＋岛框的物理下限 ≈194，余量靠压边 5pt 换得）；
+    /// 几何落痕改 isl.geo81。
+    private static let yieldSlotOffset: CGFloat = 84
     /// (77) ⑧让位触发源：np＝镜像播放态（系统正在播放
     /// 占岛变宽）；screen＝录屏/投屏占用岛（UIScreen
     /// .isCaptured，Miller 23:18 录屏实证同被盖）。任一
@@ -240,7 +246,8 @@ final class PetIslandLayer: UIView {
         Breadcrumbs.log("isl.perch75 supp=\(on ? 1 : 0)")
         if on {
             hideBubble()
-            mirrorSongLabel?.isHidden = true
+            mirrorCenter81?.isHidden = true
+            setMirrorNote81(playing: false)
             islandBackdrop74?.removeFromSuperview()
             islandBackdrop74 = nil
             backdropSegL = nil
@@ -267,9 +274,10 @@ final class PetIslandLayer: UIView {
     func setIslandMirror(leftId: String?, rightId: String?,
                          phrase: String?, isPlaying: Bool,
                          songTitle: String? = nil,
-                         artist: String? = nil) {
-        syncMirrorSong79(title: songTitle, artist: artist,
-                         active: leftId != nil)
+                         artist: String? = nil,
+                         artwork: UIImage? = nil) {
+        syncMirrorCenter81(artwork: artwork, title: songTitle,
+                           active: leftId != nil, isPlaying: isPlaying)
         if let leftId, let rightId, let phrase {
             let lineupChanged = islandMirror?.leftId != leftId
                 || islandMirror?.rightId != rightId
@@ -291,49 +299,94 @@ final class PetIslandLayer: UIView {
         refreshYield77()
     }
 
-    /// (79) 第 5 条：镜像歌名渲染位——publishMirror 原只
-    /// 传宠物/台词/播放态，前台镜像层无歌名位（(78) 判读
-    /// 定案）。本位挂岛框下方居中（y=52 起 14pt 行），与
-    /// 宠物（底 48）与台词气泡（宠物上方）不打架；镜像
-    /// 撤除/横屏/抑制期隐藏。文本变化落 isl.song79。
-    private func syncMirrorSong79(title: String?, artist: String?,
-                                  active: Bool) {
-        let text: String
-        if active, let title, !title.isEmpty {
-            text = (artist?.isEmpty == false)
-                ? "\(title) · \(artist!)" : title
-        } else { text = "" }
-        if text != lastMirrorSong79 {
-            lastMirrorSong79 = text
-            Breadcrumbs.log("isl.song79 on=\(text.isEmpty ? 0 : 1)")
+    /// (81) 第 4 条：中间岛呈现重做（(79) 的 y=52 岛下小
+    /// 字歌名行整件撤除——Miller (79) 验收定案：不在岛内、
+    /// 横屏被隐藏、还被气泡压）。新规格定版：左宠物·中
+    /// （正在播放歌曲封面小图＋旁边随播放跳动的音符）·右
+    /// 宠物——封面与音符住在岛框体内（中心 y 与岛框同
+    /// 心），簇宽 47pt（封面 24＋间 5＋音符 18），宠物内
+    /// 缘距中心 ≥58pt 不相撞；横屏不隐藏；镜像撤除/抑制
+    /// 期隐藏。五宿主共用本层一处渲染，齐全性由共享保证。
+    /// 自证面包屑 isl.cov81（签名变化才落）。
+    private func syncMirrorCenter81(artwork: UIImage?,
+                                    title: String?,
+                                    active: Bool,
+                                    isPlaying: Bool) {
+        let signature = active ? (title ?? "") : ""
+        if signature != lastMirrorCover81 {
+            lastMirrorCover81 = signature
+            Breadcrumbs.log("isl.cov81 on=\(active ? 1 : 0)")
         }
-        guard !text.isEmpty, isPortrait, !liveActivitySuppressed else {
-            mirrorSongLabel?.isHidden = true
+        guard active, !liveActivitySuppressed else {
+            mirrorCenter81?.isHidden = true
+            setMirrorNote81(playing: false)
             return
         }
-        let label: UILabel
-        if let existing = mirrorSongLabel {
-            label = existing
+        let cluster: UIView
+        if let existing = mirrorCenter81 {
+            cluster = existing
         } else {
-            label = UILabel()
-            label.font = .systemFont(ofSize: 11, weight: .medium)
-            label.textColor = UIColor.white.withAlphaComponent(0.92)
-            label.textAlignment = .center
-            label.layer.shadowColor = UIColor.black.cgColor
-            label.layer.shadowOpacity = 0.55
-            label.layer.shadowRadius = 3
-            label.layer.shadowOffset = .zero
-            label.isUserInteractionEnabled = false
-            addSubview(label)
-            mirrorSongLabel = label
+            cluster = UIView()
+            cluster.isUserInteractionEnabled = false
+            let cover = UIImageView()
+            cover.frame = CGRect(x: 0, y: 1, width: 24, height: 24)
+            cover.contentMode = .scaleAspectFill
+            cover.clipsToBounds = true
+            cover.layer.cornerRadius = 6
+            cover.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+            cluster.addSubview(cover)
+            mirrorCover81 = cover
+            let note = UIImageView()
+            note.frame = CGRect(x: 29, y: 4, width: 18, height: 18)
+            note.image = UIImage(systemName: "music.note",
+                withConfiguration: UIImage.SymbolConfiguration(
+                    pointSize: 15, weight: .semibold))
+            note.tintColor = .white
+            note.contentMode = .center
+            cluster.addSubview(note)
+            mirrorNote81 = note
+            addSubview(cluster)
+            mirrorCenter81 = cluster
         }
-        label.text = text
-        label.isHidden = false
-        label.frame = CGRect(
-            x: max(16, (bounds.width - 260) / 2),
-            y: Self.seatFeetY + 4, width: min(260, bounds.width - 32),
-            height: 14)
-        bringSubviewToFront(label)
+        if let artwork { mirrorCover81?.image = artwork }
+        cluster.isHidden = false
+        positionMirrorCenter81()
+        bringSubviewToFront(cluster)
+        setMirrorNote81(playing: isPlaying)
+    }
+
+    /// 中央簇落位：岛框中心（横竖屏同位，横屏不隐藏）。
+    private func positionMirrorCenter81() {
+        guard let cluster = mirrorCenter81 else { return }
+        cluster.frame = CGRect(
+            x: bounds.width / 2 - 23.5,
+            y: Self.islandTopY + Self.islandHeight / 2 - 13,
+            width: 47, height: 26)
+    }
+
+    /// 音符跳动：播放中挂双轨关键帧动画（纵跳＋轻摆，
+    /// 0.9s 一轮无限循环）；暂停/隐藏摘除并压暗静置。
+    private func setMirrorNote81(playing: Bool) {
+        guard let note = mirrorNote81 else { return }
+        let key = "noteBounce81"
+        if playing {
+            note.alpha = 1
+            guard note.layer.animation(forKey: key) == nil else { return }
+            let bounce = CAKeyframeAnimation(keyPath: "transform.translation.y")
+            bounce.values = [0, -3.5, 0, -1.5, 0]
+            bounce.duration = 0.9
+            let sway = CAKeyframeAnimation(keyPath: "transform.rotation.z")
+            sway.values = [0, -0.14, 0, 0.14, 0]
+            sway.duration = 0.9
+            let group = CAAnimationGroup()
+            group.animations = [bounce, sway]
+            group.duration = 0.9
+            group.repeatCount = .infinity
+            note.layer.add(group, forKey: key)
+        } else {
+            note.layer.removeAnimation(forKey: key)
+            note.alpha = 0.55
+        }
     }
 
     /// 岛面台词唯一出口：镜像期 = 活动的当前句（与后台
@@ -359,9 +412,11 @@ final class PetIslandLayer: UIView {
     private var lastPerchSignature74 = ""
     /// (79) 第 4 条岛带几何去重签名（isl.geo79）。
     private var lastGeoSignature79 = ""
-    /// (79) 第 5 条镜像歌名签（isl.song79 去重）。
-    private var mirrorSongLabel: UILabel?
-    private var lastMirrorSong79 = ""
+    /// (81) 第 4 条中央簇（封面＋跳动音符）与去重签名。
+    private var mirrorCenter81: UIView?
+    private var mirrorCover81: UIImageView?
+    private var mirrorNote81: UIImageView?
+    private var lastMirrorCover81 = ""
     private var tickTimer: Timer?
     /// 宿主主窗（(53) G）：本层视图本体不再进窗，petRootLayer
     /// （= 本层 layer）直挂它的 layer；hostWindow 只作 graft
@@ -724,6 +779,8 @@ final class PetIslandLayer: UIView {
         super.layoutSubviews()
         reseatAll(animated: false)
         updateVisibility()
+        // (81) 第 4 条：中央簇随 bounds（旋转）重落中心位。
+        positionMirrorCenter81()
     }
 
     private var isPortrait: Bool { bounds.width <= bounds.height }
@@ -913,15 +970,15 @@ final class PetIslandLayer: UIView {
             sendSubviewToBack(container)
         }
         let cx = bounds.width / 2
-        // (79) 第 4 条：外延 6→2pt，剪影总宽随让位偏移同收。
-        let outerL = cx - effectiveSlotOffset - Self.petSize / 2 - 2
+        // (81) 第 5 条：外延 2→1pt，剪影总宽随让位偏移同收。
+        let outerL = cx - effectiveSlotOffset - Self.petSize / 2 - 1
         let innerL = cx - Self.islandHalfWidth + 6
         let innerR = cx + Self.islandHalfWidth - 6
-        let outerR = cx + effectiveSlotOffset + Self.petSize / 2 + 2
+        let outerR = cx + effectiveSlotOffset + Self.petSize / 2 + 1
         let geoSig = "\(Int(outerR - outerL))|\(mirrorYielded ? 1 : 0)"
         if geoSig != lastGeoSignature79 {
             lastGeoSignature79 = geoSig
-            Breadcrumbs.log("isl.geo79 w=\(Int(outerR - outerL))"
+            Breadcrumbs.log("isl.geo81 w=\(Int(outerR - outerL))"
                 + " y=\(mirrorYielded ? 1 : 0)")
         }
         let targetDuo = PetHomeRegistry.shared.islandTargetDuo

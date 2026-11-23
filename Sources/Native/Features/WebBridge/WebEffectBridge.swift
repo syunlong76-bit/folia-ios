@@ -1247,6 +1247,17 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         Breadcrumbs.log("prep.web80 warm")
     }
 
+    /// (81) 第 3 条：旋转落定后催网页层按新尺寸重排——向
+    /// 页面派发一记 resize 事件，画布监听者（WebGL 场景/
+    /// 町景 OrbitControls 宿主）即刻按新宽高重绘，不等系
+    /// 统布局的自然 resize 时序。揭盖回执走 onStyleFrame
+    /// 原路（舞台侧结算）。
+    func nudgeEffectResize81() {
+        webView.evaluateJavaScript(
+            "window.dispatchEvent(new Event('resize'))",
+            completionHandler: nil)
+    }
+
     /// 人工重试入口（诊断面板 / 设置页调用）：清退避计数与致命错误后重载。
     func retryAfterFatalError() {
         terminateDates.removeAll()

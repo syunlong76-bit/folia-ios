@@ -74,12 +74,12 @@ final class MiniBarQuickRowView: UIView {
     /// (68) A1：喜欢填充态（refreshLike 写、configurationUpdateHandler 读）。
     private var likeFilled = false
     private let starButton = UIButton(type: .system)
-    /// (77) ⑤：原打乱钮位由爪印接管（长按 2s 召唤/3s 告
-    /// 别，与退役的窗口爪印同一切换核 PetSummonButton70
-    /// .performPawToggle77）。打乱队列撤下台面——去向：
-    /// 队列面板与命令面板内仍可达（见 (77) 报告⑤）。
+    /// (77) ⑤：原打乱钮位由爪印接管，与退役的窗口爪印
+    /// 同一切换核 PetSummonButton70.performPawToggle77。
+    /// 打乱队列撤下台面——去向：队列面板与命令面板内仍
+    /// 可达（见 (77) 报告⑤）。(81) 第 10 条：交互改单击
+    /// 切换（原长按 2s/3s 退役）。
     private let pawButton = UIButton(type: .system)
-    private let pawPressRecognizer = UILongPressGestureRecognizer()
     private let panelButton = UIButton(type: .system)
     private let commandButton = UIButton(type: .system)
 
@@ -107,19 +107,10 @@ final class MiniBarQuickRowView: UIView {
                   title: "星标", accessibility: "星标",
                   action: #selector(starTapped))
         configure(pawButton, symbol: "pawprint.fill", pointSize: 16,
-                  title: "宠物", accessibility: "宠物开关（长按）",
+                  title: "宠物", accessibility: "宠物开关",
                   action: #selector(pawTapped))
-        // (77) ⑤爪印长按：阈值按按下瞬间开关态（开 3.0s
-        // 关/关 2.0s 召唤），在 hitTest 现读刷新（与窗口
-        // 爪印同纪律）；按下即回调宿主续命浮层 5 秒钟，
-        // 防长按未满先被闲置收起打断。
-        pawPressRecognizer.minimumPressDuration =
-            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
-        pawPressRecognizer.allowableMovement = 12
-        pawPressRecognizer.cancelsTouchesInView = false
-        pawPressRecognizer.addTarget(
-            self, action: #selector(pawLongPressed(_:)))
-        pawButton.addGestureRecognizer(pawPressRecognizer)
+        // (81) 第 10 条：长按识别器整套摘除（长按语义退
+        // 役），单击切换；按下即回调宿主续命浮层闲置钟。
         pawButton.addTarget(self, action: #selector(pawTouchDown),
                             for: .touchDown)
         configure(panelButton, symbol: "square.grid.2x2", pointSize: 16,
@@ -163,6 +154,12 @@ final class MiniBarQuickRowView: UIView {
                     equalTo: trailingAnchor).isActive = true
             }
         }
+        // (81) 第 8 条：主题变更自刷整套图标 + 首装即按现
+        // 行主题落字形（configure 的 SF 符号只是装配占位）。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(themeChanged81),
+            name: .foliaMiniPlayerThemeChanged, object: nil)
+        themeChanged81()
     }
 
     /// 图标在上、标签在下的双通道钮（UIButton.Configuration，
@@ -224,6 +221,36 @@ final class MiniBarQuickRowView: UIView {
         button.configuration = config
     }
 
+    /// (81) 第 8 条：主题图标版（DeckIconSet81 字形图）。
+    private func setButtonState(_ button: UIButton, image: UIImage,
+                                color: UIColor) {
+        guard var config = button.configuration else { return }
+        config.image = image
+        config.baseForegroundColor = color
+        button.configuration = config
+    }
+
+    /// (81) 第 8 条：当前主题，图标刷新（喜欢/星标状态回
+    /// 显）按它取整套字形。宿主不向浮层推主题（applyMini-
+    /// Theme 只管主题层与进度 chrome），故浮层自订主题变
+    /// 更通知刷新，与三宿主同源同拍。
+    private var theme81: MiniPlayerTheme = MiniPlayerTheme.effective
+
+    @objc private func themeChanged81() {
+        theme81 = MiniPlayerTheme.effective
+        refreshLike()
+        refreshStar()
+        setButtonState(pawButton,
+            image: DeckIconSet81.image(.paw, theme: theme81, pointSize: 17),
+            color: UIColor.white.withAlphaComponent(0.75))
+        setButtonState(panelButton,
+            image: DeckIconSet81.image(.sliders, theme: theme81, pointSize: 17),
+            color: UIColor.white.withAlphaComponent(0.75))
+        setButtonState(commandButton,
+            image: DeckIconSet81.image(.command, theme: theme81, pointSize: 17),
+            color: UIColor.white.withAlphaComponent(0.75))
+    }
+
     /// 状态订阅：切歌刷新喜欢与星标、星标外部变更（他面
     /// 切换）刷新星标——全部回主线程。（77）⑤：原队列变
     /// 化刷新打乱可用性随打乱钮撤下台面一并退役。
@@ -249,14 +276,8 @@ final class MiniBarQuickRowView: UIView {
     /// 到爪印钮前现读开关刷新长按阈值——外部路径（设置/
     /// 长按宠物本体/另一台爪印）改过开关后，本钮下一次按
     /// 下读到的恒为现态。
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        let hit = super.hitTest(point, with: event)
-        if hit === pawButton {
-            pawPressRecognizer.minimumPressDuration =
-                StickerSettings.miniPetsEnabled ? 3.0 : 2.0
-        }
-        return hit
-    }
+    // (81) 第 10 条：原 hitTest 覆写只为按宠物开关态动态
+    // 改爪印长按时长——长按语义退役后整件删除，命中走默认。
 
     // MARK: - 回显
 
@@ -268,7 +289,8 @@ final class MiniBarQuickRowView: UIView {
         // 未喜欢维持现行（白 75% 前景、无填充）。
         likeFilled = liked
         setButtonState(likeButton,
-            symbol: liked ? "heart.fill" : "heart", pointSize: 17,
+            image: DeckIconSet81.image(liked ? .heartFill : .heart,
+                                       theme: theme81, pointSize: 17),
             color: liked
                 ? .white
                 : UIColor.white.withAlphaComponent(0.75))
@@ -280,7 +302,8 @@ final class MiniBarQuickRowView: UIView {
         let starred = PlaybackEngine.shared.currentTrack
             .map { StarStore.shared.isStarred($0.id) } ?? false
         setButtonState(starButton,
-            symbol: starred ? "star.fill" : "star", pointSize: 16,
+            image: DeckIconSet81.image(starred ? .starFill : .star,
+                                       theme: theme81, pointSize: 16),
             color: starred
                 ? UIColor(red: 1, green: 0.8, blue: 0.25, alpha: 1)
                 : UIColor.white.withAlphaComponent(0.75))
@@ -372,45 +395,27 @@ final class MiniBarQuickRowView: UIView {
         host.present(nav, animated: true)
     }
 
-    /// 长按已触发标记：长按抬手时 touchUpInside 仍会到，
-    /// pawTapped 见标记即吞掉（与星标长按同款防误报）。
-    private var pawLongPressFired = false
-
-    /// (77) ⑤爪印短按：无动作（防误触，与窗口爪印同纪
-    /// 律），只给一句长按提示——长按语义靠它可发现。
+    /// (81) 第 10 条：浮层爪印同步改单击切换（长按语义
+    /// 退役、全页统一），点击带闪光＋烟花（PawFirework81），
+    /// 切换走共享核、src 按浮层入口记 deck-tap。
     @objc private func pawTapped() {
-        if pawLongPressFired {
-            pawLongPressFired = false
-            return
-        }
         onUserInteraction?()
-        Breadcrumbs.log("minibar.webrow paw tap=hint")
-        NativePlaybackFailureToast.show(
-            message: StickerSettings.miniPetsEnabled
-                ? "长按爪印 3 秒，送小宠物回家"
-                : "长按爪印 2 秒，召唤小宠物")
-    }
-
-    /// (77) ⑤爪印按下瞬间：先续命浮层闲置钟（长按 3s 不
-    /// 被 5 秒闲置收起从中打断）。
-    @objc private func pawTouchDown() {
-        onUserInteraction?()
-    }
-
-    /// (77) ⑤爪印长按触发：走共享切换核（与退役窗口爪印
-    /// 同实现、同 src 收口），src/via 按台面入口记 deck。
-    @objc private func pawLongPressed(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-        pawLongPressFired = true
-        onUserInteraction?()
-        let enabled = StickerSettings.miniPetsEnabled
+        let wasEnabled = StickerSettings.miniPetsEnabled
+        PawFirework81.burst(in: self,
+                            at: CGPoint(x: pawButton.frame.midX,
+                                        y: pawButton.frame.midY))
+        PawFirework81.pop(pawButton)
+        Breadcrumbs.log("paw.tap81 on=\(wasEnabled ? 0 : 1) src=deck")
         PetSummonButton70.performPawToggle77(
             window: window,
-            src: enabled ? "deck3s" : "deck2s",
-            via: enabled ? "deck3s" : "deck2s",
-            actCrumb: "paw.act77")
-        pawPressRecognizer.minimumPressDuration =
-            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+            src: "deck-tap",
+            via: "deck-tap",
+            actCrumb: "paw.act81")
+    }
+
+    /// 爪印按下瞬间：续命浮层闲置钟（与 (77) 同纪律）。
+    @objc private func pawTouchDown() {
+        onUserInteraction?()
     }
 
     /// 格子（面板）本体未在本文件域：只发定名信号，宿主工
@@ -543,74 +548,154 @@ final class MiniBarQuickRowOverlayView: UIView {
     }
 }
 
-/// (79) 第 1 条：台面常驻爪印钮。爪印原只住快速行浮层
-/// （默认不显、点台身空白才呼出），Miller (78) 真机找不到
-/// ——本钮把爪印摆到点播台主排右端簇（下一曲与模式钮之
-/// 间），展开台面恒可见。语义与浮层爪印完全同核：短按只
-/// 给长按提示（防误触），长按按开关态 2s 召唤/3s 告别，
-/// 走 PetSummonButton70.performPawToggle77 收口；阈值在
-/// hitTest 现读刷新（外部路径改过开关后下一次按下恒读
-/// 现态）。自证面包屑 paw.face79。
+/// (81) 第 10 条：爪印点按烟花——点击瞬间爪印闪光亮起＋
+/// 烟花炸开（Miller 定版）。实现纪律：粒子走一发即停的
+/// CAEmitterLayer（birthRate 冲一拍即归零、层 1.2s 后摘
+/// 除），总量约 30 颗、寿命 ≤0.9s，克制不掉帧；闪光为一
+/// 圈径向光晕视图弹簧放大淡出；宿主视图须 clipsToBounds
+/// =false（三宿主台面均满足）。颜色取白/金/粉/青四色，
+/// 与四套主题都可读。
+enum PawFirework81 {
+
+    private static func particleImage() -> CGImage? {
+        let size = CGSize(width: 10, height: 10)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            UIColor.white.setFill()
+            context.cgContext.fillEllipse(
+                in: CGRect(origin: .zero, size: size))
+        }
+        return image.cgImage
+    }
+
+    /// 在 host 坐标系的 center 点炸开一次。
+    static func burst(in host: UIView, at center: CGPoint) {
+        // 闪光光晕：自 6pt 弹簧放大到 54pt 并淡出。
+        let glow = UIView(frame: CGRect(x: center.x - 3, y: center.y - 3,
+                                        width: 6, height: 6))
+        glow.backgroundColor = UIColor.white.withAlphaComponent(0.85)
+        glow.layer.cornerRadius = 3
+        glow.isUserInteractionEnabled = false
+        host.addSubview(glow)
+        UIView.animate(withDuration: 0.45, delay: 0,
+                       usingSpringWithDamping: 0.6,
+                       initialSpringVelocity: 0.4,
+                       options: [.beginFromCurrentState]) {
+            glow.transform = CGAffineTransform(scaleX: 9, y: 9)
+            glow.alpha = 0
+        } completion: { _ in glow.removeFromSuperview() }
+
+        // 烟花粒子：一发即停。
+        guard let image = particleImage() else { return }
+        let emitter = CAEmitterLayer()
+        emitter.emitterPosition = center
+        emitter.emitterShape = .point
+        emitter.renderMode = .additive
+        let colors: [UIColor] = [
+            .white,
+            UIColor(red: 1.0, green: 0.84, blue: 0.35, alpha: 1),
+            UIColor(red: 1.0, green: 0.55, blue: 0.70, alpha: 1),
+            UIColor(red: 0.45, green: 0.85, blue: 1.0, alpha: 1),
+        ]
+        emitter.emitterCells = colors.map { color in
+            let cell = CAEmitterCell()
+            cell.contents = image
+            cell.birthRate = 9
+            cell.lifetime = 0.85
+            cell.lifetimeRange = 0.25
+            cell.velocity = 118
+            cell.velocityRange = 52
+            cell.emissionRange = .pi * 2
+            cell.scale = 0.55
+            cell.scaleRange = 0.3
+            cell.alphaSpeed = -1.4
+            cell.color = color.cgColor
+            cell.yAcceleration = 150
+            return cell
+        }
+        host.layer.addSublayer(emitter)
+        // 冲一拍（约 36 颗）即停发，余粒子自然燃尽后摘层。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.09) {
+            emitter.birthRate = 0
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.25) {
+            emitter.removeFromSuperlayer()
+        }
+    }
+
+    /// 爪印本体的点按回弹：冲亮放大、系统弹簧回落。
+    static func pop(_ button: UIView) {
+        button.transform = CGAffineTransform(scaleX: 1.28, y: 1.28)
+        UIView.animate(withDuration: 0.5, delay: 0,
+                       usingSpringWithDamping: 0.55,
+                       initialSpringVelocity: 0.6,
+                       options: [.beginFromCurrentState]) {
+            button.transform = .identity
+        }
+    }
+}
+
+/// (79) 第 1 条：台面常驻爪印钮（主排右端簇、展开台面恒
+/// 可见）。(81) 第 10 条交互改版——长按语义整套退役，改
+/// 单击切换（点一下宠物出现、再点一下消失，全页统一），
+/// 点击瞬间闪光＋烟花炸开（PawFirework81），切换仍走
+/// PetSummonButton70.performPawToggle77 收口。
+///
+/// 长按失效根因（(81) 施工定案，代码坐实）：(79) 版的
+/// 2s/3s 长按识别器挂在本钮上，而三宿主台身都挂着 0.55s
+/// 长按切主题识别器（祖先视图）——按住爪印满 0.55s 时
+/// 祖先识别器先行认领（其 handler 对按键区落点虽早退、
+/// 认领本身照常发生），按 UIKit 手势互斥默认，本钮的
+/// 识别器收到取消、永远到不了 .began；且 (79) 真机日志
+/// 窗内 paw.face79 init ×6 在位、fire 零样本，与此机制
+/// 互证。单击走 UIControl .touchUpInside 本体追踪、不
+/// 经识别器链，不受此害（三宿主其余按键同路已验）。
 final class DeckPawButton79: UIButton {
 
     var onUserInteraction: (() -> Void)?
-    private let pressRecognizer = UILongPressGestureRecognizer()
-    private var longPressFired = false
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        tintColor = UIColor.white.withAlphaComponent(0.9)
-        setImage(UIImage(systemName: "pawprint.fill",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)),
-                 for: .normal)
-        accessibilityLabel = "宠物开关（长按）"
-        pressRecognizer.minimumPressDuration =
-            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
-        pressRecognizer.allowableMovement = 12
-        pressRecognizer.cancelsTouchesInView = false
-        pressRecognizer.addTarget(self, action: #selector(longPressed(_:)))
-        addGestureRecognizer(pressRecognizer)
+        accessibilityLabel = "宠物开关"
         addTarget(self, action: #selector(touchDown), for: .touchDown)
         addTarget(self, action: #selector(tapped), for: .touchUpInside)
-        Breadcrumbs.log("paw.face79 init")
+        // (81) 第 8 条：字形随主题整套切换（自订主题通知）。
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(refreshFace81),
+            name: .foliaMiniPlayerThemeChanged, object: nil)
+        refreshFace81()
+        Breadcrumbs.log("paw.face81 init mode=tap")
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
 
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        let hit = super.hitTest(point, with: event)
-        if hit === self {
-            pressRecognizer.minimumPressDuration =
-                StickerSettings.miniPetsEnabled ? 3.0 : 2.0
-        }
-        return hit
+    /// 字形（当前主题套）＋明暗（宠物开=亮白、关=灰 0.45，
+    /// 即 (79) 真机所见灰态的语义，保留作状态信号）。
+    @objc private func refreshFace81() {
+        setImage(DeckIconSet81.image(
+            .paw, theme: MiniPlayerTheme.effective, pointSize: 16),
+                 for: .normal)
+        tintColor = StickerSettings.miniPetsEnabled
+            ? .white : UIColor.white.withAlphaComponent(0.45)
     }
 
     @objc private func touchDown() { onUserInteraction?() }
 
     @objc private func tapped() {
-        if longPressFired { longPressFired = false; return }
         onUserInteraction?()
-        Breadcrumbs.log("paw.face79 tap=hint")
-        NativePlaybackFailureToast.show(
-            message: StickerSettings.miniPetsEnabled
-                ? "长按爪印 3 秒，送小宠物回家"
-                : "长按爪印 2 秒，召唤小宠物")
-    }
-
-    @objc private func longPressed(_ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-        longPressFired = true
-        onUserInteraction?()
-        let enabled = StickerSettings.miniPetsEnabled
-        Breadcrumbs.log("paw.face79 fire on=\(enabled ? 1 : 0)")
+        let wasEnabled = StickerSettings.miniPetsEnabled
+        if let host = superview {
+            PawFirework81.burst(in: host,
+                                at: CGPoint(x: frame.midX, y: frame.midY))
+        }
+        PawFirework81.pop(self)
+        Breadcrumbs.log("paw.tap81 on=\(wasEnabled ? 0 : 1)")
         PetSummonButton70.performPawToggle77(
             window: window,
-            src: enabled ? "face3s" : "face2s",
-            via: enabled ? "face3s" : "face2s",
-            actCrumb: "paw.act79")
-        pressRecognizer.minimumPressDuration =
-            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+            src: "face-tap",
+            via: "face-tap",
+            actCrumb: "paw.act81")
+        refreshFace81()
     }
 }
