@@ -204,6 +204,11 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneDidBecomeActive(_ scene: UIScene) {
+        // (73) 本地服务器回前台探活：监听的静默死亡正发生
+        // 在挂起期（(72) 真机实证），回前台第一时间实测——
+        // 活着零成本（一发回环连接），死了不等用户点歌单
+        // 撞 -1004 才修，当场 restart 重建。
+        Task { _ = await LocalServer.shared.ensureAlive(timeout: 4) }
         // 岛层即时置顶（3.7 (41) 组1）：回前台先把岛层送回
         // 主窗最顶，不等 0.5s 守护拍；未安装时为空操作。
         PetIslandLayer.shared.refrontIfNeeded()

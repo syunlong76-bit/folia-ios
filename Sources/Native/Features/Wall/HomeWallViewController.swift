@@ -689,8 +689,11 @@ final class HomeWallViewController: UIViewController,
     /// 落定前最后一套属性随系统旋转变换呈现），coordinator
     /// completion 里一次性收尾。快照覆盖法不采用：整屏光栅
     /// 化（≤400 卡）另占 GPU/内存且与宠物/贴纸层级打架，冻结
-    /// 已达成动画期间零重算、风险更低。alongside 段刻意传
-    /// nil——不借旋转动画做任何墙面工作。
+    /// 已达成动画期间零重算、风险更低。
+    /// (73) 时序再改：收尾从 completion 提前到 alongside 首
+    /// 帧（见下 alongside 注）——冻结只保留「动画期间不被中
+    /// 间 bounds 反复触发重算」一职，实际重排在转场第一帧
+    /// 就以最终 bounds 完成，消除落定 snap。
     override func viewWillTransition(to size: CGSize,
         with coordinator: UIViewControllerTransitionCoordinator) {
         super.viewWillTransition(to: size, with: coordinator)
@@ -700,30 +703,45 @@ final class HomeWallViewController: UIViewController,
         wallRotationGeneration += 1
         let generation = wallRotationGeneration
         wallLayout.setRotationFrozen(true)
+        // (73) 岛层守护转场期暂停：旋转动画中途不许整层
+        // reseatAll 抢主线程（落定 completion 里恢复并补拍）。
+        PetIslandLayer.setRefrontSuspended(true)
         Breadcrumbs.log("wall.rotate freeze gen=\(generation)"
             + " from=\(Int(fromSize.width))x\(Int(fromSize.height))"
             + " to=\(Int(size.width))x\(Int(size.height))")
-        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+        coordinator.animate(alongsideTransition: { [weak self] _ in
             guard let self else { return }
-            // 中途反向再转：旧代 completion 只记账不解冻，新
-            // 一代的 completion 才是收尾点（防提前解冻后中间
-            // bounds 又触发重算）。
-            guard generation == self.wallRotationGeneration else {
-                Breadcrumbs.log("wall.rotate superseded gen=\(generation)")
-                return
-            }
+            // (73) 墙体重排提前到转场首帧（alongside 在动画
+            // 开始时以最终 bounds 执行）：(72) 前收尾全压在
+            // completion——旋转变换已播完、冻结的旧布局还多
+            // 停一帧，随后一次性换新布局＋reload，呈现为
+            // 「闪一下（旧帧）然后再放大（新帧 snap）」。改
+            // 为首帧即以最终 bounds 解冻重排：转场全程呈现
+            // 的就是最终布局随窗口刚性旋转，落定帧与前一帧
+            // 逐位一致、无尺度跳变。重排仍只此一次：纯旋转
+            // 尺寸类别不变、走同键平移路，零 lattice 重算；
+            // 中途反向再转时新一代 freeze 重新冻结、由新一
+            // 代 alongside 收尾，旧代在此落空不解冻。
+            guard generation == self.wallRotationGeneration else { return }
             self.wallLayout.setRotationFrozen(false)
-            // 一次性收尾（逐个点名，此外无其他旋转后重排）：
-            // ① 墙本体：解冻后唯一一次 invalidate → prepare →
-            //    refreshInstances；尺寸类别未变（纯旋转在转置
-            //    安全线内）时指纹不变、lattice 零重算，只重建
-            //    一次属性帧；类别变了才全量重算一次。
             self.wallLayout.invalidateLayout()
             // (58)：prepare 若因类别变化换了实例集，数据源须
             // 同步 reload（旧版靠后续事件兜底、映射错位窗口
             // 存在）；身份未变则不动。
             if self.wallLayout.lastIdentityChanged {
                 self.collectionView.reloadData()
+            }
+        }) { [weak self] _ in
+            guard let self else { return }
+            // (73) 岛层守护恢复＋即时补一拍：转场期间跳过的
+            // 几何同步在此落定帧后一次补齐（不在动画中途）。
+            PetIslandLayer.setRefrontSuspended(false)
+            PetIslandLayer.shared.refrontIfNeeded()
+            // 中途反向再转：旧代 completion 只记账，新一代
+            // 才是收尾点。
+            guard generation == self.wallRotationGeneration else {
+                Breadcrumbs.log("wall.rotate superseded gen=\(generation)")
+                return
             }
             // ② 迷你台/点播台：宽度按新 bounds 重断言（口径与
             //    viewDidLayoutSubviews 同：min(宽,高)−24，纯旋

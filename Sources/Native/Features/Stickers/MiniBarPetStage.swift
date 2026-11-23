@@ -1557,7 +1557,9 @@ final class MiniBarPetStage: UIView {
         Breadcrumbs.log("pet.gesture state=close-trigger asset=\(actor.asset)")
         SettingsStore.miniPetsEnabled = false
         StickerSettings.miniPetsEnabled = false
-        // (72)：岛民随全局关撤下（reconcile off 分支）。
+        // (73)：关台只辖台上 cast；岛民常驻不随全局关撤下
+        // （reconcile 已解耦，见 PetHomeRegistry (73) 注），
+        // 本调用仅作稳定事件对账（岛民维持落座自愈）。
         PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         pendingSpawns.removeAll()
         batchActive = false

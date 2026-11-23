@@ -13,32 +13,62 @@ enum Ponder62 {
 
     struct Tip {
         let id: String
+        /// (73) 导播台章节 id（见 chapters）：学网页版
+        /// Ponder 的分章讲法——按使用区域分章、每章逐面讲
+        /// 「这是什么、在哪、怎么用/怎么设」。
+        let chapter: String
         let title: String
         let body: String
     }
 
+    /// (73) 导播台章节（顺序即导览顺序，组织学网页版
+    /// Ponder 的 basics/library/player/panel/settings/
+    /// studio 分章；内容只收原生真实存在的功能与设置）。
+    static let chapters: [(id: String, title: String)] = [
+        ("start", "入门"),
+        ("wall", "照片墙"),
+        ("player", "播放与舞台"),
+        ("pets", "宠物"),
+        ("desk", "工作台"),
+        ("settings", "设置")
+    ]
+
     /// 真内容：只覆盖已落地的功能面，不给未迁面写假教程。
     static let tips: [Tip] = [
-        Tip(id: "queue", title: "队列面板",
-            body: "点播台上排「面板」键打开播放面板，队列页签里可拖动排序、左滑移除、批量多选，还能把当前队列存成本机歌单。"),
-        Tip(id: "sketchbook", title: "速记簿",
+        Tip(id: "login", chapter: "start", title: "登录三家",
+            body: "点左上角白色横线打开工作台，点头像区扫码登录网易云 / QQ 音乐 / 酷狗；登录后头像区显示昵称、三家状态行各自亮绿点。未登录时只能播本地与已缓存曲目。"),
+        Tip(id: "wall", chapter: "wall", title: "照片墙漫游",
+            body: "主页照片墙单指拖动平移浏览，点按任意封面卡展开——展开卡上直接出歌词与播放控制；歌词始终钉在正在播放歌曲自己的封面卡上，随卡一起移动。"),
+        Tip(id: "lattice", chapter: "wall", title: "Lattice 拼贴墙",
+            body: "拼贴墙把当前队列铺成拼贴格：正在播放的格子带呼吸光环、已经播过的会压暗。从墙面布局切换进入，点任意格子即从那首开始播。"),
+        Tip(id: "sketchbook", chapter: "wall", title: "速记簿",
             body: "屏幕左缘的小把手是速记簿：搜索结果行尾第一个钮把歌暂存进来，抽屉里可分组、看历史、把草稿队列一键替换当前队列。"),
-        Tip(id: "command", title: "命令面板",
-            body: "点播台上排「命令」键打开命令面板：播放控制、队列操作、当前歌曲与工具命令集中在一处，顶部可搜索。"),
-        Tip(id: "stage-style", title: "歌词样式",
-            body: "舞台上三击屏幕可洗牌切换下一个歌词特效；样式选择器里每个样式都有自己的调参面板，逐条按你的验收为准。"),
-        Tip(id: "minibar", title: "播放台",
-            body: "播放台 5 秒无操作会收成进度细条，宠物会跟着掉到细条上玩；点细条恢复完整形态，任何操作都会重新计时。"),
-        Tip(id: "seam", title: "缝合工具条",
+        Tip(id: "seam", chapter: "wall", title: "缝合工具条",
             body: "墙顶工具条可切换歌 / 推 / 探三段、切换网格与墙面布局；「…」菜单里有喜欢的音乐、云盘、过滤与隐藏管理。"),
-        // (66) 帮助页补齐：补上 (62) 后落地的功能面条目。
-        Tip(id: "island", title: "灵动岛宠物",
-            body: "迷你台上的宠物说完告别词会蹦到灵动岛上坐住（捂脸小猫＋爱心小狗固定双人组），在岛上闲晃冒泡；点它可以蹦回迷你台。"),
-        Tip(id: "concert", title: "汪汪队开大会",
+        Tip(id: "queue", chapter: "player", title: "队列面板",
+            body: "点播台上排「面板」键打开播放面板，队列页签里可拖动排序、左滑移除、批量多选，还能把当前队列存成本机歌单。"),
+        Tip(id: "command", chapter: "player", title: "命令面板",
+            body: "点播台上排「命令」键打开命令面板：播放控制、队列操作、当前歌曲与工具命令集中在一处，顶部可搜索。"),
+        Tip(id: "stage-style", chapter: "player", title: "歌词样式",
+            body: "舞台上三击屏幕可洗牌切换下一个歌词特效，长按舞台约 5 秒同样切换（洗牌袋一轮内不重复）；样式选择器里每个样式都有自己的调参面板。带「网页运行」徽标的样式是网页特效在原生里无缝切换运行，音频始终原生。"),
+        Tip(id: "minibar", chapter: "player", title: "播放台",
+            body: "播放台 5 秒无操作会收成进度细条，宠物会跟着掉到细条上玩；点细条恢复完整形态，任何操作都会重新计时。横屏时播放台与竖屏同尺寸、居中显示。"),
+        Tip(id: "paw", chapter: "pets", title: "爪印召唤",
+            body: "右下角的爪印钮在任意页面都够得着：长按约 2 秒召唤宠物上播放台，长按约 3 秒全员告别离场；长按台上单只宠物约 3 秒，它说完告别词再消失。"),
+        Tip(id: "pets-care", chapter: "pets", title: "宠物陪伴",
+            body: "宠物会自己玩耍、互相打招呼聊天（各自性格不同），也会冒关心气泡问你累不累、有没有好好吃饭；点气泡可以回应摸摸头 / 亲亲 / 抱抱，它会回话。点宠物本体也会弹对话框。"),
+        // (73) island 口径随确定性落座改版更新：固定双人组常驻。
+        Tip(id: "island", chapter: "pets", title: "灵动岛宠物",
+            body: "灵动岛上住着固定双人组（捂脸小猫在左、爱心小狗在右），常驻陪你听歌、会冒泡说话；点它蹦回播放台。用「汪汪队开大会」样式时它们撤下上台，切走样式即回岛。"),
+        Tip(id: "concert", chapter: "pets", title: "汪汪队开大会",
             body: "歌词样式选「汪汪队开大会」时，宠物全员上舞台列队轮唱，独唱者会跑到中央；此样式生效期间点播台与灵动岛的宠物会撤下，切走样式即恢复。"),
-        Tip(id: "theme-park", title: "主题乐园",
+        Tip(id: "desk", chapter: "desk", title: "工作台（控制台）",
+            body: "屏幕左上角的白色横线是工作台把手：点开后顶部垂下控制设置台，灵动岛嵌在台顶的凹口里露出。台里有账户登录与三家状态、歌单 / 电台 / 搜索 / 专辑 / 本地分区、设置入口和本导播台；点台外区域或上拖即可收起，收起回到左上角白线。"),
+        Tip(id: "settings-tour", chapter: "settings", title: "设置导览",
+            body: "设置共 12 个页签：外观、播放页、主页与歌单、动画与性能、播放控制、歌词、通用、快捷操作、连接与集成、存储与备份、开发者、帮助。想调什么先按页签找分组，组内每项都有一行说明；思索教程的开关与重置在「通用 → 思索」组。"),
+        Tip(id: "theme-park", chapter: "settings", title: "主题乐园",
             body: "设置 → 外观 → 主题乐园：可预览当前歌曲按封面生成的主题、切换配色预设、编辑自定义三色；歌曲主题的自动切换与生成来源在同一页签的「歌曲主题」组。"),
-        Tip(id: "local-cache", title: "本地曲库与媒体缓存",
+        Tip(id: "local-cache", chapter: "settings", title: "本地曲库与媒体缓存",
             body: "导入的本地歌曲在「本地」分区浏览；听过的歌会自动回填到媒体缓存（设置 → 存储与备份可改缓存目录、看占用），离线时可播已缓存曲目。")
     ]
 
@@ -152,18 +182,35 @@ final class PonderListViewController62: UIViewController {
             stack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor, constant: -20)
         ])
         let title = UILabel()
-        title.text = FoliaLanguage62.text("ponderTitle")
+        title.text = "导播台"
         title.font = .systemFont(ofSize: 17, weight: .semibold)
         title.textColor = .white
         stack.addArrangedSubview(title)
+        let intro = UILabel()
+        intro.text = "按区域分章，逐个功能讲清在哪、怎么用、去哪设置。条目只收原生里真实存在的功能。"
+        intro.font = .systemFont(ofSize: 12.5)
+        intro.textColor = UIColor.white.withAlphaComponent(0.55)
+        intro.numberOfLines = 0
+        stack.addArrangedSubview(intro)
+        // (73) 分章呈现（学网页版 Ponder 的分章讲法）：章
+        // 标题金色小题，章下条目沿旧行式（已读/未读标记）。
         let seen = Ponder62.seenIDs
-        for tip in Ponder62.tips {
-            let label = UILabel()
-            label.text = "· \(tip.title)\(seen.contains(tip.id) ? "（已读）" : "（未读）")\n\(tip.body)"
-            label.font = .systemFont(ofSize: 13)
-            label.textColor = UIColor.white.withAlphaComponent(0.75)
-            label.numberOfLines = 0
-            stack.addArrangedSubview(label)
+        for chapter in Ponder62.chapters {
+            let chapterTips = Ponder62.tips.filter { $0.chapter == chapter.id }
+            guard !chapterTips.isEmpty else { continue }
+            let header = UILabel()
+            header.text = chapter.title
+            header.font = .systemFont(ofSize: 15, weight: .semibold)
+            header.textColor = UIColor(red: 1.0, green: 0.84, blue: 0.40, alpha: 1)
+            stack.addArrangedSubview(header)
+            for tip in chapterTips {
+                let label = UILabel()
+                label.text = "· \(tip.title)\(seen.contains(tip.id) ? "（已读）" : "（未读）")\n\(tip.body)"
+                label.font = .systemFont(ofSize: 13)
+                label.textColor = UIColor.white.withAlphaComponent(0.75)
+                label.numberOfLines = 0
+                stack.addArrangedSubview(label)
+            }
         }
         let reset = UIButton(type: .system)
         reset.setTitle("重置已读（重新显示全部提示）", for: .normal)

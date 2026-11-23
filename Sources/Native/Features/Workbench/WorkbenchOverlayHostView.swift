@@ -43,6 +43,24 @@ import UIKit
 // 每次 chrome 写入落 workbench.chrome.audit 自证面包屑（字
 // 段含 gestureRawState/animatorGeneration/animatorIdentity/
 // stackHash 与 panelOpenGeom），复现一次即可从日志定罪。
+//
+// (73) 形态改造（Miller 18:39/18:40 定版）：控制台自左缘
+// 抽屉改为顶部控制设置台——
+// - 收起态：左上角一条白色横线把手（安全区内贴左），点按
+//   展开、在把手上竖拖跟手；收起动画回到该横线处。
+// - 展开态：面板自顶部垂下、占据整幅宽度，顶缘正中开灵
+//   动岛凹口（竖屏 14 Pro 几何：凹口宽 142、高 54，岛嵌在
+//   凹口里露出，面板不压岛）；内容自凹口底之下排布，系
+//   统状态栏区域由凹口＋内容顶距让行。横屏岛在左侧边中
+//   段：面板整体右让 52pt 避岛，不压岛。
+// - 展开/收起仍走本状态机与系统弹簧（animator 不变），几
+//   何轴向由 tx 改 ty：关闭位 ty=−panelHeight、满开 0；
+//   audit 字段随轴改名 modelTy/presTy/modelBottom/presBottom，
+//   geomOK 恒等式改 panelHeight + modelTy。
+// - 原左上角独立浮灯泡（WB62 思索钮）撤除：灯泡收进本台
+//   底行作「导播台」入口（点开 Ponder62 导览列表面）。
+// 功能项一个不少：账户头/三家状态/歌单/电台/搜索/专辑/
+// 本地/设置全保留，仅换容器排布（分区改 3×2 格＋导播台行）。
 
 final class WorkbenchOverlayHostView: UIView {
 
@@ -130,7 +148,27 @@ final class WorkbenchOverlayHostView: UIView {
     private let scrimView = UIView()
     private let sidebarView = UIView()
     private let handleView = UIView()
-    private let handleChevron = UIImageView()
+    /// (73) 白线本体（44×5）：handleView 是 60×36 透明命
+    /// 中盒（5pt 线直接命中不可靠），白线居其左上呈现。
+    private let handleLineView = UIView()
+    /// (73) 面板内容容器：整体自 contentTopPad 之下排布
+    /// （让灵动岛凹口与状态栏），顶距约束由 layout 按安全
+    /// 区/朝向更新。
+    private let contentView = UIView()
+    private var contentTopConstraint: NSLayoutConstraint?
+    /// (73) 面板背景三层（Miller 18:48 定：展开台半透明毛
+    /// 玻璃）：系统毛玻璃（systemThickMaterialDark，透出下
+    /// 方墙面）＋主题底色 45% 暗调层（保白字对比）＋剪影
+    /// 描边层（凹口与底角边缘干净）。前两层各挂一份剪影
+    /// mask（even-odd 切灵动岛凹口），内容层（contentView）
+    /// 在其上、不参与模糊，文字控件保持清晰。sidebarView
+    /// 本体透明，layer.shadowPath 同步剪影形。
+    private let panelBlurView = UIVisualEffectView(
+        effect: UIBlurEffect(style: .systemThickMaterialDark))
+    private let panelTintView = UIView()
+    private let panelBlurMask = CAShapeLayer()
+    private let panelTintMask = CAShapeLayer()
+    private let panelEdgeLayer = CAShapeLayer()
 
     /// 手势识别器引用（audit 的 gestureRawState 实时读源＋
     /// 看门狗交叉核对）：build 时各存一份。
@@ -151,8 +189,47 @@ final class WorkbenchOverlayHostView: UIView {
     /// (54) 工作流 N 修）。
     private var avatarLoadKey: String?
 
-    private var panelWidth: CGFloat {
-        bounds.width > 0 ? min(304, bounds.width * 0.84) : 304
+    /// (73) 顶部台高度：内容顶距＋内容行高合计，钳制在屏
+    /// 高留 56pt 余量内（横屏矮屏不许把底行裁掉）。
+    private var panelHeight: CGFloat {
+        guard bounds.height > 0 else { return 400 }
+        return min(contentTopPad + Self.deskContentHeight,
+                   bounds.height - 56)
+    }
+
+    /// (73) 内容顶距：竖屏让出灵动岛凹口底（54）再让 8，
+    /// 且不低于安全区＋6（状态栏系统件区域让行）；横屏顶
+    /// 部无岛，安全区＋10。
+    private var contentTopPad: CGFloat {
+        if bounds.width < bounds.height, safeAreaInsets.top >= 44 {
+            return max(safeAreaInsets.top + 6, Self.islandNotchHeight + 8)
+        }
+        return safeAreaInsets.top + 10
+    }
+
+    /// (73) 灵动岛凹口尺寸（竖屏）：岛本体 ≈126×37、顶距
+    /// ≈11（底 ≈48）；凹口宽 142（左右各让 8）、高 54
+    /// （底让 6），岛嵌在凹口里完整露出。
+    private static let islandNotchWidth: CGFloat = 142
+    private static let islandNotchHeight: CGFloat = 54
+    /// (73) 横屏让岛：面板左缘右移量（岛深 ≈37＋呼吸 15）。
+    private static let landscapeIslandClearance: CGFloat = 52
+    /// (73) 内容行高合计（与 build 排布常量对账）：账户头
+    /// 70＋三家状态 63＋分隔块 31＋分区格 98＋导播台行
+    /// （间距 12＋行 46）＋底垫 14。
+    private static let deskContentHeight: CGFloat =
+        70 + 63 + 31 + 98 + 12 + 46 + 14
+
+    /// (73) 凹口在面板坐标系的矩形（顶边开口：y 自 −20 起
+    /// 切掉面板顶缘中段）；横屏/无岛机型为 nil（不切凹口）。
+    private var islandNotchRect: CGRect? {
+        guard bounds.width < bounds.height,
+              safeAreaInsets.top >= 44 else { return nil }
+        let panelW = sidebarView.bounds.width > 0
+            ? sidebarView.bounds.width : bounds.width
+        return CGRect(x: (panelW - Self.islandNotchWidth) / 2, y: -20,
+                      width: Self.islandNotchWidth,
+                      height: Self.islandNotchHeight + 20)
     }
 
     init(hostViewController: UIViewController) {
@@ -202,22 +279,54 @@ final class WorkbenchOverlayHostView: UIView {
         scrimPanGesture = scrimPan
         addSubview(scrimView)
 
-        sidebarView.backgroundColor = WorkbenchTheme.background
+        // (73) 面板本体透明：背景＝毛玻璃＋暗调层（剪影
+        // mask 切底圆角＋灵动岛凹口），阴影沿剪影走
+        // （shadowPath 在 layout 的 updatePanelShape 同步）。
+        sidebarView.backgroundColor = .clear
+        panelBlurView.isUserInteractionEnabled = false
+        panelBlurMask.fillRule = .evenOdd
+        panelBlurView.layer.mask = panelBlurMask
+        sidebarView.addSubview(panelBlurView)
+        panelTintView.backgroundColor =
+            WorkbenchTheme.background.withAlphaComponent(0.45)
+        panelTintView.isUserInteractionEnabled = false
+        panelTintMask.fillRule = .evenOdd
+        panelTintView.layer.mask = panelTintMask
+        sidebarView.addSubview(panelTintView)
+        panelEdgeLayer.fillColor = UIColor.clear.cgColor
+        panelEdgeLayer.strokeColor =
+            UIColor.white.withAlphaComponent(0.14).cgColor
+        panelEdgeLayer.lineWidth = 1
+        sidebarView.layer.addSublayer(panelEdgeLayer)
         sidebarView.layer.shadowColor = UIColor.black.cgColor
         sidebarView.layer.shadowOpacity = 0.45
         sidebarView.layer.shadowRadius = 24
-        sidebarView.layer.shadowOffset = CGSize(width: 6, height: 0)
+        sidebarView.layer.shadowOffset = CGSize(width: 0, height: 6)
         let sidebarPan = UIPanGestureRecognizer(target: self, action: #selector(sidebarPanned(_:)))
         sidebarView.addGestureRecognizer(sidebarPan)
         sidebarPanGesture = sidebarPan
         addSubview(sidebarView)
+
+        // (73) 内容容器：顶距由 layout 按安全区/朝向更新
+        // （竖屏让凹口、横屏让状态栏），内部排布相对容器。
+        contentView.translatesAutoresizingMaskIntoConstraints = false
+        sidebarView.addSubview(contentView)
+        let topC = contentView.topAnchor.constraint(
+            equalTo: sidebarView.topAnchor, constant: 69)
+        contentTopConstraint = topC
+        NSLayoutConstraint.activate([
+            topC,
+            contentView.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor),
+            contentView.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
+            contentView.bottomAnchor.constraint(equalTo: sidebarView.bottomAnchor)
+        ])
 
         // —— 账户头（点按进登录页：未登录去登录、已登录去管理）——
         let header = UIView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(accountTapped)))
-        sidebarView.addSubview(header)
+        contentView.addSubview(header)
         sidebarAvatar.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(sidebarAvatar)
         let titleLabel = UILabel()
@@ -237,11 +346,11 @@ final class WorkbenchOverlayHostView: UIView {
         accountHintLabel.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(accountHintLabel)
         NSLayoutConstraint.activate([
-            header.topAnchor.constraint(equalTo: sidebarView.topAnchor),
-            header.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor),
-            header.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor),
+            header.topAnchor.constraint(equalTo: contentView.topAnchor),
+            header.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
             sidebarAvatar.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 20),
-            sidebarAvatar.topAnchor.constraint(equalTo: header.topAnchor, constant: 56),
+            sidebarAvatar.topAnchor.constraint(equalTo: header.topAnchor, constant: 8),
             sidebarAvatar.widthAnchor.constraint(equalToConstant: 48),
             sidebarAvatar.heightAnchor.constraint(equalToConstant: 48),
             titleLabel.leadingAnchor.constraint(equalTo: sidebarAvatar.trailingAnchor, constant: 14),
@@ -260,7 +369,7 @@ final class WorkbenchOverlayHostView: UIView {
         providerStack.axis = .vertical
         providerStack.spacing = 6
         providerStack.translatesAutoresizingMaskIntoConstraints = false
-        sidebarView.addSubview(providerStack)
+        contentView.addSubview(providerStack)
         for provider in NativeSessionStore.Provider.allCases {
             // 每行自带状态点（8×8，贴行首、与文字同行居中）：
             // 旧版三行只有文字、全侧栏的状态点只长在两个头像上，
@@ -289,66 +398,93 @@ final class WorkbenchOverlayHostView: UIView {
         }
         NSLayoutConstraint.activate([
             providerStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
-            providerStack.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor, constant: 20),
-            providerStack.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor, constant: -16)
+            providerStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            providerStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16)
         ])
 
         let divider = UIView()
         divider.backgroundColor = WorkbenchTheme.hairline
         divider.translatesAutoresizingMaskIntoConstraints = false
-        sidebarView.addSubview(divider)
+        contentView.addSubview(divider)
         NSLayoutConstraint.activate([
             divider.topAnchor.constraint(equalTo: providerStack.bottomAnchor, constant: 16),
-            divider.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor, constant: 20),
-            divider.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor, constant: -20),
+            divider.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 20),
+            divider.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -20),
             divider.heightAnchor.constraint(equalToConstant: 1)
         ])
 
-        // —— 分区行 ——
+        // —— 分区（(73) 改 3×2 格：功能项一个不少——歌单/
+        // 电台/搜索/专辑/本地/设置全在格内） ——
         let sectionsStack = UIStackView()
         sectionsStack.axis = .vertical
-        sectionsStack.spacing = 4
+        sectionsStack.spacing = 6
         sectionsStack.translatesAutoresizingMaskIntoConstraints = false
-        sidebarView.addSubview(sectionsStack)
-        let sections: [(WorkbenchSection, String, String)] = [
-            (.playlists, "music.note.list", "歌单"),
-            (.radio, "radio", "电台"),
-            (.search, "magnifyingglass", "搜索"),
-            (.albums, "opticaldisc", "专辑"),
-            (.local, "folder", "本地")
+        contentView.addSubview(sectionsStack)
+        let gridRows: [[(WorkbenchSection, String, String)]] = [
+            [(.playlists, "music.note.list", "歌单"),
+             (.radio, "radio", "电台"),
+             (.search, "magnifyingglass", "搜索")],
+            [(.albums, "opticaldisc", "专辑"),
+             (.local, "folder", "本地"),
+             (.settings, "gearshape", "设置")]
         ]
-        for (section, icon, title) in sections {
-            sectionsStack.addArrangedSubview(makeSectionRow(section: section, icon: icon, title: title))
+        for rowItems in gridRows {
+            let row = UIStackView()
+            row.axis = .horizontal
+            row.spacing = 6
+            row.distribution = .fillEqually
+            for (section, icon, title) in rowItems {
+                row.addArrangedSubview(makeSectionRow(
+                    section: section, icon: icon, title: title, compact: true))
+            }
+            sectionsStack.addArrangedSubview(row)
         }
         NSLayoutConstraint.activate([
             sectionsStack.topAnchor.constraint(equalTo: divider.bottomAnchor, constant: 14),
-            sectionsStack.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor, constant: 12),
-            sectionsStack.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor, constant: -12)
+            sectionsStack.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
+            sectionsStack.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12)
         ])
 
-        // —— 底部设置入口（只调起既有 SettingsViewController）——
-        let settingsButton = makeSectionRow(section: .settings, icon: "gearshape", title: "设置")
-        settingsButton.translatesAutoresizingMaskIntoConstraints = false
-        sidebarView.addSubview(settingsButton)
+        // —— (73) 导播台行：原独立浮灯泡撤除后收进本台底
+        // 行——灯泡＋「导播台」，点开 Ponder62 导览列表面
+        // （openSection(.guide) 分发）。 ——
+        let guideButton = makeSectionRow(section: .guide, icon: "lightbulb",
+                                         title: "导播台", compact: true)
+        guideButton.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        guideButton.tintColor = UIColor(red: 1.0, green: 0.84, blue: 0.40, alpha: 1)
+        let guideHint = UILabel()
+        guideHint.text = "功能导览"
+        guideHint.font = .systemFont(ofSize: 12.5)
+        guideHint.textColor = WorkbenchTheme.secondary
+        guideHint.translatesAutoresizingMaskIntoConstraints = false
+        guideButton.addSubview(guideHint)
+        contentView.addSubview(guideButton)
         NSLayoutConstraint.activate([
-            settingsButton.leadingAnchor.constraint(equalTo: sidebarView.leadingAnchor, constant: 12),
-            settingsButton.trailingAnchor.constraint(equalTo: sidebarView.trailingAnchor, constant: -12),
-            settingsButton.bottomAnchor.constraint(equalTo: sidebarView.safeAreaLayoutGuide.bottomAnchor, constant: -14)
+            guideButton.topAnchor.constraint(equalTo: sectionsStack.bottomAnchor, constant: 12),
+            guideButton.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
+            guideButton.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -12),
+            guideHint.trailingAnchor.constraint(equalTo: guideButton.trailingAnchor, constant: -14),
+            guideHint.centerYAnchor.constraint(equalTo: guideButton.centerYAnchor)
         ])
     }
 
-    private func makeSectionRow(section: WorkbenchSection, icon: String, title: String) -> UIButton {
+    /// 分区行（compact＝(73) 顶部台格内紧凑行：高 46、字
+    /// 15、内距收紧；非 compact 保留旧 50 高全宽行规格）。
+    private func makeSectionRow(section: WorkbenchSection, icon: String,
+                                title: String, compact: Bool = false) -> UIButton {
         var config = UIButton.Configuration.plain()
         config.image = UIImage(systemName: icon)
-        config.imagePadding = 14
+        config.imagePadding = compact ? 8 : 14
         config.imagePlacement = .leading
         config.title = title
         config.baseForegroundColor = WorkbenchTheme.primary
-        config.contentInsets = NSDirectionalEdgeInsets(top: 13, leading: 14, bottom: 13, trailing: 14)
+        config.contentInsets = compact
+            ? NSDirectionalEdgeInsets(top: 11, leading: 10, bottom: 11, trailing: 10)
+            : NSDirectionalEdgeInsets(top: 13, leading: 14, bottom: 13, trailing: 14)
         let button = UIButton(type: .system)
         button.configuration = config
         button.tintColor = WorkbenchTheme.primary
-        button.titleLabel?.font = .systemFont(ofSize: 16, weight: .medium)
+        button.titleLabel?.font = .systemFont(ofSize: compact ? 15 : 16, weight: .medium)
         button.contentHorizontalAlignment = .leading
         button.backgroundColor = WorkbenchTheme.rowFill
         button.layer.cornerRadius = 12
@@ -356,19 +492,26 @@ final class WorkbenchOverlayHostView: UIView {
         button.addAction(UIAction { [weak self] _ in
             self?.openSection(section)
         }, for: .touchUpInside)
-        button.heightAnchor.constraint(equalToConstant: 50).isActive = true
+        button.heightAnchor.constraint(equalToConstant: compact ? 46 : 50).isActive = true
         return button
     }
 
     private func buildHandle() {
-        // 左缘离散把手：18×80 的小片，只它自己带手势（点按开、
-        // 在把手上横拖跟手），不设全高边缘手势。
-        handleView.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        handleView.layer.cornerRadius = 9
-        handleView.layer.maskedCorners = [.layerMaxXMinYCorner, .layerMaxXMaxYCorner]
-        handleView.layer.borderWidth = 1
-        handleView.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
-        handleView.accessibilityLabel = "打开书库"
+        // (73) 收起态把手：左上角一条白色横线（44×5、安全
+        // 区内贴左），只它自己带手势（点按展开顶部台、在把
+        // 手上竖拖跟手）。展开/收起动画自此位置生长/收回
+        // （面板自顶部垂下、把手随进度淡出，见 applyChrome）。
+        // handleView 本体透明作命中盒，白线由子视图呈现。
+        handleView.backgroundColor = .clear
+        handleLineView.backgroundColor = UIColor.white.withAlphaComponent(0.92)
+        handleLineView.layer.cornerRadius = 2.5
+        handleLineView.layer.shadowColor = UIColor.black.cgColor
+        handleLineView.layer.shadowOpacity = 0.35
+        handleLineView.layer.shadowRadius = 3
+        handleLineView.layer.shadowOffset = CGSize(width: 0, height: 1)
+        handleLineView.isUserInteractionEnabled = false
+        handleView.addSubview(handleLineView)
+        handleView.accessibilityLabel = "打开控制台"
         handleView.isAccessibilityElement = true
         handleView.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(handleTapped)))
@@ -376,18 +519,6 @@ final class WorkbenchOverlayHostView: UIView {
         handleView.addGestureRecognizer(handlePan)
         handlePanGesture = handlePan
         addSubview(handleView)
-        handleChevron.image = UIImage(systemName: "chevron.right")
-        handleChevron.tintColor = UIColor.white.withAlphaComponent(0.85)
-        handleChevron.contentMode = .scaleAspectFit
-        handleChevron.isUserInteractionEnabled = false
-        handleChevron.translatesAutoresizingMaskIntoConstraints = false
-        handleView.addSubview(handleChevron)
-        NSLayoutConstraint.activate([
-            handleChevron.centerXAnchor.constraint(equalTo: handleView.centerXAnchor),
-            handleChevron.centerYAnchor.constraint(equalTo: handleView.centerYAnchor),
-            handleChevron.widthAnchor.constraint(equalToConstant: 10),
-            handleChevron.heightAnchor.constraint(equalToConstant: 16)
-        ])
     }
 
     // MARK: - 布局（安全区/横竖屏）
@@ -405,23 +536,29 @@ final class WorkbenchOverlayHostView: UIView {
         let sizeChanged = bounds.size != lastSidebarSize
         if sizeChanged {
             lastSidebarSize = bounds.size
-            let width = panelWidth
+            let height = panelHeight
             let savedTransform = sidebarView.transform
             sidebarView.transform = .identity
-            sidebarView.frame = CGRect(x: 0, y: 0, width: width, height: bounds.height)
+            sidebarView.frame = panelFrame(height: height)
             sidebarView.transform = savedTransform
-            sidebarView.layer.shadowPath = UIBezierPath(rect: sidebarView.bounds).cgPath
-            // 宽度可能变了：按现态进度以新宽重申位移（关闭
-            // −width、满开 0、途中 −width×(1−progress)）。
-            let tx: CGFloat
+            contentTopConstraint?.constant = contentTopPad
+            updatePanelShape()
+            // 高度可能变了：按现态进度以新高重申位移（关闭
+            // −height、满开 0、途中 −height×(1−progress)）。
+            let ty: CGFloat
             switch sidebarState {
-            case .closed: tx = -width
-            case .open: tx = 0
-            case .dragging, .settling: tx = -width * (1 - currentProgress)
+            case .closed: ty = -height
+            case .open: ty = 0
+            case .dragging, .settling: ty = -height * (1 - currentProgress)
             }
-            updateGeometry(tx: tx, generation: sidebarGeneration, caller: "layout")
+            updateGeometry(ty: ty, generation: sidebarGeneration, caller: "layout")
         }
-        handleView.frame = CGRect(x: 0, y: bounds.height * 0.36, width: 18, height: 80)
+        // (73) 把手：左上角白色横线（安全区内贴左）；命中
+        // 盒 60×36 贴安全区顶，白线居盒内左上（8,8）。
+        handleView.frame = CGRect(
+            x: safeAreaInsets.left + 8, y: safeAreaInsets.top,
+            width: 60, height: 36)
+        handleLineView.frame = CGRect(x: 8, y: 8, width: 44, height: 5)
         if sizeChanged {
             // 旋转强制点位（(58) 定稿①）：宿主 bounds 尺寸变
             // 化即旋转/分屏落点，在此核对不变式＋落 audit。
@@ -430,10 +567,63 @@ final class WorkbenchOverlayHostView: UIView {
         }
     }
 
+    /// (73) 面板 frame：竖屏整幅宽贴顶；横屏岛在左侧边中
+    /// 段，面板整体右让岛深（不压岛）。
+    private func panelFrame(height: CGFloat) -> CGRect {
+        if bounds.width > bounds.height {
+            let inset = Self.landscapeIslandClearance
+            return CGRect(x: inset, y: 0,
+                          width: bounds.width - inset, height: height)
+        }
+        return CGRect(x: 0, y: 0, width: bounds.width, height: height)
+    }
+
+    /// (73) 面板剪影：底两角圆角 24；竖屏顶缘正中切灵动
+    /// 岛凹口（even-odd 切口、凹口矩形顶边开口）——岛嵌在
+    /// 凹口里完整露出、面板不压岛。毛玻璃/暗调两层 mask、
+    /// 描边层与阴影路径同步此形。
+    private func updatePanelShape() {
+        let rect = sidebarView.bounds
+        guard rect.width > 0, rect.height > 0 else { return }
+        let path = UIBezierPath()
+        let r: CGFloat = 24
+        path.move(to: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: rect.width, y: 0))
+        path.addLine(to: CGPoint(x: rect.width, y: rect.height - r))
+        path.addArc(withCenter: CGPoint(x: rect.width - r, y: rect.height - r),
+                    radius: r, startAngle: 0, endAngle: .pi / 2, clockwise: true)
+        path.addLine(to: CGPoint(x: r, y: rect.height))
+        path.addArc(withCenter: CGPoint(x: r, y: rect.height - r),
+                    radius: r, startAngle: .pi / 2, endAngle: .pi, clockwise: true)
+        path.close()
+        if let notch = islandNotchRect {
+            path.append(UIBezierPath(roundedRect: notch, cornerRadius: 20))
+            path.usesEvenOddFillRule = true
+        }
+        panelBlurView.frame = rect
+        panelTintView.frame = rect
+        panelBlurMask.frame = rect
+        panelBlurMask.path = path.cgPath
+        panelTintMask.frame = rect
+        panelTintMask.path = path.cgPath
+        panelEdgeLayer.frame = rect
+        panelEdgeLayer.path = path.cgPath
+        sidebarView.layer.shadowPath = path.cgPath
+    }
+
     // MARK: - 命中仲裁（DS 结论 2/3）
 
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         if sidebarState != .closed {
+            // (73) 灵动岛凹口区（面板顶缘中段的空区）不吞触
+            // 摸：落 scrim（点按关闭），与「面板外点按关闭」
+            // 同语义，岛本体不被面板命中区覆盖。
+            if let notch = islandNotchRect {
+                let zone = CGRect(
+                    x: sidebarView.frame.minX + notch.minX, y: 0,
+                    width: notch.width, height: Self.islandNotchHeight)
+                if zone.contains(point) { return scrimView }
+            }
             // 展开（含动画/拖动中）：宿主整层接管——面板内走
             // super 分发，面板外落 scrim（点按关闭），墙与迷你
             // 台在此期间点不到（且墙交互已由回调禁用）。
@@ -455,29 +645,30 @@ final class WorkbenchOverlayHostView: UIView {
                           tx: CGFloat(t.m41), ty: CGFloat(t.m42))
     }
 
-    /// 面板右缘（model）：center.x − bounds.width/2 +
-    /// bounds.applying(model transform).maxX。纯平移下恒等于
-    /// panelWidth + tx——audit 的 geomOK 字段逐行自检此恒等
-    /// 式（读法写错时 geomOK=0 立即可见，Pro 施工约束）。
-    private func panelModelRightEdge() -> CGFloat {
-        let w = sidebarView.bounds.width
-        return sidebarView.center.x - w / 2
-            + sidebarView.bounds.applying(sidebarView.transform).maxX
+    /// 面板底缘（model）：center.y − bounds.height/2 +
+    /// bounds.applying(model transform).maxY。纯平移下恒等于
+    /// panelHeight + ty——audit 的 geomOK 字段逐行自检此恒
+    /// 等式（读法写错时 geomOK=0 立即可见，Pro 施工约束）。
+    /// （(73) 轴向随形态由右缘/tx 改底缘/ty。）
+    private func panelModelBottomEdge() -> CGFloat {
+        let h = sidebarView.bounds.height
+        return sidebarView.center.y - h / 2
+            + sidebarView.bounds.applying(sidebarView.transform).maxY
     }
 
-    /// 面板右缘（presentation：在途动画的呈现值；无呈现层
+    /// 面板底缘（presentation：在途动画的呈现值；无呈现层
     /// 时回退 model）。与 model 分家即第三机制的实锤字段。
-    private func panelPresentationRightEdge() -> CGFloat {
-        let w = sidebarView.bounds.width
+    private func panelPresentationBottomEdge() -> CGFloat {
+        let h = sidebarView.bounds.height
         guard let pres = sidebarView.layer.presentation() else {
-            return panelModelRightEdge()
+            return panelModelBottomEdge()
         }
-        return pres.position.x - w / 2
-            + sidebarView.bounds.applying(affine(from: pres.transform)).maxX
+        return pres.position.y - h / 2
+            + sidebarView.bounds.applying(affine(from: pres.transform)).maxY
     }
 
     private func panelOpenGeom() -> Bool {
-        panelModelRightEdge() >= panelWidth - 0.5
+        panelModelBottomEdge() >= panelHeight - 0.5
     }
 
     // MARK: - 自证面包屑（workbench.chrome.audit）
@@ -528,16 +719,16 @@ final class WorkbenchOverlayHostView: UIView {
 
     /// chrome 自证面包屑（(58) 定稿①）：每一次 chrome 写入后
     /// 落一行（拖动中段节流 20Hz，见 applyChrome）。字段全集
-    /// ＝定罪映射：modelRight 与 presRight 分家→第三机制；
+    /// ＝定罪映射：modelBottom 与 presBottom 分家→第三机制；
     /// drag=1 恒久而 gesture 已终结→B′；anim 非空且 gen 停
     /// 滞→A；落定末行 handleHidden/panelOpenGeom
     /// 两者须与真机截图逐条对得上（验收判据）。
     private func auditChrome(caller: String, progress: CGFloat? = nil) {
-        let modelTx = sidebarView.transform.tx
-        let presTx = sidebarView.layer.presentation()
-            .map { CGFloat($0.transform.m41) } ?? modelTx
-        let modelRight = panelModelRightEdge()
-        let presRight = panelPresentationRightEdge()
+        let modelTy = sidebarView.transform.ty
+        let presTy = sidebarView.layer.presentation()
+            .map { CGFloat($0.transform.m42) } ?? modelTy
+        let modelBottom = panelModelBottomEdge()
+        let presBottom = panelPresentationBottomEdge()
         Breadcrumbs.log("workbench.chrome.audit"
             + " caller=\(caller) stack=\(stackHash())"
             + " state=\(sidebarStateName) gen=\(sidebarGeneration)"
@@ -547,10 +738,10 @@ final class WorkbenchOverlayHostView: UIView {
             + (progress.map { " progress=\(Self.fmt($0))" } ?? "")
             + " handleHidden=\(handleView.isHidden ? 1 : 0)"
             + " handleAlpha=\(Self.fmt(handleView.alpha))"
-            + " modelTx=\(Self.fmt(modelTx)) presTx=\(Self.fmt(presTx))"
-            + " modelRight=\(Self.fmt(modelRight)) presRight=\(Self.fmt(presRight))"
-            + " panelOpenGeom=\(modelRight >= panelWidth - 0.5 ? 1 : 0)"
-            + " geomOK=\(abs(modelRight - (panelWidth + modelTx)) <= 0.5 ? 1 : 0)")
+            + " modelTy=\(Self.fmt(modelTy)) presTy=\(Self.fmt(presTy))"
+            + " modelBottom=\(Self.fmt(modelBottom)) presBottom=\(Self.fmt(presBottom))"
+            + " panelOpenGeom=\(modelBottom >= panelHeight - 0.5 ? 1 : 0)"
+            + " geomOK=\(abs(modelBottom - (panelHeight + modelTy)) <= 0.5 ? 1 : 0)")
     }
 
     // MARK: - chrome 写入唯一通道（applyChrome）
@@ -597,12 +788,12 @@ final class WorkbenchOverlayHostView: UIView {
     /// 面板几何（transform）写入的唯一通道（(58) 定稿① Pro
     /// 补正）：按 generation 校验，过期代次的写入一律丢弃并
     /// 落 geomdrop 痕——旧 animator 即使残留引用也写不动面板。
-    private func updateGeometry(tx: CGFloat, generation: Int, caller: String) {
+    private func updateGeometry(ty: CGFloat, generation: Int, caller: String) {
         guard generation == sidebarGeneration else {
             Breadcrumbs.log("workbench.chrome.geomdrop caller=\(caller) gen=\(generation) current=\(sidebarGeneration)")
             return
         }
-        sidebarView.transform = CGAffineTransform(translationX: tx, y: 0)
+        sidebarView.transform = CGAffineTransform(translationX: 0, y: ty)
     }
 
     /// 面板进度唯一入口（(58) 定稿①，代旧 applySidebarProgress）：
@@ -612,7 +803,7 @@ final class WorkbenchOverlayHostView: UIView {
     private func progressTransit(to progress: CGFloat, caller: String) {
         let clamped = min(max(progress, 0), 1)
         currentProgress = clamped
-        updateGeometry(tx: -panelWidth * (1 - clamped),
+        updateGeometry(ty: -panelHeight * (1 - clamped),
                        generation: sidebarGeneration, caller: caller)
         scrimView.alpha = 0.5 * clamped
         applyChrome(caller: caller, mode: .transient(clamped))
@@ -629,18 +820,18 @@ final class WorkbenchOverlayHostView: UIView {
     /// updateGeometry 拉回。纠正必落 invariant.violation。
     private func enforceInvariant(caller: String) {
         guard sidebarState == .open || sidebarState == .closed else { return }
-        let targetTx: CGFloat = sidebarState == .open ? 0 : -panelWidth
-        let modelTx = sidebarView.transform.tx
-        if sidebarAnimator != nil, abs(modelTx - targetTx) > 0.5 { return }
+        let targetTy: CGFloat = sidebarState == .open ? 0 : -panelHeight
+        let modelTy = sidebarView.transform.ty
+        if sidebarAnimator != nil, abs(modelTy - targetTy) > 0.5 { return }
         guard CACurrentMediaTime() - lastTransitionBeginAt >= 0.3 else { return }
         // 几何型违规：落定态面板不在落定位（无 animator 在写
         // 的前提下到不了位，即写入通道外的改动/残局）。
-        if abs(modelTx - targetTx) > 0.5 {
+        if abs(modelTy - targetTy) > 0.5 {
             Breadcrumbs.log("invariant.violation caller=\(caller) kind=geometry"
-                + " state=\(sidebarStateName) modelTx=\(Self.fmt(modelTx))"
-                + " targetTx=\(Self.fmt(targetTx)) panelOpenGeom=\(panelOpenGeom() ? 1 : 0)")
+                + " state=\(sidebarStateName) modelTy=\(Self.fmt(modelTy))"
+                + " targetTy=\(Self.fmt(targetTy)) panelOpenGeom=\(panelOpenGeom() ? 1 : 0)")
             currentProgress = sidebarState == .open ? 1 : 0
-            updateGeometry(tx: targetTx, generation: sidebarGeneration,
+            updateGeometry(ty: targetTy, generation: sidebarGeneration,
                            caller: "invariant-heal")
         }
         // chrome 型违规：显隐/alpha 与落定态派生值不符（(61)
@@ -699,7 +890,7 @@ final class WorkbenchOverlayHostView: UIView {
     /// 达落定）。animator 的 animations 只经 progressTransit
     /// 写，completion 凭代次＋位置双判据落定。
     private func beginTransition(toOpen open: Bool, animated: Bool,
-                                 reason: String, initialVelocityX: CGFloat) {
+                                 reason: String, initialVelocityY: CGFloat) {
         stopCurrentAnimator()
         sidebarGeneration += 1
         let gen = sidebarGeneration
@@ -713,20 +904,20 @@ final class WorkbenchOverlayHostView: UIView {
             emitSidebarVisibility(true, source: "set-open")
         }
         let targetProgress: CGFloat = open ? 1 : 0
-        let targetTx = -panelWidth * (1 - targetProgress)
-        let currentTx = sidebarView.transform.tx
+        let targetTy = -panelHeight * (1 - targetProgress)
+        let currentTy = sidebarView.transform.ty
         guard animated, !UIAccessibility.isReduceMotionEnabled,
-              abs(targetTx - currentTx) > 0.5 else {
+              abs(targetTy - currentTy) > 0.5 else {
             progressTransit(to: targetProgress, caller: "settle-immediate")
             settleSidebar(generation: gen, targetOpen: open, caller: "immediate")
             return
         }
-        let distance = targetTx - currentTx
+        let distance = targetTy - currentTy
         let relativeVelocity = distance != 0
-            ? min(max(initialVelocityX / distance, -3), 3) : 0
+            ? min(max(initialVelocityY / distance, -3), 3) : 0
         let timing = UISpringTimingParameters(
             dampingRatio: 0.86,
-            initialVelocity: CGVector(dx: relativeVelocity, dy: 0))
+            initialVelocity: CGVector(dx: 0, dy: relativeVelocity))
         let animator = UIViewPropertyAnimator(duration: 0.55, timingParameters: timing)
         animator.addAnimations { [weak self] in
             self?.progressTransit(to: targetProgress, caller: "animator")
@@ -811,17 +1002,17 @@ final class WorkbenchOverlayHostView: UIView {
     }
 
     func setSidebarOpen(_ open: Bool, animated: Bool, reason: String,
-                        initialVelocityX: CGFloat = 0) {
+                        initialVelocityY: CGFloat = 0) {
         // 守卫：目标态已落定且面板已在目标位才算同值；同值
         // 不许整段 return 吞掉收口——先补一次落定收口再返回
         // （(55) 工作流 A 定案：在途 animator 被拖动打断时
         // completion 已丢，硬藏 chrome 与 (false) 发送全押在
         // 收口上，吞掉即冻屏/冻墙）。拖动松手时面板还在途
         // 中（状态为 dragging），不走守卫、继续收口。
-        let targetTx: CGFloat = open ? 0 : -panelWidth
+        let targetTy: CGFloat = open ? 0 : -panelHeight
         let settledTarget: SidebarState = open ? .open : .closed
         if sidebarState == settledTarget,
-           abs(sidebarView.transform.tx - targetTx) <= 0.5 {
+           abs(sidebarView.transform.ty - targetTy) <= 0.5 {
             reconcileSettledSidebar(open: open, reason: reason)
             return
         }
@@ -831,7 +1022,7 @@ final class WorkbenchOverlayHostView: UIView {
             return
         }
         beginTransition(toOpen: open, animated: animated,
-                        reason: reason, initialVelocityX: initialVelocityX)
+                        reason: reason, initialVelocityY: initialVelocityY)
     }
 
     // MARK: - 开合手势
@@ -868,13 +1059,14 @@ final class WorkbenchOverlayHostView: UIView {
         dragSidebar(gesture, opening: false)
     }
 
-    /// 跟手拖动：把手右拖开、面板/遮罩左拖关；松手按速度与
-    /// 进度用系统弹簧收口到开/关。.began 时停旧 animator、
-    /// 代次递增、状态迁 dragging 并启动看门狗；终结（ended/
-    /// cancelled/failed 同路）经 beginTransition 收口——手势
-    /// cancel 也是定稿①的强制点位（走同一落定路径）。
+    /// 跟手拖动：把手下拖开、面板/遮罩上拖关（(73) 轴向改
+    /// 竖向）；松手按速度与进度用系统弹簧收口到开/关。
+    /// .began 时停旧 animator、代次递增、状态迁 dragging 并
+    /// 启动看门狗；终结（ended/cancelled/failed 同路）经
+    /// beginTransition 收口——手势 cancel 也是定稿①的强制
+    /// 点位（走同一落定路径）。
     private func dragSidebar(_ gesture: UIPanGestureRecognizer, opening: Bool) {
-        let width = panelWidth
+        let height = panelHeight
         // 双指边缘防抢：dragging 期间只有 owner 识别器能推进/
         // 终结本次拖动（另一识别器的 .began 直接忽略）。
         if case .dragging = sidebarState,
@@ -898,22 +1090,22 @@ final class WorkbenchOverlayHostView: UIView {
             startDragWatchdog()
         case .changed:
             lastGestureEventAt = CACurrentMediaTime()
-            let translation = gesture.translation(in: self).x
-            let base: CGFloat = opening ? -width : 0
-            let tx = min(max(base + translation, -width), 0)
-            progressTransit(to: width > 0 ? 1 + tx / width : 0, caller: "drag")
+            let translation = gesture.translation(in: self).y
+            let base: CGFloat = opening ? -height : 0
+            let ty = min(max(base + translation, -height), 0)
+            progressTransit(to: height > 0 ? 1 + ty / height : 0, caller: "drag")
         case .ended, .cancelled, .failed:
             lastGestureEventAt = CACurrentMediaTime()
             dragOwner = nil
             stopDragWatchdog()
-            let velocity = gesture.velocity(in: self).x
+            let velocity = gesture.velocity(in: self).y
             let targetOpen: Bool
             if velocity > 350 { targetOpen = true }
             else if velocity < -350 { targetOpen = false }
             else { targetOpen = currentProgress > 0.45 }
             auditChrome(caller: "drag-end")
             beginTransition(toOpen: targetOpen, animated: true,
-                            reason: "drag", initialVelocityX: velocity)
+                            reason: "drag", initialVelocityY: velocity)
         default:
             break
         }
@@ -960,7 +1152,7 @@ final class WorkbenchOverlayHostView: UIView {
         stopDragWatchdog()
         dragOwner = nil
         beginTransition(toOpen: currentProgress > 0.45, animated: true,
-                        reason: "drag-watchdog", initialVelocityX: 0)
+                        reason: "drag-watchdog", initialVelocityY: 0)
     }
 
     // MARK: - 账户区（B 组 ProviderSessionStatusQuery，签名见报告）
@@ -1047,6 +1239,10 @@ final class WorkbenchOverlayHostView: UIView {
         Breadcrumbs.log("workbench.open section=\(section.rawValue)")
         setSidebarOpen(false, animated: true, reason: "section")
         switch section {
+        case .guide:
+            // (73) 导播台：Ponder62 导览列表面（章节化导览，
+            // 条目与落点见 Ponder62.chapters）。
+            Ponder62.presentList(from: presenter)
         case .search:
             SearchHostPresenter.presentSearch(from: presenter)
         case .settings:
@@ -1082,6 +1278,8 @@ enum WorkbenchSection: String {
     case albums
     case local
     case settings
+    /// (73) 导播台（台内灯泡行，非分区页）。
+    case guide
 }
 
 /// 圆形头像小件：图 + 无图时昵称首字兜底（没昵称时人形图标

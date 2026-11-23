@@ -199,8 +199,8 @@ final class PetSummonButton70: UIView {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             Breadcrumbs.log("pet.switch off via=corner3s")
             currentFacePetStage()?.performFarewellDismissAll70()
-            // (72)：岛民随全局关撤下（reconcile 的 off 分支
-            // 只动 home==.island 者，与台上 dismiss 流不打架）。
+            // (73)：岛民常驻不随全局关撤下（reconcile 已
+            // 解耦），本调用仅作稳定事件对账。
             PetHomeRegistry.shared.reconcileIsland(reason: "switch")
         } else {
             // 召唤：开关双写 on＋当前面掉落入场（写入场门控

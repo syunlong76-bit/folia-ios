@@ -701,19 +701,13 @@ enum Settings62ClusterB {
             Breadcrumbs.log("settings62.ponderTips=\($0)")
         })
         ponderGroup.addArrangedSubview(host.makeHairline())
-        ponderGroup.addArrangedSubview(switchRow(host: host, title: "触屏思索按钮",
-            isOn: SettingsStore.ponderTouchButtonEnabled) {
-            SettingsStore.ponderTouchButtonEnabled = $0
-            Breadcrumbs.log("settings62.ponderButton=\($0)")
-        })
-        ponderGroup.addArrangedSubview(host.makeHairline())
-        ponderGroup.addArrangedSubview(buttonRow(host: host, title: "打开思索教程列表") { [weak host] in
+        ponderGroup.addArrangedSubview(buttonRow(host: host, title: "打开导播台（教程列表）") { [weak host] in
             guard let host else { return }
             Ponder62.presentList(from: host)
         })
         ponderGroup.addArrangedSubview(host.makeHairline())
         ponderGroup.addArrangedSubview(host.makeHintRow(
-            "教程提示在功能面首次使用时出现一次，读过不再弹（列表里可重置已读）。触屏思索按钮是墙面右下的「?」悬浮钮，点开即教程列表；开关变更下次进墙生效。"))
+            "教程提示在功能面首次使用时出现一次，读过不再弹（列表里可重置已读）。导播台入口在工作台顶部控制台底行（灯泡「导播台」），点开即分章教程列表。（73 起原左上角独立浮灯泡撤除、收进控制台；旧「触屏思索按钮」开关已无对应物，一并下线。）"))
         stack.addArrangedSubview(ponderGroup)
         reg(ponderGroup, 6)
     }

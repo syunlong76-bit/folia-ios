@@ -166,6 +166,18 @@ final class PetIslandLayer: UIView {
     /// 定、窗 bounds 同步与 proxy 序位，失守即修复并落
     /// island.refront（不再对本层 bringSubviewToFront）。
     private var refrontTimer: Timer?
+    /// 转场期守护暂停计数（(73)，全实例共享）：旋转/入场转
+    /// 场在飞时守护拍跳过修复——bounds 变化分支会在旋转动
+    /// 画中途于主线程整层 reseatAll，与转场抢帧（(72) 入场
+    /// framedrops topcallers 含 island.refront=3.0ms、单帧
+    /// maxGap 185.4ms 的共犯）。墙面转场方在 freeze 时 +1、
+    /// 落定 completion 里 −1 并即时补一拍 refrontIfNeeded，
+    /// 几何同步不丢、只是延后到落定帧之后。
+    private static var refrontSuspendCount = 0
+    static func setRefrontSuspended(_ suspended: Bool) {
+        if suspended { refrontSuspendCount += 1 }
+        else { refrontSuspendCount = max(0, refrontSuspendCount - 1) }
+    }
     /// 层序面包屑去重签名（3.7 (46)）：island.layer.state 只在
     /// 序位/上方邻居变化时落盘，防 0.5s 守护拍刷屏。
     private var lastLayerStateSignature = ""
@@ -286,6 +298,10 @@ final class PetIslandLayer: UIView {
     }
 
     private func refrontIfNeeded(logged: Bool) {
+        // (73) 转场在飞：整拍跳过（计时登记也免，防暂停期
+        // 的零活污染 topcallers 口径）；落定后转场方会即时
+        // 补调一拍，修复不丢。
+        guard Self.refrontSuspendCount == 0 else { return }
         // (58) 掉帧量测：本守护是嫌疑#3（入场期被 SceneDelegate
         // 反复触发），整段耗时登记进 EntryCallbackTimings，
         // 入场 teardown 汇总 top3 与 >50ms 帧间隔对位。

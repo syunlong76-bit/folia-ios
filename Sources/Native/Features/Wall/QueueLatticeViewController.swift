@@ -675,17 +675,20 @@ final class QueueLatticeViewController: UIViewController,
         rotationGeneration += 1
         let generation = rotationGeneration
         wallLayout.setRotationFrozen(true)
+        // (73) 岛层守护转场期暂停（同主页墙）。
+        PetIslandLayer.setRefrontSuspended(true)
         Breadcrumbs.log("lattice.rotate freeze gen=\(generation)")
-        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+        coordinator.animate(alongsideTransition: { [weak self] _ in
             guard let self else { return }
-            guard generation == self.rotationGeneration else {
-                Breadcrumbs.log("lattice.rotate stale gen=\(generation)")
-                return
-            }
+            // (73) 重排提前到转场首帧（同主页墙 (73) 注）：
+            // 本墙的缩放档随新宽重定原本压在 completion——
+            // 落定帧整墙换档即肉眼「再放大」；提前到首帧后
+            // 新档随转场刚性旋转呈现，落定无尺度跳变。
+            guard generation == self.rotationGeneration else { return }
             self.wallLayout.setRotationFrozen(false)
-            // 落地：缩放档随新宽重定、偏移重钉中心单元、原点按
-            // 新场钳制——网格列数随新宽高比重排（键含尺寸类别，
-            // 失效后 prepare 自动重算）。
+            // 缩放档随新宽重定、偏移重钉中心单元、原点按新
+            // 场钳制——网格列数随新宽高比重排（键含尺寸类
+            // 别，失效后 prepare 自动重算）。
             self.wallLayout.cameraScale = Self.cameraScale(forWidth: size.width)
             let cell = self.wallLayout.cellViewSize
             self.collectionView.contentOffset = CGPoint(x: cell.width, y: cell.height)
@@ -693,6 +696,14 @@ final class QueueLatticeViewController: UIViewController,
             self.wallLayout.invalidateLayout()
             if self.wallLayout.lastIdentityChanged {
                 self.collectionView.reloadData()
+            }
+        }) { [weak self] _ in
+            guard let self else { return }
+            PetIslandLayer.setRefrontSuspended(false)
+            PetIslandLayer.shared.refrontIfNeeded()
+            guard generation == self.rotationGeneration else {
+                Breadcrumbs.log("lattice.rotate stale gen=\(generation)")
+                return
             }
             Breadcrumbs.log("lattice.rotate land gen=\(generation)"
                 + " instances=\(self.wallLayout.instances.count)")

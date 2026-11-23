@@ -153,17 +153,16 @@ final class PetHomeRegistry {
     }
 
     private func runReconcile(reason: String) {
-        // 全局关：只动岛民（在台上的双人组归台上 dismiss 流，
-        // 不在此强制改道，防归属与在场破裂）。
-        if !StickerSettings.miniPetsEnabled {
-            var departed = 0
-            for asset in Self.islandFixedDuo where home(of: asset) == .island {
-                setHome(asset, .pool)
-                departed += 1
-            }
-            Breadcrumbs.log("isl.boot r=\(reason) off departed=\(departed)")
-            return
-        }
+        // (73) 解耦定案：岛民落座不再过 miniPetsEnabled 闸。
+        // (72) 真机实证——该开关被爪印钮/长按宠物的「关闭」
+        // 语义持久化写 false 后（Miller (70)/(71) 验收爪印钮
+        // 时关过），此后每次 reconcile 都走 off 分支提前返回，
+        // 落座裁决永不执行：isl.gate/isl.seat.*/isl.drive 全
+        // 程 0 次、日志只有 isl.boot off 一行。但 Miller 定版
+        // 里岛民是常驻固定双人组，唯一认可的撤岛口径是汪汪
+        // 队样式（islandSuspended，见下段闸）；迷你台开关只
+        // 管台上 cast 的召唤与否，不辖岛民。开关态只记进
+        // isl.boot 的 bar= 字段供对账，不再拦裁决。
         if reason == "active", !introDone {
             Breadcrumbs.log("isl.gate why=intro r=active")
             return
@@ -194,7 +193,8 @@ final class PetHomeRegistry {
                 decisions.append("\(asset):onstage")
             }
         }
-        Breadcrumbs.log("isl.boot r=\(reason) \(decisions.joined(separator: " "))")
+        Breadcrumbs.log("isl.boot r=\(reason) \(decisions.joined(separator: " "))"
+            + " bar=\(StickerSettings.miniPetsEnabled ? "on" : "off")")
     }
     var stageBarResidents: [String] {
         homes.filter { $0.value == .stageBar }.map { $0.key }

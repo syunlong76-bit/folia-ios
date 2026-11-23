@@ -1927,20 +1927,29 @@ final class WallPrototypeViewController: UIViewController,
         wallRotationGeneration += 1
         let generation = wallRotationGeneration
         wallLayout.setRotationFrozen(true)
+        // (73) 岛层守护转场期暂停（同主页墙）。
+        PetIslandLayer.setRefrontSuspended(true)
         Breadcrumbs.log("wall.rotate freeze gen=\(generation) wall=tracks"
             + " from=\(Int(fromSize.width))x\(Int(fromSize.height))"
             + " to=\(Int(size.width))x\(Int(size.height))")
-        coordinator.animate(alongsideTransition: nil) { [weak self] _ in
+        coordinator.animate(alongsideTransition: { [weak self] _ in
             guard let self else { return }
-            guard generation == self.wallRotationGeneration else {
-                Breadcrumbs.log("wall.rotate superseded gen=\(generation) wall=tracks")
-                return
-            }
+            // (73) 重排提前到转场首帧（同主页墙 (73) 注）：
+            // 落定帧不再有旧布局→新布局的 snap。
+            guard generation == self.wallRotationGeneration else { return }
             self.wallLayout.setRotationFrozen(false)
             self.wallLayout.invalidateLayout()
             // prepare 若因尺寸类别变化换了实例集，同步 reload。
             if self.wallLayout.lastIdentityChanged {
                 self.collectionView.reloadData()
+            }
+        }) { [weak self] _ in
+            guard let self else { return }
+            PetIslandLayer.setRefrontSuspended(false)
+            PetIslandLayer.shared.refrontIfNeeded()
+            guard generation == self.wallRotationGeneration else {
+                Breadcrumbs.log("wall.rotate superseded gen=\(generation) wall=tracks")
+                return
             }
             Breadcrumbs.log("wall.rotate landed gen=\(generation) wall=tracks"
                 + " size=\(Int(size.width))x\(Int(size.height))"

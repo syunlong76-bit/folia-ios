@@ -11,8 +11,9 @@ import UIKit
 ///   板 / 速记簿 / 搜索（手势快捷总开关关时不装）。
 /// - 长按工具条打开命令面板：长按手势挂在墙视图顶部工具条
 ///   区域（工具条本体由 WA/WC 维护，本钩子只认其帧区域）。
-/// - 触屏思索按钮：左上角悬浮小灯泡钮（ponderTouchButtonEnabled；
-///   (70) C 组由右下角「?」钮改版，见 installPonderButtonIfNeeded）。
+/// - 触屏思索按钮：(73) 撤除——独立浮灯泡收进工作台顶部
+///   控制台作「导播台」入口（WorkbenchOverlayHostView 的
+///   .guide 行 → Ponder62.presentList），本文件不再安装。
 /// - 启动后直达播放界面：entryDidFinish 在入场播完/关闭的
 ///   落点调用，开关开且引擎已装载时走宿主既有
 ///   openNativeStageForBackgroundReturn 通路。
@@ -21,10 +22,6 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
     private static var instances: [ObjectIdentifier: WB62HomeWallHooks] = [:]
 
     private weak var host: HomeWallViewController?
-    private var ponderButton: UIButton?
-    /// 思索钮变淡计时（3.7 (70) C 组）：出现/交互后 3 秒无
-    /// 操作自动变淡，任一交互取消重排。
-    private var ponderDimWorkItem: DispatchWorkItem?
 
     static func install(in host: HomeWallViewController) {
         let key = ObjectIdentifier(host)
@@ -72,7 +69,8 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
             host.view.addGestureRecognizer(longPress)
             Breadcrumbs.log("shortcuts62.gestures installed swipeLeft=\(SettingsStore.swipeLeftTarget) longPressPalette=\(SettingsStore.longPressToolbarCommandPalette)")
         }
-        installPonderButtonIfNeeded()
+        // (73) 独立浮灯泡已撤除（收进工作台控制台「导播
+        // 台」行），此处不再安装任何悬浮钮。
     }
 
     // MARK: 动态背景门控
@@ -137,89 +135,6 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
             if let found = findDrawer(in: subview) { return found }
         }
         return nil
-    }
-
-    // MARK: 思索按钮（(70) C 组改版：小灯泡·左上角·3 秒变淡）
-    //
-    // Miller 定版规格：原右下角紫色「?」圆钮改为小灯泡图
-    // 标（Lucide bulb 形态——包内无 Lucide 字体资产，以 SF
-    // Symbol lightbulb 的同形线框字形落，报告已注明）、移
-    // 左上角安全区内（右下角让给 (70) 全局宠物召唤钮）；
-    // tap 功能不变，仍走 Ponder62.presentList 导览入口。
-    // 显隐：出现/任一交互后全透明度，3 秒无操作自动变淡
-    // 到 0.25（仍可见、仍可点，不是隐藏/移除）；交互＝钮
-    // 自身点按＋墙面任意点按（不消费触摸的观察识别器），
-    // 每次交互恢复全透明并重新计时。动效守 iOS 口径：
-    // 恢复 0.2s、变淡 0.5s easeOut 缓动。
-
-    private static let ponderDimDelay: TimeInterval = 3
-    private static let ponderDimmedAlpha: CGFloat = 0.25
-
-    private func installPonderButtonIfNeeded() {
-        guard SettingsStore.ponderTouchButtonEnabled, let host else { return }
-        let button = UIButton(type: .system)
-        let config = UIImage.SymbolConfiguration(pointSize: 19, weight: .semibold)
-        button.setImage(UIImage(systemName: "lightbulb", withConfiguration: config),
-                        for: .normal)
-        button.tintColor = .white
-        // (72) 透明底（Miller (71) 验收点名：紫蓝底太丑）：
-        // 撤一切底色/圆底，只留白色灯泡字形本体；可读性靠
-        // 字形自身的深色柔影兜底（压在亮封面上也不消失）。
-        button.backgroundColor = .clear
-        button.layer.cornerRadius = 20
-        button.imageView?.layer.shadowColor = UIColor.black.cgColor
-        button.imageView?.layer.shadowOffset = CGSize(width: 0, height: 1)
-        button.imageView?.layer.shadowRadius = 4
-        button.imageView?.layer.shadowOpacity = 0.65
-        button.translatesAutoresizingMaskIntoConstraints = false
-        button.addAction(UIAction { [weak self] _ in
-            guard let self, let host = self.host else { return }
-            self.pokePonderButton()
-            Ponder62.presentList(from: host)
-        }, for: .touchUpInside)
-        host.view.addSubview(button)
-        NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 40),
-            button.heightAnchor.constraint(equalToConstant: 40),
-            button.leadingAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.leadingAnchor, constant: 14),
-            button.topAnchor.constraint(equalTo: host.view.safeAreaLayoutGuide.topAnchor, constant: 10)
-        ])
-        ponderButton = button
-        // 墙面任意点按＝交互：不消费触摸的观察识别器，只
-        // 负责给变淡计时续命，不拦任何既有手势链。
-        let pokeTap = UITapGestureRecognizer(target: self, action: #selector(handlePonderPokeTap))
-        pokeTap.cancelsTouchesInView = false
-        pokeTap.delegate = self
-        host.view.addGestureRecognizer(pokeTap)
-        pokePonderButton()
-        Breadcrumbs.log("ponder62.button installed")
-    }
-
-    @objc private func handlePonderPokeTap() {
-        pokePonderButton()
-    }
-
-    /// 交互落点：立即恢复全透明（已全透明时只续计时），
-    /// 并重排 3 秒变淡。
-    private func pokePonderButton() {
-        guard let button = ponderButton else { return }
-        ponderDimWorkItem?.cancel()
-        if button.alpha < 1 {
-            UIView.animate(withDuration: 0.2, delay: 0,
-                           options: [.curveEaseOut, .beginFromCurrentState]) {
-                button.alpha = 1
-            }
-        }
-        let work = DispatchWorkItem { [weak button] in
-            guard let button, button.window != nil else { return }
-            UIView.animate(withDuration: 0.5, delay: 0,
-                           options: [.curveEaseOut, .beginFromCurrentState]) {
-                button.alpha = Self.ponderDimmedAlpha
-            }
-        }
-        ponderDimWorkItem = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + Self.ponderDimDelay,
-                                      execute: work)
     }
 
     // MARK: UIGestureRecognizerDelegate

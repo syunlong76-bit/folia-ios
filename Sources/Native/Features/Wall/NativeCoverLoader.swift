@@ -312,15 +312,16 @@ final class NativeCoverLoader {
         return decoded.image
     }
 
-    /// (72) -1004 断连自愈（与 NativeDataClient 同口径）：
-    /// LocalServer 同端口重试的 1 秒空窗里封面取图必被拒，
-    /// 等监听真活后重发一次，不把空窗算成加载失败。
+    /// -1004 断连自愈（与 NativeDataClient 同口径）：(73)
+    /// 改走 ensureAlive——探针实测判死后 restart 强制重建，
+    /// 等新监听真 ready 再重发一次（(72) 的 start()+
+    /// waitUntilAlive 在挂起静默死亡时整体失效，见
+    /// NativeDataClient 同名注释）。
     private func fetchDataWithConnectRetry(_ url: URL) async throws -> (Data, URLResponse) {
         do {
             return try await session.data(from: url)
         } catch let error as URLError where error.code == .cannotConnectToHost {
-            LocalServer.shared.start()
-            _ = await LocalServer.shared.waitUntilAlive(timeout: 2)
+            _ = await LocalServer.shared.ensureAlive(timeout: 3)
             return try await session.data(from: url)
         }
     }

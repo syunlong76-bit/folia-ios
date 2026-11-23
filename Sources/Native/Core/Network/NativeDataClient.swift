@@ -192,17 +192,16 @@ final class NativeDataClient {
         do {
             (data, response) = try await session.data(for: request)
         } catch {
-            // (72) -1004 断连自愈：LocalServer 监听 failed 后
-            // 同端口 1 秒重试的空窗里连接必被拒（(71) 日志两
-            // 个歌单各中招两轮才靠上层重试成功）。此处等监听
-            // 真活后整请求重发一次（start() 幂等：终局失败已
-            // 复位标志时顺带把服务拉起来），不再把空窗抛给
-            // 页面当加载失败。
+            // -1004 断连自愈：(72) 版走 start()+waitUntilAlive，
+            // (72) 真机定案失效——挂起静默死亡时 start() 被幂
+            // 等锁空转、listenerAlive 过期恒 true 把等待即刻
+            // 放行，重发必再撞 -1004。(73) 改走 ensureAlive：
+            // 探针实测判死 → restart 强制重建 → 等新监听真
+            // ready 后整请求重发一次。
             if !retriedAfterConnect,
                let urlError = error as? URLError,
                urlError.code == .cannotConnectToHost {
-                LocalServer.shared.start()
-                _ = await LocalServer.shared.waitUntilAlive(timeout: 3)
+                _ = await LocalServer.shared.ensureAlive(timeout: 4)
                 Breadcrumbs.log("data.retry connect path=\(path)")
                 return try await getJSONImpl(
                     path, query: query, retriedAfter301: retriedAfter301,

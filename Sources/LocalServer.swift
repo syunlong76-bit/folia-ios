@@ -92,6 +92,96 @@ final class LocalServer {
         return listenerAlive
     }
 
+    /// 死亡待恢复旗（(73)）：任一死亡路径（.failed／非自愿
+    /// .cancelled／waiting 守望超时／探针判死）置位，下一次
+    /// .ready 落 srv.back 自证后清零——桥日志凭 srv.dead →
+    /// srv.restart → srv.back 三行判服务器死过又活过来。
+    private var hadDied = false
+    /// restart 退避防抖（(73)）：2 秒内重复调用合并为一次，
+    /// 被合并的调用补排一次延后重试，不让并发自愈互相踩。
+    private var lastRestartAt: Date?
+    private let restartLock = NSLock()
+    private var deferredRestartScheduled = false
+
+    /// 强制重启（(73)）：start() 的幂等锁只在 attempt 终局
+    /// 失败时复位；监听「静默死亡」（App 挂起期间系统收走
+    /// socket、状态回调不达 .failed——(72) 真机实证：挂起
+    /// 约 8 分钟后全量 -1004、listenerAlive 恒 true、无任何
+    /// server failed 面包屑）时，start() 是空转、waitUntilAlive
+    /// 被过期标志即刻放行，自愈链整体失效。本方法是唯一绕
+    /// 过幂等锁的恢复口：取消旧监听、清标志与端口、全量重
+    /// 新 attempt。清 listenerAlive 在 cancel 之前——旧监听
+    /// 的 .cancelled 回调据此识别为自愿取消、不再重复报死。
+    func restart() {
+        restartLock.lock()
+        let now = Date()
+        if let last = lastRestartAt, now.timeIntervalSince(last) < 2 {
+            if !deferredRestartScheduled {
+                deferredRestartScheduled = true
+                listenerQueue.asyncAfter(deadline: .now() + 2.5) { [weak self] in
+                    guard let self else { return }
+                    self.restartLock.lock()
+                    self.deferredRestartScheduled = false
+                    self.restartLock.unlock()
+                    if !self.listenerAlive { self.restart() }
+                }
+            }
+            restartLock.unlock()
+            return
+        }
+        lastRestartAt = now
+        restartLock.unlock()
+        Breadcrumbs.log("srv.restart")
+        listenerAlive = false
+        listener?.cancel()
+        listener = nil
+        port = 0
+        samePortRetries = 0
+        startRequested = false
+        startBeganAt = nil
+        start()
+    }
+
+    /// 回环探针（(73)）：真向 127.0.0.1:port 发起一次 TCP
+    /// 连接判生死——.ready 即活，.failed/.cancelled/超时即
+    /// 死。不信 listenerAlive 标志：静默死亡时标志停留在
+    /// true（(72) 定案），只有实测连接能判真死。
+    func probeLoopback(timeout: TimeInterval) async -> Bool {
+        guard port != 0,
+              let nwPort = NWEndpoint.Port(rawValue: port) else { return false }
+        let connection = NWConnection(host: "127.0.0.1", port: nwPort, using: .tcp)
+        return await withCheckedContinuation { continuation in
+            let box = LoopbackProbeBox(continuation)
+            connection.stateUpdateHandler = { state in
+                switch state {
+                case .ready: box.finish(true, connection)
+                case .failed, .cancelled: box.finish(false, connection)
+                default: break
+                }
+            }
+            connection.start(queue: DispatchQueue(label: "com.miller.folia.probe"))
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                box.finish(false, connection)
+            }
+        }
+    }
+
+    /// 自愈入口（(73)，数据层/封面层 -1004 与回前台共用）：
+    /// 标志称活也须探针实测；实测死了走 restart 强制重建，
+    /// 再等新监听真 ready（restart 已同步清标志，
+    /// waitUntilAlive 不会被过期标志放行）。
+    func ensureAlive(timeout: TimeInterval) async -> Bool {
+        if listenerAlive {
+            if await probeLoopback(timeout: 0.8) { return true }
+            // 标志称活、探针判死：静默死亡坐实，落死亡自证。
+            listenerAlive = false
+            hadDied = true
+            Breadcrumbs.log("srv.dead why=probe")
+        }
+        restart()
+        return await waitUntilAlive(timeout: timeout)
+    }
+
     private func attempt(port: UInt16, retriesLeft: Int) {
         guard let nwPort = NWEndpoint.Port(rawValue: port) else { return }
         let params = NWParameters.tcp
@@ -121,6 +211,10 @@ final class LocalServer {
                 self.listenerAlive = true
                 self.port = port
                 self.samePortRetries = 0
+                if self.hadDied {
+                    self.hadDied = false
+                    Breadcrumbs.log("srv.back port=\(port)")
+                }
                 Breadcrumbs.log("server ready port=\(port)")
                 if let began = self.startBeganAt {
                     let ms = Int(Date().timeIntervalSince(began) * 1000)
@@ -136,6 +230,8 @@ final class LocalServer {
                 }
             case .failed(let error):
                 self.listenerAlive = false
+                self.hadDied = true
+                Breadcrumbs.log("srv.dead why=fail")
                 Breadcrumbs.log("server failed port=\(port)")
                 NSLog("[LocalServer] failed on \(port): \(error)")
                 FoliaBridgeLogStore.shared.write(
@@ -185,7 +281,31 @@ final class LocalServer {
                     }
                 } else {
                     NSLog("[LocalServer] waiting on \(port): \(error)")
+                    // (73) 守望：waiting 久不转 ready 可能是
+                    // 监听已被系统收走（挂起恢复期）；3 秒后
+                    // 仍非真活且本监听仍是现任，判死走重建。
+                    // 瞬态 waiting 转 ready 后 listenerAlive
+                    // 为真、守望自动落空，不误杀。
+                    let watched = listener
+                    self.listenerQueue.asyncAfter(deadline: .now() + 3) { [weak self] in
+                        guard let self, self.listener === watched,
+                              !self.listenerAlive else { return }
+                        self.hadDied = true
+                        Breadcrumbs.log("srv.dead why=wait")
+                        self.restart()
+                    }
                 }
+            case .cancelled:
+                // (73)：非自愿取消与 .failed 同级死亡。旧版
+                // 本 case 落 default 无人处理——监听被系统取
+                // 消时标志恒 true、全员以为它活着。自愿取消
+                // （.failed 收尾的 cancel、restart 的 cancel）
+                // 发生时 listenerAlive 已先行清零，据此落空。
+                guard self.listenerAlive else { return }
+                self.listenerAlive = false
+                self.hadDied = true
+                Breadcrumbs.log("srv.dead why=cancel")
+                self.restart()
             default:
                 break
             }
@@ -656,6 +776,26 @@ private final class ConnectionHandler {
         guard !finished else { return }
         finished = true
         server?.handlerFinished(self)
+    }
+}
+
+/// 回环探针的续体收口（(73)）：状态回调与超时兜底两路并发
+/// 抵达，只许先到者兑现一次，后到者只负责取消连接。
+private final class LoopbackProbeBox {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+
+    init(_ continuation: CheckedContinuation<Bool, Never>) {
+        self.continuation = continuation
+    }
+
+    func finish(_ alive: Bool, _ connection: NWConnection) {
+        lock.lock()
+        let pending = continuation
+        continuation = nil
+        lock.unlock()
+        connection.cancel()
+        pending?.resume(returning: alive)
     }
 }
 
