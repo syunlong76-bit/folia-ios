@@ -127,13 +127,27 @@ final class PetIslandLayer: UIView {
 
     static let shared = PetIslandLayer()
 
-    private static let petSize: CGFloat = 46
-    /// 脚底线（3.7 (44) 改回岛中，(41) 口径）：脚底 45、帧
-    /// y∈[−1,45]，宠物坐进岛里（头顶露上沿、身体藏胶囊
-    /// 后）。(43) 的 93（下沿出岛）真机被判突兀已回退，勿
-    /// 按 (43) 口径调；落座几何不随 (53) M 的居民改定动
-    /// （容量/站位/选角的 M 口径见文件头文末 M 段）。
-    private static let seatFeetY: CGFloat = 45
+    /// (74) 第 10 项重定（Miller 19:52 口径，推翻 (44)）：旧
+    /// 座位（46pt、脚底 45、偏移 ±40）算出的宠物框与岛框
+    /// （x 133.5–259.5、y 11–48）几乎完全重合，而应用窗口
+    /// 合成在系统岛层之下——身体全被岛体盖住、只剩头顶
+    /// 一线露在岛上沿外（(73) 真机截图实证），(44)「身体
+    /// 藏胶囊后」的旧设计就此作废。新口径：宠物整只落在
+    /// 岛框左右两侧的真像素带里、紧贴岛框边缘，身后垫一
+    /// 块与岛框同高同圆角的纯黑框底把剪影接成一整条岛
+    /// 框，整只在框内可见、不许只露局部。
+    private static let petSize: CGFloat = 38
+    /// 岛框几何（iPhone 14 Pro，文件头实测口径）：顶距
+    /// ≈11、高 ≈37（底 ≈48）、半宽 ≈63。
+    private static let islandTopY: CGFloat = 11
+    private static let islandHeight: CGFloat = 37
+    private static let islandHalfWidth: CGFloat = 63
+    /// 槽位中心偏移：岛半宽 + 3pt 缝 + 宠物半宽（=85）；
+    /// 左槽中心 x=111.5（框 92.5–130.5，距岛框左缘 3pt），
+    /// 右槽对称。脚底线与岛框底对齐（48）。
+    private static let slotOffset: CGFloat =
+        islandHalfWidth + 3 + petSize / 2
+    private static let seatFeetY: CGFloat = islandTopY + islandHeight
     /// petRootLayer 的 zPosition（(53) G，DS 终审路线 c）：
     /// 与 window.layer 的其它直属子层（根视图层/呈现容器层）
     /// 同级竞争，10000 恒压其上。停靠层的 999 是窗口子视图
@@ -145,6 +159,14 @@ final class PetIslandLayer: UIView {
     private static let proxyZoneHeight: CGFloat = 120
 
     private var pets: [IslandPetView] = []
+    /// (74) 岛框黑底：与真岛同高（37）同圆角（18.5）的纯
+    /// 黑圆角块，横跨左右槽位与岛框全宽，垫在宠物身后，
+    /// 使「宠物＋框底＋真岛」读作一整条岛框剪影（障眼法
+    /// 对位：应用像素进不了岛框本体，只能把框向两侧延
+    /// 伸到真像素带里）。无宠物/横屏时隐藏。
+    private var islandBackdrop74: UIView?
+    /// 落点自证去重签名（isl.perch74 只在落点变化时落）。
+    private var lastPerchSignature74 = ""
     private var tickTimer: Timer?
     /// 宿主主窗（(53) G）：本层视图本体不再进窗，petRootLayer
     /// （= 本层 layer）直挂它的 layer；hostWindow 只作 graft
@@ -464,7 +486,13 @@ final class PetIslandLayer: UIView {
         // 横屏保守隐藏（岛不在顶部）；竖屏恢复。
         let show = isPortrait
         for pet in pets { pet.isHidden = !show }
-        if !show { hideBubble() }
+        if !show {
+            hideBubble()
+            islandBackdrop74?.removeFromSuperview()
+            islandBackdrop74 = nil
+        } else {
+            syncIslandBackdrop74()
+        }
     }
 
     // MARK: 落座 / 撤下
@@ -557,20 +585,15 @@ final class PetIslandLayer: UIView {
     private func reseatAll(animated: Bool) {
         guard isPortrait else { return }
         let cx = bounds.width / 2
-        // 站位表（(53) M 改定）：居民恒为固定双人组、容量 2，
-        // 站位只剩两档——双只 [−40,+40]（(43) 双只表原值，
-        // 两只以岛中线对称分列＝双人居中口径）、单只 [0]
-        // 居中（一只被召回/尚未到岛的过渡态）。(43) 三只表
-        // [−54,0,+54] 随容量 3 一并退役（第三只不可能落座）。
-        // 席位按双人组序分配（cat-live 左、dog-11 右），与
-        // 到岛先后无关，站位恒定。
-        let offsets: [CGFloat] = pets.count >= 2 ? [-40, 40] : [0]
-        let ordered = pets.sorted {
-            (PetHomeRegistry.islandFixedDuo.firstIndex(of: $0.asset) ?? .max)
-                < (PetHomeRegistry.islandFixedDuo.firstIndex(of: $1.asset) ?? .max)
-        }
-        for (index, pet) in ordered.enumerated() {
-            let offset: CGFloat = index < offsets.count ? offsets[index] : 0
+        // (74) 站位表（推翻 (53) M 的 ±40/单只居中）：槽位
+        // 按双人组序号定死——cat-live（序 0）恒左槽、dog-11
+        // （序 1）恒右槽，单只在场也不串位、不居中（居中=
+        // 钻回岛体正下方死区）。左右槽紧贴岛框边缘、脚底
+        // 与岛框底对齐，整只在真像素带内。
+        for pet in pets {
+            let duoIndex = PetHomeRegistry.islandFixedDuo
+                .firstIndex(of: pet.asset) ?? 0
+            let offset = duoIndex == 0 ? -Self.slotOffset : Self.slotOffset
             pet.seatFeet = CGPoint(x: cx + offset, y: Self.seatFeetY)
             let target = CGPoint(x: pet.seatFeet.x,
                                  y: pet.seatFeet.y - Self.petSize / 2)
@@ -583,6 +606,50 @@ final class PetIslandLayer: UIView {
             } else if pet.center == .zero || !isAnimatingArrival(pet) {
                 pet.center = target
             }
+        }
+        syncIslandBackdrop74()
+        // 落点自证（落点/名单变化才落）：坐标为窗口系实测
+        // 框，form=pill 表示系统岛处于收起胶囊形态的对位
+        // 基准（应用侧无岛形态观测 API，展开等系统事件期
+        // 间系统层恒压应用层、属平台行为，见交付报告）。
+        let frames = pets.map {
+            "\($0.asset)=\(Int($0.frame.minX))..\(Int($0.frame.maxX))"
+        }.joined(separator: " ")
+        let signature = "\(Int(bounds.width))|\(frames)"
+        if signature != lastPerchSignature74, !pets.isEmpty {
+            lastPerchSignature74 = signature
+            Breadcrumbs.log("isl.perch74 \(frames) form=pill")
+        }
+    }
+
+    /// (74) 框底同步：横跨「左槽左缘−10 … 右槽右缘+10」
+    /// （恒定全宽，不随单/双只变化，剪影稳定），y/高/圆
+    /// 角与真岛框一致；无宠物时移除。垫在所有宠物之下。
+    private func syncIslandBackdrop74() {
+        guard isPortrait, !pets.isEmpty else {
+            islandBackdrop74?.removeFromSuperview()
+            islandBackdrop74 = nil
+            return
+        }
+        let backdrop: UIView
+        if let existing = islandBackdrop74 {
+            backdrop = existing
+        } else {
+            backdrop = UIView()
+            backdrop.backgroundColor = .black
+            backdrop.layer.cornerRadius = Self.islandHeight / 2
+            backdrop.isUserInteractionEnabled = false
+            islandBackdrop74 = backdrop
+        }
+        let cx = bounds.width / 2
+        let halfSpan = Self.slotOffset + Self.petSize / 2 + 10
+        backdrop.frame = CGRect(x: cx - halfSpan, y: Self.islandTopY,
+                                width: halfSpan * 2,
+                                height: Self.islandHeight)
+        if backdrop.superview !== self {
+            insertSubview(backdrop, at: 0)
+        } else {
+            sendSubviewToBack(backdrop)
         }
     }
 
