@@ -292,6 +292,25 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     private func routeStep() {
         guard routeState == .routing else { return }
         let generation = routeGeneration
+        // (77) ⑥认领先行：细条触摸在飞（用户正在点播放条）
+        // 时 route 不许呈现——呈现转场会取消在飞触摸（(76)
+        // 日志实证 tap 与 settle 同毫秒相撞、点按死于
+        // at=cancel）。hold 期间短延迟让行、不计 attempts，
+        // 触摸落定（点按展开或取消）后 route 自行续步。
+        if RouteInteractionHold.shared.isHeld {
+            if routeLastRetryReason != "user-hold" {
+                routeLastRetryReason = "user-hold"
+                Breadcrumbs.log("nowplaying.route retry gen=\(generation)"
+                    + " reason=user-hold attempt=\(routeAttempts)")
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                [weak self] in
+                guard let self, self.routeState == .routing,
+                      self.routeGeneration == generation else { return }
+                self.routeStep()
+            }
+            return
+        }
         routeAttempts += 1
         guard let window, let root = window.rootViewController else {
             routeRetryOrGiveUp(generation: generation, reason: "no-window")
@@ -304,7 +323,7 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 前置 = 引擎真装载（(45) R-1 口径）：短重试窗内等装载
         // 落地，窗尽仍空按纸面队列细分终局原因，不开空舞台。
         guard PlaybackEngine.shared.currentTrack != nil else {
-            if routeAttempts < 10 {
+            if routeAttempts < 6 {
                 routeRetryOrGiveUp(generation: generation, reason: "no-current-track")
             } else {
                 let paper = QueueManager.shared.currentTrack != nil
@@ -396,11 +415,13 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         return nil
     }
 
-    /// 短重试：0.12s 一拍、上限 10 拍（≈1.2s + 决策耗时），同
-    /// 原因只落一行 retry 痕防刷屏；窗尽 giveup。
+    /// 短重试（(77) ⑥收敛）：退避 0.12/0.25/0.5s、上限 6
+    /// 拍——(76) 日志里 gen=9–12 反复以 0.12s×10 拍烧完再
+    /// giveup 的重试风暴收口为退避＋减拍，同原因仍只落一
+    /// 行 retry 痕；窗尽 giveup。
     private func routeRetryOrGiveUp(generation: Int, reason: String) {
         guard routeState == .routing, generation == routeGeneration else { return }
-        if routeAttempts >= 10 {
+        if routeAttempts >= 6 {
             routeGiveUp(generation: generation, reason: "unstable-\(reason)")
             return
         }
@@ -408,7 +429,9 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             routeLastRetryReason = reason
             Breadcrumbs.log("nowplaying.route retry gen=\(generation) reason=\(reason) attempt=\(routeAttempts)")
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) { [weak self] in
+        let delay: TimeInterval = routeAttempts <= 2 ? 0.12
+            : (routeAttempts <= 4 ? 0.25 : 0.5)
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) { [weak self] in
             guard let self, self.routeState == .routing,
                   self.routeGeneration == generation else { return }
             self.routeStep()
@@ -532,6 +555,34 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         return presentedChain(from: root)
             .map { String(describing: type(of: $0)) }
             .joined(separator: ">")
+    }
+}
+
+/// (77) ⑥条触摸认领旗：收起态播放条触摸在飞期间置位，
+/// nowplaying.route 的呈现步骤咨询本旗让行（认领先于路由
+/// 仲裁）。引用计数配对 begin/end，另设 1.5s 自动过期兜
+/// 底——任何路径漏 end 都不会把 route 永久堵死。
+final class RouteInteractionHold {
+    static let shared = RouteInteractionHold()
+    private var count = 0
+    private var lastBegin: CFTimeInterval = 0
+
+    func begin() {
+        count += 1
+        lastBegin = CACurrentMediaTime()
+    }
+
+    func end() {
+        count = max(0, count - 1)
+    }
+
+    var isHeld: Bool {
+        guard count > 0 else { return false }
+        if CACurrentMediaTime() - lastBegin > 1.5 {
+            count = 0
+            return false
+        }
+        return true
     }
 }
 

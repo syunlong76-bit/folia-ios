@@ -494,3 +494,20 @@ private final class SnowBankView: UIView {
         maskLayer.path = path.cgPath
     }
 }
+
+extension UIColor {
+    /// (77) ②未填充轨道色：与填充同色相的实色压暗（亮度
+    /// ×0.42、饱和微降、alpha 恒 1）——(74) 的「填充同色
+    /// 25% 透明」在封面砖面上与填充混成前暗后橙的双截
+    /// 观感（Miller (76) 图4 点名），本版全条统一为现行
+    /// 后半段主题色、进度辨识改走同色系明度差。白色填充
+    /// （缺省主题）压暗后为深灰实轨，与白填充可辨。
+    func foliaDarkenedTrack77() -> UIColor {
+        var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        guard getHue(&h, saturation: &s, brightness: &b, alpha: &a)
+        else { return self }
+        return UIColor(hue: h,
+                       saturation: min(1, s * 0.92 + 0.04),
+                       brightness: b * 0.42, alpha: 1)
+    }
+}

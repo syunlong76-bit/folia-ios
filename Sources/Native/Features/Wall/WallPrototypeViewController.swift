@@ -186,6 +186,7 @@ final class WallPrototypeViewController: UIViewController,
     /// 高度在完整/收起两形态间切换。
     private var miniBarWidthConstraint: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
+    private var miniBarBottomC: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
     /// (74) 小横线形态的轨道约束组（同主页墙口径）。
     private var miniTrackLeadC: NSLayoutConstraint?
@@ -611,6 +612,15 @@ final class WallPrototypeViewController: UIViewController,
             Breadcrumbs.log("minibar.dead76 host=wallproto at=noRecog"
                 + " recog=\(self.miniTapBits())")
         }
+        // (77) ⑥认领/救援接线：认领痕在 MiniBarHitView 内
+        // 落（claim77）；救援 = 静止短点被外部转场取消时
+        // 直接派发展开（disp77 via=rescue 与 claim 对位）。
+        bar.crumbHostTag = "wallproto"
+        bar.onCancelledTapRescue = { [weak self] in
+            guard let self, self.miniBarCollapsed else { return }
+            Breadcrumbs.log("minibar.disp77 host=wallproto via=rescue")
+            self.expandMiniBar()
+        }
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
@@ -823,13 +833,17 @@ final class WallPrototypeViewController: UIViewController,
         miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
         miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
         miniTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 134)
+        // (77) ②⑤：底锚存引用、按形态切换——展开 −10（窗
+        // 口爪印退役后无需再让位 −54）；收起 +31.5 使轨道
+        // 中心与 home indicator 中心重合（账见
+        // applyMiniBarBottom77）。先按展开值装配。
+        miniBarBottomC = bar.bottomAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10)
         NSLayoutConstraint.activate([
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
-            // (75) 第 5 项①：底锚 −10→−54，台身下缘恒在
-            // 爪印钮带之上 8pt（同主页墙注）。
-            bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -54),
+            miniBarBottomC!,
 
             miniTrackLeadC!,
             miniTrackTrailC!,
@@ -1042,13 +1056,16 @@ final class WallPrototypeViewController: UIViewController,
         let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        // (74) 第 6 项进度单色（同主页墙口径）：轨道 = 填充
-        // 同色 25% 透明，整条一个色相、两形态同规。
+        // (77) ②进度配色（推翻 (74) 的同色 25% 透明轨）：
+        // 全条统一为现行后半段主题色（填充色两形态同规，
+        // 收起态仅星空走强金兜底），未填充轨改同色系实色
+        // 压暗（foliaDarkenedTrack77）——明度差辨进度，
+        // 不再出现前暗后橙双截、不退纯白。
         let singleColor = miniBarCollapsed
             ? Self.miniCollapsedFillColor(for: miniTheme)
             : Self.miniFillColor(for: miniTheme)
         miniProgressFill.backgroundColor = singleColor
-        miniProgressTrack.backgroundColor = singleColor.withAlphaComponent(0.25)
+        miniProgressTrack.backgroundColor = singleColor.foliaDarkenedTrack77()
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
@@ -1211,6 +1228,9 @@ final class WallPrototypeViewController: UIViewController,
             return
         }
         Breadcrumbs.log("minibar.tap host=wallproto collapsed=1 action=expand")
+        // (77) ⑥派发环自证：与 claim77（认领）/minibar
+        // .expand（展开）三环同轴对位。
+        Breadcrumbs.log("minibar.disp77 host=wallproto via=tap")
         expandMiniBar()
     }
 
@@ -1517,9 +1537,34 @@ final class WallPrototypeViewController: UIViewController,
         setMiniBarForm(collapsed: geometryCollapsed)
     }
 
+    /// (77) ②底锚按形态落位：展开 −10（窗口爪印退役、不
+    /// 再让位）；收起与 home indicator 严丝合缝重合——几
+    /// 何账（iPhone 14 Pro）：安全区底 34、indicator
+    /// 134×5、底边距屏底 ≈8、中心在屏底上方 ≈10.5；收起
+    /// 轨道中心 = 台底 −8（台高 16、轨底 −5.5、轨高 5）。
+    /// 台底锚（相对安全区底）C 使轨道中心落 indicator 中
+    /// 心：C = 34 − 10.5 + 8 = +31.5。无 indicator 机型
+    /// （安全区底 0）回落 −10 防台身出屏。宠物层按
+    /// bar.frame 跟随（MiniBarPetStage.syncFrame），落位
+    /// 变更自动带宠物、无需另动。
+    private func applyMiniBarBottom77(collapsed: Bool) {
+        guard let bottomC = miniBarBottomC else { return }
+        let inset = view.window?.safeAreaInsets.bottom
+            ?? view.safeAreaInsets.bottom
+        bottomC.constant = collapsed
+            ? (inset > 0 ? 31.5 : -10) : -10
+    }
+
+    override func viewSafeAreaInsetsDidChange() {
+        super.viewSafeAreaInsetsDidChange()
+        applyMiniBarBottom77(collapsed: miniBarCollapsed)
+    }
+
     private func setMiniBarForm(collapsed: Bool) {
         // (72) 形态收口同步共享旗标（单宿主交接的对齐源）。
         MiniBarSingleHost.shared.sharedCollapsed = collapsed
+        applyMiniBarBottom77(collapsed: collapsed)
+        (miniBar as? MiniBarHitView)?.isCollapsedForm = collapsed
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in miniMainCenterY { constraint.constant = -5 }
@@ -1533,7 +1578,12 @@ final class WallPrototypeViewController: UIViewController,
         miniTrackCenterXC?.isActive = collapsed
         miniTrackWidthC?.isActive = collapsed
         miniProgressTrack.layer.cornerRadius = collapsed ? 2.5 : 2
-        miniProgressKnob.isHidden = collapsed
+        // (77) ②③：四主题小圆点恢复收起态在场——(74) 细
+        // 条改素线时以 isHidden=collapsed 误删；皮肤在
+        // refreshMiniProgressChrome 两形态同挂，圆点本体
+        // 两形态恒可见（(22)/(23) 旧制：13pt 皮肤压 9pt
+        // knob、溢出显示）。
+        miniProgressKnob.isHidden = false
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius

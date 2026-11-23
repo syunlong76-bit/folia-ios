@@ -35,21 +35,74 @@ final class MiniBarHitView: UIView {
 
     func noteRecognizerClaimed() { sequenceClaimed = true }
 
+    // MARK: - (77) ⑥触摸认领与取消救援（(76) 日志定案）
+    //
+    // (76) 会话日志实证：歌单页 2 次点按全死于 at=cancel——
+    // nowplaying.route 的呈现在飞时把细条触摸取消（与 route
+    // settle 同毫秒相撞）。本版双保险：①认领先行——收起态
+    // 触摸一落台身即置 RouteInteractionHold，route 的呈现
+    // 步骤见 hold 必让行（SceneDelegate.routeStep 咨询点），
+    // 路由 churn 不许再取消在飞的条触摸；②取消救援——呈现
+    // 已在飞、触摸仍被取消时，若序列是静止短点（<0.35s、
+    // 位移 <10pt、无识别器认领），按点按意图直接派发展开，
+    // 不让用户白点。滚动起手位移大、天然出局。
+
+    /// 面包屑宿主名（wallproto/homewall/stage，宿主装配时写）。
+    var crumbHostTag = ""
+    /// 当前是否收起形态（宿主 setMiniBarForm 同步）。
+    var isCollapsedForm = false
+    /// 取消救援派发（宿主接 expandMiniBar 同路）。
+    var onCancelledTapRescue: (() -> Void)?
+    private var downTime: CFTimeInterval = 0
+    private var downLocation: CGPoint = .zero
+    private var maxDeviation: CGFloat = 0
+
     override func touchesBegan(_ touches: Set<UITouch>,
                                with event: UIEvent?) {
         sequenceClaimed = false
+        if isCollapsedForm {
+            downTime = CACurrentMediaTime()
+            downLocation = touches.first?.location(in: self) ?? .zero
+            maxDeviation = 0
+            RouteInteractionHold.shared.begin()
+            Breadcrumbs.log("minibar.claim77 host=\(crumbHostTag)")
+        }
         super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesMoved(_ touches: Set<UITouch>,
+                               with event: UIEvent?) {
+        if isCollapsedForm, downTime > 0, let touch = touches.first {
+            let now = touch.location(in: self)
+            maxDeviation = max(maxDeviation,
+                               hypot(now.x - downLocation.x,
+                                     now.y - downLocation.y))
+        }
+        super.touchesMoved(touches, with: event)
     }
 
     override func touchesEnded(_ touches: Set<UITouch>,
                                with event: UIEvent?) {
+        if isCollapsedForm { RouteInteractionHold.shared.end() }
         if !sequenceClaimed { onDispatchUnclaimed?() }
         super.touchesEnded(touches, with: event)
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>,
                                    with event: UIEvent?) {
-        onDispatchCancelled?()
+        if isCollapsedForm {
+            RouteInteractionHold.shared.end()
+            onDispatchCancelled?()
+            let stationary = CACurrentMediaTime() - downTime < 0.35
+                && maxDeviation < 10
+            if stationary, !sequenceClaimed {
+                Breadcrumbs.log("minibar.claim77 host=\(crumbHostTag)"
+                    + " via=rescue")
+                onCancelledTapRescue?()
+            }
+        } else {
+            onDispatchCancelled?()
+        }
         super.touchesCancelled(touches, with: event)
     }
 
