@@ -159,6 +159,12 @@ final class EdgeOneAPIClient {
             throw EdgeOneError.providerUnverified(provider: provider, method: path)
         }
         let bases = [pair.primary, pair.backup]
+        // 3.7 (78) 第 5 条超时收敛：单腿 URLRequest 的 6s 是空闲
+        // 间隔超时、不是总时长——(77) 日志实证一腿能跑 12,808ms
+        // 才判 timeout，hedge 失败路径要等慢腿跑满、整次取流被
+        // 拖到 13.4s。本版加总时长硬顶 7s：哨兵任务到点即收官，
+        // 两腿一并取消，未归腿记 pending，hedge.fail 带 cap=1。
+        let deadlineIndex = 99
         let winner: (Int, Data)? = await withTaskGroup(
             of: (Int, LegOutcome).self
         ) { group in
@@ -169,9 +175,22 @@ final class EdgeOneAPIClient {
                         queryItems: queryItems, timeout: perNodeTimeout))
                 }
             }
+            group.addTask {
+                try? await Task.sleep(nanoseconds: 7_000_000_000)
+                return (deadlineIndex, LegOutcome(
+                    data: nil, kind: "deadline", elapsedMs: 7000))
+            }
             var firstSuccess: (Int, Data)?
             var legs: [Int: LegOutcome] = [:]
+            var capped = false
             for await (index, outcome) in group {
+                if index == deadlineIndex {
+                    if firstSuccess == nil { capped = true }
+                    // 到点收官：取消两腿（URLSession 响应取消），
+                    // 任务组排空即返回，不等慢腿跑满自身超时。
+                    group.cancelAll()
+                    break
+                }
                 legs[index] = outcome
                 if let data = outcome.data {
                     firstSuccess = (index, data)
@@ -180,14 +199,18 @@ final class EdgeOneAPIClient {
                     group.cancelAll()
                     break
                 }
+                if legs.count == bases.count {
+                    // 两腿皆败已齐：取消 7s 哨兵，不陪它睡满。
+                    group.cancelAll()
+                    break
+                }
             }
             if firstSuccess == nil {
-                // 走到这里任务组已排空（两腿皆败），legs 必齐。
                 let legText = bases.indices.map { i in
                     let leg = legs[i]
-                    return "n\(i)=\(leg?.elapsedMs ?? -1)ms/\(leg?.kind ?? "none")"
+                    return "n\(i)=\(leg?.elapsedMs ?? -1)ms/\(leg?.kind ?? "pending")"
                 }.joined(separator: " ")
-                Breadcrumbs.log("hedge.fail \(legText)")
+                Breadcrumbs.log("hedge.fail \(legText)\(capped ? " cap=1" : "")")
             }
             return firstSuccess
         }
@@ -283,13 +306,27 @@ final class EdgeOneAPIClient {
         }
         let rawId = songId.replacingOccurrences(of: "ncm_", with: "")
         let cookie = await NativeDataClient.shared.webCookie()
-        let cookieFlag = cookie != nil ? "yes" : "no"
+        // (78) 第 5 条见证修复：旧行写 cookie=yes/no，但日志管
+        // 线对 cookie= 一律脱敏成 <redacted>，yes/no 根本落不
+        // 下来——(77) 日志里判不出当时带没带会话。改用 sess=
+        // 键（1=带会话、0=匿名），不再被脱敏规则吞掉。
+        let sessFlag = cookie != nil ? "1" : "0"
         // 音质档位（3.7 (62) WC 簇）：读 SettingsStore.streamQuality62
         // （播放面板音质页签写），默认 exhigh 与既有行为一致；
         // 后端对 lossless/hires 是否认账待真机验，见 (62) 报告。
+        // (78) 第 5 条数据通路对齐（定案）：网页版取流原式带
+        // randomCNIP=true&https=true（folia-major netease.ts），
+        // 本客户端此前漏 randomCNIP。2026-11-24 本机对照实测
+        // （同一函数、同一 level=exhigh、匿名）：1959667347 与
+        // 486188245 不带 randomCNIP 均回 url:null/code:404/
+        // cannotListenReason:1，带上即回真实地址——(77) 两首
+        // 「有资源却播不了」的主因在此（函数启动时已备随机
+        // CN IP，参数置真才用）。https=true 同步对齐网页口径。
         var queryItems = [
             URLQueryItem(name: "id", value: rawId),
-            URLQueryItem(name: "level", value: SettingsStore.streamQuality62)
+            URLQueryItem(name: "level", value: SettingsStore.streamQuality62),
+            URLQueryItem(name: "randomCNIP", value: "true"),
+            URLQueryItem(name: "https", value: "true")
         ]
         if let cookie {
             queryItems.append(URLQueryItem(name: "cookie", value: cookie))
@@ -309,15 +346,19 @@ final class EdgeOneAPIClient {
             )
             resp = try JSONDecoder().decode(NeteaseSongURLResponse.self, from: data)
         } catch {
-            Breadcrumbs.log("stream.fetch songId=\(rawId) cookie=\(cookieFlag) result=failed")
+            Breadcrumbs.log("stream.fetch songId=\(rawId) sess=\(sessFlag) result=failed")
+            // (78) 第 5 条：整次取流终败收口行——与紧邻的
+            // hedge.fail 分腿行成对，下轮日志一眼判「哪腿先死、
+            // 401 是节点保护还是上游真无权」（sess 判会话在否）。
+            Breadcrumbs.log("stream.fail78 songId=\(rawId) sess=\(sessFlag)")
             throw error
         }
         guard let urlStr = resp.data?.first?.url,
               let url = URL(string: urlStr.replacingOccurrences(of: "http://", with: "https://")) else {
-            Breadcrumbs.log("stream.fetch songId=\(rawId) cookie=\(cookieFlag) result=missing")
+            Breadcrumbs.log("stream.fetch songId=\(rawId) sess=\(sessFlag) result=missing")
             throw EdgeOneError.streamURLMissing
         }
-        Breadcrumbs.log("stream.fetch songId=\(rawId) cookie=\(cookieFlag) result=ok")
+        Breadcrumbs.log("stream.fetch songId=\(rawId) sess=\(sessFlag) result=ok")
         return url
     }
 
