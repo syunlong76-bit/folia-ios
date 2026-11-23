@@ -103,6 +103,12 @@ final class StageViewController: UIViewController {
     private var stageBarWidthConstraint: NSLayoutConstraint?
     private var stageBarHeightConstraint: NSLayoutConstraint?
     private var stageTrackBottomConstraint: NSLayoutConstraint?
+    /// (74) 小横线形态的轨道约束组（同两面墙台口径）。
+    private var stageTrackLeadC: NSLayoutConstraint?
+    private var stageTrackTrailC: NSLayoutConstraint?
+    private var stageTrackHeightC: NSLayoutConstraint?
+    private var stageTrackCenterXC: NSLayoutConstraint?
+    private var stageTrackWidthC: NSLayoutConstraint?
     /// 点播台附加功能行（3.7 (54) 工作流 H 建、(60) 第 7 条迁
     /// 浮层）：五钮行（喜欢/星标/打乱/面板/命令，字幕钮已随第
     /// 11 条删）不再装进点播台本体，改住透明浮层
@@ -134,6 +140,8 @@ final class StageViewController: UIViewController {
     private var seekGuardBlocked70 = 0
     private var stageIdleWorkItem: DispatchWorkItem?
     private var stagePetStage: MiniBarPetStage?
+    /// (74) 本页缝合工具条（三页清单之三，播放详情页）。
+    private var stageSeamToolbar: SeamToolbarView?
 
     // MARK: 状态
 
@@ -565,6 +573,11 @@ final class StageViewController: UIViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // (74) 工具条提层：台面渲染层在演期间会后加子视图，
+        // 每次回台把工具条提回最上（只动 z 序）。
+        if let seamToolbar = stageSeamToolbar {
+            view.bringSubviewToFront(seamToolbar)
+        }
         // (68) B 组：全宽控制条开关回台同步（设置里关掉时回
         // 台不得残留识别器/条体）。
         syncWideBar68()
@@ -807,6 +820,9 @@ final class StageViewController: UIViewController {
         // 三键仍走既有按钮与命令入口（handleCommand 同路）。
         // 附加功能浮层在 buildStageBar 内随台一并装配（锚台顶）。
         buildStageBar()
+        // (74) 缝合工具条铺到播放详情页（三页清单之三）：与
+        // 主页/歌单页同款同口径（左上锚、绕岛、系统弹簧）。
+        installStageSeamToolbar74()
         refreshPlayButton()
         refreshLikeButton()
         // 主题变更通知（设置页/任一台长按）→ 本台同步换装。
@@ -2196,6 +2212,53 @@ final class StageViewController: UIViewController {
     // StageProgressDriver（viewWillDisappear 必 stop），不新
     // 造第二套。
 
+    /// (74) 播放详情页缝合工具条：与主页/歌单页同款。落位：
+    /// 本页顶部行是舞台头（关闭键/标题/喜欢，safe.top+6 起
+    /// 38 高、样式钮至 +74），工具条落其下——top = safeArea
+    /// .top + 82（= layoutStage 的 contentTop），左锚贴安全
+    /// 区（横屏绕岛）、全宽、44 高；收起横线在左端（条内左
+    /// 锚）。动作全转发回主页（与歌单页同路）：本台 dismiss
+    /// 有 StageExitGate 守卫，转发前先经闸门程序化放行
+    /// （approveProgrammaticExit），不绕闸。
+    private func installStageSeamToolbar74() {
+        let toolbar = SeamToolbarView()
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(toolbar)
+        NSLayoutConstraint.activate([
+            toolbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 82),
+            toolbar.heightAnchor.constraint(equalToConstant: 44),
+        ])
+        if let home = SeamToolbarForwarding.findHomeWall(from: self) {
+            let state = home.seamToolbarInitialState
+            toolbar.setSegment(state.segment)
+            toolbar.setLayoutMode(grid: state.grid)
+        }
+        SeamToolbarForwarding.applyAccountState(to: toolbar)
+        toolbar.onSegmentChanged = { [weak self] segment in
+            self?.stageSeamForward74("segment-\(segment.crumbName)")
+        }
+        toolbar.onAvatarTapped = { [weak self] in self?.stageSeamForward74("avatar") }
+        toolbar.onSearchTapped = { [weak self] in self?.stageSeamForward74("search") }
+        toolbar.onSettingsTapped = { [weak self] in self?.stageSeamForward74("settings") }
+        toolbar.onGuideTapped = { [weak self] in self?.stageSeamForward74("guide") }
+        toolbar.onLatticeTapped = { [weak self] in self?.stageSeamForward74("lattice") }
+        toolbar.onLayoutTapped = { [weak self] in self?.stageSeamForward74("layout") }
+        toolbar.onMoreTapped = { [weak self] _ in self?.stageSeamForward74("more") }
+        toolbar.onFullscreenTapped = { [weak self] in self?.stageSeamForward74("fullscreen") }
+        stageSeamToolbar = toolbar
+        Breadcrumbs.log("stage.seam74 installed")
+    }
+
+    /// (74) 舞台工具条动作转发：先经 StageExitGate 程序化
+    /// 放行（目的地是主页既有面、正当转移），再走统一转发
+    /// （关本台回主页执行主页同名动作）。
+    private func stageSeamForward74(_ action: String) {
+        StageExitGate.shared.approveProgrammaticExit(stage: self, reason: "seam74-\(action)")
+        SeamToolbarForwarding.forward(action, from: self)
+    }
+
     private func buildStageBar() {
         let bar = stageBar
         bar.backgroundColor = .clear
@@ -2356,6 +2419,12 @@ final class StageViewController: UIViewController {
             equalToConstant: CGFloat(SettingsStore.bottomBarHeight))
         stageBarWidthConstraint?.isActive = true
         stageBarHeightConstraint?.isActive = true
+        // (74) 轨道约束存引用（收起态换居中 134×5 小横线）。
+        stageTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20)
+        stageTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20)
+        stageTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
+        stageTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
+        stageTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 134)
         NSLayoutConstraint.activate([
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
@@ -2381,9 +2450,10 @@ final class StageViewController: UIViewController {
             glassTint.topAnchor.constraint(equalTo: bar.topAnchor),
             glassTint.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
 
-            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
-            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20),
-            progressTrack.heightAnchor.constraint(equalToConstant: 4),
+            // (74) 轨道约束存引用（收起态换居中小横线）。
+            stageTrackLeadC!,
+            stageTrackTrailC!,
+            stageTrackHeightC!,
             fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
             fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
@@ -2483,6 +2553,11 @@ final class StageViewController: UIViewController {
         tap.require(toFail: longPress)
         tap.require(toFail: doubleTap)
         bar.addGestureRecognizer(tap)
+        // (74) 第 4 项兜底识别器（同两面墙台）：与形态无关、
+        // 恒启用、无 require 链，几何细条时先纠标志再展开。
+        let agnosticTap74 = UITapGestureRecognizer(
+            target: self, action: #selector(stageBarAgnosticTapped74(_:)))
+        bar.addGestureRecognizer(agnosticTap74)
         syncStageBarDoubleTapEnabled()
 
         applyStageTheme()
@@ -2565,9 +2640,13 @@ final class StageViewController: UIViewController {
         let themed = stageKnobSkin != nil
         stageProgressKnob?.backgroundColor = themed ? .clear : .white
         stageProgressKnob?.layer.shadowOpacity = themed ? 0 : 0.9
-        stageProgressFill?.backgroundColor = stageBarCollapsed
+        // (74) 第 6 项进度单色（同两面墙台口径）：轨道 = 填
+        // 充同色 25% 透明，整条一个色相、两形态同规。
+        let singleColor = stageBarCollapsed
             ? Self.stageCollapsedFillColor(for: stageTheme)
             : Self.stageFillColor(for: stageTheme)
+        stageProgressFill?.backgroundColor = singleColor
+        stageProgressTrack?.backgroundColor = singleColor.withAlphaComponent(0.25)
     }
 
     /// 与墙 miniFillColor 同值（主题填充色）。
@@ -2623,6 +2702,20 @@ final class StageViewController: UIViewController {
     /// （build/collapse/expand/在场复位）各调一次本方法收口。
     private func syncStageBarDoubleTapEnabled() {
         stageBarDoubleTap?.isEnabled = !stageBarCollapsed
+    }
+
+    /// (74) 第 4 项兜底（同两面墙台）：与形态无关的恒启用
+    /// 识别器，几何细条（≤20）时先按几何纠正标志（含双击
+    /// 启停收口）再展开，不等 require 链落空。
+    @objc private func stageBarAgnosticTapped74(_ gesture: UITapGestureRecognizer) {
+        guard stageBar.bounds.height <= 20 else { return }
+        if !stageBarCollapsed {
+            Breadcrumbs.log("minibar.hit host=stage heal=flag74")
+            stageBarCollapsed = true
+            syncStageBarDoubleTapEnabled()
+        }
+        Breadcrumbs.log("minibar.hit host=stage via=agnostic74")
+        expandStageBar()
     }
 
     /// 台面点按分发（与墙同构）：收起态只展开；展开态按键
@@ -2820,7 +2913,17 @@ final class StageViewController: UIViewController {
         stageBarHeightConstraint?.constant = collapsed ? 16 : CGFloat(SettingsStore.bottomBarHeight)
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in stageMainCenterY { constraint.constant = -5 }
-        stageTrackBottomConstraint?.constant = collapsed ? -6 : -7
+        // (74) 第 5 项小横线（同两面墙台口径）：收起态轨道
+        // 换居中 134×5 小横线、圆点收起；台体容器与命中带
+        // 不动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
+        stageTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
+        stageTrackHeightC?.constant = collapsed ? 5 : 4
+        stageTrackLeadC?.isActive = !collapsed
+        stageTrackTrailC?.isActive = !collapsed
+        stageTrackCenterXC?.isActive = collapsed
+        stageTrackWidthC?.isActive = collapsed
+        stageProgressTrack?.layer.cornerRadius = collapsed ? 2.5 : 2
+        stageProgressKnob?.isHidden = collapsed
         let radius: CGFloat = collapsed ? 8 : 35
         stageBar.layer.cornerRadius = radius
         stageBlurView?.layer.cornerRadius = radius

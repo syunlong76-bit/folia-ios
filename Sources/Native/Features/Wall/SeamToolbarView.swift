@@ -57,6 +57,9 @@ final class SeamToolbarView: UIView {
     var onAvatarTapped: (() -> Void)?
     var onSearchTapped: (() -> Void)?
     var onSettingsTapped: (() -> Void)?
+    /// (74) 导播台入口（小灯泡）：(73) 工作台大台撤除后
+    /// Ponder62 导览入口改挂本条，宿主接 presentList。
+    var onGuideTapped: (() -> Void)?
     var onLayoutTapped: (() -> Void)?
     /// 「…」点按：回调带本钮作 action sheet 的锚点。
     var onMoreTapped: ((UIView) -> Void)?
@@ -76,6 +79,7 @@ final class SeamToolbarView: UIView {
         items: SeamSegment.allCases.map { $0.title } + ["拼"])
     private let searchButton = UIButton(type: .system)
     private let settingsButton = UIButton(type: .system)
+    private let guideButton = UIButton(type: .system)
     private let layoutButton = UIButton(type: .system)
     private let moreButton = UIButton(type: .system)
     private let fullscreenButton = UIButton(type: .system)
@@ -93,7 +97,7 @@ final class SeamToolbarView: UIView {
     /// 全条内容视图组（双态只动这组的 alpha/transform）。
     private var contentViews: [UIView] {
         [blurView, avatarButton, avatarInitial, avatarImageView, segmentControl,
-         searchButton, settingsButton, layoutButton, moreButton,
+         searchButton, settingsButton, guideButton, layoutButton, moreButton,
          fullscreenButton]
     }
 
@@ -162,6 +166,8 @@ final class SeamToolbarView: UIView {
                       action: #selector(searchTapped))
         configureIcon(settingsButton, symbol: "gearshape", label: "设置",
                       action: #selector(settingsTapped))
+        configureIcon(guideButton, symbol: "lightbulb", label: "导播台",
+                      action: #selector(guideTapped))
         configureIcon(layoutButton, symbol: "square.grid.2x2", label: "切换布局",
                       action: #selector(layoutTapped))
         configureIcon(moreButton, symbol: "ellipsis", label: "更多",
@@ -183,20 +189,25 @@ final class SeamToolbarView: UIView {
 
             segmentControl.leadingAnchor.constraint(equalTo: avatarButton.trailingAnchor, constant: 8),
             segmentControl.centerYAnchor.constraint(equalTo: centerYAnchor),
-            segmentControl.widthAnchor.constraint(equalToConstant: 132),
+            // (74) 宽度账：加导播台灯泡后六钮并排，分段由
+            // 132 收至 104、图标钮 36 收至 33，整条内容
+            // 6+32+8+104+4+6×33+4 = 356pt，竖屏 369 可用
+            // 宽内成立；横屏更宽不顶。
+            segmentControl.widthAnchor.constraint(equalToConstant: 104),
             segmentControl.heightAnchor.constraint(equalToConstant: 30),
 
             searchButton.leadingAnchor.constraint(equalTo: segmentControl.trailingAnchor, constant: 4),
             settingsButton.leadingAnchor.constraint(equalTo: searchButton.trailingAnchor),
-            layoutButton.leadingAnchor.constraint(equalTo: settingsButton.trailingAnchor),
+            guideButton.leadingAnchor.constraint(equalTo: settingsButton.trailingAnchor),
+            layoutButton.leadingAnchor.constraint(equalTo: guideButton.trailingAnchor),
             moreButton.leadingAnchor.constraint(equalTo: layoutButton.trailingAnchor),
             fullscreenButton.leadingAnchor.constraint(equalTo: moreButton.trailingAnchor),
             fullscreenButton.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
         ])
-        for button in [searchButton, settingsButton, layoutButton, moreButton, fullscreenButton] {
+        for button in [searchButton, settingsButton, guideButton, layoutButton, moreButton, fullscreenButton] {
             NSLayoutConstraint.activate([
                 button.centerYAnchor.constraint(equalTo: centerYAnchor),
-                button.widthAnchor.constraint(equalToConstant: 36),
+                button.widthAnchor.constraint(equalToConstant: 33),
                 button.heightAnchor.constraint(equalToConstant: 44),
             ])
         }
@@ -216,12 +227,15 @@ final class SeamToolbarView: UIView {
         grabberHitView.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(grabberTapped)))
         addSubview(grabberHitView)
+        // (74) 设置台安置口径：收起横线改左锚（本条贴左上
+        // 角，横线落左端：线身 leading+12 起 36 宽，命中垫
+        // leading+2 起 76 宽居于线身），不再居中。
         NSLayoutConstraint.activate([
-            grabberView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            grabberView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             grabberView.centerYAnchor.constraint(equalTo: centerYAnchor),
             grabberView.widthAnchor.constraint(equalToConstant: 36),
             grabberView.heightAnchor.constraint(equalToConstant: 4),
-            grabberHitView.centerXAnchor.constraint(equalTo: centerXAnchor),
+            grabberHitView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
             grabberHitView.centerYAnchor.constraint(equalTo: centerYAnchor),
             grabberHitView.widthAnchor.constraint(equalToConstant: 76),
             grabberHitView.heightAnchor.constraint(equalToConstant: 28),
@@ -419,6 +433,11 @@ final class SeamToolbarView: UIView {
     @objc private func avatarTapped() { noteToolbarInteraction(); onAvatarTapped?() }
     @objc private func searchTapped() { noteToolbarInteraction(); onSearchTapped?() }
     @objc private func settingsTapped() { noteToolbarInteraction(); onSettingsTapped?() }
+    @objc private func guideTapped() {
+        noteToolbarInteraction()
+        Breadcrumbs.log("seam.guide tap")
+        onGuideTapped?()
+    }
     @objc private func layoutTapped() {
         noteToolbarInteraction()
         InteractionTrace.shared.beginAction("layout")
@@ -446,6 +465,10 @@ enum WallMoreMenu {
         var filter: () -> Void
         var manageHidden: () -> Void
         var backToStage: () -> Void
+        /// (74) 工作台分区承接：原侧栏分区行（歌单/电台/专辑/
+        /// 本地）随工作台撤除收进本菜单，宿主按分区可见性
+        /// 设置过滤后注入（标题与原分区行同名）。
+        var sections: [(title: String, run: () -> Void)] = []
     }
 
     static func present(from host: UIViewController, anchor: UIView,
@@ -476,6 +499,12 @@ enum WallMoreMenu {
         }
         back.isEnabled = hasQueue
         sheet.addAction(back)
+        for section in actions.sections {
+            sheet.addAction(UIAlertAction(title: section.title, style: .default) { _ in
+                Breadcrumbs.log("wall.menu.pick item=section-\(section.title)")
+                section.run()
+            })
+        }
         sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
         if let popover = sheet.popoverPresentationController {
             popover.sourceView = anchor
@@ -578,6 +607,16 @@ enum SeamToolbarForwarding {
             let settings = SettingsViewController()
             settings.modalPresentationStyle = .overFullScreen
             home.present(settings, animated: false)
+        case "guide":
+            // (74) 导播台：导览列表自带呈现面，从主页发出
+            // （与原工作台 .guide 行同一落点）。
+            Breadcrumbs.log("seam.guide forward")
+            Ponder62.presentList(from: home)
+        case "lattice":
+            // (74) 补接「拼」格转发（此前歌单面工具条未接此
+            // 回调）：回主页后走统一落点 present 队列拼贴。
+            Breadcrumbs.log("seam.lattice forward")
+            QueueLatticeViewController.present(from: home)
         case "layout": home.seamToggleLayout()
         case "more": home.seamMoreTapped(anchor: home.view)
         case "fullscreen": home.seamSetImmersive(true)

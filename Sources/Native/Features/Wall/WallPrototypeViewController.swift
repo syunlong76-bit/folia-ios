@@ -185,6 +185,12 @@ final class WallPrototypeViewController: UIViewController,
     private var miniBarWidthConstraint: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
+    /// (74) 小横线形态的轨道约束组（同主页墙口径）。
+    private var miniTrackLeadC: NSLayoutConstraint?
+    private var miniTrackTrailC: NSLayoutConstraint?
+    private var miniTrackHeightC: NSLayoutConstraint?
+    private var miniTrackCenterXC: NSLayoutConstraint?
+    private var miniTrackWidthC: NSLayoutConstraint?
     /// 点播台附加功能行（3.7 (54) 工作流 H 建、(60) 第 7 条迁
     /// 浮层）：五钮行不再装进台本体，改住透明浮层
     /// （MiniBarQuickRowOverlayView）挂本 VC 的 view、锚台顶上
@@ -376,29 +382,11 @@ final class WallPrototypeViewController: UIViewController,
         ])
         Breadcrumbs.log("wall.chrome playlist hintBar=removed close=glass-x")
 
-        // 墙内设置齿轮（3.7 (36)）：固定左上角（顶部带右上角是
-        // 关闭键、正中是行动胶囊（非常驻），左上角不挡拼贴操
-        // 作），样式与主界面边缘齿轮一致（34×34、半透明），点
-        // 按打开同一个设置页；边缘老齿轮保留不动。
-        // (53) L 组保留决定：曲目墙无工作台侧栏，本齿轮是本面
-        // 唯一的设置路径（主页墙齿轮已因侧栏完整覆盖删除，
-        // 两面口径不同，不跟随删除）。
-        let settingsGear = UIButton(type: .system)
-        settingsGear.setImage(UIImage(systemName: "gearshape.fill"), for: .normal)
-        settingsGear.tintColor = .white
-        settingsGear.backgroundColor = UIColor.black.withAlphaComponent(0.25)
-        settingsGear.layer.cornerRadius = 17
-        settingsGear.alpha = 0.5
-        settingsGear.accessibilityLabel = "设置"
-        settingsGear.translatesAutoresizingMaskIntoConstraints = false
-        settingsGear.addTarget(self, action: #selector(wallSettingsTapped), for: .touchUpInside)
-        view.addSubview(settingsGear)
-        NSLayoutConstraint.activate([
-            settingsGear.widthAnchor.constraint(equalToConstant: 34),
-            settingsGear.heightAnchor.constraint(equalToConstant: 34),
-            settingsGear.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            settingsGear.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8)
-        ])
+        // (74) 墙内独立设置齿轮撤除：设置入口统一收进缝合工
+        // 具条齿轮（Miller 定：顶部工具条里已有设置，独立页
+        // 面形态与独立入口都不要）。原 (53) L 组「本面唯一设
+        // 置路径」的保留理由随工具条铺到本面而失效；本面工
+        // 具条随之上移到顶部行（见 installPlaylistSeamToolbar）。
 
         // 氛围底（丝滑切入）：盖在空墙上、垫在胶囊/关闭键下；数据
         // 到达后淡出。封面来自内存缓存（主页墙刚显示过），零等待。
@@ -822,15 +810,21 @@ final class WallPrototypeViewController: UIViewController,
             equalToConstant: MiniBarQuickRowView.expandedBarHeight)
         miniBarWidthConstraint?.isActive = true
         miniBarHeightConstraint?.isActive = true
+        // (74) 轨道约束存引用（收起态换居中小横线，同主页墙）。
+        miniTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20)
+        miniTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20)
+        miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
+        miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
+        miniTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 134)
         NSLayoutConstraint.activate([
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
             bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
 
-            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
-            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20),
-            progressTrack.heightAnchor.constraint(equalToConstant: 4),
+            miniTrackLeadC!,
+            miniTrackTrailC!,
+            miniTrackHeightC!,
             fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
             fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
@@ -920,9 +914,34 @@ final class WallPrototypeViewController: UIViewController,
         collapsedTap.isEnabled = false
         bar.addGestureRecognizer(collapsedTap)
         miniBarCollapsedTapRecognizer = collapsedTap
+        // (74) 第 4 项兜底识别器（同主页墙）：与形态无关、
+        // 恒启用、无 require 链，几何细条时先纠标志再展开。
+        let agnosticTap74 = UITapGestureRecognizer(
+            target: self, action: #selector(miniBarAgnosticTapped74(_:)))
+        bar.addGestureRecognizer(agnosticTap74)
 
         applyMiniTheme()
         applyMiniBarSlots()
+    }
+
+    /// (74) 第 4 项本面定案：Miller (67) 录屏与 (74) 截图
+    /// 两度实报的都是本面（曲目墙）细条点不开——(67) 取证
+    /// C① 已判「同步态路径成立、疑标志/识别器启停失同步」
+    /// （(63) 前科），(70) 只把几何自愈挂在出现边沿，页面
+    /// 存续期再失同步仍复发；(72) 的 MiniBarSingleHost 只
+    /// 仲裁「谁能动形态」、不经手命中与识别器启停，故没治
+    /// 到这一层。本识别器以台体实际高度为真值分发，失同步
+    /// 时先落 heal 面包屑纠正标志再展开，与 expand 内的
+    /// minibar expand 行成对构成「点中→展开」自证。
+    @objc private func miniBarAgnosticTapped74(_ gesture: UITapGestureRecognizer) {
+        guard let bar = miniBar, bar.bounds.height <= 20 else { return }
+        if !miniBarCollapsed {
+            Breadcrumbs.log("minibar.hit host=wallproto heal=flag74")
+            miniBarCollapsed = true
+            miniPetStage?.barFormChanged(collapsed: true)
+        }
+        Breadcrumbs.log("minibar.hit host=wallproto via=agnostic74")
+        expandMiniBar()
     }
 
     /// 点播台槽位应用（3.7 (50)）：按 MiniBarSlotSettings 显隐
@@ -1006,9 +1025,13 @@ final class WallPrototypeViewController: UIViewController,
         let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        miniProgressFill.backgroundColor = miniBarCollapsed
+        // (74) 第 6 项进度单色（同主页墙口径）：轨道 = 填充
+        // 同色 25% 透明，整条一个色相、两形态同规。
+        let singleColor = miniBarCollapsed
             ? Self.miniCollapsedFillColor(for: miniTheme)
             : Self.miniFillColor(for: miniTheme)
+        miniProgressFill.backgroundColor = singleColor
+        miniProgressTrack.backgroundColor = singleColor.withAlphaComponent(0.25)
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
@@ -1460,7 +1483,17 @@ final class WallPrototypeViewController: UIViewController,
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in miniMainCenterY { constraint.constant = -5 }
-        miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
+        // (74) 第 5 项小横线（同主页墙口径）：收起态轨道换
+        // 居中 134×5 小横线、圆点收起；台体容器与命中带不
+        // 动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
+        miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
+        miniTrackHeightC?.constant = collapsed ? 5 : 4
+        miniTrackLeadC?.isActive = !collapsed
+        miniTrackTrailC?.isActive = !collapsed
+        miniTrackCenterXC?.isActive = collapsed
+        miniTrackWidthC?.isActive = collapsed
+        miniProgressTrack.layer.cornerRadius = collapsed ? 2.5 : 2
+        miniProgressKnob.isHidden = collapsed
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
@@ -2057,25 +2090,23 @@ final class WallPrototypeViewController: UIViewController,
         loadEntries()
     }
 
-    /// 歌单页导航台装配（(62) 追加三，Miller 15:01 定）：与
-    /// 主页同款缝合工具条。几何复核（先量后装、零重叠）：本
-    /// 面既有 chrome——关闭键占 safeArea.top+8 起 44 高（至
-    /// +52）、右缘内 44 宽；设置齿轮占 +8 起 34 高（至
-    /// +42）、左缘 34 宽。工具条整排（主页口径 leading 12 /
-    /// trailing −12 / 高 44）若同高装配必与两者相撞，故落
-    /// 在关闭键行下方一排：top = safeArea.top + 56（与关闭
-    /// 键命中区下沿留 4pt 间隔），纵向与两者零交叠；横向整
-    /// 排与主页一致。动作语义＝转发回主页执行主页同名动作
-    /// （SeamToolbarForwarding：切段即离歌单回对应段主页，
-    /// 搜索/设置/登录/布局/沉浸同主页），不在本面另造行为。
-    /// z 序在拍立得背板之上（加载态亦可见可点），与关闭键
-    /// （背板之下、本条之上行）互不遮挡。
+    /// 歌单页导航台装配（(62) 追加三、(74) 修订）：与主页同
+    /// 款缝合工具条。几何（先量后装、零重叠）：本面顶部行有
+    /// 关闭键（safeArea.top+8 起 44 高、右缘内 44 宽），工
+    /// 具条整排内容宽 356pt——同高装配时右端让关闭键只剩
+    /// 317pt 装不下，故仍落关闭键行下方一排：top = safeArea
+    /// .top + 56、全宽（leading 贴安全区左缘、横屏绕岛；
+    /// trailing −12），与关闭键纵向零交叠。(74) 独立设置齿
+    /// 轮已撤除（原占顶部行左端），本面设置入口只剩本条齿
+    /// 轮。动作语义＝转发回主页执行主页同名动作
+    /// （SeamToolbarForwarding），不在本面另造行为。z 序在
+    /// 拍立得背板之上（加载态亦可见可点）。
     private func installPlaylistSeamToolbar() {
         let toolbar = SeamToolbarView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(toolbar)
         NSLayoutConstraint.activate([
-            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            toolbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 56),
             toolbar.heightAnchor.constraint(equalToConstant: 44),
@@ -2101,6 +2132,14 @@ final class WallPrototypeViewController: UIViewController,
         toolbar.onSettingsTapped = { [weak self] in
             guard let self else { return }
             SeamToolbarForwarding.forward("settings", from: self)
+        }
+        toolbar.onGuideTapped = { [weak self] in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("guide", from: self)
+        }
+        toolbar.onLatticeTapped = { [weak self] in
+            guard let self else { return }
+            SeamToolbarForwarding.forward("lattice", from: self)
         }
         toolbar.onLayoutTapped = { [weak self] in
             guard let self else { return }
@@ -2151,13 +2190,8 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    /// 墙内齿轮打开设置页：与主界面边缘齿轮同一呈现方式
-    /// （overFullScreen 浮层、animated: false）。
-    @objc private func wallSettingsTapped() {
-        let settings = SettingsViewController()
-        settings.modalPresentationStyle = .overFullScreen
-        present(settings, animated: false)
-    }
+    // (74) wallSettingsTapped 已随墙内独立齿轮一并撤除：
+    // 本面设置入口 = 工具条齿轮（转发回主页开设置面板）。
 
     // MARK: - 预加载（等首批数据再 present，DS 第二十四轮栈首）
 

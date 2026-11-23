@@ -20,6 +20,12 @@ struct SeamToolbarBridge: UIViewRepresentable {
         bar.onSettingsTapped = {
             SeamToolbarForwarding.activate("settings", from: bar)
         }
+        bar.onGuideTapped = {
+            SeamToolbarForwarding.activate("guide", from: bar)
+        }
+        bar.onLatticeTapped = {
+            SeamToolbarForwarding.activate("lattice", from: bar)
+        }
         bar.onLayoutTapped = {
             SeamToolbarForwarding.activate("layout", from: bar)
         }

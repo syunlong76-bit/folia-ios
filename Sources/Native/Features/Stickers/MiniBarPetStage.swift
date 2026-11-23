@@ -937,8 +937,17 @@ final class MiniBarPetStage: UIView {
 
     private func walkRange(for actor: MiniPetActor) -> ClosedRange<CGFloat> {
         let half = actor.bounds.width / 2
-        let lo = half + 6
-        let hi = max(lo + 1, bounds.width - half - 6)
+        var lo = half + 6
+        var hi = max(lo + 1, bounds.width - half - 6)
+        // (74) 第 5 项：收起态台面只剩居中 134pt 小横线，宠
+        // 物步行域同步收进横线一带（中心 ±92），不在线外空中
+        // 行走；展开态恢复整宽。
+        if collapsed {
+            let mid = bounds.width / 2
+            lo = max(lo, mid - 92 + half)
+            hi = min(hi, mid + 92 - half)
+            if hi < lo { hi = lo }
+        }
         return lo...hi
     }
 

@@ -42,9 +42,22 @@ final class PetSummonButton70: UIView {
     // (72) 弱化定版（Miller (71) 验收：坐在右下角太突兀）：
     // 直径 44→36、静置 alpha 0.55→0.35、圆底 0.35→0.22、
     // 右距 14→8 贴边。长按阈值与反馈语义不变。
+    // (74) 位置改版（Miller 图5 红圈定点）：落屏幕右下角本
+    // 角——底距由 88（避点播台展开高）改为 10、右距 10，
+    // 贴右下安全区。代价自知：点播台展开态（高 70、底距
+    // 10）时本钮叠在台体右端之上（窗口层 z 序在本钮），
+    // 收起态小横线居中不与本钮相干；按 Miller 定点执行。
     private static let diameter: CGFloat = 36
-    private static let bottomClearance: CGFloat = 88
+    private static let bottomClearance: CGFloat = 10
     private static let idleAlpha: CGFloat = 0.35
+
+    /// (74) 入场抑制：开局油画呈现全程本钮不许出现（图4
+    /// 它浮在油画右下被点名）。EntryIntro 呈现/消散两点调
+    /// setEntrySuppressed 显式开关，frontGuard 每拍再按呈现
+    /// 链里有无 EntryIntroViewController 兜底对账（漏挂钩
+    /// 时自愈、误挂时不残留）。
+    private static weak var sharedInstance: PetSummonButton70?
+    private var entrySuppressed = false
 
     private let circleView = UIView()
     private let iconView = UIImageView()
@@ -60,6 +73,7 @@ final class PetSummonButton70: UIView {
 
     static func install(in window: UIWindow) {
         let button = PetSummonButton70()
+        sharedInstance = button
         window.addSubview(button)
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
@@ -67,7 +81,7 @@ final class PetSummonButton70: UIView {
             button.heightAnchor.constraint(equalToConstant: diameter),
             button.trailingAnchor.constraint(
                 equalTo: window.safeAreaLayoutGuide.trailingAnchor,
-                constant: -8),
+                constant: -10),
             button.bottomAnchor.constraint(
                 equalTo: window.safeAreaLayoutGuide.bottomAnchor,
                 constant: -bottomClearance),
@@ -75,10 +89,35 @@ final class PetSummonButton70: UIView {
         button.startFrontGuard()
     }
 
+    /// (74) 入场抑制显式开关（EntryIntro 呈现/消散点调用）。
+    static func setEntrySuppressed(_ on: Bool) {
+        sharedInstance?.entrySuppressed = on
+        sharedInstance?.refreshEntryVisibility()
+        if on { Breadcrumbs.log("pet.btn74 entryhide") }
+    }
+
+    private func refreshEntryVisibility() {
+        let introInChain = Self.introInPresentedChain(window: window)
+        let shouldHide = entrySuppressed || introInChain
+        if isHidden != shouldHide { isHidden = shouldHide }
+    }
+
+    /// 呈现链里有无入场页（frontGuard 兜底对账用）。
+    private static func introInPresentedChain(window: UIWindow?) -> Bool {
+        var vc = window?.rootViewController
+        while let current = vc {
+            if current is EntryIntroViewController { return true }
+            vc = current.presentedViewController
+        }
+        return false
+    }
+
     private func startFrontGuard() {
         guard frontGuardTimer == nil else { return }
         let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] _ in
             guard let self, let window = self.window else { return }
+            // (74) 每拍先对账入场抑制（呈现链兜底），再提层。
+            self.refreshEntryVisibility()
             if window.subviews.last !== self {
                 window.bringSubviewToFront(self)
             }

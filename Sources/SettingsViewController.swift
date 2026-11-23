@@ -133,9 +133,11 @@ final class SettingsViewController: UIViewController {
         buildLayout()
         refresh()
 
-        // 入场初始态：遮罩透明、卡片下沉，viewDidAppear 里弹簧滑入
+        // 入场初始态：遮罩透明、面板自工具条下缘轻沉待发，
+        // viewDidAppear 里弹簧落下（(74) 就地展开面板形态）。
         backdropView.alpha = 0
-        cardView.transform = CGAffineTransform(translationX: 0, y: 56)
+        cardView.alpha = 0
+        cardView.transform = CGAffineTransform(translationX: 0, y: -16)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -153,6 +155,7 @@ final class SettingsViewController: UIViewController {
         if SettingsStore.reduceMotionFollowSystem
             && UIAccessibility.isReduceMotionEnabled {
             backdropView.alpha = 1
+            cardView.alpha = 1
             cardView.transform = .identity
             Breadcrumbs.log("settings.reduceMotion applied=entrance")
             return
@@ -161,6 +164,7 @@ final class SettingsViewController: UIViewController {
                        usingSpringWithDamping: 0.85, initialSpringVelocity: 0.4,
                        options: [.curveEaseOut]) {
             self.backdropView.alpha = 1
+            self.cardView.alpha = 1
             self.cardView.transform = .identity
         }
     }
@@ -325,7 +329,12 @@ final class SettingsViewController: UIViewController {
             UITapGestureRecognizer(target: self, action: #selector(close)))
         view.addSubview(backdropView)
 
-        // 浮层卡片：近黑、24 圆角、四周留 12 边距的底部浮卡
+        // (74) 就地展开面板：独立「设置页面」形态撤掉——齿轮
+        // 点开的设置改成自顶部工具条下缘展开的下拉面板（参
+        // 照网页版齿轮打开设置的方式）：顶锚 = 安全区顶 +56
+        // （工具条 44 高 + 4 顶距 + 8 间隔，与三页工具条落位
+        // 对齐），左右 12 边距，高度贴合内容、封顶见下方
+        // maxHeight；内容与页签体系一字不动。
         cardView.backgroundColor = FoliaUI.card
         cardView.layer.cornerRadius = 24
         cardView.clipsToBounds = true
@@ -338,10 +347,10 @@ final class SettingsViewController: UIViewController {
             backdropView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             cardView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
             cardView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
-            cardView.bottomAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12),
             cardView.topAnchor.constraint(
-                greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 24)
+                equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 56),
+            cardView.bottomAnchor.constraint(
+                lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12)
         ])
 
         // 卡内整体走一个 ScrollView：卡片高度默认贴合内容（下方 height 约束），
@@ -377,8 +386,10 @@ final class SettingsViewController: UIViewController {
         let hugHeight = cardView.heightAnchor.constraint(
             equalTo: scroll.contentLayoutGuide.heightAnchor)
         hugHeight.priority = .defaultHigh
+        // (74) 面板封顶：屏高 72%（下拉面板不吞整屏，下方墙
+        // 面仍露一带；超高内容内部滚动，同 (63) 口径）。
         let maxHeight = cardView.heightAnchor.constraint(
-            lessThanOrEqualTo: view.heightAnchor, multiplier: 0.88)
+            lessThanOrEqualTo: view.heightAnchor, multiplier: 0.72)
         NSLayoutConstraint.activate([hugHeight, maxHeight])
 
         // 顶部小横条（sheet 抓手）
@@ -910,7 +921,8 @@ final class SettingsViewController: UIViewController {
         }
         UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseIn], animations: {
             self.backdropView.alpha = 0
-            self.cardView.transform = CGAffineTransform(translationX: 0, y: 56)
+            // (74) 关闭回向工具条：上收 16 + 淡出（与入场镜像）。
+            self.cardView.transform = CGAffineTransform(translationX: 0, y: -16)
             self.cardView.alpha = 0
         }, completion: { _ in
             self.dismiss(animated: false)

@@ -593,6 +593,10 @@ enum EntryIntroPresenter {
     /// 共用，语义一字未改）。
     private static func performPresent(presenter: UIViewController,
                                        url: URL, veil: UIView) {
+        // (74) 爪印召唤钮入场抑制：present 发起前同步置位，
+        // 入场全程任何一帧不许它浮在油画上（消散点在
+        // dismissIntro 对称解除，另有钮内呈现链兜底对账）。
+        PetSummonButton70.setEntrySuppressed(true)
         let vc = EntryIntroViewController(url: url)
         vc.exitVeil = veil
         // overFullScreen（3.7 (23) 直溶前提）：呈现方（主页
@@ -1425,6 +1429,8 @@ final class EntryIntroViewController: UIViewController {
     private func dismissIntro(reason: String, animated: Bool) {
         guard !isDismissing else { return }
         isDismissing = true
+        // (74) 入场抑制解除（与 performPresent 的置位对称）。
+        PetSummonButton70.setEntrySuppressed(false)
         Breadcrumbs.log("entry end \(reason)")
         Breadcrumbs.log("entry dismiss begin reason=\(reason)")
         // (65) 工作流 D：淡入未走完就退场时补发部分对账行

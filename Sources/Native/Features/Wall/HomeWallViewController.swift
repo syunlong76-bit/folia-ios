@@ -132,6 +132,14 @@ final class HomeWallViewController: UIViewController,
     private var miniBarWidthConstraint: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
+    /// (74) 小横线形态的轨道约束组：展开态 leading/trailing/
+    /// height 在场；收起态换 centerX+固定宽 134（见
+    /// setMiniBarForm 的形态收口）。
+    private var miniTrackLeadC: NSLayoutConstraint?
+    private var miniTrackTrailC: NSLayoutConstraint?
+    private var miniTrackHeightC: NSLayoutConstraint?
+    private var miniTrackCenterXC: NSLayoutConstraint?
+    private var miniTrackWidthC: NSLayoutConstraint?
     /// 点播台附加功能行（3.7 (54) 工作流 H 建、(60) 第 7 条迁
     /// 浮层）：五钮行不再装进台本体，改住透明浮层
     /// （MiniBarQuickRowOverlayView）挂本 VC 的 view、锚台顶上
@@ -173,10 +181,11 @@ final class HomeWallViewController: UIViewController,
     /// (53) L 组改版为 iOS 式 ✕ 毛玻璃圆钮后，引用指整件 chrome
     /// 容器（命中 44pt + 视觉圆 34pt），显隐仍作用于整件。
     private var rootCloseButton: UIView?
-    /// 工作台浮层宿主（3.7 (53) A 组）：书库侧栏/头像区叠在
-    /// 墙上，关闭态只占把手与头像两个小命中区；侧栏展开时经
-    /// 其回调禁墙交互。安装在 viewDidLoad 末尾（见彼处）。
-    private var workbenchHost: WorkbenchOverlayHostView?
+    /// (74) 工作台宿主已撤除（见 viewDidLoad 内留痕）：原书
+    /// 库侧栏/工作台大台退役，入口全部由缝合工具条承接。
+    /// 分区可见性映射（原侧栏行显隐的设置消费点）改存本表，
+    /// 由「…」菜单建菜单时消费（applyHomeTabs62Visibility）。
+    private var seamSectionVisibility62: [String: Bool] = [:]
     /// 速记簿抽屉宿主（(53) D 组装、(54) N 组起持有）：侧栏
     /// 打开时经 setExternallyCovered 整层隐藏（照网页版
     /// is-covered），关栏恢复。
@@ -216,7 +225,6 @@ final class HomeWallViewController: UIViewController,
     /// 时存速记簿 covered 态/工作台宿主/宠物层的交互开关，退出
     /// 时逐项恢复（原本就被侧栏 covered 的速记簿不代为解除）。
     private var seamImmersiveSavedSketchbookCovered: Bool?
-    private var seamImmersiveSavedWorkbenchEnabled: Bool?
     private var seamImmersiveSavedPetEnabled: Bool?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
@@ -401,35 +409,16 @@ final class HomeWallViewController: UIViewController,
             self.setMiniProgress(fraction)
         }
 
-        // 工作台浮层安装（3.7 (53) A 组，DS 对账：不换 root、
-        // 不建容器 VC，只在墙上叠一层宿主视图）：关闭态命中
-        // 只认把手/头像、其余穿透；侧栏展开时禁墙平移与卡片
-        // 点按、关闭恢复。墙画布/入场/点卡 route 均不受影响
-        // （宿主不参与这些链，入场 present 走 VC 层级、盖在
-        // 宿主之上）。贴纸层视图是懒加的、会盖在本宿主之上，
-        // 但其视图不拦触摸（dock 已关交互、失败/缓冲贴纸只在
-        // 特定状态短暂出现且不在把手/头像命中区）。
-        let workbench = WorkbenchOverlayHostView(hostViewController: self)
-        workbench.onSidebarVisibilityChanged = { [weak self] open in
-            self?.collectionView.isUserInteractionEnabled = !open
-            // 网格形态（(55) E）与墙面同口径：侧栏打开时禁交互。
-            self?.gridCollectionView?.isUserInteractionEnabled = !open
-            // 速记簿共存（3.7 (54) 工作流 N，照网页版 is-covered
-            // 口径）：侧栏打开时速记簿整层隐藏——把手绝不浮压
-            // 侧栏之上；关栏原样恢复（抽屉状态保留）。
-            self?.sketchbookDrawer?.setExternallyCovered(open)
-            Breadcrumbs.log("workbench.wallInteraction enabled=\(!open)")
-        }
-        workbench.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(workbench)
-        NSLayoutConstraint.activate([
-            workbench.topAnchor.constraint(equalTo: view.topAnchor),
-            workbench.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            workbench.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            workbench.trailingAnchor.constraint(equalTo: view.trailingAnchor)
-        ])
-        workbenchHost = workbench
-        // (53) D 组速记簿：左缘把手＋抽屉宿主，装在工作台宿主之后
+        // (74) 工作台宿主整层撤除：(73) 把设置台做成顶部整幅
+        // 大台（真机图1 三家状态文字重叠、导播台与头像挤撞、
+        // 整块黑板压墙）被 Miller 判方向错——设置台回归缝合
+        // 工具条本体（头像/分段/搜索/齿轮/灯泡导播台/格子/
+        // 「…」/全屏），账户/分区/设置/导览入口全部由工具条
+        // 承接（分区歌单/电台/专辑/本地收进「…」菜单，见
+        // seamMoreTapped）。原 onSidebarVisibilityChanged 的
+        // 墙交互锁与速记簿 covered 联动随侧栏形态一并退役。
+        Breadcrumbs.log("workbench74 desk=removed carrier=seam")
+        // (53) D 组速记簿：左缘把手＋抽屉宿主
         // 成为墙面最上层子视图（其 hitTest 只认把手/抽屉、其余穿透，
         // 非模态不挡墙操作；宠物岛走 window.layer 独立层级、互不影响）。
         // (54) N 组起持有引用：侧栏开关经 onSidebarVisibilityChanged
@@ -1456,15 +1445,22 @@ final class HomeWallViewController: UIViewController,
             equalToConstant: MiniBarQuickRowView.expandedBarHeight)
         miniBarWidthConstraint?.isActive = true
         miniBarHeightConstraint?.isActive = true
+        // (74) 轨道约束存引用：收起态要把整宽轨道换成居中
+        // 小横线（宽 134、高 5），展开态还原（见 setMiniBarForm）。
+        miniTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20)
+        miniTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20)
+        miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
+        miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
+        miniTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 134)
         NSLayoutConstraint.activate([
             bar.centerXAnchor.constraint(equalTo: view.centerXAnchor),
             bar.leadingAnchor.constraint(greaterThanOrEqualTo: view.leadingAnchor, constant: 12),
             bar.trailingAnchor.constraint(lessThanOrEqualTo: view.trailingAnchor, constant: -12),
             bar.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
 
-            progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20),
-            progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20),
-            progressTrack.heightAnchor.constraint(equalToConstant: 4),
+            miniTrackLeadC!,
+            miniTrackTrailC!,
+            miniTrackHeightC!,
             fill.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             fill.topAnchor.constraint(equalTo: progressTrack.topAnchor),
             fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
@@ -1556,9 +1552,36 @@ final class HomeWallViewController: UIViewController,
         collapsedTap.isEnabled = false
         bar.addGestureRecognizer(collapsedTap)
         miniBarCollapsedTapRecognizer = collapsedTap
+        // (74) 第 4 项兜底识别器：与形态无关、恒启用、无
+        // require 链——几何已是细条（≤20）时任何落在台身的
+        // 点按先按几何纠正标志再展开（把 (63) 自愈前移到分
+        // 发前，照 (67) 取证修法②）。展开态恒空转放行。
+        let agnosticTap74 = UITapGestureRecognizer(
+            target: self, action: #selector(miniBarAgnosticTapped74(_:)))
+        bar.addGestureRecognizer(agnosticTap74)
 
         applyMiniTheme()
         applyMiniBarSlots()
+    }
+
+    /// (74) 第 4 项：细条点按的几何兜底（与形态无关）。
+    /// 背景定案见 (67) 取证 C① 与 (70) B3 注释：标志=展开、
+    /// 几何=细条的失同步态下 collapsedTap 被 sync 关掉、点
+    /// 按落进展开链的双击/长按判定里出不来；(70) 只在出现
+    /// 边沿按几何自愈，页面存续期间再失同步仍点不开（(73)
+    /// 真机依旧、(74) Miller 再报）。本识别器不随形态启停，
+    /// 以台体实际高度为真值：≤20 即先落 heal 面包屑纠正标
+    /// 志、再走既有 expandMiniBar（其内 minibar expand 一
+    /// 行与本行 minibar.hit 成对，即「点中→展开」自证）。
+    @objc private func miniBarAgnosticTapped74(_ gesture: UITapGestureRecognizer) {
+        guard let bar = miniBar, bar.bounds.height <= 20 else { return }
+        if !miniBarCollapsed {
+            Breadcrumbs.log("minibar.hit host=homewall heal=flag74")
+            miniBarCollapsed = true
+            miniPetStage?.barFormChanged(collapsed: true)
+        }
+        Breadcrumbs.log("minibar.hit host=homewall via=agnostic74")
+        expandMiniBar()
     }
 
     /// 点播台槽位应用（3.7 (50)）：按 MiniBarSlotSettings 显隐
@@ -1671,9 +1694,15 @@ final class HomeWallViewController: UIViewController,
         let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        miniProgressFill.backgroundColor = miniBarCollapsed
+        // (74) 第 6 项进度单色：填充与轨道同色——轨道改用填
+        // 充色 25% 透明，不再白轨 + 彩填充的异色拼接（两形
+        // 态同口径；收起态用收起填充色、展开态用展开填充色，
+        // 整条恒一个色相）。
+        let singleColor = miniBarCollapsed
             ? Self.miniCollapsedFillColor(for: miniTheme)
             : Self.miniFillColor(for: miniTheme)
+        miniProgressFill.backgroundColor = singleColor
+        miniProgressTrack.backgroundColor = singleColor.withAlphaComponent(0.25)
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
@@ -2137,7 +2166,20 @@ final class HomeWallViewController: UIViewController,
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (60) 第 7 条：展开台高回 70 后主排中心两形态同为 −5。
         for constraint in miniMainCenterY { constraint.constant = -5 }
-        miniTrackBottomConstraint?.constant = collapsed ? -6 : -7
+        // (74) 第 5 项小横线：收起态轨道不再整宽——换居中
+        // 134×5 圆角小横线（Home 指示条量级），进度填充仍在
+        // 线内表达（fill 宽随轨道宽、scaleX 分数不变）；圆点
+        // 收起（线身不再挂点）。台体容器不动（宽/高/命中带
+        // 原样，命中区不随视觉缩小——第 4 项反方向纪律）。
+        // 底距 −5.5 使 5pt 线在 16pt 容器内居中。
+        miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
+        miniTrackHeightC?.constant = collapsed ? 5 : 4
+        miniTrackLeadC?.isActive = !collapsed
+        miniTrackTrailC?.isActive = !collapsed
+        miniTrackCenterXC?.isActive = collapsed
+        miniTrackWidthC?.isActive = collapsed
+        miniProgressTrack.layer.cornerRadius = collapsed ? 2.5 : 2
+        miniProgressKnob.isHidden = collapsed
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
@@ -2696,21 +2738,19 @@ extension HomeWallViewController {
         // 工具条 z 序（(60) 第 2 条）：提到速记簿宿主之上作双
         // 保险——速记簿把手热区已下移（edgeTop ≥115）与本条纵
         // 向错位，此处再保顶部条带的命中不被速记簿层拦截。
-        // 工作台宿主/侧栏彼此的相对序不动（速记簿原本即在工
-        // 作台宿主之上，本条只是越过速记簿一层）。
+        // (74) 左锚改安全区：横屏灵动岛在左侧，leading 贴安
+        // 全区左缘即绕岛（竖屏安全区左缘 = 屏左缘、口径不变）。
         let toolbar = SeamToolbarView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
         if let drawer = sketchbookDrawer {
             view.insertSubview(toolbar, aboveSubview: drawer)
-        } else if let host = workbenchHost {
-            view.insertSubview(toolbar, belowSubview: host)
         } else {
             view.addSubview(toolbar)
         }
         seamToolbarTrailing = toolbar.trailingAnchor.constraint(
             equalTo: view.trailingAnchor, constant: -12)
         NSLayoutConstraint.activate([
-            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
+            toolbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             seamToolbarTrailing!,
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
             toolbar.heightAnchor.constraint(equalToConstant: 44),
@@ -2740,6 +2780,13 @@ extension HomeWallViewController {
             let settings = SettingsViewController()
             settings.modalPresentationStyle = .overFullScreen
             self.present(settings, animated: false)
+        }
+        // (74) 导播台入口改挂工具条灯泡（原工作台 .guide 行
+        // 退役）：落点仍是 Ponder62 导览列表。
+        toolbar.onGuideTapped = { [weak self] in
+            guard let self else { return }
+            Breadcrumbs.log("wall.seam.guide")
+            Ponder62.presentList(from: self)
         }
         toolbar.onLayoutTapped = { [weak self] in self?.seamToggleLayout() }
         toolbar.onMoreTapped = { [weak self] anchor in
@@ -2786,11 +2833,7 @@ extension HomeWallViewController {
         clear.translatesAutoresizingMaskIntoConstraints = false
         clear.addTarget(self, action: #selector(seamFilterClearTapped), for: .touchUpInside)
         bar.addSubview(clear)
-        if let host = workbenchHost {
-            view.insertSubview(bar, belowSubview: host)
-        } else {
-            view.addSubview(bar)
-        }
+        view.addSubview(bar)
         NSLayoutConstraint.activate([
             blur.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             blur.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
@@ -2818,11 +2861,7 @@ extension HomeWallViewController {
         tapView.translatesAutoresizingMaskIntoConstraints = false
         tapView.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(seamImmersiveTap(_:))))
-        if let host = workbenchHost {
-            view.insertSubview(tapView, belowSubview: host)
-        } else {
-            view.addSubview(tapView)
-        }
+        view.addSubview(tapView)
         NSLayoutConstraint.activate([
             tapView.topAnchor.constraint(equalTo: view.topAnchor),
             tapView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -3078,34 +3117,22 @@ extension HomeWallViewController {
         gridCollectionView?.reloadData()
     }
 
-    /// 顶部胶囊入口显隐（(62) §4.3）：侧栏分区行按总开关＋5 页签
-    /// 开关显隐——关掉的分区行不渲染（isHidden 于 UIStackView 即
-    /// 不占位）。映射：歌单→「歌单」、推荐→「电台」、探索→「搜索」、
-    /// 专辑→「专辑」、本地→「本地」（原生侧栏既有分区名）。
+    /// 分区入口显隐（(62) §4.3、(74) 改消费点）：原侧栏分区行
+    /// 随工作台撤除，分区收进工具条「…」菜单——本函数不再走
+    /// 视图树改 isHidden，改把总开关＋5 页签开关算成映射存
+    /// 表，seamMoreTapped 建菜单时按表过滤（关掉的分区不进
+    /// 菜单）。映射口径不变：歌单→「歌单」、推荐→「电台」、
+    /// 探索→「搜索」、专辑→「专辑」、本地→「本地」。
     func applyHomeTabs62Visibility() {
-        guard let host = workbenchHost else { return }
         let master = SettingsStore.homeTabsEnabled
-        let map: [String: Bool] = [
+        seamSectionVisibility62 = [
             "歌单": master && SettingsStore.showHomeTabPlaylists,
             "电台": master && SettingsStore.showHomeTabRecommend,
             "搜索": master && SettingsStore.showHomeTabExplore,
             "专辑": master && SettingsStore.showHomeTabAlbums,
             "本地": master && SettingsStore.showHomeTabLocal,
         ]
-        var applied = 0
-        func walk(_ v: UIView) {
-            if let button = v as? UIButton,
-               let label = button.accessibilityLabel,
-               let visible = map[label] {
-                button.isHidden = !visible
-                applied += 1
-            }
-            for sub in v.subviews { walk(sub) }
-        }
-        walk(host)
-        if applied > 0 {
-            Breadcrumbs.log("wall62.homeTabs master=\(master ? 1 : 0) applied=\(applied)")
-        }
+        Breadcrumbs.log("wall62.homeTabs master=\(master ? 1 : 0) carrier=menu")
     }
 
     /// 首页歌曲卡：开关开时墙面左上同款 TrackPill62 跟随当前曲。
@@ -3220,13 +3247,12 @@ extension HomeWallViewController {
             // 时逐项恢复原层级与状态。
             if !wasImmersive {
                 seamImmersiveSavedSketchbookCovered = sketchbookDrawer?.isExternallyCovered
-                seamImmersiveSavedWorkbenchEnabled = workbenchHost?.isUserInteractionEnabled
                 seamImmersiveSavedPetEnabled = miniPetStage?.isUserInteractionEnabled
             }
             if sketchbookDrawer?.isExternallyCovered == false {
                 sketchbookDrawer?.setExternallyCovered(true)
             }
-            workbenchHost?.isUserInteractionEnabled = false
+            // (74) 工作台宿主已撤除，沉浸中和名单只剩宠物层。
             miniPetStage?.isUserInteractionEnabled = false
             seamImmersiveTapView?.isHidden = false
             if let tapView = seamImmersiveTapView {
@@ -3244,14 +3270,10 @@ extension HomeWallViewController {
                 if let savedCovered = seamImmersiveSavedSketchbookCovered, !savedCovered {
                     sketchbookDrawer?.setExternallyCovered(false)
                 }
-                if let savedWorkbench = seamImmersiveSavedWorkbenchEnabled {
-                    workbenchHost?.isUserInteractionEnabled = savedWorkbench
-                }
                 if let savedPet = seamImmersiveSavedPetEnabled {
                     miniPetStage?.isUserInteractionEnabled = savedPet
                 }
                 seamImmersiveSavedSketchbookCovered = nil
-                seamImmersiveSavedWorkbenchEnabled = nil
                 seamImmersiveSavedPetEnabled = nil
                 Breadcrumbs.log("wall.seam.immersive zorder restored=1")
             }
@@ -3318,9 +3340,9 @@ extension HomeWallViewController {
         card.onSessionChanged = { [weak self] in self?.seamRefreshAccount() }
         if let pop = card.popoverPresentationController {
             pop.sourceView = seamToolbar ?? view
-            pop.sourceRect = CGRect(
-                x: (seamToolbar?.bounds.width ?? view.bounds.width) - 44,
-                y: 0, width: 44, height: 44)
+            // (74) 锚点回正：头像在工具条左端（leading 6 起
+            // 32×32），旧锚点落在条右端、卡片箭头指错位。
+            pop.sourceRect = CGRect(x: 6, y: 6, width: 32, height: 32)
             pop.permittedArrowDirections = [.up]
         }
         present(card, animated: true)
@@ -3382,6 +3404,23 @@ extension HomeWallViewController {
     func seamMoreTapped(anchor: UIView) {
         let hasQueue = PlaybackEngine.shared.currentTrack != nil
             || !QueueManager.shared.queue.isEmpty
+        // (74) 工作台分区承接：歌单/电台/专辑/本地四分区收进
+        // 本菜单（搜索已有工具条钮、设置已有齿轮、导览已有
+        // 灯泡，不重复列）；显隐读分区可见性映射（设置页
+        // 主页页签开关的消费点，applyHomeTabs62Visibility）。
+        var sections: [(title: String, run: () -> Void)] = []
+        let sectionDefs: [(String, () -> WorkbenchSectionViewController)] = [
+            ("歌单", { WorkbenchPlaylistListViewController() }),
+            ("电台", { WorkbenchRadioViewController() }),
+            ("专辑", { WorkbenchAlbumListViewController() }),
+            ("本地", { WorkbenchLocalViewController() }),
+        ]
+        for (title, make) in sectionDefs
+        where seamSectionVisibility62[title] ?? true {
+            sections.append((title: title, run: { [weak self] in
+                self?.seamOpenSection74(make())
+            }))
+        }
         WallMoreMenu.present(
             from: self, anchor: anchor,
             hasQueue: hasQueue,
@@ -3401,7 +3440,16 @@ extension HomeWallViewController {
                     manage.modalPresentationStyle = .fullScreen
                     self.present(manage, animated: true)
                 },
-                backToStage: { [weak self] in self?.openNativeStageFromHome() }))
+                backToStage: { [weak self] in self?.openNativeStageFromHome() },
+                sections: sections))
+    }
+
+    /// (74) 分区页呈现（与原工作台 openSection 同路：全屏 +
+    /// dismissToWall 关回墙）。
+    private func seamOpenSection74(_ vc: WorkbenchSectionViewController) {
+        vc.dismissToWall = { [weak self] in self?.dismiss(animated: true) }
+        vc.modalPresentationStyle = .fullScreen
+        present(vc, animated: true)
     }
 
     /// 喜欢的音乐：原始全量里 specialType=5 的那张（与工作台
