@@ -405,9 +405,13 @@ final class SeamToolbarView: UIView {
         }
         // 内容行带：绕岛态落到凹口下方；平形态 = 全高减去
         // 宿主下挪量 flatRowTop（(78) 第 4 条，仅主页非 0）。
-        let targetTop: CGFloat = wrap ? contentRowTop : flatRowTop
+        // 下挪只对高带成立：横屏带高 44 时行顶再下挪会把控
+        // 件推出带外——带高 <80 自动回落 0（横屏几何与旧版
+        // 一字不变，(78) 适配自查抓到的问题）。
+        let flatTop = bounds.height >= 80 ? flatRowTop : 0
+        let targetTop: CGFloat = wrap ? contentRowTop : flatTop
         let targetHeight: CGFloat = wrap ? 44
-            : max(44, bounds.height - flatRowTop)
+            : max(44, bounds.height - flatTop)
         if rowTopConstraint?.constant != targetTop {
             rowTopConstraint?.constant = targetTop
         }
