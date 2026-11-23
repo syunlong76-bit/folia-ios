@@ -19,6 +19,40 @@ final class MiniBarHitView: UIView {
     /// ＝死在识别器/守卫环（各死点另有 minibar.dead75）。
     var onHitLanded: (() -> Void)?
 
+    /// (76) ⑤派发段见证（(75) 会话日志判读改靶）：(75) 实
+    /// 证出现「到达环全登记、expand 与三守卫死点双零」——
+    /// 死点不在守卫环、而在到达之后、识别器认领之前的派
+    /// 发段（守卫全在识别器回调里，回调没触发就永远静
+    /// 默）。本视图补两路见证：触摸序列被取消
+    /// （onDispatchCancelled）、触摸正常结束却无任何台身
+    /// 识别器认领（onDispatchUnclaimed）。认领旗由宿主在
+    /// 任一台身识别器回调入口调 noteRecognizerClaimed()
+    /// 置位。本类只发信号、分环落痕在宿主；其他宿主不接
+    /// 线即无行为变化。
+    var onDispatchCancelled: (() -> Void)?
+    var onDispatchUnclaimed: (() -> Void)?
+    private var sequenceClaimed = false
+
+    func noteRecognizerClaimed() { sequenceClaimed = true }
+
+    override func touchesBegan(_ touches: Set<UITouch>,
+                               with event: UIEvent?) {
+        sequenceClaimed = false
+        super.touchesBegan(touches, with: event)
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>,
+                               with event: UIEvent?) {
+        if !sequenceClaimed { onDispatchUnclaimed?() }
+        super.touchesEnded(touches, with: event)
+    }
+
+    override func touchesCancelled(_ touches: Set<UITouch>,
+                                   with event: UIEvent?) {
+        onDispatchCancelled?()
+        super.touchesCancelled(touches, with: event)
+    }
+
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         let hit = super.hitTest(point, with: event)
         if hit != nil { onHitLanded?() }

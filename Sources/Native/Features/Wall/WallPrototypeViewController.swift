@@ -593,6 +593,24 @@ final class WallPrototypeViewController: UIViewController,
                 + " col=\(self.miniBarCollapsed ? 1 : 0)"
                 + " h=\(Int(bar.bounds.height))")
         }
+        // (76) ⑤派发段见证接线（(75) 日志判读改靶：到达
+        // 环全登记而 expand/dead75 双零 = 死在识别器认领
+        // 前）：取消与未认领各落 dead76、行内带当刻三识别
+        // 器启停位，下轮日志据此分环（位错 / 中途取消 /
+        // 识别饥饿）。未认领只在收起态落痕（展开态按键等
+        // 子视图自理的点按不经台身识别器、免假阳性；收起
+        // 态点中宠物的序列会与 pet.* 面包屑同刻出现、可
+        // 对照剔除）。
+        bar.onDispatchCancelled = { [weak self] in
+            guard let self else { return }
+            Breadcrumbs.log("minibar.dead76 host=wallproto at=cancel"
+                + " recog=\(self.miniTapBits())")
+        }
+        bar.onDispatchUnclaimed = { [weak self] in
+            guard let self, self.miniBarCollapsed else { return }
+            Breadcrumbs.log("minibar.dead76 host=wallproto at=noRecog"
+                + " recog=\(self.miniTapBits())")
+        }
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
@@ -925,6 +943,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 时先落 heal 面包屑纠正标志再展开，与 expand 内的
     /// minibar expand 行成对构成「点中→展开」自证。
     @objc private func miniBarAgnosticTapped74(_ gesture: UITapGestureRecognizer) {
+        // (76) ⑤派发段认领旗（同 miniBarTapped 等各回调）。
+        (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
         guard let bar = miniBar else { return }
         // (75) 死点留痕（同主页墙）：几何守卫拒绝不再静默。
         guard bar.bounds.height <= 20 else {
@@ -1068,6 +1088,7 @@ final class WallPrototypeViewController: UIViewController,
         // 影响本识别器。
         guard gesture.state == .began, let bar = miniBar, !miniBarCollapsed,
               MiniPlayerTheme.effectsEnabled else { return }
+        (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
@@ -1112,6 +1133,7 @@ final class WallPrototypeViewController: UIViewController,
     /// 注：宠物占位区的点按被宠物识别器整组接走，永远到不
     /// 了台身——双击须落在台身空白/封面/标题区（验收口径）。
     @objc private func miniBarTapped(_ gesture: UITapGestureRecognizer) {
+        (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
         guard let bar = miniBar else { return }
         // 收起态点按本应走无链的 collapsedTap 即时展开；此处
         // 仅作识别器启停万一失同步时的兜底。
@@ -1162,6 +1184,7 @@ final class WallPrototypeViewController: UIViewController,
     /// （每击已由 seekHit 识别器即时 seek）；按键区自理。
     /// 宠物占位区双击被宠物识别器接走、到不了台身。
     @objc private func miniBarDoubleTapped(_ gesture: UITapGestureRecognizer) {
+        (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
         guard let bar = miniBar, !miniBarCollapsed else { return }
         resetMiniIdleTimer()
         let point = gesture.location(in: bar)
@@ -1182,6 +1205,7 @@ final class WallPrototypeViewController: UIViewController,
     /// 收起态细条单击（3.7 (61) 第 7 条，与主页墙同构）：独
     /// 立识别器、无任何 require 链，点按即时展开。
     @objc private func miniBarCollapsedTapped(_ gesture: UITapGestureRecognizer) {
+        (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
         guard miniBarCollapsed else {
             Breadcrumbs.log("minibar.dead75 host=wallproto at=flag")
             return
@@ -1196,6 +1220,7 @@ final class WallPrototypeViewController: UIViewController,
     /// 「没办法拖进度」反馈而设）。封面重叠落点归封面规格；
     /// 按键区自理；收起态不 seek。
     @objc private func miniSeekTapped(_ gesture: UITapGestureRecognizer) {
+        (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
         guard let bar = miniBar, !miniBarCollapsed else { return }
         resetMiniIdleTimer()
         let point = gesture.location(in: bar)
@@ -1214,6 +1239,14 @@ final class WallPrototypeViewController: UIViewController,
         Breadcrumbs.log("minibar.seek host=wallproto via=seek-tap")
     }
 
+    /// (76) 三识别器启停位（与 minibar.form 的 recog= 同
+    /// 序：单击/双击/收起单击），派发段见证行内联用。
+    private func miniTapBits() -> String {
+        "\((miniBarTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarDoubleTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+            + "\((miniBarCollapsedTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
+    }
+
     /// 点按识别器组按形态启停（3.7 (61) 第 7 条，与主页墙同
     /// 构）：全部形态切换都经 setMiniBarForm 收口到这里。
     private func syncMiniBarTapRecognizers(collapsed: Bool) {
@@ -1228,6 +1261,9 @@ final class WallPrototypeViewController: UIViewController,
     /// 守卫先行会让标记永不复位、进度填充从此冻结（独立审查中-2）。
     /// 封面/按键的上沿落在命中带里，那里起手不抢手势（低-3）。
     @objc private func miniSeekPanned(_ gesture: UIPanGestureRecognizer) {
+        if gesture.state == .began {
+            (miniBar as? MiniBarHitView)?.noteRecognizerClaimed()
+        }
         guard miniSeekHit != nil, miniBar != nil else { return }
         let engine = PlaybackEngine.shared
         // 比例按轨道实际帧算（13.3）：轨道左右各内缩 20pt，按整条
