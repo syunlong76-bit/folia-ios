@@ -201,6 +201,11 @@ final class HomeWallViewController: UIViewController,
     /// StripSurface62 已于 (63) 第 4 条按 Miller 令整条摘除。
     private var wallBackdrop62: WallBackdrop62?
     private var seamToolbarTrailing: NSLayoutConstraint?
+    /// (75) 工具条双向约束组（竖屏绕岛带／横屏安全区侧锚），
+    /// applySeamBandOrientation 按当前朝向二选一激活。
+    private var seamBandPortrait: [NSLayoutConstraint] = []
+    private var seamBandLandscape: [NSLayoutConstraint] = []
+    private var seamBandIsPortrait: Bool?
     /// (62) 集成补接：工具条弹性回零计时（滚动停 0.3s 后归位）。
     private var seamElasticResetWork: DispatchWorkItem?
     /// 歌单→曲目墙共享元素转场的 hero 快照（(60) 第 3 条③）：
@@ -591,6 +596,12 @@ final class HomeWallViewController: UIViewController,
         // （与侧栏账户头同口径）。
         seamToolbarTrailing?.constant =
             (rootCloseButton?.isHidden ?? true) ? -12 : -64
+        // (75) 首启定向兜底（横屏冷启时 install 的屏幕猜测可
+        // 能与实际 bounds 不符）：按真实 bounds 校正一次；
+        // 另：绕岛带全宽覆顶后，✕ 容器须在带之上（展开态
+        // 不被毛玻璃盖住），提回最前（隐藏时为空操作）。
+        applySeamBandOrientation(portrait: view.bounds.width < view.bounds.height)
+        if let chrome = rootCloseButton { view.bringSubviewToFront(chrome) }
         seamRefreshAccount()
         // (62) 每次露面重读资料库界面选择（设置页改动后回墙生效，
         // 与工具条布局钮同状态源）＋侧栏分区显隐。
@@ -700,6 +711,9 @@ final class HomeWallViewController: UIViewController,
             + " to=\(Int(size.width))x\(Int(size.height))")
         coordinator.animate(alongsideTransition: { [weak self] _ in
             guard let self else { return }
+            // (75) 工具条朝向组随转场首帧切换（与墙重排同拍，
+            // 绕岛带/侧锚在旋转全程刚性跟随、不落单帧旧形态）。
+            self.applySeamBandOrientation(portrait: size.width < size.height)
             // (73) 墙体重排提前到转场首帧（alongside 在动画
             // 开始时以最终 bounds 执行）：(72) 前收尾全压在
             // completion——旋转变换已播完、冻结的旧布局还多
@@ -2682,6 +2696,18 @@ extension HomeWallViewController {
 
     // MARK: 安装
 
+    /// (75) 工具条朝向切换：竖屏激活绕岛带组、横屏激活安
+    /// 全区侧锚组；同值重复调用为空操作（viewDidAppear 每
+    /// 次露面调用作首启定向兜底，不产生约束抖动）。
+    func applySeamBandOrientation(portrait: Bool) {
+        guard seamBandIsPortrait != portrait,
+              !seamBandPortrait.isEmpty, !seamBandLandscape.isEmpty else { return }
+        seamBandIsPortrait = portrait
+        NSLayoutConstraint.deactivate(portrait ? seamBandLandscape : seamBandPortrait)
+        NSLayoutConstraint.activate(portrait ? seamBandPortrait : seamBandLandscape)
+        Breadcrumbs.log("seam.wrap75 host=home portrait=\(portrait ? 1 : 0)")
+    }
+
     func installSeamChrome() {
         // (62) WD §1 墙后层：插在墙画布之下，画布底色改透使
         // 墙后画面（透光封面/模糊/墙后歌词）可见；网格画布
@@ -2738,23 +2764,38 @@ extension HomeWallViewController {
         // 工具条 z 序（(60) 第 2 条）：提到速记簿宿主之上作双
         // 保险——速记簿把手热区已下移（edgeTop ≥115）与本条纵
         // 向错位，此处再保顶部条带的命中不被速记簿层拦截。
-        // (74) 左锚改安全区：横屏灵动岛在左侧，leading 贴安
-        // 全区左缘即绕岛（竖屏安全区左缘 = 屏左缘、口径不变）。
+        // (75) 第 3 项双向约束组：竖屏＝绕岛带（钉屏幕顶边
+        // 全宽、高 104：凹口 0–56＋内容行 54–98＋底衬 6，
+        // 条体绕岛、横线落岛左近）；横屏＝(74) 安全区侧锚
+        // （岛在侧边、leading 贴安全区左缘即避岛）。切换点
+        // 在 viewWillTransition 与 viewDidAppear（首启定向）。
         let toolbar = SeamToolbarView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.wrapIslandEnabled = true
+        toolbar.contentRowTop = 54
         if let drawer = sketchbookDrawer {
             view.insertSubview(toolbar, aboveSubview: drawer)
         } else {
             view.addSubview(toolbar)
         }
+        let bandP: [NSLayoutConstraint] = [
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            toolbar.topAnchor.constraint(equalTo: view.topAnchor),
+            toolbar.heightAnchor.constraint(equalToConstant: 104),
+        ]
         seamToolbarTrailing = toolbar.trailingAnchor.constraint(
             equalTo: view.trailingAnchor, constant: -12)
-        NSLayoutConstraint.activate([
+        let bandL: [NSLayoutConstraint] = [
             toolbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             seamToolbarTrailing!,
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 4),
             toolbar.heightAnchor.constraint(equalToConstant: 44),
-        ])
+        ]
+        seamBandPortrait = bandP
+        seamBandLandscape = bandL
+        applySeamBandOrientation(
+            portrait: UIScreen.main.bounds.width < UIScreen.main.bounds.height)
         // (63) 第 4 条：墙缝信息条（StripSurface62）按 Miller
         // 令整条摘除——装配块删除后工具条下方区域回归墙面卡
         // 片本体；条本不拦截触摸，顶部热区与层级零变化。

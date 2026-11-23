@@ -133,6 +133,11 @@ final class WallPrototypeViewController: UIViewController,
     private var backdrop: LoadingBackdropView?
     /// (62) 追加三：歌单页同款导航台（缝合工具条）。
     private var playlistSeamToolbar: SeamToolbarView?
+    /// (75) 工具条双向约束组（竖屏绕岛带／横屏 (74) 侧锚），
+    /// 与主页墙同构（applySeamBandOrientation 二选一激活）。
+    private var seamBandPortrait: [NSLayoutConstraint] = []
+    private var seamBandLandscape: [NSLayoutConstraint] = []
+    private var seamBandIsPortrait: Bool?
     private var didCenterCamera = false
     private var isWrapping = false
 
@@ -1967,6 +1972,8 @@ final class WallPrototypeViewController: UIViewController,
             + " to=\(Int(size.width))x\(Int(size.height))")
         coordinator.animate(alongsideTransition: { [weak self] _ in
             guard let self else { return }
+            // (75) 工具条朝向组随转场首帧切换（同主页墙）。
+            self.applySeamBandOrientation(portrait: size.width < size.height)
             // (73) 重排提前到转场首帧（同主页墙 (73) 注）：
             // 落定帧不再有旧布局→新布局的 snap。
             guard generation == self.wallRotationGeneration else { return }
@@ -2037,6 +2044,8 @@ final class WallPrototypeViewController: UIViewController,
         // (70) B3：布局落定后再核一次（viewWillAppear 时帧
         // 可能仍是旧值），失同步在此收口。
         resyncMiniBarFormToGeometry70()
+        // (75) 工具条首启定向兜底（同主页墙）。
+        applySeamBandOrientation(portrait: view.bounds.width < view.bounds.height)
         Breadcrumbs.log("wall.appear kind=playlist")
         Breadcrumbs.log("tracks appear playlist=\(playlistId)")
         // (62) 尾波第 5 组：种子先于呈现落地时在此消费待定位
@@ -2090,27 +2099,52 @@ final class WallPrototypeViewController: UIViewController,
         loadEntries()
     }
 
-    /// 歌单页导航台装配（(62) 追加三、(74) 修订）：与主页同
-    /// 款缝合工具条。几何（先量后装、零重叠）：本面顶部行有
-    /// 关闭键（safeArea.top+8 起 44 高、右缘内 44 宽），工
-    /// 具条整排内容宽 356pt——同高装配时右端让关闭键只剩
-    /// 317pt 装不下，故仍落关闭键行下方一排：top = safeArea
-    /// .top + 56、全宽（leading 贴安全区左缘、横屏绕岛；
-    /// trailing −12），与关闭键纵向零交叠。(74) 独立设置齿
-    /// 轮已撤除（原占顶部行左端），本面设置入口只剩本条齿
-    /// 轮。动作语义＝转发回主页执行主页同名动作
-    /// （SeamToolbarForwarding），不在本面另造行为。z 序在
-    /// 拍立得背板之上（加载态亦可见可点）。
+    /// (75) 工具条朝向切换（与主页墙同构）。
+    func applySeamBandOrientation(portrait: Bool) {
+        guard seamBandIsPortrait != portrait,
+              !seamBandPortrait.isEmpty, !seamBandLandscape.isEmpty else { return }
+        seamBandIsPortrait = portrait
+        NSLayoutConstraint.deactivate(portrait ? seamBandLandscape : seamBandPortrait)
+        NSLayoutConstraint.activate(portrait ? seamBandPortrait : seamBandLandscape)
+        Breadcrumbs.log("seam.wrap75 host=tracks portrait=\(portrait ? 1 : 0)")
+    }
+
+    /// 歌单页导航台装配（(62) 追加三、(74) 修订、(75) 再修）：
+    /// 与主页同款缝合工具条。几何（先量后装、零重叠）：本
+    /// 面顶部行有关闭键（safeArea.top+8 起 44 高、右缘内
+    /// 44 宽），工具条整排内容宽 356pt——同高装配时右端让
+    /// 关闭键只剩 317pt 装不下，故内容行仍落关闭键行下方
+    /// 一排。(75) 竖屏改绕岛带：条体钉屏幕顶边全宽、高
+    /// 165（凹口 0–56＋页眉空带＋内容行 115–159＋底衬 6，
+    /// 内容行顶 115 与 (74) 的 safeArea.top+56 同位、与关
+    /// 闭键纵向零交叠），关闭键容器提至带上层（展开态不
+    /// 被毛玻璃盖）；横屏回 (74) 侧锚组（top = safeArea
+    /// .top + 56、leading 贴安全区左缘避岛、trailing −12）。
+    /// 动作语义＝转发回主页执行主页同名动作
+    /// （SeamToolbarForwarding），不在本面另造行为。
+    /// (75) 加载页零帧：背板在场期间整条隐藏（见装配尾）。
     private func installPlaylistSeamToolbar() {
         let toolbar = SeamToolbarView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.wrapIslandEnabled = true
+        toolbar.contentRowTop = 115
         view.addSubview(toolbar)
-        NSLayoutConstraint.activate([
+        let bandP: [NSLayoutConstraint] = [
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            toolbar.topAnchor.constraint(equalTo: view.topAnchor),
+            toolbar.heightAnchor.constraint(equalToConstant: 165),
+        ]
+        let bandL: [NSLayoutConstraint] = [
             toolbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 56),
             toolbar.heightAnchor.constraint(equalToConstant: 44),
-        ])
+        ]
+        seamBandPortrait = bandP
+        seamBandLandscape = bandL
+        applySeamBandOrientation(
+            portrait: UIScreen.main.bounds.width < UIScreen.main.bounds.height)
         if let home = SeamToolbarForwarding.findHomeWall(from: self) {
             let state = home.seamToolbarInitialState
             toolbar.setSegment(state.segment)
@@ -2154,6 +2188,22 @@ final class WallPrototypeViewController: UIViewController,
             SeamToolbarForwarding.forward("fullscreen", from: self)
         }
         playlistSeamToolbar = toolbar
+        // (75) 关闭键容器提至绕岛带之上：展开态毛玻璃不盖
+        // 关闭键（收起态带透明、本步无副作用）。
+        if let chrome = closeChromeView { view.bringSubviewToFront(chrome) }
+        // (75) 加载页零帧（Miller 20:29 点名）：拍立得背板
+        // 在场期间工具条整条隐藏——收起横线与展开条都不许
+        // 出现在加载页上；背板淡出完成（onFadedOut）才恢复。
+        // 背板若在装配前已被 dismiss（快路径），其 fadeOut
+        // 完成回调仍会触发恢复，隐藏不会残留。
+        if let backdrop {
+            toolbar.isHidden = true
+            backdrop.onFadedOut = { [weak toolbar] in
+                toolbar?.isHidden = false
+                Breadcrumbs.log("seam.wrap75 loading=done bar=back")
+            }
+            Breadcrumbs.log("seam.wrap75 loading bar=hidden")
+        }
         Breadcrumbs.log("wall.seam.playlist installed")
     }
 

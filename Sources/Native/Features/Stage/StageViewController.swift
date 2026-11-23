@@ -142,6 +142,11 @@ final class StageViewController: UIViewController {
     private var stagePetStage: MiniBarPetStage?
     /// (74) 本页缝合工具条（三页清单之三，播放详情页）。
     private var stageSeamToolbar: SeamToolbarView?
+    /// (75) 工具条双向约束组（竖屏绕岛带／横屏 (74) 侧锚），
+    /// 与主页墙同构（applySeamBandOrientation 二选一激活）。
+    private var seamBandPortrait: [NSLayoutConstraint] = []
+    private var seamBandLandscape: [NSLayoutConstraint] = []
+    private var seamBandIsPortrait: Bool?
 
     // MARK: 状态
 
@@ -667,8 +672,20 @@ final class StageViewController: UIViewController {
         renderer?.setLifecycle(engine.isPlaying ? .playing : .paused, active: true)
     }
 
+    /// (75) 旋转时工具条朝向组随转场首帧切换（本类此前无
+    /// viewWillTransition 重写，此为唯一新增用途）。
+    override func viewWillTransition(to size: CGSize,
+        with coordinator: UIViewControllerTransitionCoordinator) {
+        super.viewWillTransition(to: size, with: coordinator)
+        coordinator.animate(alongsideTransition: { [weak self] _ in
+            self?.applySeamBandOrientation(portrait: size.width < size.height)
+        }, completion: nil)
+    }
+
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (75) 工具条首启定向兜底（同主页墙）。
+        applySeamBandOrientation(portrait: view.bounds.width < view.bounds.height)
         // RouteGuard presented 模式（3.7 (46)）：守卫窗顺延到
         // appear+3s（DS 成功标准以 viewDidAppear 为锚）。
         StageExitGate.shared.noteStageAppeared(token: stageToken)
@@ -2247,6 +2264,16 @@ final class StageViewController: UIViewController {
     // StageProgressDriver（viewWillDisappear 必 stop），不新
     // 造第二套。
 
+    /// (75) 工具条朝向切换（与主页墙同构）。
+    func applySeamBandOrientation(portrait: Bool) {
+        guard seamBandIsPortrait != portrait,
+              !seamBandPortrait.isEmpty, !seamBandLandscape.isEmpty else { return }
+        seamBandIsPortrait = portrait
+        NSLayoutConstraint.deactivate(portrait ? seamBandLandscape : seamBandPortrait)
+        NSLayoutConstraint.activate(portrait ? seamBandPortrait : seamBandLandscape)
+        Breadcrumbs.log("seam.wrap75 host=stage portrait=\(portrait ? 1 : 0)")
+    }
+
     /// (74) 播放详情页缝合工具条：与主页/歌单页同款。落位：
     /// 本页顶部行是舞台头（关闭键/标题/喜欢，safe.top+6 起
     /// 38 高、样式钮至 +74），工具条落其下——top = safeArea
@@ -2255,16 +2282,33 @@ final class StageViewController: UIViewController {
     /// 锚）。动作全转发回主页（与歌单页同路）：本台 dismiss
     /// 有 StageExitGate 守卫，转发前先经闸门程序化放行
     /// （approveProgrammaticExit），不绕闸。
+    /// (75) 竖屏改绕岛带：条体钉屏幕顶边全宽、高 191（凹
+    /// 口 0–56＋舞台头空带＋内容行 141–185＋底衬 6，内容
+    /// 行顶 141 与 (74) 的 safeArea.top+82 同位）；横屏回
+    /// (74) 侧锚组。带内空域点按穿透（SeamToolbarView 命
+    /// 中纪律），舞台头控件在带下仍可点。
     private func installStageSeamToolbar74() {
         let toolbar = SeamToolbarView()
         toolbar.translatesAutoresizingMaskIntoConstraints = false
+        toolbar.wrapIslandEnabled = true
+        toolbar.contentRowTop = 141
         view.addSubview(toolbar)
-        NSLayoutConstraint.activate([
+        let bandP: [NSLayoutConstraint] = [
+            toolbar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            toolbar.topAnchor.constraint(equalTo: view.topAnchor),
+            toolbar.heightAnchor.constraint(equalToConstant: 191),
+        ]
+        let bandL: [NSLayoutConstraint] = [
             toolbar.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 12),
             toolbar.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
             toolbar.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 82),
             toolbar.heightAnchor.constraint(equalToConstant: 44),
-        ])
+        ]
+        seamBandPortrait = bandP
+        seamBandLandscape = bandL
+        applySeamBandOrientation(
+            portrait: UIScreen.main.bounds.width < UIScreen.main.bounds.height)
         if let home = SeamToolbarForwarding.findHomeWall(from: self) {
             let state = home.seamToolbarInitialState
             toolbar.setSegment(state.segment)

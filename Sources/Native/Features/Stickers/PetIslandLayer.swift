@@ -136,17 +136,22 @@ final class PetIslandLayer: UIView {
     /// 岛框左右两侧的真像素带里、紧贴岛框边缘，身后垫一
     /// 块与岛框同高同圆角的纯黑框底把剪影接成一整条岛
     /// 框，整只在框内可见、不许只露局部。
-    private static let petSize: CGFloat = 38
+    /// (75) 视觉挤占优化（Miller 20:31）：状态栏字形由系统
+    /// 画在一切之上、本层遮不住，问题只在视觉挤占——(74)
+    /// 黑框底横跨全宽太宽、站位靠外。本轮：个头 38→34、
+    /// 缝 3→1pt 贴紧岛缘、框底改每只身后一短段（见
+    /// syncIslandBackdrop74），不再拉满全宽。
+    private static let petSize: CGFloat = 34
     /// 岛框几何（iPhone 14 Pro，文件头实测口径）：顶距
     /// ≈11、高 ≈37（底 ≈48）、半宽 ≈63。
     private static let islandTopY: CGFloat = 11
     private static let islandHeight: CGFloat = 37
     private static let islandHalfWidth: CGFloat = 63
-    /// 槽位中心偏移：岛半宽 + 3pt 缝 + 宠物半宽（=85）；
-    /// 左槽中心 x=111.5（框 92.5–130.5，距岛框左缘 3pt），
+    /// 槽位中心偏移：岛半宽 + 1pt 缝 + 宠物半宽（=81）；
+    /// 左槽中心 x=cx−81（框 cx−98…cx−64，距岛框左缘 1pt），
     /// 右槽对称。脚底线与岛框底对齐（48）。
     private static let slotOffset: CGFloat =
-        islandHalfWidth + 3 + petSize / 2
+        islandHalfWidth + 1 + petSize / 2
     private static let seatFeetY: CGFloat = islandTopY + islandHeight
     /// petRootLayer 的 zPosition（(53) G，DS 终审路线 c）：
     /// 与 window.layer 的其它直属子层（根视图层/呈现容器层）
@@ -159,12 +164,14 @@ final class PetIslandLayer: UIView {
     private static let proxyZoneHeight: CGFloat = 120
 
     private var pets: [IslandPetView] = []
-    /// (74) 岛框黑底：与真岛同高（37）同圆角（18.5）的纯
-    /// 黑圆角块，横跨左右槽位与岛框全宽，垫在宠物身后，
-    /// 使「宠物＋框底＋真岛」读作一整条岛框剪影（障眼法
-    /// 对位：应用像素进不了岛框本体，只能把框向两侧延
-    /// 伸到真像素带里）。无宠物/横屏时隐藏。
+    /// (74) 岛框黑底、(75) 改两段短底：容器（透明）＋左右
+    /// 各一短段纯黑圆角块（与真岛同高 37、同圆角 18.5），
+    /// 只垫在每只宠物身后并向岛缘内 tuck 6pt 接上剪影，
+    /// 不再横跨全宽（(75) 视觉挤占优化）。无宠物/横屏时
+    /// 整件移除。
     private var islandBackdrop74: UIView?
+    private var backdropSegL: UIView?
+    private var backdropSegR: UIView?
     /// 落点自证去重签名（isl.perch74 只在落点变化时落）。
     private var lastPerchSignature74 = ""
     private var tickTimer: Timer?
@@ -622,35 +629,63 @@ final class PetIslandLayer: UIView {
         }
     }
 
-    /// (74) 框底同步：横跨「左槽左缘−10 … 右槽右缘+10」
-    /// （恒定全宽，不随单/双只变化，剪影稳定），y/高/圆
-    /// 角与真岛框一致；无宠物时移除。垫在所有宠物之下。
+    /// (75) 框底同步（改两段短底）：每段只罩本侧宠物——外
+    /// 缘出宠物外框 6pt、内缘向岛框内 tuck 6pt（tuck 段落
+    /// 在岛体死区、无像素可见，纯为剪影接续的几何余量），
+    /// y/高/圆角与真岛框一致；单只在场时只亮本侧段。无宠
+    /// 物时整件移除。垫在所有宠物之下。
     private func syncIslandBackdrop74() {
         guard isPortrait, !pets.isEmpty else {
             islandBackdrop74?.removeFromSuperview()
             islandBackdrop74 = nil
+            backdropSegL = nil
+            backdropSegR = nil
             return
         }
-        let backdrop: UIView
+        let container: UIView
         if let existing = islandBackdrop74 {
-            backdrop = existing
+            container = existing
         } else {
-            backdrop = UIView()
-            backdrop.backgroundColor = .black
-            backdrop.layer.cornerRadius = Self.islandHeight / 2
-            backdrop.isUserInteractionEnabled = false
-            islandBackdrop74 = backdrop
+            container = UIView()
+            container.backgroundColor = .clear
+            container.isUserInteractionEnabled = false
+            islandBackdrop74 = container
+            let segL = UIView()
+            let segR = UIView()
+            for seg in [segL, segR] {
+                seg.backgroundColor = .black
+                seg.layer.cornerRadius = Self.islandHeight / 2
+                seg.isUserInteractionEnabled = false
+                container.addSubview(seg)
+            }
+            backdropSegL = segL
+            backdropSegR = segR
+        }
+        container.frame = bounds
+        if container.superview !== self {
+            insertSubview(container, at: 0)
+        } else {
+            sendSubviewToBack(container)
         }
         let cx = bounds.width / 2
-        let halfSpan = Self.slotOffset + Self.petSize / 2 + 10
-        backdrop.frame = CGRect(x: cx - halfSpan, y: Self.islandTopY,
-                                width: halfSpan * 2,
-                                height: Self.islandHeight)
-        if backdrop.superview !== self {
-            insertSubview(backdrop, at: 0)
-        } else {
-            sendSubviewToBack(backdrop)
+        let outerL = cx - Self.slotOffset - Self.petSize / 2 - 6
+        let innerL = cx - Self.islandHalfWidth + 6
+        let innerR = cx + Self.islandHalfWidth - 6
+        let outerR = cx + Self.slotOffset + Self.petSize / 2 + 6
+        let hasLeft = pets.contains {
+            (PetHomeRegistry.islandFixedDuo.firstIndex(of: $0.asset) ?? 0) == 0
         }
+        let hasRight = pets.contains {
+            (PetHomeRegistry.islandFixedDuo.firstIndex(of: $0.asset) ?? 0) == 1
+        }
+        backdropSegL?.frame = CGRect(x: outerL, y: Self.islandTopY,
+                                     width: innerL - outerL,
+                                     height: Self.islandHeight)
+        backdropSegR?.frame = CGRect(x: innerR, y: Self.islandTopY,
+                                     width: outerR - innerR,
+                                     height: Self.islandHeight)
+        backdropSegL?.isHidden = !hasLeft
+        backdropSegR?.isHidden = !hasRight
     }
 
     private func isAnimatingArrival(_ pet: IslandPetView) -> Bool {

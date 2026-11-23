@@ -1,0 +1,2 @@
+=== usage ===
+{"prompt_tokens": 3178, "completion_tokens": 17123, "total_tokens": 20301, "prompt_tokens_details": {"cached_tokens": 2176}, "completion_tokens_details": {"reasoning_tokens": 14775}, "prompt_cache_hit_tokens": 2176, "prompt_cache_miss_tokens": 1002}

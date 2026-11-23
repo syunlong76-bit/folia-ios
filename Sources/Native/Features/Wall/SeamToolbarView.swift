@@ -48,6 +48,25 @@ enum SeamSegment: Int, CaseIterable {
 /// 展开后无操作 3.5s 自动收回（任一钮点按重置计时）。展开/
 /// 收起只动 transform/alpha，不重排墙面。沉浸模式整条隐藏
 /// 的现行逻辑保留、横线同藏（见 setImmersiveHidden）。
+///
+/// 绕岛形态（3.7 (75) 第 3 项，Miller 2026-11-23 20:29/
+/// 20:31 点名）：(74) 的直条悬在岛下方、与岛毫无关系被
+/// 否。本形态下宿主把本条钉到屏幕顶边全宽（top=0），条
+/// 体顶带绕灵动岛：背景顶沿切出凹口包住岛（岛几何与
+/// PetIslandLayer 同源：半宽 63、底 48，凹口每侧留 8pt
+/// 缝、底留 8pt），内容行落到凹口下方（contentRowTop 由
+/// 宿主按本页顶部家具定），收起横线落在岛左近、与岛同
+/// 高——条就住在岛那一层高度。横屏宿主改走 (74) 安全区
+/// 侧锚约束（岛在侧边），本形态以 bounds 宽<高判定、横
+/// 向自动不生效。命中纪律：收起态只认横线命中垫、展开
+/// 态只认内容控件，带内空域一律穿透（高带不吞页面点按）。
+/// (75) 绕岛背景描边层载体：layer 本体即 CAShapeLayer，
+/// 只描边不填充，路径与背景 mask 同源（外轮廓＋凹口）。
+private final class SeamShapeBorderView: UIView {
+    override class var layerClass: AnyClass { CAShapeLayer.self }
+    var shapeLayer: CAShapeLayer { layer as! CAShapeLayer }
+}
+
 final class SeamToolbarView: UIView {
 
     var onSegmentChanged: ((SeamSegment) -> Void)?
@@ -94,6 +113,36 @@ final class SeamToolbarView: UIView {
 
     private(set) var segment: SeamSegment = .songs
 
+    // MARK: - (75) 绕岛形态
+
+    /// 宿主开启（钉顶边全宽时置 true）；实际生效还须
+    /// bounds 为竖向（layoutSubviews 判定，横屏自动回落）。
+    var wrapIslandEnabled = false
+    /// 绕岛态内容行顶在本条内的 y（宿主按本页顶部家具定：
+    /// 主页 54＝凹口底 56 上沿贴行、歌单页/舞台按其页眉行
+    /// 下沿）。非绕岛态忽略（行 = 全高）。
+    var contentRowTop: CGFloat = 54
+    /// 内容行布局带：内容控件的 centerY 全部锚到本带，绕
+    /// 岛态带落到凹口下方、平形态带 = 全高（与旧 centerY
+    /// 锚本条中心等价）。
+    private let rowGuide = UILayoutGuide()
+    private var rowTopConstraint: NSLayoutConstraint?
+    private var rowHeightConstraint: NSLayoutConstraint?
+    /// 绕岛态背景描边（与 mask 同路径 stroke；平形态由
+    /// blurView 自带 border 承担、本层隐藏）。
+    private let borderView = SeamShapeBorderView()
+    private let maskShapeLayer = CAShapeLayer()
+    private var grabberLeadingConstraint: NSLayoutConstraint?
+    private var grabberCenterYConstraint: NSLayoutConstraint?
+    private var grabberHitLeadingConstraint: NSLayoutConstraint?
+    private var grabberHitCenterYConstraint: NSLayoutConstraint?
+    private var wrapActiveNow = false
+    /// 灵动岛几何（iPhone 14 Pro 实测口径，与 PetIslandLayer
+    /// 同源常量）：半宽 63、顶 11、底 48、中心 y≈29.5。
+    private static let islandHalfWidth: CGFloat = 63
+    private static let islandBottom: CGFloat = 48
+    private static let islandCenterY: CGFloat = 29.5
+
     /// 全条内容视图组（双态只动这组的 alpha/transform）。
     private var contentViews: [UIView] {
         [blurView, avatarButton, avatarInitial, avatarImageView, segmentControl,
@@ -123,6 +172,35 @@ final class SeamToolbarView: UIView {
             blurView.topAnchor.constraint(equalTo: topAnchor),
             blurView.bottomAnchor.constraint(equalTo: bottomAnchor),
         ])
+
+        // (75) 绕岛描边层：垫在背景之上、内容之下，初始隐
+        // 藏（平形态走 blurView 自带 border）。
+        borderView.isUserInteractionEnabled = false
+        borderView.isHidden = true
+        borderView.shapeLayer.fillColor = UIColor.clear.cgColor
+        borderView.shapeLayer.strokeColor =
+            UIColor.white.withAlphaComponent(0.25).cgColor
+        borderView.shapeLayer.lineWidth = 1
+        borderView.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(borderView)
+        NSLayoutConstraint.activate([
+            borderView.leadingAnchor.constraint(equalTo: leadingAnchor),
+            borderView.trailingAnchor.constraint(equalTo: trailingAnchor),
+            borderView.topAnchor.constraint(equalTo: topAnchor),
+            borderView.bottomAnchor.constraint(equalTo: bottomAnchor),
+        ])
+
+        // (75) 内容行布局带（见 rowGuide 注释）。
+        addLayoutGuide(rowGuide)
+        let rowTop = rowGuide.topAnchor.constraint(equalTo: topAnchor)
+        let rowHeight = rowGuide.heightAnchor.constraint(equalToConstant: 44)
+        NSLayoutConstraint.activate([
+            rowGuide.leadingAnchor.constraint(equalTo: leadingAnchor),
+            rowGuide.trailingAnchor.constraint(equalTo: trailingAnchor),
+            rowTop, rowHeight,
+        ])
+        rowTopConstraint = rowTop
+        rowHeightConstraint = rowHeight
 
         // 头像：圆形底 + 昵称首字（登录态由宿主回填）；未登录
         // 显示 person 符号。与侧栏头像同一登录态口径。
@@ -177,7 +255,7 @@ final class SeamToolbarView: UIView {
 
         NSLayoutConstraint.activate([
             avatarButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            avatarButton.centerYAnchor.constraint(equalTo: centerYAnchor),
+            avatarButton.centerYAnchor.constraint(equalTo: rowGuide.centerYAnchor),
             avatarButton.widthAnchor.constraint(equalToConstant: 32),
             avatarButton.heightAnchor.constraint(equalToConstant: 32),
             avatarInitial.centerXAnchor.constraint(equalTo: avatarButton.centerXAnchor),
@@ -188,7 +266,7 @@ final class SeamToolbarView: UIView {
             avatarImageView.heightAnchor.constraint(equalToConstant: 32),
 
             segmentControl.leadingAnchor.constraint(equalTo: avatarButton.trailingAnchor, constant: 8),
-            segmentControl.centerYAnchor.constraint(equalTo: centerYAnchor),
+            segmentControl.centerYAnchor.constraint(equalTo: rowGuide.centerYAnchor),
             // (74) 宽度账：加导播台灯泡后六钮并排，分段由
             // 132 收至 104、图标钮 36 收至 33，整条内容
             // 6+32+8+104+4+6×33+4 = 356pt，竖屏 369 可用
@@ -206,7 +284,7 @@ final class SeamToolbarView: UIView {
         ])
         for button in [searchButton, settingsButton, guideButton, layoutButton, moreButton, fullscreenButton] {
             NSLayoutConstraint.activate([
-                button.centerYAnchor.constraint(equalTo: centerYAnchor),
+                button.centerYAnchor.constraint(equalTo: rowGuide.centerYAnchor),
                 button.widthAnchor.constraint(equalToConstant: 33),
                 button.heightAnchor.constraint(equalToConstant: 44),
             ])
@@ -230,18 +308,147 @@ final class SeamToolbarView: UIView {
         // (74) 设置台安置口径：收起横线改左锚（本条贴左上
         // 角，横线落左端：线身 leading+12 起 36 宽，命中垫
         // leading+2 起 76 宽居于线身），不再居中。
+        // (75) 约束改存引用：绕岛态由 layoutSubviews 按岛几
+        // 何改写常数（横线移到岛左近、与岛同高），平形态
+        // 恢复本组数值。
+        let gLead = grabberView.leadingAnchor.constraint(
+            equalTo: leadingAnchor, constant: 12)
+        let gCY = grabberView.centerYAnchor.constraint(equalTo: centerYAnchor)
+        let hLead = grabberHitView.leadingAnchor.constraint(
+            equalTo: leadingAnchor, constant: 2)
+        let hCY = grabberHitView.centerYAnchor.constraint(equalTo: centerYAnchor)
+        grabberLeadingConstraint = gLead
+        grabberCenterYConstraint = gCY
+        grabberHitLeadingConstraint = hLead
+        grabberHitCenterYConstraint = hCY
         NSLayoutConstraint.activate([
-            grabberView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            grabberView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            gLead, gCY,
             grabberView.widthAnchor.constraint(equalToConstant: 36),
             grabberView.heightAnchor.constraint(equalToConstant: 4),
-            grabberHitView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 2),
-            grabberHitView.centerYAnchor.constraint(equalTo: centerYAnchor),
+            hLead, hCY,
             grabberHitView.widthAnchor.constraint(equalToConstant: 76),
             grabberHitView.heightAnchor.constraint(equalToConstant: 28),
         ])
         // 初始态 = 收起（只剩横线），无动画直接落位。
         applyToolbarState(expanded: false, animated: false, reason: "init")
+    }
+
+    // MARK: - (75) 绕岛几何（布局期判定，常数只在变化时写）
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let wrap = wrapIslandEnabled && bounds.width > 0
+            && bounds.width < bounds.height
+        if wrap != wrapActiveNow {
+            wrapActiveNow = wrap
+            Breadcrumbs.log("seam.wrap75 \(wrap ? "on" : "off")"
+                + " row=\(Int(contentRowTop))")
+        }
+        // 内容行带：绕岛态落到凹口下方，平形态 = 全高。
+        let targetTop: CGFloat = wrap ? contentRowTop : 0
+        let targetHeight: CGFloat = wrap ? 44 : bounds.height
+        if rowTopConstraint?.constant != targetTop {
+            rowTopConstraint?.constant = targetTop
+        }
+        if rowHeightConstraint?.constant != targetHeight {
+            rowHeightConstraint?.constant = targetHeight
+        }
+        // 背景形态：绕岛态 mask 切凹口＋独立描边层；平形态
+        // 回 blurView 圆角＋自带 border。
+        if wrap {
+            let path = Self.wrapBackgroundPath(bounds: bounds)
+            maskShapeLayer.frame = bounds
+            maskShapeLayer.path = path
+            maskShapeLayer.fillRule = .evenOdd
+            if blurView.layer.mask !== maskShapeLayer {
+                blurView.layer.mask = maskShapeLayer
+            }
+            blurView.layer.cornerRadius = 0
+            blurView.layer.borderWidth = 0
+            borderView.shapeLayer.path = path
+            borderView.isHidden = false
+        } else {
+            if blurView.layer.mask != nil { blurView.layer.mask = nil }
+            blurView.layer.cornerRadius = 22
+            blurView.layer.borderWidth = 1
+            borderView.isHidden = true
+        }
+        // 横线对位：绕岛态落岛左近（线身右缘距岛左缘 14pt、
+        // 与岛同高居中）；平形态回 (74) 左锚行内位。
+        if wrap {
+            let islandLeft = bounds.width / 2 - Self.islandHalfWidth
+            let cy = Self.islandCenterY - bounds.height / 2
+            if grabberLeadingConstraint?.constant != islandLeft - 50 {
+                grabberLeadingConstraint?.constant = islandLeft - 50
+            }
+            if grabberHitLeadingConstraint?.constant != islandLeft - 70 {
+                grabberHitLeadingConstraint?.constant = islandLeft - 70
+            }
+            if grabberCenterYConstraint?.constant != cy {
+                grabberCenterYConstraint?.constant = cy
+            }
+            if grabberHitCenterYConstraint?.constant != cy {
+                grabberHitCenterYConstraint?.constant = cy
+            }
+        } else {
+            if grabberLeadingConstraint?.constant != 12 {
+                grabberLeadingConstraint?.constant = 12
+            }
+            if grabberHitLeadingConstraint?.constant != 2 {
+                grabberHitLeadingConstraint?.constant = 2
+            }
+            if grabberCenterYConstraint?.constant != 0 {
+                grabberCenterYConstraint?.constant = 0
+            }
+            if grabberHitCenterYConstraint?.constant != 0 {
+                grabberHitCenterYConstraint?.constant = 0
+            }
+        }
+    }
+
+    /// 绕岛背景路径：外轮廓（顶边平直贴屏幕顶、底角 22 圆
+    /// 角）＋凹口（岛宽＋两侧各 8 缝、底＝岛底＋8、底角 18
+    /// 圆角、自顶边切入），even-odd 合成后凹口即镂空。
+    private static func wrapBackgroundPath(bounds: CGRect) -> CGPath {
+        let w = bounds.width, h = bounds.height, r: CGFloat = 22
+        let path = UIBezierPath()
+        path.move(to: CGPoint(x: 0, y: 0))
+        path.addLine(to: CGPoint(x: w, y: 0))
+        path.addLine(to: CGPoint(x: w, y: h - r))
+        path.addArc(withCenter: CGPoint(x: w - r, y: h - r), radius: r,
+                    startAngle: 0, endAngle: .pi / 2, clockwise: true)
+        path.addLine(to: CGPoint(x: r, y: h))
+        path.addArc(withCenter: CGPoint(x: r, y: h - r), radius: r,
+                    startAngle: .pi / 2, endAngle: .pi, clockwise: true)
+        path.close()
+        let cx = w / 2
+        let half = islandHalfWidth + 8
+        let bottom = islandBottom + 8
+        let nr: CGFloat = 18
+        path.move(to: CGPoint(x: cx - half, y: -4))
+        path.addLine(to: CGPoint(x: cx + half, y: -4))
+        path.addLine(to: CGPoint(x: cx + half, y: bottom - nr))
+        path.addArc(withCenter: CGPoint(x: cx + half - nr, y: bottom - nr),
+                    radius: nr, startAngle: 0, endAngle: .pi / 2,
+                    clockwise: true)
+        path.addLine(to: CGPoint(x: cx - half + nr, y: bottom))
+        path.addArc(withCenter: CGPoint(x: cx - half + nr, y: bottom - nr),
+                    radius: nr, startAngle: .pi / 2, endAngle: .pi,
+                    clockwise: true)
+        path.close()
+        return path.cgPath
+    }
+
+    /// 命中纪律（(75)）：收起态只认横线命中垫；展开态只认
+    /// 内容控件（super 命中到本视图/背景即空域、穿透）。高
+    /// 带（绕岛态 100pt+）绝不整带吞页面点按。
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden, alpha > 0.01 else { return nil }
+        if isToolbarExpanded {
+            let hit = super.hitTest(point, with: event)
+            return (hit === self || hit === blurView) ? nil : hit
+        }
+        return grabberHitView.frame.contains(point) ? grabberHitView : nil
     }
 
     // MARK: - 双态（(60) 第 2 条）

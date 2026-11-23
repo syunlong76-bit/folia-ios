@@ -196,13 +196,19 @@ final class LoadingBackdropView: UIView {
         return true
     }
 
+    /// (75) 退场完成回调（淡出结束、已离场时触发一次）：
+    /// 歌单页据此恢复加载期被隐藏的工具条（加载页零帧）。
+    var onFadedOut: (() -> Void)?
+
     private func fadeOutNow() {
         phase = .fadingOut
         UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseOut]) {
             self.alpha = 0
-        } completion: { _ in
+        } completion: { [weak self] _ in
+            guard let self else { return }
             self.phase = .finished
             self.removeFromSuperview()
+            self.onFadedOut?()
         }
     }
 

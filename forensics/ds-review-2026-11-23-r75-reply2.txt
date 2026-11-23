@@ -1,0 +1,493 @@
+=== reasoning ===
+我们需要回答用户。我们需要按输出格式：按致命/重要/次要分级列发现，每条给依据与建议；最后总评。要基于简报事实，不假设访问仓库。要攻击实现计划，找漏洞质疑假设给替代方案。不要写代码。需要结合第一轮 A-F 和第二轮 G 裁决。需要推理从简但足够。
+
+用户是中文，要求输出中文。我们需要仔细读简报，寻找漏洞。
+
+我们需要按问题 A-G 重点攻击，但也要找计划没想到的。要分级。
+
+注意：用户说“第二轮回重发全量简报＋以下新事实，请直接产出分级结论，推理从简。” 他们希望我们直接产出分级结论。我们需要包括 A-F 攻击点，以及 G 的裁决。要按致命/重要/次要。
+
+我们需要先理解背景。
+
+Folia iOS 17+ 音乐播放器，UIKit。目标 iPhone 14 Pro iOS 18.2。真 Live Activity 灵动岛宠物计划。背景是以前障眼法。
+
+计划包括：
+1 新 Widget Extension target。
+2 Attributes 空，ContentState songTitle, artist, isPlaying, phrase, petsHidden。
+图片从 APNG 抽第一帧 PNG进 extension。
+3 ActivityConfiguration：compact leading 猫 trailing 狗；minimal 猫；expanded 猫狗放大两端，中间歌名+词；锁屏横幅同 expanded。petsHidden=true 三形态渲染空。
+4 IslandLiveActivityManager：拉起时机（首次 scene 激活且 activitiesEnabled，若无活动 request；开始播放时若未拉起也拉起）。更新 Combine 订阅 currentTrack/isPlaying 变化；词随机换。8小时 staleDate; 回前台检查 Activity.activities 空且应运行重拉；状态 stale/ended/dismissed 先 end 再按条件重拉。系统关实时活动不拉起/结束已有，回落障眼法。
+5 与障眼法互斥：活动在跑（非空且 state active）抑制 PetIslandLayer 渲染；活动不在跑 perch 照常；切换面包屑。
+6 汪汪队：beginConcert 调 manager.endForConcert()；endConcert resumeAfterConcert；与 islandSuspended 同进同出。
+7 App Group 声明 group.com.miller.folia；机会性；取不到静默降级。
+8 Info.plist NSSupportsLiveActivities true。
+9 验包。
+
+问题 A：未签名侧载链路，extension entitlements/App Group 个人团队签还能成立吗？App Group group.com.miller.folia 个人团队会不会注册失败导致装不上或活动拉不起？更稳 id 策略或干脆不声明 App Group 的理由。
+
+问题 B：ActivityKit 频次与配额：切歌/播放暂停每次 update、演唱会 end+request、回前台 restart——会不会撞更新预算/活动数上限/频繁启停限制？ staleDate=8h 的设法对不对？stale 之后系统如何呈现、用户观感？
+
+问题 C：互斥设计：用 Activity.activities 状态判 perch 抑制是否可靠？活动被系统结束但 app 在后台无感知、回前台才发现——这段时间锁屏/岛上是什么状态、perch 应用内不可见所以无叠影，但回前台瞬间会不会闪？有没有竞态：reconcile 落座与 manager 拉起同帧发生？
+
+问题 D：呈现合规：compact 槽位尺寸很小（leading/trailing each约几十 pt），38pt 级宠物图放进去「整只可见」是否现实？expanded/锁屏布局有没有系统尺寸上限会裁切？petsHidden 渲染空视图是否合规？
+
+问题 E：属性/状态设计：phrase 放 ContentState 由 app 随机换词——app 挂起（后台音频播放）时切歌靠远程命令/自动连播，update 还能不能发出（后台执行窗口）？如果 update 发不出，岛上词/歌名滞后于锁屏 Now Playing，会不会穿帮？
+
+问题 F：还有什么是这个计划完全没想到的（授权弹窗时机、首次拉起的系统确认、iOS 版本差异、与既有 Now Playing 锁屏卡的关系、用户在岛上长按进到的管理页等）？
+
+问题 G：Live Activity 拉起条件与 miniPetsEnabled 关系三案。需要裁决，并判断 LA 是否应绕开 introDone 闸，被任何条件挡下是否应落一行 la.gate 自证。可能提第四案。
+
+我们需要给出发现分级。可能有很多点。
+
+我们需要识别致命问题。可能关键点是 App Group 在未签名/个人团队重签的问题。需要分析。用户是用 SideStore/个人开发者证书在安装时重签侧载。个人团队可以创建 App Group 吗？在 Apple 开发者计划中，免费/个人团队可以使用 App Groups? 免费个人团队没有付费开发者账户？SideStore 个人开发者证书可以是免费或付费？通常个人团队（Personal Team）不支持 App Groups? 需要判断。实际上免费 Apple ID 个人团队不能使用 App Groups 吗？Apple 开发者文档：App Groups 需要付费开发者计划 membership。如果用户使用个人团队（free provisioning）无法注册 App Group？不一定，个人开发者付费账户属于个人团队，可以。如果免费账户，Sign in with Apple ID free provisioning 可能不支持 App Groups。SideStore 可能用免费开发者证书？用户“个人开发者证书”可能是指个人 team。简报说“用户用 SideStore/个人开发者证书在安装时重签侧载”。个人开发者证书可能是指 Apple ID 免费个人开发证书，7天。若免费个人团队，App Groups 不可用。因此声明 App Group entitlements 重签时可能失败，因为 provisioning profile 不包含该 capability，导致安装失败或扩展无法运行。但其实对 Live Activity，widget extension 需要与 app 共享数据时才有 App Group；如果不依赖 App Group，不需要声明。计划中 v1 渲染不依赖它，图已打进 extension，ContentState 由 ActivityKit 传输。那么为什么不声明 App Group？更稳策略是干脆不声明 App Group，因为 v1 不需要。计划里第7点说“App Group 共享容器只作机会性用途（如日后动态图），v1 渲染不依赖它；容器取不到时静默降级不崩。” 但声明 App Group entitlement 会强制签名需匹配 provisioning profile，如果没有该能力则重签失败/安装失败。所以致命或重要。建议：v1 删除 App Group 声明，不要写 entitlements，待确实需要且目标用户证书支持时再引入，或改用 App Group 前缀为 team ID 自动生成提供 fallback。用户提问“有没有更稳 id 策略或干脆不声明 App Group 的理由？” yes 干脆不声明最稳。
+
+但是否声明 App Group 仍然必需用于“图已打进 extension”吗？不需要。Live Activity 数据通过 ActivityKit 传入 ContentState，图包在 extension 内，如果用静态图，无需共享容器。如果有动态图，可能需要 App Group 或者 App 侧写入共享容器。但 v1 不需要。
+
+此外，注意 NSSupportsLiveActivities true 是 app 侧 Info.plist 键。Extension 的 NSExtensionPointIdentifier 是 com.apple.widgetkit-extension。对 Live Activity，extension 需要支持 ActivityKit，不是 WidgetKit? Widget extension 可以同时支持 widgets 和 live activities。要加 NSSupportsLiveActivities? Actually Info.plist for extension needs NSExtensionPointIdentifier com.apple.widgetkit-extension. The app sets NSSupportsLiveActivities=YES. The extension may need to set NSSupportsLiveActivities? Apple docs: For apps that support Live Activities, add NSSupportsLiveActivities to Info.plist of app target. Extension target Info.plist doesn't need? It might need `NSSupportsLiveActivities` for Live Activities in widget extension? Hmm not sure. But plan checks app Info.plist, not extension. Might be okay.
+
+还需要注意 Live Activity 的更新频率和预算。ActivityKit 有 `ActivityContent` and `update` may have budget not documented exact but there are rate limits. Frequent updates on every track change/pause might be okay for user initiated? Apple's docs mention budget; system throttles. There's also `activity.update(using:)` with `ACAlert`? Actually ActivityKit: `Activity` updates: may be limited; for Live Activities, updates are budgeted but not exactly doc public. There is “update” is not intended for high-frequency; if frequent updates, consider using `pushType: .token` remote notifications? But local updates okay for song changes maybe seconds apart. We can mention likely hits “activity update budget” if auto-advance fast? But probably song changes minutes, okay. But in app background, local updates may not be delivered if app is suspended. That's issue E.
+
+活动数上限：single Live Activity per app? Actually multiple activities? “An app can have up to 5 live activities.”? iOS 16.1 maybe one at a time? Need be cautious. User asks activity count limit. Known: multiple Live Activities allowed from widget extension? There is a limit maybe 5. But plan uses one. Restart/end request may cause churn but not exceed count if ending before new.
+
+频繁启停限制: endConcert then resumeAfterConcert (end+request) may hit rate limit; iOS might show “unable to start” or system may defer. It might be okay if not massively frequent.
+
+staleDate=8h 的设法对不对？ActivityKit staleDate sets date at which activity is considered stale. After stale, system may dim/move to expired? Actually staleDate: The date after which the system considers the activity to be stale and may remove it? In ActivityKit, `staleDate: Date` is optional; system considers activity stale after date, but still shown? I need recall. `ActivityContent` has `staleDate`, system uses to enable "stale" UI? It might show with reduced alpha or stop updating. If set 8h, after 8h system may keep showing stale activity until ended by app or system. But Live Activity max duration is 8 hours anyway (system may end). Setting staleDate=now+8h matches cap but means activity remains visible but stale right at cap maybe then system ends. However if activity is stale before end, user sees outdated info. The plan's staleDate=now+8h might be slightly too late: system max lifetime may be 8 hours from start; at 8h system ends regardless. If staleDate is exactly max lifetime, no benefit. Better set staleDate earlier, e.g. 15–30min after pause/stop, or when song paused maybe set staleDate = now+some interval so system stops showing stale UI and triggers clean up. But LA needs be active while playing. 8h is maximum for "Live Activity" total? It's per activity. User says "单次活动 8 小时上限". So staleDate=now+8h equals maximum, meaning when activity hits max system ends. But maybe if user pauses at 7h59, still shows pet for 1 minute; okay. But if app is killed or suspended, it can't end, so system auto-dismisses at 8h. The bigger issue is `staleDate` is meant to mark content outdated; if you set 8h and playback stops earlier? plan updates user triggers. If app is suspended and auto-plays, maybe update can't send; staleDate won't help because still future. Need set `staleDate` based on isPlaying? If music paused, maybe stale after 1h? not specified. This could keep stale info.
+
+Need consider minimal/Lock Screen banner. Lock Screen banner not a separate activity? ActivityKit has compact and minimal and lock screen presentation. `ActivityConfiguration` has `dynamicIsland` and `regular`? In WidgetKit? For Live Activities, there are `DynamicIsland` and `LockScreen` presentations. But "锁屏横幅 = 同 expanded 的横排版" plan might misuse; lock screen presentation is `ActivityConfiguration` closure? It includes all platforms. Actually `ActivityConfiguration(for: attributes, content: { ... })`. You don't specify separate compact/minimal/expanded/lockscreen in simple closure? In iOS 16, you provide `ActivityConfiguration(for: C, content: { context in ... })` where view is used for Lock Screen; dynamic island requires separate `dynamicIsland` closure with expanded/compact/minimal. The plan stating expanded used for lock screen maybe okay but need ensure.
+
+PetsHidden rendering EmptyView: is it compliant? If `EmptyView` is returned for all presentations, will system reject? The activity is still active but no content; maybe it can show blank widget/lockscreen, but Apple may not prohibit. However if user sees blank island bubble? Might be weird. Better to end activity rather than blank if pets hidden. Plan's main path is end activity; but if end fails (system?) EmptyView fallback may show blank in Dynamic Island? E.g., if `petsHidden` true, ActivityKit may render an empty Dynamic Island view; could be invisible. Might not be rejected. But maybe must provide non-empty view; but no documented reject. Could be okay but poor fallback. But if petsHidden is part of ContentState, a pet hidden update might be unnecessary; since main path ends. Suggest fallback include a simple placeholder matching music info rather than EmptyView to avoid blank visual.
+
+Major issue: “首次 scene 激活且 ActivityAuthorizationInfo.areActivitiesEnabled 时，若无在跑活动则 request 拉起” — this may cause live activity to start immediately on app launch even if no music playing, because condition says scene active + enabled, no in-progress activity. That will show pet even when no currentTrack? IsPlaying false, currentTrack nil maybe ContentState with empty title/artist. This contradicts start on playback. Must gate on currentTrack available and maybe isPlaying. Otherwise live activity starts at app open, possibly causing unnecessary system confirmation? Actually Live Activities do not require user permission prompt; allowed via settings. But launching at cold start may show empty pet in island while not playing. That could annoy/confuse. Also "开始播放时若未拉起也拉起" suggests but the first condition doesn't require track. This is significant.
+
+Also “真 Live Activity 灵动岛宠物” is tied to playback; should only be active when playing? But app open maybe okay if it shows current track paused? The background says 岛上居民 always fixed. Could be okay if launched while app open even if no current track? But ContentState might be empty; if pet images still show maybe okay? But product likely not. Need flag as important.
+
+Another major: Live Activity can only be started from app while app in foreground? Starting Live Activity from background is restricted? Activity.request(attributes:content:pushType:) can be called from app when in foreground or with background tasks? Apple docs: You can start Live Activity from app while app is in foreground. For background start from push notification or from widget extension? Actually app can start from background when app receives remote push? If you want start while background audio playing and app not foreground, maybe must use push? Hmm. `Activity.request` likely can be called only when app is running (foreground or background?) It might be possible if app is active in background audio; but generally Live Activities are started in foreground? Need recall: ActivityKit can start from app while app is in foreground; to start from background, use push notifications with `pushType: .token` and send from APNs. The plan says “开始播放（isPlaying 变 true 且有 currentTrack）时若未拉起也拉起” via Combine in app. If app is foreground when user taps play, okay. If playback starts due to remote command from lock screen or auto-play, app may be in background, call Activity.request from background may fail or be disallowed? Need consider. If app is in background and music starts, can the app start Live Activity? I believe `Activity.request` may work in background if app has background execution? Let's verify from memory: Live Activities can be started from app only in foreground. For background start, you need to use `PushToStartTokenUpdate`? Hmm. There is `Activity.request` in app; if called in background may be delayed / not allowed? It might be possible in background because app is running due to audio. But uncertain. At least flag as risk: The plan assumes local `Activity.request` succeeds on playback start in background; but background start may not work reliably; should instead use remote push or start earlier in foreground. But this app already has local music playback; starting on app open or when app is foreground and about to play is reliable. So if playlist auto-advance while screen locked, app is background; activity already running because launched when app was foreground. The plan's initial launch on scene active ensures that. So maybe okay. If app was terminated but audio resumes via remote command? Not common.
+
+Another major: Live Activity cannot show APNG. Plan extracts first frame PNG. But original APNG cat-live is 60 frames, animations wanted? Product knows? They want "真 Live Activity 灵动岛宠物" maybe static first frame acceptable? But maybe user expects movement. Use timeline updates? Not in v1. Could be okay.
+
+App Group: as said.
+
+CI unsigned IPA: extensions have `CODE_SIGNING_ALLOWED=NO`. The extension binary and Info.plist embedded. When user re-signs with personal team, the provisioning profile must include the app group if entitlements requested. If `CODE_SIGNING_ALLOWED=NO` strips entitlement? Not strip; the built extensions may have entitlements not signed. But re-sign may fail due to missing profile. So recommend not declare App Group.
+
+Also project.yml with extension entitlements: if adding entitlements file for app and extension, but project.yml info.properties rewriting app Info.plist might not apply to extension. They need also configure extension Info.plist with NSExtension etc. We can flag.
+
+Another critical issue: `NSSupportsLiveActivities=true` in app Info.plist: For iOS 17+ maybe key is `NSSupportsLiveActivities` boolean yes. Also application state.
+
+The plan's "app target embed 依赖 Widget Extension" — for app extensions, the app bundle must include extension in `PlugIns` directory, and extension's `Info.plist` must have `NSExtensionPointIdentifier` set to `com.apple.widgetkit-extension`. XcodeGen can build extension. Fine.
+
+Need check "compact leading = 猫图、trailing = 狗图（整只可见、等比缩放）". Dynamic Island compact leading/trailing have known intrinsic size. The leading view and trailing view are small regions; image may be clipped if not using correct layout. The plan says whole pet visible. The original pet is 38pt with foot aligned to y=48. In compact leading/trailing, the island cutout height is 37pt? Actually iPhone 14 Pro dynamic island dimensions: diameter ~37.5pt? The compact leading/trailing each have width maybe 52pt, height 37pt? Pet image of 38pt may just fit if scaled. But they said image from APNG 120x120 point? Actually PNG about 120x120 px maybe not pt. Need fit via `scaledToFit` with max width/height. If the image has transparent margins, visible pet might be smaller. Might be acceptable. But need flag "整只可见" not guaranteed because system may apply padding/corner mask. Better design with small pet icon 24–28pt and test on device. Also `expanded` has Dynamic Island expanded size has max maybe 347x? Actually iOS 18 expanded dynamic island can be bigger. The layout should avoid exceeding. But standard.
+
+PetsHidden empty: If app ends activity for concert, no petsHidden needed. But if hidden and no activity, okay. If update fails and activity continues with petsHidden, empty may show. Maybe okay.
+
+Big issue: `Activity.activities` state to suppress perch is unreliable due to app not knowing system ended; if app in background and activity ended by system due to 8h or dismissal, the app may not get immediate callback. It will discover only on scene foreground. During that interval, the activity may be gone on lock screen; but perch inside app may still be suppressed? Wait suppression is app-side logic. If activity ended by system but app background, app doesn't know, so `Activity.activities` might still list? The property reflects system's activity list? It may update asynchronously and while app background maybe not. When app comes foreground, it might still think active until refresh? Actually `Activity.activities` might be empty when queried in foreground. The app won't render perch while app background anyway; when foreground, it checks. Could flash if it initially suppresses perch then reconciles? The plan says sceneDidBecomeActive checks and restarts. But the suppression may be updated after checking. There may be a race: `PetIslandLayer` and `IslandLiveActivityManager` both observe scene activation; perch may be off because old state, then toggled on later same runloop? That can cause flicker. Need use a single mediator/source of truth, not status polling. Better: coordinator sets an atomic `perchSuppressed` flag updated synchronously before scene UI renders; not derive from asynchronous `Activity.activities` in view-layer. Additionally, if live activity active, app's Perch inside app invisible anyway because app foreground; but when returning, island is on lock screen and app may show perch; suppress necessary.
+
+G issue: We need decide. Facts show miniPetsEnabled has multiple writes, including gesture off writes persistently causing bug. Two previous failures. Need Live Activity launch condition must not add new silent suppression point. They ask three cases. They mention "岛双人组在 Miller 定版里是常驻独立功能，不归迷你台开关管" — likely 甲案. I think choose 甲案 plus maybe refined: decouple completely from miniPetsEnabled. LA should not read miniPetsEnabled at all. This avoids gesture-off causing Live Activity to vanish due to old persistent false. But we may want respect settings page off? The product says island pets are separate from mini bar? The background: miniPetsEnabled originally for mini bar cast, but also island? Actually (72) reconcile used miniPetsEnabled as gate, then (73) decoupled. So yes, use 甲. Also LA should not be gated by `introDone`. Because `introDone` is an animation/ambient lifecycle condition; Live Activity should depend on scene activation/playback, not in-app intro completion. If any condition blocks LA, must log `la.gate` with reason (unlike silent suppress). Also maybe if system Live Activities disabled, log.
+
+But perhaps we should propose fourth case: LA respects only a new independent `islandPetsEnabled` setting if product wants, default true, but not the legacy miniPetsEnabled. That is better than 乙/丙. But product said it's fixed double resident, maybe no setting. So 甲 or fourth. We'll say 甲 best.
+
+Need also consider "ActivityAuthorizationInfo.areActivitiesEnabled" might be false system-wide for app, or Live Activities disabled in Settings. No prompt required. Need mention "授权弹窗" no prompt.
+
+Question F: What plan completely misses. Let's list:
+- First start: There is no permission prompt for Live Activities; if disabled in Settings, user must go to Settings. App should present education maybe. But plan does not.
+- Live Activities are controlled per app in Settings > Folia > Live Activities. If user has disabled, manager falls back to (74). Need handle enabling later.
+- `ActivityAuthorizationInfo` also has `frequentPushesEnabled`? Not applicable.
+- Does Info.plist need `NSFaceIDUsageDescription`? No.
+- iOS version differences: iOS 17+/18.2 but Live Activities available iOS 16.1; Folia target iOS17 so okay. iPhone 14 Pro has Dynamic Island. But users on non-island devices see Lock Screen Activities. The plan always uses Dynamic Island; on non-island device, ActivityConfiguration `dynamicIsland` closure? For Live Activity, you can provide `dynamicIsland` and/or lock screen. On non-Dynamic Island, only Lock Screen. If extension has `dynamicIsland` only, non-island devices may not show? The plan includes lock screen; must ensure ActivityConfiguration provides lock screen content independent of dynamic island. Good.
+- SideStore/resigning: App Group issue as above.
+- Live Activity lifecycle: user can end activity from lockscreen via long press. `Activity` handles. When user dismisses Live Activity, then app should know and not keep perch suppressed? Manager may only check app foreground. Need observe `Activity.activities` changes? There is `Activity.activityStateUpdates` async stream. Plan doesn't listen. So if user manually removes activity, app may keep suppressing perch until foreground check; but app may not know while foreground? If user dismisses while music playing on lock screen and then opens app, manager checks and restarts. But while app foreground, maybe Activity.activities is empty and perch may be visible; okay. But need consider if app sees `activities` stale in memory. Suggest use `Activity.activities` then.
+- The plan's `staleDate = now + 8h` probably should not be 8h because system may keep stale content for some time after stale; setting same as max duration may make the system end activity right after stale anyway. But there is max duration exactly 8h? Need confirm. iOS Live Activity max duration is 8 hours; system may end after 8h. If staleDate is 8h, it defines stale at same time; but there is possible system ends shortly after. Suggest set staleDate to `now + 2h` or `now + 6h` for resting; restart when active. Better: set `staleDate = nil`? In ActivityKit, if no `staleDate`, is it stale? It might be not stale. But max 8h still enforced. We can recommend set staleDate = now + 8h but plan already. The issue is if app cannot restart after 8h, activity disappears. The scene foreground check can re-pull. Might be okay.
+
+Need maybe answer "与既有 Now Playing 锁屏卡的关系": Live Activity appears as a separate card under the player sometimes; NowPlayingController writes to MPNowPlayingInfoCenter; Live Activity has its own UI. They can show duplicate song info. Need ensure Now Playing controls still work. Live Activity can have no buttons? The plan's expanded only shows image and text; maybe not interactive. The user might see lock screen media controls plus Live Activity. That's okay but duplication. The Live Activity may compete with Now Playing card space. In iOS 18, live activities are combined with media? There may be multiple. Need mention potential awkward duplicate and design should consider align updates with `NowPlayingController` to avoid two sources showing different song/play state.
+
+Potential issue: `phrase` random word update from PetLines.islandHome in ContentState. If phrase changes while app is background, as E noted, update may fail. But if phrase updated even when paused, maybe not. Need maybe decouple phrase from critical metadata; use song title/artist from NowPlaying and phrase as decorative. If update fails, old phrase remains but not fatal. But might differ from now playing. Could use `update` with `contentState` only when app foreground, and rely on `banner`? No remote push. Better to avoid dynamic phrase entirely, make static phrase? Or use a placeholder that doesn't age. But product wants phrase.
+
+Also ActivityKit ContentState has 4KB max. Song title/artist, phrase are tiny. Images are not allowed. Good.
+
+Need discuss "background update window": If app is background audio, `activity.update` called from Combine may be opportunistic; if app not running due to suspension (audio session may keep app running), but if app suspended? Audio background mode keeps app running while playing. So updates likely okay when playback changes due to audio engine. But if app is suspended and playback is auto-advancing due to system queue? Actually the app controls playback engine, so it is active in background. It should have execution. But iOS may throttle updates if too many. If network not. We can say likely updates from background audio are possible due to background audio mode, but need test; the 8h/background may expire. But if app is not playing and suspended, updates irrelevant.
+
+Potential issue: `Activity.activities` may include stale/ended activities? If `state == .active` check in plan and also `activity.end()` on stale/ended? Actually Activity object has `activityState` enum: active, ended, dismissed, stale. But can you call `end` on ended/stale? It may be no-op. They propose first end then request. But if activity is stale but still active? `state` includes stale. We need clarify. The plan says “状态 .stale/.ended/dismissed→先 end 再按条件重拉”。 `.dismissed` maybe can’t end. Probably okay. But if multiple activities exist, need manage all: end all stale/ended/dismissed before request. `Activity.activities` returns array. Need ensure no duplicates.
+
+Need check `Activity.request` attributes: Attributes static fields maybe empty `isEmpty`; but ContentState must conform to Codable, Hashable. Empty attributes with no properties okay? static attributes can be empty? `ActivityAttributes` protocol with associated ContentState; an empty struct can conform. It's okay. But `Attributes` must be Hashable. An empty struct is Hashable. But maybe WidgetKit uses `ActivityAttributes` with `static var attributes`? Fine.
+
+Potential issue: They want `petsHidden` flag in ContentState to blank. But if they end activity for concert, no need. If hidden but activity active, empty view may cause UI like an empty island at top with no content, maybe system may display compact views? It might show blank leading/trailing; maybe acceptable. But if user manually starts Live Activity but pets hidden, system might still allocate island region with blank background; not good.
+
+Need maybe mention "PetIslandLayer suppresses perch only when Activity.activities non空且 active; but if there is stale or ended activity, they may not suppress so perch will show inside app, fine. If system ends activity in background, app not know, but no perch showing because app background. When returning, the sceneDidBecomeActive checks and may restart before the UI appears, but the suppression may be temporarily false because Activity.activities is empty and the old suppression hasn't updated; but if app foreground, can show perch. There could be a flash if the suppression is derived in view update after `sceneDidBecomeActive`; better set synchronously in scene delegate before snapshot.
+
+Need maybe answer "App Group group.com.miller.folia 这种自选 id 在个人团队下会不会注册失败导致装不上或活动拉不起?" The App Group identifier must be prefixed with team ID to be valid in provisioning profiles? Actually App Group IDs are created in the developer portal in the form `group.<bundle-id>` or `group.<name>` with reverse DNS. They are associated with team ID. If the user's personal team doesn't own `group.com.miller.folia`, re-signing with their own team may fail because the entitlement requests a group ID not in profile. However if they use a free personal team and no developer portal access, they can't create the group; re-sign may fail at install or extension launches but app group mismatch may crash. So yes.
+
+Potential issue: `CODE_SIGNING_ALLOWED=NO` means appex not signed. SideStore re-signs both app and extension? Resigning app with embedded extension may require `--entitlements` for both? Maybe SideStore handles extension entitlements but if they don't match shared App Group, profile fails. Better avoid.
+
+Could mention “App Group 可选但第7点声明了 group，验包第9点查两边 entitlements —— 如果无签名信息可查，CI 的未签名包不会包含有效 entitlements, 这个检查意义有限；要验 App Group 必须重签后用设备验证。”
+
+Need structure output:
+
+Title "分级发现"
+- 致命 (must fix before construction)
+1. App Group entitlement 会搞死侧载安装/重建. 依据... 建议：v1 删除 App Group，不在 entitlements 声明；图打进 extension；等以后需要共享数据再评估。
+2. `Live Activity` 启动条件包含 scene active + enabled 且 no active activity，会无曲目拉起/空卡/滥占活动配额. 依据：计划第4条，ContentState may not have songTitle. 建议：加 gate `currentTrack != nil` 且音乐状态允许，可能仅 `isPlaying || currentTrack != nil` 根据产品；避免 app 启动即拉起。
+3. 后台启动/重拉可能失败：Activity.request from background maybe not allowed? Need decide if fatal. I think at least important. Could be "致命" if relying on background start from lock screen. But initial launch in foreground covers. We can set as important.
+
+Maybe also "miniPetsEnabled 与 LA 关系若选丙/乙会引入第三坑" and we need rule 甲. That's maybe 重要 not fatal.
+
+Could classify "App Group" as fatal because installing via personal team may outright fail. "No currentTrack gate" maybe fatal because empty activity at app start. Or at least important.
+
+Need maybe produce many findings. Let's list all possible.
+
+Let's go through A-F systematically and assign severity.
+
+A:
+- App Group声明 v1 不必要且可能致命。建议删除。
+- Group id `group.com.miller.folia` 可能不被个人团队拥有；个人 team 无法注册 App Group（如果免费）。 If user has paid developer account maybe can; but target is sideStore with personal developer certificate may be free. The risk high.
+
+B:
+- `staleDate = now + 8h` is problematic: system max age is 8h, so stale arrives exactly when system may auto-end; if app can't restart it disappears. For user, after 8h they might see stale then disappear. Could result in “宠物在岛上死了/卡住”。 Better: `staleDate` should be set much shorter for paused state, maybe on pause set to now+5min; on playing maybe now+2h; use `update` to extend? Actually `ActivityContent` staleDate can vary per update. Could set on each update `staleDate = now + 30min` or `now + 1h`; but if playback is long, may become stale before track change. Need use `staleDate` as “if I can't update in X, mark stale”. For music playback, if user listens continuously for >8h, max cap; app can restart near cap. Plan's 8h maybe okay. But if updates continue, they can update staleDate too? Actually each `update` can include new `staleDate`? In ActivityKit, staleDate is part of ActivityContent; each update includes content with staleDate. So can set to now + refresh interval maybe 60min; each update extends. If no updates for long because no track change/pause, staleDate may hit and system marks stale while still playing. So user could see pet dimmed/stale even though music playing. Need choose a staleDate that reflects expected update cadence. If playback state changes infrequently, `now+8h` avoids stale too early. Perhaps better use a separate `update` on a timer? But there is no background timer? Could be a background audio heartbeat maybe. But not. Could set staleDate to `now + 8h` and rely on update events to keep refresh not needed. Since maximum 8h, okay. But when no updates for 8h, system will end; if still playing, need restart. That is acceptable. Might not be a serious bug.
+- Activity update budget: each track change/pause likely low frequency; but if automatic play next track every 2 minutes in a playlist, still low. If user scrubs rapidly? Not. But frequent `end` in concert + request maybe not. Could be important to coalesce and debounce updates, maybe do one update per state change, not per Combine emission. Need maybe mention in secondary.
+- There is no hard “更新预算” documented, but there are limits. Should add coalescing for currentTrack/isPlaying changes and phrase randomization. For phrase random on every change, no problem.
+- “回前台 restart” may frequently start/end same if Activity.activities empty but system disabled? Need gate.
+
+C:
+- Suppression based on `Activity.activities` state maybe unreliable. Use synchronous state; race flicker.
+- There may be race: `reconcileIsland(reason:)` and manager launch same frame. If manager request triggers suppression, perch may hide but registry seat still moved. Need centralized coordinator serial queue for seat and LA mutex. This is important.
+
+D:
+- Compact slot tiny; “整只可见” unrealistic if using 120px image with padding; use dedicated small PNG/cropped asset, scaling with `ScaleToFit` and maybe restrict to ~24–28pt. Need design for Dynamic Island. The extension should have separate sized images (e.g. 80x80 px) not reuse 120x120. Important.
+- Expanded/lockscreen may have system max sizes and clipping; use GeometryReader? Need avoid. The lock screen live activity height? Might be constrained; do not use `frame(width: 400)` etc. Use adaptive horizontal layout.
+- `EmptyView` may render blank; better not. Secondary.
+
+E:
+- App background: with audio mode, app can update; but auto-play on lock screen may wake app? If playback engine runs in process, Combine will fire in background and update can be sent. But iOS may throttle high-frequency or if app suspended (paused, not playing). For pauses/play, okay. However remote controls (media controls) when app is playing may not call main queue? Need ensure updates to ActivityKit are on main actor. 
+- If update fails/suppressed, activity song/title/phrase may lag. To avoid visible inconsistency with lock screen, phrase should not be critical; maybe use a stable default phrase if unable to update. Or use NowPlaying data; but NowPlayingController is same app. Could also include no phrase. Suggestion: treat phrase as best-effort; if update with random phrase fails, previous remains. 
+- Since Live Activity updates are local, not through MPNowPlayingInfoCenter; there is no automatic sync. Need share a single source of truth for current track/play state with NowPlayingController; manager should use same data to update LA, not duplicate.
+
+F:
+- Missed: No listen for `Activity.activityStateUpdates` to update suppression when system ends/user dismisses. Suggested add async observer; otherwise stale suppression.
+- Missed: User can turn off Live Activities in Settings; if enabling later, need manager startup path. Already scene active maybe triggers.
+- Missed: On non-Dynamic Island devices, compact/minimal closures not applicable but lock screen used. Need ensure `dynamicIsland` closure not mandatory and fallback.
+- Missed: "首次拉起的系统确认" — there is no confirmation; maybe they thought. Need mention.
+- Missed: Interaction with Now Playing card: lockscreen may show both; need keep artwork/text aligned.
+- Missed: Push token for background start? Not needed v1 but maybe.
+- Missed: User long press Live Activity opens app. App should route to player maybe; not planned. Could be secondary.
+- Missed: `ActivityKit` updates may require app target's `NSSupportsLiveActivities`; extension bundle must have `NSExtensionPointIdentifier` and maybe `NSSupportsLiveActivities` for iOS 17? Need verify. We can mention as minor: Adding extension target via XcodeGen must also set extension Info.plist `NSSupportsLiveActivities` maybe yes? Actually for widget extensions, Info.plist has `NSExtensionPointIdentifier` and maybe `NSSupportsLiveActivities`? Search memory: For Live Activities in WidgetKit extension, the extension Info.plist must have `NSSupportsLiveActivities` set to YES? Let's recall: In Apple sample, `Info.plist` for widget extension includes: `NSExtensionPointIdentifier` = `com.apple.widgetkit-extension`; no `NSSupportsLiveActivities`. The app's Info.plist includes `NSSupportsLiveActivities` = YES. Since iOS 17, maybe for interactive widgets, `NSSupportsLiveActivities` no extension. But not sure. Could flag as verify.
+
+G:
+We need answer. Choose 甲. Reasons:
+- miniPetsEnabled has semantics already corrupted by gesture-off; reading it for LA would create a third silent feature suppression.
+- Folia island residents are fixed dual pet; not mini bar scene.
+- (73) already decoupled PetHomeRegistry from miniPetsEnabled; LA should follow same.
+- LA is system-level surface; being blocked by a hidden/legacy switch would be confusing.
+- Log `la.gate` for any non-system block (e.g., concert). System disabled can be `la.gate reason=activitiesDisabled`. 
+- `introDone` should not gate LA; it's an in-app animation state that failed silently twice. LA start condition should be first scene activation (with currentTrack) + system enabled + not concert. 
+- For product option if they want a user-facing "岛屿宠物" off switch, add a new independent `settings.islandPetsEnabled` default true separate from miniPetsEnabled. But product says fixed residents, so no need.
+
+Maybe we should include "第四案更优" as: LA reads no miniPetsEnabled; if product wants user control, introduce independent `islandPetsEnabled` with explicit settings UI; log all gates. But within user's three cases, 甲.
+
+Need maybe produce final verdict: "按此计划施工不可；需改 A、启动 gate、G、互斥 coordinator 后再施工"。 But maybe App Group removal is a must; if not, may fail install. So "改哪几处后施工" maybe.
+
+Let's think more deeply if there are fatal flaws.
+
+Fatal:
+1. App Group entitlement in v1 may break re-sign/install.
+2. LA on scene active without currentTrack starts blank activity at app launch.
+Maybe this is important but maybe not fatal if UI shows pets only with empty song; but product might not care. Still it's a design flaw.
+3. Background start reliability if app not foreground? But with background audio, likely okay. Could be important not fatal.
+
+Is there a more fatal hidden? The plan says "首次 scene 激活且 ActivityAuthorizationInfo.areActivitiesEnabled 时，若无在跑活动则 request 拉起" — This will start Live Activity even when no track. But if app starts with no track, ContentState songTitle empty, artist empty, isPlaying false, phrase maybe random. The Dynamic Island will show cat/dog with blank text. It also consumes 8h cap even if user never plays music. Could be perceived as phantom/island pets always there. Maybe fatal because it's a clear product bug. But since product maybe wants island pets independent? They said "App 启动后首次 scene 激活且 ... 拉起" not requiring playback; but maybe product decided island pets persistent regardless of playback? The background says "真 Live Activity 灵动岛宠物" as companion to player; but could be active while in app. However Live Activity when app is foreground shows on lock screen if user leaves. Hmm. If app opens, start LA. That's maybe okay. But no currentTrack is edge. We can phrase as important rather than fatal. But user may open app just to browse and not play, causing live activity on lock screen. That might be surprising. The plan's own "开始播放时若未拉起也拉起" indicates they intended to also start when playing. The first condition should be removed or gated.
+
+Another potential fatal: `Compact leading` and `trailing` in Dynamic Island for Live Activity. If both leading and trailing views contain pet images, that's okay. But the plan says petsHidden true renders EmptyView. Dynamic Island `compact leading/trailing` closures in iOS require returning some view. Returning `EmptyView` for both may cause assertion at runtime? Is `EmptyView` allowed in WidgetKit? There is a known issue: Dynamic Island requires content in each slot? I don't know. If you return `EmptyView` from a ViewBuilder, it returns an empty view. It may be allowed but could crash? Not sure. Could be okay. 
+
+Potential fatal: `ContentState` includes `petsHidden`; the plan says "petsHidden=true 时三形态渲染为空". But ActivityKit content update with an empty view can cause dynamic island to collapse to system default? Maybe not. Might be considered non-compliant: You cannot have an entirely empty Live Activity; it may be rejected. But not sure. Secondary.
+
+Potential fatal: App Group not only unneeded but extension's `info.plist` entitlements for App Group must match app. If they sign with free personal team, install fails. Yes.
+
+Potential fatal: `staleDate = now + 8h` with activity max duration 8h. If system ends at 8h, the plan's “回前台检查” won't restart if app never foreground. But user may listen for >8h with screen locked; Live Activity will vanish while music still playing. They might come back after 9h and see no island pet. But max 8h is platform limit; must accept. Could still use background restart? Might not. Not fixable except maybe background push. So not fatal due to platform.
+
+Potential fatal: In XcodeGen project.yml, adding Widget Extension target with `type app-extension` and app embed dependency. `CODE_SIGNING_ALLOWED=NO` may not embed extension? Need verify. Xcode with `SKIP_INSTALL=NO` and `APP_EXTENSION_SAFETY`? Unclear. But plan CI checks it.
+
+Let's maybe include "验包第9点查 entitlements 在未签名 IPA 无效" minor.
+
+Need also maybe respond G as a separate section "G 裁决".
+
+Let's plan final structure:
+
+```
+# 分级发现
+
+## 致命
+1. App Group/v1 声明会害死侧载。...
+2. LA 启动门缺失 currentTrack/播放状态，空卡立即拉。...
+3. (maybe) miniPetsEnabled 绝不能作为 LA 门槛——采用甲案并加 la.gate（这个可能重要不是致命，但结合历史第三坑可致命）
+
+## 重要
+1. 互斥状态应改为单一协调器同步抑制，不能靠 Activity.activities 轮询。
+2. ActivityKit 生命周期没有监听 activityStateUpdates；用户手动结束/系统过期无法即时回落 perch。
+3. App Group之后重新签名（若保留）会导致 App Group 不匹配。
+(hmm already)
+4. 后台 update 可行但需 Coalesce；更新频率可能撞预算。
+5. Compact 布局“整只可见”不现实；需要专用切图。
+6. EmptyView 呈现空可能留空白，不如结束。
+
+## 次要
+1. staleDate 不应固定 8h；利用 update 刷新，区分播放/暂停。
+2. phrase 可能滞后，建议非关键。
+3. 授权弹窗/设置路径引导缺失。
+4. Now Playing 卡和 LA 重复；用同一数据源。
+5. 需在 project.yml 中明确 extension Info.plist keys；验包未签名 entitlement 检查有限。
+6. 非灵动岛设备锁屏呈现需验证；long press 进入 app 路径。
+
+# G 裁决
+... 甲案 ... la.gate ... 不读 introDone ...
+
+# 总评
+按此计划施工 = 不行；改 A/G/启动门/互斥协调器 after 施工。
+```
+
+Need ensure no contradictions: We may make App Group both fatal and later mention resign. Fine.
+
+Need be precise with App Group facts:
+- Free personal team cannot create `group.com.miller.folia` because they cannot provision App Groups.
+- SideStore/resign will fail or crash. If they don't need App Group, remove it. The plan's "机会性用途" doesn't require declaration; declaring but taking no benefit just adds risk. If they want future dynamic images, can add later with `group.<teamid>.com.miller.folia`? Actually team ID prefix? The App Group ID must be prefixed with team ID for automatic signing, but if using explicit ID, you can set `group.com.miller.folia` in developer portal? Typically App Group ID must be globally unique and not necessarily team ID prefix? Actually Apple assigns Team ID prefix, and explicit App Group ID has the format `group.<reversed-DNS>`. In Xcode automatic signing, it adds `group.$(TeamIdentifierPrefix)`? I recall app groups have names like `group.com.company.app`. The team ID prefix is added automatically to the App Group identifier? Wait capabilities use "App Groups" with a container name; in Xcode you select `group.<bundle-id>`. It is associated with your team. If no team portal for free account, cannot create. With personal paid team, you can create. But the chosen ID might be unavailable if owned by original team? For resigning with another team, the identifier is embedded in entitlements; the new team must have a matching App Group ID. They might not. Thus install fails. If using `group.com.miller.folia`, and the app's original developer `com.miller.folia` may not belong to user? The app bundle id is com.miller.folia. SideStore user installing with personal team may not own com.miller.folia either. Wait they resign with their own team, bundle ID may stay com.miller.folia but their team may not have that Bundle ID registered? For sideloading, they use dummy provisioning with wildcard? SideStore can re-sign with a wildcard profile? If they use personal team, bundle id maybe must be changed? But they are installing the app with original bundle id via SideStore a custom refactor. Actually SideStore uses a p12 and provisioning profile; they may set alt bundle ID? Hmm. But user says "目标机 iPhone 14 Pro ... 用户用 SideStore/个人开发者证书在安装时重签侧载". We cannot assume they change bundle id. They might use personal team provisioning with their own explicit bundle ID? If the original is `com.miller.folia`, the personal team may not own that ID. But maybe SideStore has automatic bundle ID? The app project target is `com.miller.folia`; when building unsigned, it's embedded. If user re-signs with personal team, they might need to either change bundle ID to something unique or use free provisioning with wildcard that covers any? Actually free personal team provisioning profile is bound to specific app ID, not wildcard? Xcode free account can create wildcard App ID `XC`? It may generate a provisioning profile with specific bundle ID `com.miller.folia`? If not owned, maybe error. But this is existing process; not our problem. App Group via personal team is definitely much more problematic.
+
+Wait user says "个人开发者证书" maybe means paid developer certificate, not free. But we can mention “若为免费/个人 team 无 App Group 能力；即便付费，重签团队也必须已创建同名 App Group，否则安装失败。v1 不需要，应删除。” Good.
+
+Need maybe mention that extension and app have separate bundle IDs: app `com.miller.folia`, extension `com.miller.folia.widgets`. For App Group, both must have same group. If either cannot satisfy, extension fails. So removal is safer.
+
+Need maybe check "app 与 extension 都声明 com.apple.security.application-groups = group.com.miller.folia（写进各自 entitlements）" — App extension bundle IDs often are prefixed by app bundle ID; here `com.miller.folia.widgets` valid. Good.
+
+Potential issue with `NSSupportsLiveActivities` and XcodeGen: They mention project.yml info.properties for app Info.plist. But they might need `NSSupportsLiveActivities` for extension too if they include it in shared target? Could be minor.
+
+Need maybe mention "ActivityConfiguration 三形态 compact leading trailing, minimal, expanded" — dynamic island has three different regions: `compactLeading`, `compactTrailing`, `minimal`, `expanded`. The plan calls "expanded" and "锁屏横幅" same. Need ensure `ActivityConfiguration` in WidgetKit extension uses `ActivityConfiguration(for:dynamicIsland:content:)` with a lock screen `content` closure? Actually there is initializer `ActivityConfiguration(for:content:dynamicIsland:)`. The plan maybe okay.
+
+Maybe mention "活动状态 .stale/.ended/dismissed→先 end 再按条件重拉" — `Activity.state` includes `stale`? Actually in ActivityKit, `activityState` is `ActivityState` enum with `.active`, `.ended`, `.dismissed`. `stale` maybe from `ActivityState`? Let's recall: `ActivityState` can be active, ended, dismissed. `Activity.ContentState` not. There is `Activity.activityState` and `ActivityControlState`? Actually there is `ActivityState` with `.stale`? In ActivityKit, `activityState` values: `.active`, `.ended`, `.dismissed`. On system, "stale" may be indicated by `contentState.staleDate` and presentation. I don't think `.stale` exists in `ActivityState` values. Wait maybe in watchOS? Hmm. The plan says “状态 .stale/.ended/dismissed”。 If `.stale` is not an ActivityState, this condition is wrong. Actually ActivityKit has `ActivityState.stale`? I need recall. Apple docs: `enum ActivityState { case ended, active, dismissed }`. I think there is no stale. `staleDate` is about content. The activity state does not become `.stale`; that's a `ActivityViewContext` maybe. If plan includes `.stale`, it may not compile. Could flag as minor/important inconsistency: They should base on `activity.activityState` cases actually existing (`active`, `ended`, `dismissed`) and maybe use `isStale` if exposed? In iOS 17? I think `Activity.activityState` has `active`, `ended`, `dismissed`. Not `.stale`. So plan's check `.stale` is invalid. This is a detail. Maybe include in secondary.
+
+Need maybe mention “`Activity.activities` is `[Activity<Attributes>]` static property, but state of each activity maybe `.active` not `.stale`.” We can mention.
+
+Let's think about ActivityKit "activity update budget": There is no public exact; maybe no need to be categorical. We can say "没有公开的每分钟配额，但 Apple 会 throttle; every track change/pause is low rate; still coalesce and avoid redundant updates for same state." 
+
+Need maybe mention "frequent end+request inside concert end: if begin/end concert toggles rapidly, may hit system limit/restart; add debounce".
+
+Need maybe mention "petsHidden in ContentState increases state changes; if you use empty view, update to hidden may count as update; ending path is better."
+
+Need maybe mention "Live Activity 不 permit APNG; first frame okay but if product expects animation, maybe use timeline/push updates. Not necessary."
+
+Need maybe mention "lock screen can show when device locked; if content includes song title/artist, that is metadata that must match reality; consider privacy? no."
+
+Let's perhaps craft final answer with concise but thorough. Desired oververbosity 5. Need not be super long but include all key.
+
+Let's now produce final in Chinese.
+
+Need maybe include "依据" each point. 
+
+Let's draft:
+
+```
+# 对抗评审：Folia iOS (75) 真 LA 灵动岛宠物
+
+## 致命
+### A1 ...
+...
+```
+
+Need be mindful not to write code. We can mention "pseudo" not code.
+
+Let's ensure we answer all A-F. The user asked "请你重点攻击的问题 A-F" and G. We need explicitly map. We can label each finding with [A], [B], etc.
+
+Let's create a list of findings maybe 12.
+
+Detailed content:
+
+**致命1 [A] App Group entitlement 必须从 v1 移除。**
+依据：v1 渲染图已打进 extension，ContentState 只传 string，完全不需要共享容器。计划第7点承认不依赖，却仍声明 group.com.miller.folia。SideStore/个人证书重签时，每个 entitlement 必须被 provisioning profile 覆盖；个人或免费 team 通常没有/不能注册同样的 App Group，重签后安装会失败或扩展被系统拒。这是比“取不到容器”更严重，是“包起不来”。
+建议：v1 不声明任何 application-groups entitlement；app/extension entitlements 仅保留最低必需。若将来要动态图，再引入 `group.<teamID>.com.miller.folia`，且必须同时提供 profile 生成与失败降级说明。
+
+**致命2 [G] LA 不得读 miniPetsEnabled，也不得用 introDone 当闸。**
+依据：历史第 (72)/(74) 坑，miniPetsEnabled 被手势关闭语义持久化为 false，introDone 又是同样会静默压制整场的陈旧状态。若 LA 读它，等于再引入第三个“开关没关但功能消失”的断点。
+建议：采纳甲案。LA 只由：系统实时活动可用 + app 激活/播放事件 + 非演唱会态 + currentTrack 存在 决定。`islandSuspended`（汪汪队）仍作为硬约束，但必须被 `la.gate reason=concertSuspended` 记录，而不是无声跳过。`introDone` 完全绕开。若产品确实需要用户开关，新增独立 `settings.islandPetsEnabled` 默认 true，而不是复用 miniPetsEnabled。
+
+**致命3 [E?] 启动条件会拉起空 Live Activity。**
+计划第4条“首次 scene 激活且 areActivitiesEnabled 时，若无在跑活动则 request 拉起”没有要求 currentTrack 或 isPlaying。冷启动不进播放也会拉，ContentState 的 songTitle/artist 为空，岛上有猫狗图片和随机词，但音乐相关信息空白，且开始消耗 8h/活动配额。
+建议：首次拉起至少需要 `currentTrack != nil`；更稳是“currentTrack != nil 且 (scene active 或 isPlaying)”，避免无曲库/首次启动空卡。或产品明确要“app 打开即宠物”，也必须给空态专用文案，而不是随机词/空标题。
+
+**重要4 [A/C] 互斥不能靠 Activity.activities 现查。**
+依据：活动被系统结束/用户手动结束/过期，app 在后台未必同步得知；等到 scene 前台才发现会导致回前台瞬间 perch 与 LA 状态短暂不同步，出现闪一下或叠影。`reconcileIsland` 与 LA request 可能同帧跑。
+建议：用 app 内唯一协调器/状态机维护 `perchSuppressed`，由 `Activity.activityStateUpdates`（或 manager 主动 end/exit 回调）同步改变；不要由 PetIslandLayer 每次渲染去读 Activity.activities。落座裁决和 LA 拉起应排队在一个串行入口，例如 `IslandCoordinator.sync(reason:)`。
+
+**重要5 [B] 生命周期管理过度依赖“回前台 restart”，8h 到期/后台被结束后会长时间无岛。**
+依据：活动在 8h 后被系统结束，app 在后台可能不唤醒，用户继续听歌但锁屏不再有宠物，直到下一次打开 app。`staleDate = now + 8h` 只是标记内容旧，不等于能主动续命。频繁 `end+request`（演唱会结束/回前台）可能撞 ActivityKit 的限频。
+建议：把 `staleDate` 与播放状态绑定：暂停后设短（如 5–15min），播放中每次更新可设合理未来值；不要固定 8h 或 nil。ActivityKit 没有公开精确配额，但要合并 Update：切歌、play/pause、phrase 随机可以合并为 1 次；演唱会 `endForConcert` 与 `resumeAfterConcert` 增加最小间隔/防抖。若用户长期后台播放，可接受 8h 上限但到期后需用 app 下一次前台或远程命令重建；文档写明限制。
+
+**重要6 [D] compact 槽“整只可见”不现实；需要专用图/尺寸。**
+依据：Dynamic Island compact leading/trailing 槽只有约 35–40pt 高、宽度很小。38pt 宠物加黑底/原图 margin 放进去可能被裁或贴边。计划用 120×120 PNG 直接 `Image`，没有为槽位做边缘修剪。
+建议：为 LA 单独输出裁剪过的宠物头像尺寸（约 80–120px，不含大透明边），用 `scaledToFit` 并给 `accessibilityIgnoresInvertColors` maybe not. 若产品要求”整只“，应把宠物图缩到 24–28pt 内。先在 iPhone 14 Pro 真机上跑 Dynamic Island compact/minimal 验证。
+
+**重要7 [E] 后台 update 不是稳发，歌词/歌名可能滞后；别把随机 phrase 当前台实时数据。**
+依据：App 有后台 audio mode，播放中大概率可 update；但 iOS 仍可能限流，且自动连播/远程命令触发时可能主线程繁忙或应用不在前台；ActivityKit update 失败不会回退。phrase 尤其容易与锁屏 Now Playing 不一致。
+建议：ContentState 中 songTitle/artist/isPlaying 必须与 NowPlayingController/PlaybackEngine 是同一数据源，最好由 coordinator 统一产生。把 phrase 当 best-effort，若 update 失败不得影响 core metadata；或 v1 采用固定 phrase，避免随机滞后穿帮。不要在 ContentState 中传图片/大对象。
+
+**重要8 [F] 没有监听 `activityStateUpdates` / 系统结束/用户手动关闭。**
+依据：用户可在锁屏/岛上长按结束活动，系统可因 8h 或设置关闭结束。计划只在 sceneDidBecomeActive 轮询 `Activity.activities`；在后台时状态变化不会更新 perch 抑制和 manager 状态。
+建议：增加异步监听 `Activity.activityStateUpdates` 并处理 `.ended`, `.dismissed`（注意 `.stale` 可能不是 ActivityState 枚举值；应查实际 API）；收到结束事件后清除抑制、标记可重拉，不必等回前台。
+
+**次要9 [F] 首启/授权说明缺失。**
+依据：Live Activities 没有系统弹窗授权，但用户可能在设置里已经关闭。计划直接 request，无引导。
+建议：当 `areActivitiesEnabled=false`，In-App 宠物用 (74) 障眼法；可在设置页给一行说明和跳转系统设置的深链。不要打断播放。
+
+**次要10 [F] 与 Now Playing 锁屏卡关系未考虑。**
+依据：Live Activity 会作为独立卡片显示，可能与 Media Player 控制卡同时出现，数据源若不同步，锁屏上看会打架。
+建议：设计锁屏布局与 Media Player 信息层级区分；同一个 update 数据源也驱动 NowPlaying 和 LA，避免歌名/暂停状态不一致。
+
+**次要11 [C] `petsHidden=true` 渲染 EmptyView 不是好兜底。**
+依据：主路径 end 后不会同时存在 active+petsHidden；若 update 失败/结束未完成，EmptyView 可能给锁屏留空位或被系统显示异常。
+建议：petsHidden 不进入 ContentState 或仅作为瞬时更新；如果保留，渲染成一行“演唱会中，岛民散场”而非 EmptyView，或立即 end。
+
+**次要12 [B/API] `.stale` 可能不是 `ActivityState` 枚举。**
+依据：ActivityKit 的 activityState 常见为 active/ended/dismissed；内容 stale 通过 staleDate 和视图上下文判断。计划写到 `.stale` 可能编译不过。
+建议：确认 SDK 的 `ActivityState` 实际枚举；用 `activity.activityState == .active` 判断，过期用 `activity.content.state`? Actually `activity.content` is ActivityContent not state. 
+```
+
+Need maybe be careful with `.stale` not existing. Let's verify: In ActivityKit, `Activity.activityState` is `ActivityState`. `ActivityState` enum has cases `active`, `ended`, `dismissed`. There's also `ActivityState.stale`? I think not. Actually in iOS 17 there's `ActivityState.stale`? Let's recall Swift: 
+```
+public enum ActivityState {
+    case ended
+    case active
+    case dismissed
+}
+```
+I don't remember `.stale`. There is `staleDate` in `ActivityContent`. The plan says "状态 .stale/.ended/dismissed". This is a concrete technical inaccuracy. We can include.
+
+Need maybe also mention "动态图 v1 无法播 APNG" as missed? It's known. Maybe not.
+
+Need maybe include "App Group could use `group.<teamID>.com.miller.folia` rather than arbitrary" if they insist. But we recommend removal.
+
+Need maybe answer "更稳的 id 策略或干脆不声明 App Group 的理由?" We already says removal. Maybe add "若日后必须共享，id 策略应为 `group.$(DEVELOPMENT_TEAM).com.miller.folia.island` 并用 xcconfig 注入，而不是静态字符串 group.com.miller.folia。"
+
+Need maybe consider "首次拉起的系统确认" user asked in F. We mention no system prompt but settings.
+
+Need maybe mention "Lock screen banner = same expanded": The plan's proposed layout might not be allowed to specify `expanded` for lockscreen. But I can include as minor.
+
+Let's maybe add one more important finding about ActivityKit's `activity.request` from background:
+**重要 [F/E] 后台启动 Live Activity 可能不被允许/不可靠。**
+依据：Activity.request 大部分情况下应在 app foreground 执行；后台音频播放切歌时 app 未必有活跃 UI 场景，系统可能延迟。计划在 isPlaying 变 true 时从后台 request 可能失败；虽然 initial launch on scene active may cover most paths.
+建议：确保首次请求在 foreground scene active 时完成；后台只 update 已存在的 activity，不靠后台 request。如果需要在后台重新拉起（如 8h 到期），考虑用 push token/后台任务，或者接受下次 app 前台才重拉。
+
+Should this be important? Yes. Add.
+
+Let's ensure not overlong. Need final summary.
+
+Maybe structure final:
+- "致命" 3 items
+- "重要" 8 items
+- "次要" 5 items
+- "G 裁决" can be embedded or separate. User specifically asks G; we can include G in fatal/重要 as above.
+
+Let's maybe not attempt to map every item to A-F but can label.
+
+Let's draft final answer succinctly but enough.
+
+Need be explicit about recommendations. Let's use bullet points.
+
+Let's maybe include "总评: 改 A/G/启动门/互斥 coordinator 后施工；不能按原计划直接施工。"
+
+Let's now produce final. Ensure no code. Use proper Chinese.
+
+Double-check if any statements could be wrong:
+- "Live Activities 没有系统弹窗授权" — true.
+- "ActivityState includes stale?" I'm not 100%. Need maybe phrase "计划里的 `.stale` 很可能不是 ActivityState 枚举值（现有枚举是 active/ended/dismissed；stale 由 staleDate/视图上下文表达），实施前必须核实，否则编译不过。" This hedges. Good.
+
+Could "App Group 个人或免费 team 通常没有/不能注册同样的 App Group" be accurate? If they use paid personal team, they can. But we say "可能；若免费/无 portal 则不行；重签团队必须拥有同名 App Group，否则 provisioning failure." Good.
+
+Need maybe include "NSSupportsLiveActivities true for app Info, extension Info maybe maybe not; verify" as minor.
+
+Let's produce final.
+=== answer ===
+## 分级发现
+
+### 致命
+
+**1.【A】v1 不应声明 App Group，否则侧载重签大概率失败**
+- **依据**：计划第 7 点自己承认 v1 渲染不依赖共享容器，图已打进 extension，ContentState 只传字符串；但仍声明 `com.apple.security.application-groups=group.com.miller.folia`。SideStore/个人开发者证书重签时，每个 entitlement 都必须被 provisioning profile 覆盖；个人团队（尤其免费侧载链路）经常不能注册同名 App Group。签名后可能出现装不上、extension 崩溃、Live Activity 拉不起。
+- **建议**：v1 完全删除 App Group entitlement，app 与 extension 都不声明。以后真要做动态图时再引入 `group.<TeamID>.com.miller.folia` 这类由团队前缀确定的 id，并配套 profile 校验。验包第 9 点里查未签名 entitlements 也没有实际意义。
+
+**2.【G】Live Activity 不得再读 miniPetsEnabled，也不得读 introDone**
+- **依据**：(72)/(74) 已经证明这条链上有多个“陈旧状态静默压制功能”的断点。miniPetsEnabled 被手势关闭误写持久 false；introDone 又曾连续挡下 `isl.gate`。如果 LA 再读它，等于再制造第三个同类坑。这不是质量问题，是功能存活问题。
+- **建议**：采纳 **甲案**。LA 拉起只由：系统 Live Activity 可用 + app 激活/播放事件 + 非演唱会态 + 至少存在 currentTrack 决定。`miniPetsEnabled` 只继续辖迷你台 cast，不辖岛民 LA。`introDone` 完全绕开。若产品未来需要独立开关，新增 `islandPetsEnabled`，不要复用旧键。
+- **必需的日志**：任何被挡下的 LA 拉起都要落 `la.gate reason=...`，包括 `activitiesDisabled`、`noTrack`、`concertSuspended`、`alreadyActive`，不得静默。
+
+**3.【E/启动条件】第一次 scene 激活即拉 LA，可能冷启动拉出空岛**
+- **依据**：计划第 4 条“首次 scene 激活且 areActivitiesEnabled，若无在跑活动则 request 拉起”没有要求 `currentTrack != nil`。冷启动不播放时，ContentState 的 songTitle/artist 为空，只有猫狗图和随机词；这会消耗 8 小时窗口、霸占灵动岛，且观感像 bug。
+- **建议**：首拉条件必须加 `currentTrack != nil`。更稳是：
+  - `currentTrack != nil && (sceneHasActivated || isPlaying)`
+  - 非播放态如果有宠物，也要给出明确的空态文案，而不是随机词加空标题。
+
+---
+
+### 重要
+
+**4.【A/C】互斥不能用 `Activity.activities` 现查现抑制**
+- **依据**：活动被系统结束/用户手动关掉/8h 过期时，app 在后台不会实时感知；等到回前台再查，`perch` 和 LA 状态可能短时间不同步。且 `reconcileIsland` 与 manager 拉起可能同帧竞争。
+- **建议**：由一个协调器统一维护 `perchSuppressed`，不要由 PetIslandLayer 每次渲染时自己查 `Activity.activities`。监听 `Activity.activityStateUpdates`，收到 `.ended/.dismissed` 后同步清抑制。落座、撤下、LA 拉起/结束走同一串行入口，避免竞态。
+
+**5.【B】生命周期过度依赖“回前台 restart”，后台 8h 到期会长时间无岛**
+- **依据**：系统 8h 结束活动时，app 在后台可能不会醒；用户继续听歌但锁屏/岛上宠物没了，直到下次打开 app。计划把 `staleDate = now + 8h` 设想成上限，但 stale 不等于续命。`endForConcert` → `resumeAfterConcert` 的 end+request 频繁启停也可能触发系统限频。
+- **建议**：
+  - `staleDate` 不要固定 8h；暂停后设短（如 5–15 分钟），播放中每次 update 可刷新 staleDate。
+  - 合并更新：切歌、播放/暂停、phrase 随机应合并为一次 update。
+  - 演唱会结束后的重启加防抖/最小间隔。
+  - 后台重拉不要假设 `Activity.request` 一定成功；首次请求尽量在前台 scene active 完成，后台只 update 已存在的活动。
+
+**6.【D】compact 槽位“整只可见”不现实，需要专用 LA 图**
+- **依据**：灵动岛 compact leading/trailing 高度只有约 37–40pt，槽位很窄。计划直接拿 120×120 单帧 PNG 等比缩放，很难保证“整只可见”，很可能被系统裁边或贴边。expanded/lock screen 也受系统最大布局约束。
+- **建议**：为 LA 单独输出裁剪过的头像规格，默认缩到约 24–28pt 视觉尺寸内；用 `scaledToFit` 但不要给图片大透明 margin。先在 iPhone 14 Pro 真机验证 compact/minimal/expanded 三态。不要复用贴纸原图。
+
+**7.【E】后台 update 不总是可靠，phrase 不要当成关键同步数据**
+- **依据**：App 有后台 audio mode，播放中 update 大概率可行，但自动连播/远程命令/系统限流时可能失败。若 phrase 每次都随机换，失败后岛上的词会与锁屏 Now Playing/实际状态不一致，穿帮风险高。
+- **建议**：`songTitle/artist/isPlaying` 必须与 NowPlayingController/PlaybackEngine 使用同一数据源。`phrase` 作为 best-effort，失败不影响核心元数据；v1 甚至可以先用固定语料，避免随机导致的滞后感。不要传图片进 ContentState，计划本身是对的。
+
+**8.【F】没监听 `activityStateUpdates` / 用户手动结束活动**
+- **依据**：用户可在锁屏/岛上长按结束 Live Activity，系统也可能因设置关闭或超时结束。计划只在 `sceneDidBecomeActive` 查 `Activity.activities`；后台期间状态变了，perch 抑制和 manager 内部状态不会更新。
+- **建议**：增加异步监听 `activityStateUpdates`。注意：计划里的 `.stale` 很可能不是 `ActivityState` 枚举值；实际通常是 `active/ended/dismissed`，内容 staleness 由 `staleDate` 表达。实施前务必核实 API，否则编译不过或判断失效。
+
+**9.【F】后台启动/重拉 Live Activity 可能不可靠**
+- **依据**：`Activity.request` 原则上是前台操作；后台 isPlaying 变 true 触发 request 可能被系统推迟或失败，不能作为主要启动路径。
+- **建议**：确保首次 LA 请求在 scene active 时完成；后台只更新已存在的活动。若要在 8h 到期后后台续期，需要 push token/远程通知或后台任务支持，否则接受“下次打开 app 再重拉”。
+
+---
+
+### 次要
+
+**10.【F】授权/设置路径未规划**
+- Live Activity 没有系统弹窗授权；用户可能在设置里已经关掉。计划直接 request，没有引导。建议在设置页提供说明，并允许跳转系统设置。`areActivitiesEnabled=false` 时回落 (74) 障眼法，这点计划已有，但没有用户可见解释。
+
+**11.【F】与 Now Playing 锁屏卡关系不清**
+- Live Activity 会作为独立卡片显示，可能与 Media Player 控制卡同时存在。若数据不同步，锁屏上歌名/暂停状态会打架。应由同一事件源同时驱动 NowPlaying 和 LA。
+
+**12.【C】`petsHidden=true` 渲染 EmptyView 不是好兜底**
+- 主路径是直接 end。若保留 `petsHidden`，EmptyView 可能留下空白灵动岛区域，观感差。建议改为“演唱会中，岛民散场”等轻提示，或干脆只走 end 路径。
+
+**13.【工程细节】extension 的 Info.plist/XcodeGen 需单独确认**
+- 计划解决 app 侧 `NSSupportsLiveActivities`，但 Widget extension 的 `NSExtensionPointIdentifier`、extension 自己的 Info.plist 是否由 XcodeGen 生成且不被覆盖，需要纳入验包。`project.yml` 只写 app 的 `info.properties` 不够，extension target 也要显式配置。
+
+**14.【D/兼容性】非灵动岛设备也要能显示**
+- 目标机是 iPhone 14 Pro，但 Folia 支持 iOS 17 全机型。非灵动岛设备会走锁屏横幅。计划不要把动态岛三态当作唯一呈现；须保证锁屏 `content` 独立可用。
+
+---
+
+## G 裁决
+
+采用 **甲案**：LA 与 `miniPetsEnabled` 完全解耦。
+
+- **理由**：`miniPetsEnabled` 已被手势关闭语义污染过，且岛上双人组是常驻独立功能，不是“迷你台小宠物”的从属。把它作为 LA 闸口，会让已经发生过两次的“陈旧状态静默压制功能”出现第三次。
+- **LA 拉起条件**：  
+  `areActivitiesEnabled == true`  
+  && `currentTrack != nil`  
+  && `nonConcertPhase`  
+  && `sceneHasActivated || isPlaying`  
+  不读 `miniPetsEnabled`，不读 `introDone`。
+- **阻挡必须自证**：只要 LA 被条件挡下，就落 `la.gate reason=...`。系统关 Live Activity 时落 `activitiesDisabled`；汪汪队演唱会时落 `concertSuspended`；无曲目时落 `noTrack`。
+- 如果未来产品真需要“关掉岛上宠物”的用户开关，应另设独立的 `islandPetsEnabled`，默认 true，绝不回退到旧 `miniPetsEnabled`。
+
+---
+
+## 总评
+
+**不能按此计划原样施工。**  
+必须改掉 App Group、miniPets/introDone 闸口、无曲目拉起这三处致命点；再把互斥改成单一协调器、补齐 `activityStateUpdates` 与真机动态岛尺寸验证后，才可进入施工。核心方案方向是对的，但现在的实现案会引入第三个静默失效坑，并且在侧载重签链路上有实打实装不上的风险。
