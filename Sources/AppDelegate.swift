@@ -70,6 +70,8 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         Breadcrumbs.log("pet.audit77 launch"
             + " new=\(rawKey("settings.general.miniPetsEnabled"))"
             + " legacy=\(rawKey("folia.stickers.miniPetsEnabled"))")
+        // (78) 见证启动自检（见 Breadcrumbs.witnessBoot78）。
+        Breadcrumbs.witnessBoot78()
         // 音乐播放器的音频会话：.playback 让 WKWebView 的网页音频不受静音拨片影响、
         // 锁屏/后台继续出声。此前（含 1.0 壳）从未配置，WebKit 只能用默认会话。
         // 启动时只定类别、不激活：激活会立刻打断其他 App 正在放的声音，而用户可能

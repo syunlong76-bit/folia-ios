@@ -103,6 +103,8 @@ final class SeamToolbarView: UIView {
     private let avatarImageView = UIImageView()
     /// 头像加载防串图键（当前 URL 串；回调落地前比对，照侧栏同款）。
     private var avatarLoadKey: String?
+    /// (78) 第 3 条：占位字图层约束（摘除/挂回时整组开关）。
+    private var avatarInitialConstraints: [NSLayoutConstraint] = []
     /// 数据段三段 + (71)「拼」动作格（队列拼贴入口）。
     private let segmentControl = UISegmentedControl(
         items: SeamSegment.allCases.map { $0.title } + ["拼"])
@@ -131,6 +133,14 @@ final class SeamToolbarView: UIView {
     /// 主页 54＝凹口底 56 上沿贴行、歌单页/舞台按其页眉行
     /// 下沿）。非绕岛态忽略（行 = 全高）。
     var contentRowTop: CGFloat = 54
+    /// (78) 第 4 条：平形态内容行顶（缺省 0＝旧行为）。主页
+    /// 恒为平形态（带宽>高、wrap 不生效），旧口径行带＝全
+    /// 高、控件行心落在带心（104 带心 52）——分段控件上沿
+    /// 37 与岛底 48 纵向交叠且横向压进岛左段，Miller 真机
+    /// 点名「贴着灵动岛干涉」。主页宿主置 30：行心下移至
+    /// 67，分段上沿 52、头像上沿 51，与岛底拉开 3–4pt 间
+    /// 距。仅主页宿主赋值，其余宿主恒 0 不动。
+    var flatRowTop: CGFloat = 0
     /// 内容行布局带：内容控件的 centerY 全部锚到本带，绕
     /// 岛态带落到凹口下方、平形态带 = 全高（与旧 centerY
     /// 锚本条中心等价）。
@@ -393,9 +403,11 @@ final class SeamToolbarView: UIView {
             Breadcrumbs.log("seam.wrap75 \(wrap ? "on" : "off")"
                 + " row=\(Int(contentRowTop))")
         }
-        // 内容行带：绕岛态落到凹口下方，平形态 = 全高。
-        let targetTop: CGFloat = wrap ? contentRowTop : 0
-        let targetHeight: CGFloat = wrap ? 44 : bounds.height
+        // 内容行带：绕岛态落到凹口下方；平形态 = 全高减去
+        // 宿主下挪量 flatRowTop（(78) 第 4 条，仅主页非 0）。
+        let targetTop: CGFloat = wrap ? contentRowTop : flatRowTop
+        let targetHeight: CGFloat = wrap ? 44
+            : max(44, bounds.height - flatRowTop)
         if rowTopConstraint?.constant != targetTop {
             rowTopConstraint?.constant = targetTop
         }
@@ -606,8 +618,18 @@ final class SeamToolbarView: UIView {
         if wrapActiveNow {
             Breadcrumbs.log("seam.morph76 \(expanded ? "exp" : "col")"
                 + " anim=\(animated ? 1 : 0)")
-            Breadcrumbs.log("seam.flash77 path=xfade")
         }
+        // (78) 第 2 条见证修复（定案：条件挡住）：(77) 的
+        // seam.flash77 与 morph76 exp/col 同被 wrapActiveNow
+        // 一门挡住——(77) 真机日志里两者双双 0 次、wrap75
+        // on/off 亦 0 次，而主页工具条恒为平形态（实测 lay
+        // 尺寸 393×104、宽>高，wrap 判定恒假），见证埋进了
+        // 永不执行的分支、(77) 闪屏修法等于无证上路。本版
+        // 改无条件落 seam.flash78（带形态位 wrap=）：init 的
+        // applyToolbarState 调用同经此地，每条工具条建成即
+        // 有一行，站点存活自证。
+        Breadcrumbs.log("seam.flash78 wrap=\(wrapActiveNow ? 1 : 0)"
+            + " exp=\(expanded ? 1 : 0) anim=\(animated ? 1 : 0)")
         let apply = { [self] in
             for view in contentViews {
                 if view === blurView { continue }
@@ -699,8 +721,33 @@ final class SeamToolbarView: UIView {
     /// .loadAvatar 加载真头像（圆形图位盖在兜底之上、带 key
     /// 防串图，照侧栏同款）；无值/加载未回时回退现行首字/
     /// person.fill 逻辑。参数带默认值 nil，旧调用点源码兼容。
+    /// (78) 第 3 条：占位字图层挂回（登录无图/换图加载中才
+    /// 需要它在场）。约束首次摘除前从本视图约束表里捞出存
+    /// 档，挂回时整组重新激活。
+    private func attachAvatarInitialIfNeeded() {
+        guard avatarInitial.superview == nil else { return }
+        addSubview(avatarInitial)
+        NSLayoutConstraint.activate(avatarInitialConstraints)
+    }
+
+    /// (78) 第 3 条：占位字图层整层摘除——真头像图已落地时
+    /// 调用，removeFromSuperview 连图带层一起走，不是改透
+    /// 明度（(77) 真机实证：图已显示、字还压在图上）。
+    private func detachAvatarInitial() {
+        guard avatarInitial.superview != nil else { return }
+        if avatarInitialConstraints.isEmpty {
+            avatarInitialConstraints = constraints.filter {
+                ($0.firstItem as? UIView) == avatarInitial
+                    || ($0.secondItem as? UIView) == avatarInitial
+            }
+        }
+        NSLayoutConstraint.deactivate(avatarInitialConstraints)
+        avatarInitial.removeFromSuperview()
+    }
+
     func setAccount(nickname: String?, loggedIn: Bool, avatarURLString: String? = nil) {
         if loggedIn, let first = nickname?.first {
+            attachAvatarInitialIfNeeded()
             avatarInitial.text = String(first)
             avatarInitial.isHidden = false
             avatarButton.setImage(nil, for: .normal)
@@ -710,16 +757,30 @@ final class SeamToolbarView: UIView {
                 withConfiguration: UIImage.SymbolConfiguration(pointSize: 13)), for: .normal)
         }
         let key = (loggedIn ? avatarURLString : nil).flatMap { $0.isEmpty ? nil : $0 }
-        guard key != avatarLoadKey else { return }
+        guard key != avatarLoadKey else {
+            // 同键重入：图已在位则占位字保持摘除，防回填复活。
+            if avatarImageView.image != nil { detachAvatarInitial() }
+            return
+        }
         avatarLoadKey = key
         guard let key, let url = URL(string: key) else {
             avatarImageView.image = nil
             return
         }
         let expectedKey = key
-        WorkbenchCover.loadAvatar(url: url, into: avatarImageView) { [weak self] in
-            self?.avatarLoadKey == expectedKey
-        }
+        WorkbenchCover.loadAvatar(url: url, into: avatarImageView,
+            completion: { [weak self] success in
+                // 真图落地即整层摘除占位字（(78) 第 3 条）。
+                guard let self, success,
+                      self.avatarLoadKey == expectedKey else { return }
+                self.detachAvatarInitial()
+            },
+            isCurrent: { [weak self] in
+                self?.avatarLoadKey == expectedKey
+            })
+        // 缓存同步命中在 loadAvatar 返回前已置图（completion
+        // 亦已同步回调），此处兜底再核一次，双路都摘干净。
+        if avatarImageView.image != nil { detachAvatarInitial() }
         Breadcrumbs.log("seam.toolbar avatar load")
     }
 

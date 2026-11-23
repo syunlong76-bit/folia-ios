@@ -36,6 +36,19 @@ enum Breadcrumbs {
             message: "\(event) · availMB=\(availMB) footprintMB=\(footprintMB())")
     }
 
+    /// (78) 见证启动自检：(77) 两处见证（seam.flash77 被
+    /// wrapActiveNow 条件挡住、minibar.claim77 所在派发段整
+    /// 段没跑）整轮哑火而报告无从察觉的教训——本包每个新见
+    /// 证先在启动时于本行登记在册，证明当轮面包屑通道活
+    /// 着；此后某见证在日志中缺席，即可判「站点没跑」而非
+    /// 「日志没收」。名册：flash=seam.flash78（设置台形变，
+    /// 无条件落）、tap=mb.claim78/mb.disp78（播放条根级认
+    /// 领新链）、dec=wall.dec78（封面解码量测）、tile=
+    /// wall.tile78（砖面占位量测）。
+    static func witnessBoot78() {
+        log("wit78.live flash=1 tap=1 dec=1 tile=1")
+    }
+
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。
     static func samplerStart() {
         samplerRefs += 1

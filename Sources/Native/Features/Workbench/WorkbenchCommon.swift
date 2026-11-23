@@ -41,29 +41,50 @@ enum WorkbenchCover {
 
     /// 头像加载：先走同链；代理给不出地址（如 LocalServer 未就绪）
     /// 时回退一次直下（头像是公开图，无凭据）。
+    /// (78) 第 3 条：新增 completion（置于 isCurrent 之前，既有
+    /// 调用点的尾随闭包仍绑 isCurrent、语义不变）——true 表示
+    /// 真图已置入 imageView，供工具条在图落地时整层摘除占位
+    /// 字图层；缓存同步命中在本函数返回前同步回调。
     static func loadAvatar(url: URL?, into imageView: UIImageView,
+                           completion: ((Bool) -> Void)? = nil,
                            isCurrent: @escaping () -> Bool) {
         imageView.image = nil
-        guard let url else { return }
+        guard let url else { completion?(false); return }
         let raw = url.absoluteString
         let tier = NativeCoverLoader.tier(forPixelExtent: 120)
         if let proxied = NativeCoverLoader.shared.proxiedURLString(raw, tier: tier) {
             if let cached = NativeCoverLoader.shared.cachedImage(for: proxied) {
                 imageView.image = cached
+                completion?(true)
                 return
             }
             Task {
                 if let image = await NativeCoverLoader.shared.image(for: proxied, tier: tier) {
-                    await MainActor.run { if isCurrent() { imageView.image = image } }
+                    await MainActor.run {
+                        if isCurrent() {
+                            imageView.image = image
+                            completion?(true)
+                        }
+                    }
                     return
                 }
                 let image = await directImage(url)
-                await MainActor.run { if isCurrent() { imageView.image = image } }
+                await MainActor.run {
+                    if isCurrent() {
+                        imageView.image = image
+                        completion?(image != nil)
+                    }
+                }
             }
         } else {
             Task {
                 let image = await directImage(url)
-                await MainActor.run { if isCurrent() { imageView.image = image } }
+                await MainActor.run {
+                    if isCurrent() {
+                        imageView.image = image
+                        completion?(image != nil)
+                    }
+                }
             }
         }
     }
