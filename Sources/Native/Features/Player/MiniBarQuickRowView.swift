@@ -372,9 +372,17 @@ final class MiniBarQuickRowView: UIView {
         host.present(nav, animated: true)
     }
 
+    /// 长按已触发标记：长按抬手时 touchUpInside 仍会到，
+    /// pawTapped 见标记即吞掉（与星标长按同款防误报）。
+    private var pawLongPressFired = false
+
     /// (77) ⑤爪印短按：无动作（防误触，与窗口爪印同纪
     /// 律），只给一句长按提示——长按语义靠它可发现。
     @objc private func pawTapped() {
+        if pawLongPressFired {
+            pawLongPressFired = false
+            return
+        }
         onUserInteraction?()
         Breadcrumbs.log("minibar.webrow paw tap=hint")
         NativePlaybackFailureToast.show(
@@ -393,6 +401,7 @@ final class MiniBarQuickRowView: UIView {
     /// 同实现、同 src 收口），src/via 按台面入口记 deck。
     @objc private func pawLongPressed(_ gesture: UILongPressGestureRecognizer) {
         guard gesture.state == .began else { return }
+        pawLongPressFired = true
         onUserInteraction?()
         let enabled = StickerSettings.miniPetsEnabled
         PetSummonButton70.performPawToggle77(
