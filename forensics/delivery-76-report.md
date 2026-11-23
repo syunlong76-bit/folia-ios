@@ -144,7 +144,7 @@ Miller 22:17 确认：从没动过设置里的宠物开关。(75) 与更早会�
 
 ## 交付信息
 
-- 分支/提交：release-76 / 515b63d9（已推送）
-- CI：（构建完成后补）
-- IPA：（验包后补）
-- 下载：（上传后补）
+- 分支/提交：release-76 / 出包提交 a6db890c（报告终稿 aace5bf9，报告-only 不影响包体）
+- CI：45193036201，completed success（前两轮 45190434441 / 45192569747 因追加项改码主动取消、被本轮取代）
+- IPA：Folia-3.7-76-unsigned.ipa，48,585,752 字节。验包实证：CFBundleVersion = **76**（CFBundleShortVersionString 3.7)、FoliaWidgets.appex 在位、扩展 Assets.car 1,126,735 字节（(75) 约 1.5MB，紧裁后变小）且 dog-11 / cat-09 渲染名都在、NSSupportsLiveActivities = true
+- 下载：https://muse.ai/files/1467544983097845/1457877679796937/btcjdkmh8y6eiqc831qobs71/Folia-3.7-76-unsigned.ipa（到期 2026-11-25 22:31 CST；本地原件 ~/workspace/folia-deploy/build-76/Folia-3.7-76-unsigned.ipa，如需可再走文叔叔补发）
