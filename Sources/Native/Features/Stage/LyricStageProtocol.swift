@@ -294,11 +294,15 @@ enum LyricStageRegistry {
               factory: nil),
         .init(id: "hanabi",   displayName: "花火", order: 26,  styleVersion: 1, isNativeAvailable: false,
               factory: nil),
-        // (60) 第 4 条：machi 锁定禁用（用户选不到、用不了）；
-        // (70) 原生渲染已删、WebEffect 资源保留，锁定语义不变。
+        // (60) 第 4 条曾锁定禁用、(70) 原生渲染删除后悬置；
+        // (74) Miller 拍板恢复：解除锁定，按「网页运行」入列
+        // （hasWebRuntime=true、WebEffect 资源 VisualizerMachi
+        // 与 createMachiRuntime 在包内完好）——选择器可选、
+        // 洗牌袋/三击/长按轮换经 selectableStyleIds 同源入
+        // 袋、样式池全集 21 只，呈现走 StageRuntimeStore 网
+        // 页嵌入通路，与其余 16 只网页特效同路。
         .init(id: "machi",    displayName: "町景", order: 27,  styleVersion: 1, isNativeAvailable: false,
-              factory: nil,
-              isLocked: true),
+              factory: nil),
         .init(id: "nebbia",   displayName: "雾笺", order: 29,  styleVersion: 1, isNativeAvailable: false,
               factory: nil),
         .init(id: "classic",  displayName: "流光", order: 30,  styleVersion: 2, isNativeAvailable: false,

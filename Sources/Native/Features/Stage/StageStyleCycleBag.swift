@@ -49,8 +49,10 @@ final class StageStyleCycleBag {
     /// 全部登记条目——已迁条目在选择器走原生切换、未迁条目
     /// 走网页兜底，两者在选择器里都可选，故全部入袋；注册
     /// 表之外不存在其他可选样式。（60) 第 4 条：锁定样式
-    /// （isLocked，如 machi）过滤出袋——next() 取前对账会把
-    /// 已在余量里的锁定残留一并剔除，进行中的一轮自动清净。
+    /// （isLocked）过滤出袋——next() 取前对账会把已在余量
+    /// 里的锁定残留一并剔除，进行中的一轮自动清净。（74）
+    /// machi 解除锁定后注册表已无锁定样式，全集 = 21 只，
+    /// 町景与三击/长按轮换同源入袋。
     static var selectableStyleIds: [String] {
         LyricStageRegistry.allStyles
             .filter { !$0.isLocked }

@@ -189,9 +189,10 @@ final class StageStylePickerViewController: UIViewController, UITableViewDataSou
             return cell
         }
         let style = styles[indexPath.row]
-        // (60) 第 4 条：锁定样式（machi）整行置灰——文字降至系统
+        // (60) 第 4 条：锁定样式整行置灰——文字降至系统
         // tertiary 量级（深色外观下仍可读）、徽标换「锁」、调参钮
         // 禁用、点选在 didSelect 直接返回不发任何回调。
+        // （74）machi 已解除锁定，本分支当前无样式命中、防御保留。
         let locked = style.isLocked
         var config = UIListContentConfiguration.valueCell()
         config.text = style.displayName

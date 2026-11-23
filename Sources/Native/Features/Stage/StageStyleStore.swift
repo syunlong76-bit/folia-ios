@@ -37,8 +37,9 @@ enum StageStyleStore {
     /// （原生渲染或网页嵌入，3.7 (70) 口径）且未锁定则用它，
     /// 不可呈现/被锁定则用最近用过的已迁未锁样式（再无则默
     /// 认 classic——(70) 后 classic 走网页嵌入、同样可呈现）。
-    /// 当前样式被锁定时同时把持久值改写为回退值并落面包屑
-    /// （存量 machi 一次清净，后续读到的恒为回退值）。
+    /// 当前样式被锁定时同时把持久值改写为回退值并落面包屑。
+    /// （74）machi 已解除锁定：存量 currentStyleId=machi 不
+    /// 再触发本回退，按网页运行正常呈现。
     static func effectiveStyleId() -> String {
         let current = currentStyleId
         if LyricStageRegistry.isStagePresentable(current),
@@ -52,9 +53,10 @@ enum StageStyleStore {
     }
 
     /// 启动改写（3.7 (60) 第 4 条）：存量 currentStyleId 是锁定
-    /// 样式（如 machi）时，在任何舞台呈现之前直接改写为回退值，
-    /// 避免「当前样式」提示条等显示路径还报锁定样式。由
-    /// runLaunchStyleGuard 在启动最先调用。
+    /// 样式时，在任何舞台呈现之前直接改写为回退值，避免
+    /// 「当前样式」提示条等显示路径还报锁定样式。由
+    /// runLaunchStyleGuard 在启动最先调用。（74）当前注册表
+    /// 已无锁定样式，本守卫恒空转、仅作防御保留。
     static func applyLockedStyleFallbackIfNeeded() {
         let current = currentStyleId
         guard LyricStageRegistry.isLocked(current) else { return }
