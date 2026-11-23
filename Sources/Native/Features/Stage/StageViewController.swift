@@ -258,14 +258,22 @@ final class StageViewController: UIViewController {
     // MARK: 顶栏自动隐藏（3.7 (46)，Miller 规格）
     //
     // 顶栏整条（歌名/歌手/喜欢/样式胶囊/关闭）开台或恢复后 5 秒
-    // 无操作淡出隐藏；双击舞台恢复并重新计时；单击不触发恢复
-    // （仅在顶栏可见时顺延隐藏计时）；淡入淡出走 iOS 系统弹簧/
-    // 自然减速；全样式通用（页眉在本控制器层、与渲染器无关）；
-    // 底部播放条不动。隐藏只是 alpha/显隐，与 StageExitGate 的
-    // 退出守卫无关（隐藏≠退出）。
+    // 无操作淡出隐藏；单击不触发恢复（仅在顶栏可见时顺延隐藏
+    // 计时）；淡入淡出走 iOS 系统弹簧/自然减速；全样式通用
+    // （页眉在本控制器层、与渲染器无关）；底部播放条不动。隐
+    // 藏只是 alpha/显隐，与 StageExitGate 的退出守卫无关
+    // （隐藏≠退出）。（74）恢复口径按 Miller 更正：单击显示
+    // 歌名（经 require(toFail: 三击) 的时序门，见装配处）、
+    // 双击绑歌名已摘除，另有 appear/track-change/设置关自
+    // 动隐藏三源。
 
     private var headerHideWorkItem: DispatchWorkItem?
     private var headerChromeHidden = false
+    /// (74) 第 9 项（更正口径）：单击显示歌名识别器——须等
+    /// 三击识别失败才触发（require(toFail:)），故存引用待
+    /// 三击装配时接线。三击识别器同存（接线与自证用）。
+    private var stageHeaderSingleTap74: UITapGestureRecognizer?
+    private var stageTripleTap74: UITapGestureRecognizer?
 
     private var stageHeaderViews: [UIView] {
         // (53) H 修正：播放列表入口曾在本顶栏隐藏排；(60) 第 10
@@ -274,15 +282,36 @@ final class StageViewController: UIViewController {
     }
 
     private func installStageHeaderAutoHideRecognizers() {
-        let doubleTap = UITapGestureRecognizer(
-            target: self, action: #selector(stageHeaderDoubleTapped))
-        doubleTap.numberOfTapsRequired = 2
-        doubleTap.cancelsTouchesInView = false
-        view.addGestureRecognizer(doubleTap)
+        // (74) 第 9 项（Miller 19:48 更正口径，覆盖先前一版）：
+        // 本页点按正道＝单击显示歌名、三击只切特效。
+        // ①双击绑歌名的识别器已整路摘除（原 stageHeader-
+        //   DoubleTapped 及其 view 级双击识别器删除）——双击
+        //   不再有任何歌名行为；
+        // ②单击显示歌名：singleTap74 显示顶栏，但装配时在
+        //   installStyleCycleRecognizers 里给它加
+        //   require(toFail: 三击)——三击序列中单击被压住、
+        //   三击成功即单击作废，歌名全程不出现（治旧病：三
+        //   击途中点按被先行识别、切特效时歌名跟着闪）；真
+        //   单击在三击识别失败后触发，延迟约一个多击窗口
+        //   （≈0.35s，Miller 已认可接受范围）；
+        // ③单击观察器保留：不消费触摸、只在顶栏可见时即时
+        //   顺延隐藏计时（不等 ②的延迟，防计时在延迟内到点）。
+        let singleTap74 = UITapGestureRecognizer(
+            target: self, action: #selector(stageHeaderSingleTapped74))
+        singleTap74.cancelsTouchesInView = false
+        view.addGestureRecognizer(singleTap74)
+        stageHeaderSingleTap74 = singleTap74
         let tapObserver = UITapGestureRecognizer(
             target: self, action: #selector(stageHeaderAnyTapped))
         tapObserver.cancelsTouchesInView = false
         view.addGestureRecognizer(tapObserver)
+    }
+
+    /// (74) 单击显示歌名：经 require(toFail: 三击) 的时序门
+    /// 后才到这里（见装配处注释）；showStageHeader 内部兼管
+    /// 已可见时只顺延计时、已隐藏时弹簧恢复并落面包屑。
+    @objc private func stageHeaderSingleTapped74() {
+        showStageHeader(source: "tap74")
     }
 
     private func scheduleStageHeaderHide() {
@@ -334,10 +363,6 @@ final class StageViewController: UIViewController {
         scheduleStageHeaderHide()
     }
 
-    @objc private func stageHeaderDoubleTapped() {
-        showStageHeader(source: "double-tap")
-    }
-
     /// 单击观察（不消费触摸）：顶栏可见时任一单击 = 有操作，
     /// 顺延隐藏计时；顶栏已隐藏时单击不恢复（规格：单击不触发）。
     @objc private func stageHeaderAnyTapped() {
@@ -356,9 +381,10 @@ final class StageViewController: UIViewController {
     // 进度环 observer 接线已整组摘除（observer/环类本体曾留
     // 在 StageStyleCycleBag.swift 供宠物 4s 开启手势共用；
     // (70) B2 该手势整套撤除后两类已整类删除）。三击识别
-    // 器独立安装、不给任何既有识别器加
-    // require(toFail:)：双击顶栏恢复照常零延迟（三击途中第
-    // 2 击先触发顶栏恢复，无害、与切样式不冲突）。
+    // 器自身不加任何 require。（74）第 9 项手势互斥反接在
+    // 单击一侧：单击显示歌名 require(toFail: 三击)（见
+    // installStyleCycleRecognizers 接线）——三击是本页唯一
+    // 多击手势、序列全程歌名不出现；双击无任何绑定。
     //
     // 识别区纪律：识别器只挂 rendererContainer——点播台
     // （stageBar 及其宠物层 stagePetStage）、顶栏按钮、提示
@@ -372,6 +398,13 @@ final class StageViewController: UIViewController {
         tripleTap.numberOfTapsRequired = 3
         tripleTap.cancelsTouchesInView = false
         rendererContainer.addGestureRecognizer(tripleTap)
+        stageTripleTap74 = tripleTap
+        // (74) 第 9 项手势互斥：单击显示歌名必须等三击失败
+        // ——三击序列全程单击不触发、歌名不闪现（见顶栏装
+        // 配处长注）。接线在本处（三击本体所在）完成，装配
+        // 顺序为顶栏识别器先行（viewDidLoad :520/:523）。
+        stageHeaderSingleTap74?.require(toFail: tripleTap)
+        Breadcrumbs.log("stage.tapchain74 single=req3fail")
     }
 
     @objc private func styleCycleTripleTapped() {
@@ -1500,10 +1533,12 @@ final class StageViewController: UIViewController {
     }
 
     private func refreshStyleButton() {
-        let name = LyricStageRegistry.info(for: activeStyleId)?.displayName ?? activeStyleId
-        // 网页运行标注（3.7 (67) A3）：胶囊明示当前式在网页运行。
-        let suffix = StageRuntimeStore.isWeb(activeStyleId) ? " · 网页运行" : ""
-        styleButton.setTitle("样式 · \(name)\(suffix)", for: .normal)
+        // (74) 第 8 项（Miller 定）：详情页右上角两样显示撤
+        // 掉——①当前特效名不许显示；②「网页运行」徽标（(67)
+        // A3/(70) 加的后缀）不许显示。胶囊只保留中性入口名
+        // 「样式」（点按开选择器的切换入口与逻辑不动，特效
+        // 本身不动）。原标题形如「样式 · 凝彩 · 网页运行」。
+        styleButton.setTitle("样式", for: .normal)
         view.setNeedsLayout()
     }
 
