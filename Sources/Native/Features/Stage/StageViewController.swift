@@ -17,6 +17,23 @@ import WebKit
 //  setLike 同步（失败回滚，同展开卡 likeTapped）。
 final class StageViewController: UIViewController {
 
+    /// (79) 第 6 条：舞台本体补状态栏隐藏——(78) 报告把同
+    /// 文件 WebStageHostViewController 的 override 记错到
+    /// 本类头上，本体实际缺失、播放页时钟必现。本版与另
+    /// 四页（主页/歌单/拼贴/入场）对齐恒隐藏。
+    override var prefersStatusBarHidden: Bool { true }
+
+    /// (79) 第 9 条：系统边缘手势延迟——岛宠框压顶缘、
+    /// 收起宠坐底部 Home/后台手势区，(78) 判读两处失败
+    /// 均呈「触摸被系统整手拿走」签名且全仓零处置。本页
+    /// 顶/底缘手势先让 app 内拖动，系统下拉/回主屏改走
+    /// 二段式（先露小把手再拉），与 Miller 拍板的宠物
+    /// 登顶口径一致。
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        [.top, .bottom]
+    }
+    override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
+
     /// 跳网页舞台（用户选未迁样式 / 提示条回网页 / 挂载失败回退）：
     /// 3.7 (51) 起不再由墙 VC 注入回调——回程票链已整链删除，
     /// jumpToWebStage 改为本台自身叠加 present 网页宿主（见文件
@@ -90,6 +107,9 @@ final class StageViewController: UIViewController {
     /// 钮，glyph 随 QueueManager.playMode 四档变，点按弹 UIMenu
     /// 四档点选（非盲循环）；与队列面板/播放面板同一 playMode 存储。
     private let stageModeButton = UIButton(type: .system)
+    /// (79) 第 1 条：舞台台面常驻爪印钮（模式钮右侧、总时长
+    /// 标签左侧的 24pt 窄位——舞台主排已满，此位为唯一空隙）。
+    private let stagePawButton = DeckPawButton79()
     /// (66) 进度条两端功能槽位钮（barSlotLeft62/Right62 的
     /// 消费者）：落在时间标签与中央簇之间的空隙，不动 (55)
     /// 定版五钮浮层；配置随 refresh62Settings 重建。
@@ -2652,6 +2672,11 @@ final class StageViewController: UIViewController {
         bar.addSubview(stageModeButton)
         refreshStageModeButton()
 
+        // (79) 第 1 条：爪印上台面明处（与两面墙同核）。
+        stagePawButton.translatesAutoresizingMaskIntoConstraints = false
+        stagePawButton.onUserInteraction = { [weak self] in self?.resetStageIdleTimer() }
+        bar.addSubview(stagePawButton)
+
         // 播放列表入口已于 (60) 第 10 条整钮删除（原 (48) 落台面、
         // (53) H 迁顶栏隐藏排）；队列面板本体保留，经面板页签进入。
 
@@ -2760,6 +2785,12 @@ final class StageViewController: UIViewController {
                 equalTo: playButton.centerYAnchor),
             stageModeButton.widthAnchor.constraint(equalToConstant: 34),
             stageModeButton.heightAnchor.constraint(equalToConstant: 40),
+            stagePawButton.leadingAnchor.constraint(
+                equalTo: stageModeButton.trailingAnchor, constant: 0),
+            stagePawButton.centerYAnchor.constraint(
+                equalTo: playButton.centerYAnchor),
+            stagePawButton.widthAnchor.constraint(equalToConstant: 24),
+            stagePawButton.heightAnchor.constraint(equalToConstant: 40),
         ])
 
         // (66) 进度条两端槽位钮装配：左钮落在当前时间标签右
@@ -2811,6 +2842,16 @@ final class StageViewController: UIViewController {
         // 恒启用、无 require 链，几何细条时先纠标志再展开。
         let agnosticTap74 = UITapGestureRecognizer(
             target: self, action: #selector(stageBarAgnosticTapped74(_:)))
+        // (79) 第 7/13 条仲裁改造（头像当机日志定案）：本识
+        // 别器原无 require 链且 cancelsTouchesInView 缺省
+        // true——每次点按抬手必认领并整手取消台身触摸，单击
+        // 识别器被 require(toFail: 双击) 扣住等裁定、等到的
+        // 却是取消（mb.tch78 c 率 100%、locate 从未被调用）。
+        // 改：不取消他人触摸＋等双击裁定落空才认领（收起态
+        // 双击识别器禁用、require 立即满足，细条展开不迟滞）；
+        // 几何兜底语义不变。
+        agnosticTap74.cancelsTouchesInView = false
+        agnosticTap74.require(toFail: doubleTap)
         bar.addGestureRecognizer(agnosticTap74)
         syncStageBarDoubleTapEnabled()
 
@@ -2894,13 +2935,14 @@ final class StageViewController: UIViewController {
         let themed = stageKnobSkin != nil
         stageProgressKnob?.backgroundColor = themed ? .clear : .white
         stageProgressKnob?.layer.shadowOpacity = themed ? 0 : 0.9
-        // (77) ②进度配色（同两墙）：全条统一主题色、未填
-        // 充轨同色系实色压暗（foliaDarkenedTrack77）。
+        // (79) 第 2 条进度配色：全条统一一色——轨道与填
+        // 充同色直用，(77) ②的同色压暗整条删除；进度辨
+        // 识靠主题小圆点把手位置（圆点原方案不动）。
         let singleColor = stageBarCollapsed
             ? Self.stageCollapsedFillColor(for: stageTheme)
             : Self.stageFillColor(for: stageTheme)
         stageProgressFill?.backgroundColor = singleColor
-        stageProgressTrack?.backgroundColor = singleColor.foliaDarkenedTrack77()
+        stageProgressTrack?.backgroundColor = singleColor
     }
 
     /// 与墙 miniFillColor 同值（主题填充色）。
@@ -2938,7 +2980,8 @@ final class StageViewController: UIViewController {
         let point = gesture.location(in: stageBar)
         if playButton.frame.contains(point)
             || prevButton.frame.contains(point)
-            || nextButton.frame.contains(point) { return }
+            || nextButton.frame.contains(point)
+            || stagePawButton.frame.contains(point) { return }
         // 附加功能行已迁浮层（(60) 第 7 条）：浮层不在台身内，
         // 其触摸不进本识别器，无须再豁免（旧上排豁免随之退役）。
         stageTheme = stageTheme.next
@@ -3200,12 +3243,15 @@ final class StageViewController: UIViewController {
         // 换居中 134×5 小横线、圆点收起；台体容器与命中带
         // 不动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
         stageTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
-        stageTrackHeightC?.constant = collapsed ? 5 : 4
-        stageTrackLeadC?.isActive = !collapsed
-        stageTrackTrailC?.isActive = !collapsed
-        stageTrackCenterXC?.isActive = collapsed
-        stageTrackWidthC?.isActive = collapsed
-        stageProgressTrack?.layer.cornerRadius = collapsed ? 2.5 : 2
+        stageTrackHeightC?.constant = 5
+        // (79) 第 2 条：展开轨与收起轨同尺寸——恒居中
+        // 134×5（与 home indicator 一模一样，横屏同规、
+        // 不拉长），两形态不再切换全宽轨。
+        stageTrackLeadC?.isActive = false
+        stageTrackTrailC?.isActive = false
+        stageTrackCenterXC?.isActive = true
+        stageTrackWidthC?.isActive = true
+        stageProgressTrack?.layer.cornerRadius = 2.5
         // (77) ②③：四主题小圆点恢复收起态在场（(74) 误删，
         // 两形态恒可见、皮肤两形态同挂）。
         stageProgressKnob?.isHidden = false
@@ -3232,7 +3278,7 @@ final class StageViewController: UIViewController {
         // 台收起时浮层由 collapseStageBarIdle 单独收起。
         for view in [currentTimeLabel, totalTimeLabel,
                      playButton, prevButton, nextButton,
-                     stageModeButton,
+                     stageModeButton, stagePawButton,
                      stageSlotLeft66, stageSlotRight66] as [UIView] {
             view.alpha = alpha
         }
@@ -3240,7 +3286,7 @@ final class StageViewController: UIViewController {
 
     private func setStageBarContentsInteractive(_ interactive: Bool) {
         for button in [playButton, prevButton, nextButton, stageModeButton,
-                       stageSlotLeft66, stageSlotRight66] {
+                       stagePawButton, stageSlotLeft66, stageSlotRight66] {
             button.isUserInteractionEnabled = interactive
         }
     }

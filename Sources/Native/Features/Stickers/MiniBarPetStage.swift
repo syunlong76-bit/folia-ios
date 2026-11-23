@@ -55,6 +55,19 @@ import UIKit
 // MARK: - 迷你台宠物演员
 
 private final class MiniPetActor: UIView {
+
+    /// (79) 第 10 条：小形态（收起 30pt）命中区对称放大
+    /// 到 ≥44pt（iOS 最小命中口径），视觉帧与布局不变；
+    /// 展开 48pt 不受影响。
+    override func point(inside point: CGPoint,
+                        with event: UIEvent?) -> Bool {
+        let side = bounds.width
+        guard side > 0, side < 44 else {
+            return super.point(inside: point, with: event)
+        }
+        return bounds.insetBy(dx: -(44 - side) / 2,
+                              dy: -(44 - side) / 2).contains(point)
+    }
     let stickerView = StickerView()
     private(set) var asset: String = ""
     var isCat: Bool { asset.hasPrefix("cat") }
@@ -292,6 +305,12 @@ private final class MiniPetActor: UIView {
     private func finishPress(cancelled: Bool) {
         guard pressPhase != .idle else { return }
         let wasDragging = pressPhase == .dragging
+        // (79) 第 9 条：grab 后被取消/抬手原静默复位零落痕
+        // （(78) 判读盲区）——收尾恒落 pet.fin79 带相位与
+        // 取消位，下轮日志可定案取消者。
+        Breadcrumbs.log("pet.fin79 a=\(asset)"
+            + " ph=\(wasDragging ? "drag" : "grab")"
+            + " c=\(cancelled ? 1 : 0)")
         cancelPressWork()
         pressPhase = .idle
         if wasDragging {
@@ -1686,6 +1705,17 @@ final class MiniBarPetStage: UIView {
                 Breadcrumbs.log("pet.drag.end asset=\(asset) src=\(src) host=island-denied")
             }
             return
+        }
+        // (79) 第 9/11 条：落座未命中补落痕（原未命中分支
+        // 零落痕是盲区）——放手点指向岛带（y≤140）却没进
+        // 落座条件时落 isl.drop79 带坐标与拒因，换住链本
+        // 体与窗口坐标判定不动。
+        if windowPoint.y <= 140 {
+            let reason = dock.bounds.width >= dock.bounds.height
+                ? "landscape" : "outx"
+            Breadcrumbs.log("isl.drop79 a=\(actor.asset)"
+                + " x=\(Int(windowPoint.x)) y=\(Int(windowPoint.y))"
+                + " r=\(reason)")
         }
         let cx = min(max(windowPoint.x, half), max(half, dock.bounds.width - half))
         let cy = min(max(windowPoint.y, half), max(half, dock.bounds.height - half))

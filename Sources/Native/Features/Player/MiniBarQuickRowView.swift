@@ -542,3 +542,75 @@ final class MiniBarQuickRowOverlayView: UIView {
         }
     }
 }
+
+/// (79) 第 1 条：台面常驻爪印钮。爪印原只住快速行浮层
+/// （默认不显、点台身空白才呼出），Miller (78) 真机找不到
+/// ——本钮把爪印摆到点播台主排右端簇（下一曲与模式钮之
+/// 间），展开台面恒可见。语义与浮层爪印完全同核：短按只
+/// 给长按提示（防误触），长按按开关态 2s 召唤/3s 告别，
+/// 走 PetSummonButton70.performPawToggle77 收口；阈值在
+/// hitTest 现读刷新（外部路径改过开关后下一次按下恒读
+/// 现态）。自证面包屑 paw.face79。
+final class DeckPawButton79: UIButton {
+
+    var onUserInteraction: (() -> Void)?
+    private let pressRecognizer = UILongPressGestureRecognizer()
+    private var longPressFired = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        tintColor = UIColor.white.withAlphaComponent(0.9)
+        setImage(UIImage(systemName: "pawprint.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 16, weight: .semibold)),
+                 for: .normal)
+        accessibilityLabel = "宠物开关（长按）"
+        pressRecognizer.minimumPressDuration =
+            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+        pressRecognizer.allowableMovement = 12
+        pressRecognizer.cancelsTouchesInView = false
+        pressRecognizer.addTarget(self, action: #selector(longPressed(_:)))
+        addGestureRecognizer(pressRecognizer)
+        addTarget(self, action: #selector(touchDown), for: .touchDown)
+        addTarget(self, action: #selector(tapped), for: .touchUpInside)
+        Breadcrumbs.log("paw.face79 init")
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        let hit = super.hitTest(point, with: event)
+        if hit === self {
+            pressRecognizer.minimumPressDuration =
+                StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+        }
+        return hit
+    }
+
+    @objc private func touchDown() { onUserInteraction?() }
+
+    @objc private func tapped() {
+        if longPressFired { longPressFired = false; return }
+        onUserInteraction?()
+        Breadcrumbs.log("paw.face79 tap=hint")
+        NativePlaybackFailureToast.show(
+            message: StickerSettings.miniPetsEnabled
+                ? "长按爪印 3 秒，送小宠物回家"
+                : "长按爪印 2 秒，召唤小宠物")
+    }
+
+    @objc private func longPressed(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        longPressFired = true
+        onUserInteraction?()
+        let enabled = StickerSettings.miniPetsEnabled
+        Breadcrumbs.log("paw.face79 fire on=\(enabled ? 1 : 0)")
+        PetSummonButton70.performPawToggle77(
+            window: window,
+            src: enabled ? "face3s" : "face2s",
+            via: enabled ? "face3s" : "face2s",
+            actCrumb: "paw.act79")
+        pressRecognizer.minimumPressDuration =
+            StickerSettings.miniPetsEnabled ? 3.0 : 2.0
+    }
+}

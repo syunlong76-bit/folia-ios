@@ -238,6 +238,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 四档各异，点按弹四档菜单点选，与队列面板/设置同一存储
     /// 同步。详注见 HomeWallViewController 同名属性。
     private var miniModeButton: UIButton!
+    /// (79) 第 1 条：台面常驻爪印钮（主排右端簇，模式钮左侧）。
+    private var miniPawButton: DeckPawButton79!
     private var miniSeekHit: UIView!
     private var miniProgressFill: UIView!
     /// 进度拖动中：心跳不覆盖填充，松手 seek 后恢复。
@@ -275,6 +277,16 @@ final class WallPrototypeViewController: UIViewController,
     /// 部带完整显示。安全区顶恒 59pt（传感器 housing 决
     /// 定、与状态栏显隐无关），既有布局不跳位。
     override var prefersStatusBarHidden: Bool { true }
+
+    /// (79) 第 9 条：系统边缘手势延迟——岛宠框压顶缘、
+    /// 收起宠坐底部 Home/后台手势区，(78) 判读两处失败
+    /// 均呈「触摸被系统整手拿走」签名且全仓零处置。本页
+    /// 顶/底缘手势先让 app 内拖动，系统下拉/回主屏改走
+    /// 二段式（先露小把手再拉），与 Miller 拍板的宠物
+    /// 登顶口径一致。
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        [.top, .bottom]
+    }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
     override func viewDidLoad() {
@@ -814,6 +826,12 @@ final class WallPrototypeViewController: UIViewController,
         bar.addSubview(miniModeButton)
         refreshMiniModeButton()
 
+        // (79) 第 1 条：爪印上台面明处（与主页墙同位同核）。
+        miniPawButton = DeckPawButton79()
+        miniPawButton.translatesAutoresizingMaskIntoConstraints = false
+        miniPawButton.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
+        bar.addSubview(miniPawButton)
+
         // 播放列表图标已删（3.7 (60) 第 10 条）：顶部 chrome 的
         // miniQueueButton 整钮移除，设置齿轮位置不补位；队列入
         // 口保留点播台面板页签与命令面板，QueuePanelViewController
@@ -892,7 +910,11 @@ final class WallPrototypeViewController: UIViewController,
             miniModeButton.widthAnchor.constraint(equalToConstant: 30),
             miniModeButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
+            miniPawButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
+            miniPawButton.widthAnchor.constraint(equalToConstant: 30),
+            miniPawButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniNextButton.trailingAnchor.constraint(equalTo: miniPawButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
@@ -917,7 +939,7 @@ final class WallPrototypeViewController: UIViewController,
         // （70 台旧口径，封面 44 居 y 8..52、轨道顶 59 不重叠）；
         // 收起态同 −5。模式钮（(55) E 修正项）同入本组。
         // 形态切换在 setMiniBarForm 里统一改这组常量。
-        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniModeButton].map {
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniPawButton, miniModeButton].map {
             $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
@@ -958,6 +980,16 @@ final class WallPrototypeViewController: UIViewController,
         // 恒启用、无 require 链，几何细条时先纠标志再展开。
         let agnosticTap74 = UITapGestureRecognizer(
             target: self, action: #selector(miniBarAgnosticTapped74(_:)))
+        // (79) 第 7/13 条仲裁改造（头像当机日志定案）：本识
+        // 别器原无 require 链且 cancelsTouchesInView 缺省
+        // true——每次点按抬手必认领并整手取消台身触摸，单击
+        // 识别器被 require(toFail: 双击) 扣住等裁定、等到的
+        // 却是取消（mb.tch78 c 率 100%、locate 从未被调用）。
+        // 改：不取消他人触摸＋等双击裁定落空才认领（收起态
+        // 双击识别器禁用、require 立即满足，细条展开不迟滞）；
+        // 几何兜底语义不变。
+        agnosticTap74.cancelsTouchesInView = false
+        agnosticTap74.require(toFail: doubleTap)
         bar.addGestureRecognizer(agnosticTap74)
 
         applyMiniTheme()
@@ -1073,16 +1105,14 @@ final class WallPrototypeViewController: UIViewController,
         let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        // (77) ②进度配色（推翻 (74) 的同色 25% 透明轨）：
-        // 全条统一为现行后半段主题色（填充色两形态同规，
-        // 收起态仅星空走强金兜底），未填充轨改同色系实色
-        // 压暗（foliaDarkenedTrack77）——明度差辨进度，
-        // 不再出现前暗后橙双截、不退纯白。
+        // (79) 第 2 条进度配色：全条统一一色——轨道与填
+        // 充同色直用，(77) ②的同色压暗整条删除；进度辨
+        // 识靠主题小圆点把手位置（圆点原方案不动）。
         let singleColor = miniBarCollapsed
             ? Self.miniCollapsedFillColor(for: miniTheme)
             : Self.miniFillColor(for: miniTheme)
         miniProgressFill.backgroundColor = singleColor
-        miniProgressTrack.backgroundColor = singleColor.foliaDarkenedTrack77()
+        miniProgressTrack.backgroundColor = singleColor
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
@@ -1127,7 +1157,8 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         // 附加功能行已迁浮层（(60) 第 7 条）：浮层不在台身内，
         // 其触摸不进本识别器，旧上排豁免随之退役。
         miniTheme = miniTheme.next
@@ -1189,7 +1220,8 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         // 进度带分域（封面优先于进度带：封面下缘与 seekHit
         // 带约 2pt 重叠，该重叠落点归封面规格、不归 seek）。
         if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
@@ -1225,7 +1257,8 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
             Breadcrumbs.log("minibar.doubletap host=wallproto zone=seekband action=skip")
             return
@@ -1264,7 +1297,8 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         if miniCover.frame.contains(point) { return }
         guard miniSeekHit.frame.contains(point) else { return }
         let track = miniProgressTrack.frame
@@ -1326,7 +1360,8 @@ final class WallPrototypeViewController: UIViewController,
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint)
-                || miniModeButton.frame.contains(barPoint) { return }
+                || miniModeButton.frame.contains(barPoint)
+                || miniPawButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
             // 拖动期间挂起无操作计时（3.7 (21)），松手后重置。
@@ -1592,12 +1627,15 @@ final class WallPrototypeViewController: UIViewController,
         // 居中 134×5 小横线、圆点收起；台体容器与命中带不
         // 动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
         miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
-        miniTrackHeightC?.constant = collapsed ? 5 : 4
-        miniTrackLeadC?.isActive = !collapsed
-        miniTrackTrailC?.isActive = !collapsed
-        miniTrackCenterXC?.isActive = collapsed
-        miniTrackWidthC?.isActive = collapsed
-        miniProgressTrack.layer.cornerRadius = collapsed ? 2.5 : 2
+        miniTrackHeightC?.constant = 5
+        // (79) 第 2 条：展开轨与收起轨同尺寸——恒居中
+        // 134×5（与 home indicator 一模一样，横屏同规、
+        // 不拉长），两形态不再切换全宽轨。
+        miniTrackLeadC?.isActive = false
+        miniTrackTrailC?.isActive = false
+        miniTrackCenterXC?.isActive = true
+        miniTrackWidthC?.isActive = true
+        miniProgressTrack.layer.cornerRadius = 2.5
         // (77) ②③：四主题小圆点恢复收起态在场——(74) 细
         // 条改素线时以 isHidden=collapsed 误删；皮肤在
         // refreshMiniProgressChrome 两形态同挂，圆点本体
@@ -1640,14 +1678,14 @@ final class WallPrototypeViewController: UIViewController,
         // 附加功能行已迁浮层（(60) 第 7 条），不入台形态名单：
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniModeButton]
+                                miniPrevButton, miniNextButton, miniPawButton, miniModeButton]
         for view in views {
             view?.alpha = alpha
         }
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniModeButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniPawButton, miniModeButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
@@ -3516,6 +3554,15 @@ enum WallTileStats78 {
     private static var syncImg = 0
     private static var phImg = 0
     private static var phBlank = 0
+    /// (79) 第 3 条请求链计数：cfg=configure 总数、
+    /// req=真发出取图请求数、noURL=URL 换算失败早退数
+    /// （proxiedURLString 为 nil：本地服务 port=0 或地址
+    /// 形态不识别——该分支原不计 tile78、且渲染纯黑，
+    /// 是「砖未请求」侧的头号嫌疑，本包计数＋垫色＋重
+    /// 试三件一并落，见 WallPosterCell.configure）。
+    private static var cfg79 = 0
+    private static var req79 = 0
+    private static var noURL79 = 0
 
     static func note(sync: Bool, placeholderImage: Bool) {
         lock.lock()
@@ -3525,6 +3572,10 @@ enum WallTileStats78 {
         lock.unlock()
     }
 
+    static func noteCfg79() { lock.lock(); cfg79 += 1; lock.unlock() }
+    static func noteReq79() { lock.lock(); req79 += 1; lock.unlock() }
+    static func noteNoURL79() { lock.lock(); noURL79 += 1; lock.unlock() }
+
     /// 取走并清零（无样本返回 nil）。
     static func take() -> (sync: Int, phImg: Int, blank: Int)? {
         lock.lock()
@@ -3532,6 +3583,15 @@ enum WallTileStats78 {
         guard syncImg + phImg + phBlank > 0 else { return nil }
         defer { syncImg = 0; phImg = 0; phBlank = 0 }
         return (syncImg, phImg, phBlank)
+    }
+
+    /// (79) 请求链计数取走（无样本返回 nil）。
+    static func takeReq79() -> (cfg: Int, req: Int, noURL: Int)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard cfg79 + req79 + noURL79 > 0 else { return nil }
+        defer { cfg79 = 0; req79 = 0; noURL79 = 0 }
+        return (cfg79, req79, noURL79)
     }
 }
 
@@ -3544,6 +3604,9 @@ final class WallPosterCell: UICollectionViewCell {
     private let titleLabel = UILabel()
     private let subtitleLabel = UILabel()
     private var loadTask: Task<Void, Never>?
+    /// (79) 第 3 条：URL 早退后的重配置重试计数（每次
+    /// configure 成功走通即清零，见 configure）。
+    private var noURLRetry79 = 0
     private var currentUrl: String?
     private var coverPlaceholder = false
     var hasPlaceholderCover: Bool { coverPlaceholder }
@@ -3977,19 +4040,45 @@ final class WallPosterCell: UICollectionViewCell {
     }
 
     func configure(entry: WallPrototypeViewController.Entry, tier: Int) {
+        WallTileStats78.noteCfg79()
         titleLabel.text = entry.title
         subtitleLabel.text = entry.subtitle
         setNeedsLayout()
         loadTask?.cancel()
         guard let pic = entry.picUrl,
               let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else {
+            // (79) 第 3 条：早退分支原渲染纯黑（image=nil
+            // ＋clear 底）且不计任何量测——拖动中本地服务
+            // 掉线（port=0）时新配置的砖整片纯黑、正与
+            // 「未请求」侧形态吻合。本版：计数＋垫主色/
+            // 哈希色（不许露纯黑）＋port=0 时异步拉活本
+            // 地服务后以同 entry 重配置一次（重试上限由
+            // noURLRetry79 守，每次 configure 重置）。
+            WallTileStats78.noteNoURL79()
             currentUrl = nil
             coverPlaceholder = false
             imageView.image = nil
-            imageView.backgroundColor = .clear
+            imageView.backgroundColor = entry.picUrl.map {
+                NativeCoverLoader.shared.dominantColorAnyTier(raw: $0, excludingTier: tier)
+                    ?? NativeCoverLoader.placeholderColor(for: $0)
+            } ?? .clear
             stopPlaceholderPulse()
+            if entry.picUrl != nil, LocalServer.shared.port == 0,
+               noURLRetry79 < 2 {
+                noURLRetry79 += 1
+                let retryEntry = entry
+                let retryTier = tier
+                loadTask = Task { [weak self] in
+                    let alive = await LocalServer.shared.ensureAlive(timeout: 3)
+                    guard let self, alive else { return }
+                    await MainActor.run {
+                        self.configure(entry: retryEntry, tier: retryTier)
+                    }
+                }
+            }
             return
         }
+        noURLRetry79 = 0
         currentUrl = urlString
         // 缓存命中同步上图：reloadData/复用重建时不先清空、不异步等一帧，
         // 这是拖动闪黑的主修复。
@@ -4018,6 +4107,7 @@ final class WallPosterCell: UICollectionViewCell {
             startPlaceholderPulse()
             WallTileStats78.note(sync: false, placeholderImage: false)
         }
+        WallTileStats78.noteReq79()
         loadTask = Task { [weak self] in
             let image = await NativeCoverLoader.shared.image(for: urlString, tier: tier)
             guard let self else { return }

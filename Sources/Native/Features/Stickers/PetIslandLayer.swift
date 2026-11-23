@@ -157,7 +157,13 @@ final class PetIslandLayer: UIView {
     /// （实测宽 ≈202、半宽 ≈101），镜像宠物外移到贴外
     /// 沿：101 + 3 缝 + 宠物半宽 17 = 121。让位只动本层
     /// 槽位与框底（系统岛缩不了），触发源见 refreshYield77。
-    private static let yieldSlotOffset: CGFloat = 121
+    /// (79) 第 4 条收窄：Miller (78) 真机判黑剪影 288pt
+    /// 远宽于真岛 126「不协调」——让位偏移 121→90（app 内
+    /// 系统不渲染自家活动、无真扩岛要躲，让位只是镜像
+    /// 姿态，贴真岛基准收），框底外延 6→2（见
+    /// syncIslandBackdrop74），让位总宽 288→218、平形态
+    /// 208→200；几何落痕 isl.geo79。
+    private static let yieldSlotOffset: CGFloat = 90
     /// (77) ⑧让位触发源：np＝镜像播放态（系统正在播放
     /// 占岛变宽）；screen＝录屏/投屏占用岛（UIScreen
     /// .isCaptured，Miller 23:18 录屏实证同被盖）。任一
@@ -234,6 +240,7 @@ final class PetIslandLayer: UIView {
         Breadcrumbs.log("isl.perch75 supp=\(on ? 1 : 0)")
         if on {
             hideBubble()
+            mirrorSongLabel?.isHidden = true
             islandBackdrop74?.removeFromSuperview()
             islandBackdrop74 = nil
             backdropSegL = nil
@@ -258,7 +265,11 @@ final class PetIslandLayer: UIView {
     private var mirrorSpeakLeft = true
 
     func setIslandMirror(leftId: String?, rightId: String?,
-                         phrase: String?, isPlaying: Bool) {
+                         phrase: String?, isPlaying: Bool,
+                         songTitle: String? = nil,
+                         artist: String? = nil) {
+        syncMirrorSong79(title: songTitle, artist: artist,
+                         active: leftId != nil)
         if let leftId, let rightId, let phrase {
             let lineupChanged = islandMirror?.leftId != leftId
                 || islandMirror?.rightId != rightId
@@ -278,6 +289,51 @@ final class PetIslandLayer: UIView {
         // refreshYield77 与 screen 源合并裁决。
         yieldNP = islandMirror != nil && isPlaying
         refreshYield77()
+    }
+
+    /// (79) 第 5 条：镜像歌名渲染位——publishMirror 原只
+    /// 传宠物/台词/播放态，前台镜像层无歌名位（(78) 判读
+    /// 定案）。本位挂岛框下方居中（y=52 起 14pt 行），与
+    /// 宠物（底 48）与台词气泡（宠物上方）不打架；镜像
+    /// 撤除/横屏/抑制期隐藏。文本变化落 isl.song79。
+    private func syncMirrorSong79(title: String?, artist: String?,
+                                  active: Bool) {
+        let text: String
+        if active, let title, !title.isEmpty {
+            text = (artist?.isEmpty == false)
+                ? "\(title) · \(artist!)" : title
+        } else { text = "" }
+        if text != lastMirrorSong79 {
+            lastMirrorSong79 = text
+            Breadcrumbs.log("isl.song79 on=\(text.isEmpty ? 0 : 1)")
+        }
+        guard !text.isEmpty, isPortrait, !liveActivitySuppressed else {
+            mirrorSongLabel?.isHidden = true
+            return
+        }
+        let label: UILabel
+        if let existing = mirrorSongLabel {
+            label = existing
+        } else {
+            label = UILabel()
+            label.font = .systemFont(ofSize: 11, weight: .medium)
+            label.textColor = UIColor.white.withAlphaComponent(0.92)
+            label.textAlignment = .center
+            label.layer.shadowColor = UIColor.black.cgColor
+            label.layer.shadowOpacity = 0.55
+            label.layer.shadowRadius = 3
+            label.layer.shadowOffset = .zero
+            label.isUserInteractionEnabled = false
+            addSubview(label)
+            mirrorSongLabel = label
+        }
+        label.text = text
+        label.isHidden = false
+        label.frame = CGRect(
+            x: max(16, (bounds.width - 260) / 2),
+            y: Self.seatFeetY + 4, width: min(260, bounds.width - 32),
+            height: 14)
+        bringSubviewToFront(label)
     }
 
     /// 岛面台词唯一出口：镜像期 = 活动的当前句（与后台
@@ -301,6 +357,11 @@ final class PetIslandLayer: UIView {
     }
     /// 落点自证去重签名（isl.perch74 只在落点变化时落）。
     private var lastPerchSignature74 = ""
+    /// (79) 第 4 条岛带几何去重签名（isl.geo79）。
+    private var lastGeoSignature79 = ""
+    /// (79) 第 5 条镜像歌名签（isl.song79 去重）。
+    private var mirrorSongLabel: UILabel?
+    private var lastMirrorSong79 = ""
     private var tickTimer: Timer?
     /// 宿主主窗（(53) G）：本层视图本体不再进窗，petRootLayer
     /// （= 本层 layer）直挂它的 layer；hostWindow 只作 graft
@@ -545,7 +606,14 @@ final class PetIslandLayer: UIView {
         guard isPortrait else { return [] }
         var targets: [(rect: CGRect, asset: String)] = []
         for pet in pets where !pet.isHidden {
-            targets.append((rect: pet.frame, asset: pet.asset))
+            // (79) 第 10 条：岛上宠物 34×34 命中太小——命
+            // 中矩形对称放大到 ≥44pt（视觉帧不变）。
+            var rect = pet.frame
+            if rect.width < 44 {
+                rect = rect.insetBy(dx: -(44 - rect.width) / 2,
+                                    dy: -(44 - rect.height) / 2)
+            }
+            targets.append((rect: rect, asset: pet.asset))
         }
         if let label = bubbleLabel, !label.isHidden,
            let owner = bubbleOwnerAsset {
@@ -845,10 +913,17 @@ final class PetIslandLayer: UIView {
             sendSubviewToBack(container)
         }
         let cx = bounds.width / 2
-        let outerL = cx - effectiveSlotOffset - Self.petSize / 2 - 6
+        // (79) 第 4 条：外延 6→2pt，剪影总宽随让位偏移同收。
+        let outerL = cx - effectiveSlotOffset - Self.petSize / 2 - 2
         let innerL = cx - Self.islandHalfWidth + 6
         let innerR = cx + Self.islandHalfWidth - 6
-        let outerR = cx + effectiveSlotOffset + Self.petSize / 2 + 6
+        let outerR = cx + effectiveSlotOffset + Self.petSize / 2 + 2
+        let geoSig = "\(Int(outerR - outerL))|\(mirrorYielded ? 1 : 0)"
+        if geoSig != lastGeoSignature79 {
+            lastGeoSignature79 = geoSig
+            Breadcrumbs.log("isl.geo79 w=\(Int(outerR - outerL))"
+                + " y=\(mirrorYielded ? 1 : 0)")
+        }
         let targetDuo = PetHomeRegistry.shared.islandTargetDuo
         let hasLeft = pets.contains {
             (targetDuo.firstIndex(of: $0.asset) ?? 0) == 0
@@ -978,7 +1053,9 @@ final class PetIslandLayer: UIView {
         // 聊：同一节拍改为演活动当前句（左右轮流）。
         if pets.count >= 2, now >= nextChatAt {
             if islandMirror != nil {
-                nextChatAt = now + .random(in: 20...32)
+                // (79) 第 12 条：镜像期呈现节拍改固定 10 秒
+                // （与管理器 in-app 推进拍 la.say79 同步）。
+                nextChatAt = now + 10
                 presentMirrorPhrase()
             } else {
                 startChat()
@@ -987,10 +1064,12 @@ final class PetIslandLayer: UIView {
         }
         // 单/双宠日常冒泡（到家库；镜像期同为活动当前句）。
         if now >= nextBubbleAt, let pet = pets.randomElement() {
-            nextBubbleAt = now + .random(in: 16...30)
             if islandMirror != nil {
+                // (79) 第 12 条：镜像期单/双宠冒泡同归 10 秒拍。
+                nextBubbleAt = now + 10
                 presentMirrorPhrase()
             } else {
+                nextBubbleAt = now + .random(in: 16...30)
                 showBubble(PetLines.islandHome.randomElement() ?? "",
                            above: pet, duration: 2.4)
             }

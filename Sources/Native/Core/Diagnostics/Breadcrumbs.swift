@@ -47,6 +47,12 @@ enum Breadcrumbs {
     /// wall.tile78（砖面占位量测）。
     static func witnessBoot78() {
         log("wit78.live flash=1 tap=1 dec=1 tile=1")
+        // (79) 名册续登：sb=状态栏隐藏五页自证（home/wall/
+        // lattice/stage/entry 的 prefersStatusBarHidden)、
+        // root=mb.root79 根级认领在场、fin=pet.fin79 拖动
+        // 收尾落痕、drop=isl.drop79 落座未命中落痕、
+        // geo=isl.geo79 岛带几何、req=wall.req79 砖请求链。
+        log("wit79.live sb=1 root=1 fin=1 drop=1 geo=1 req=1")
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。

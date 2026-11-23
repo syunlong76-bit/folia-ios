@@ -120,6 +120,8 @@ final class HomeWallViewController: UIViewController,
     /// shuffle），点按弹四档菜单点选（非盲循环），与队列面
     /// 板/设置同一存储（QueueManager.playMode）双向同步。
     private var miniModeButton: UIButton!
+    /// (79) 第 1 条：台面常驻爪印钮（主排右端簇，模式钮左侧）。
+    private var miniPawButton: DeckPawButton79!
     private var miniProgressTrack: UIView!
     private var miniProgressFill: UIView!
     private var miniProgressKnob: UIView!
@@ -257,6 +259,16 @@ final class HomeWallViewController: UIViewController,
     /// 传感器 housing 决定、与状态栏显隐无关（恒 59pt），
     /// 锚安全区的既有布局不跳位；逐页复核见 (78) 报告。
     override var prefersStatusBarHidden: Bool { true }
+
+    /// (79) 第 9 条：系统边缘手势延迟——岛宠框压顶缘、
+    /// 收起宠坐底部 Home/后台手势区，(78) 判读两处失败
+    /// 均呈「触摸被系统整手拿走」签名且全仓零处置。本页
+    /// 顶/底缘手势先让 app 内拖动，系统下拉/回主屏改走
+    /// 二段式（先露小把手再拉），与 Miller 拍板的宠物
+    /// 登顶口径一致。
+    override var preferredScreenEdgesDeferringSystemGestures: UIRectEdge {
+        [.top, .bottom]
+    }
     override var preferredStatusBarUpdateAnimation: UIStatusBarAnimation { .fade }
 
     override func viewDidLoad() {
@@ -1488,6 +1500,14 @@ final class HomeWallViewController: UIViewController,
         bar.addSubview(miniModeButton)
         refreshMiniModeButton()
 
+        // (79) 第 1 条：爪印上台面明处——主排右端簇、模式钮
+        // 左侧常驻（展开态恒可见）；语义与浮层爪印同核
+        // （短按提示、长按 2s/3s 召唤/告别）。
+        miniPawButton = DeckPawButton79()
+        miniPawButton.translatesAutoresizingMaskIntoConstraints = false
+        miniPawButton.onUserInteraction = { [weak self] in self?.resetMiniIdleTimer() }
+        bar.addSubview(miniPawButton)
+
         let seekHit = UIView()
         seekHit.backgroundColor = .clear
         seekHit.translatesAutoresizingMaskIntoConstraints = false
@@ -1561,7 +1581,11 @@ final class HomeWallViewController: UIViewController,
             miniModeButton.widthAnchor.constraint(equalToConstant: 30),
             miniModeButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
+            miniPawButton.trailingAnchor.constraint(equalTo: miniModeButton.leadingAnchor, constant: -2),
+            miniPawButton.widthAnchor.constraint(equalToConstant: 30),
+            miniPawButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniNextButton.trailingAnchor.constraint(equalTo: miniPawButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
@@ -1586,7 +1610,7 @@ final class HomeWallViewController: UIViewController,
         // （70 台旧口径，封面 44 居 y 8..52、轨道顶 59 不重叠）；
         // 收起态同 −5。形态切换在 setMiniBarForm 里统一改这组
         // 常量。模式钮（(55) E 修正项）同入本组，随形态同位。
-        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniModeButton].map {
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton, miniNextButton, miniPawButton, miniModeButton].map {
             $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
@@ -1631,6 +1655,16 @@ final class HomeWallViewController: UIViewController,
         // 发前，照 (67) 取证修法②）。展开态恒空转放行。
         let agnosticTap74 = UITapGestureRecognizer(
             target: self, action: #selector(miniBarAgnosticTapped74(_:)))
+        // (79) 第 7/13 条仲裁改造（头像当机日志定案）：本识
+        // 别器原无 require 链且 cancelsTouchesInView 缺省
+        // true——每次点按抬手必认领并整手取消台身触摸，单击
+        // 识别器被 require(toFail: 双击) 扣住等裁定、等到的
+        // 却是取消（mb.tch78 c 率 100%、locate 从未被调用）。
+        // 改：不取消他人触摸＋等双击裁定落空才认领（收起态
+        // 双击识别器禁用、require 立即满足，细条展开不迟滞）；
+        // 几何兜底语义不变。
+        agnosticTap74.cancelsTouchesInView = false
+        agnosticTap74.require(toFail: doubleTap)
         bar.addGestureRecognizer(agnosticTap74)
 
         applyMiniTheme()
@@ -1774,14 +1808,14 @@ final class HomeWallViewController: UIViewController,
         let themed = miniKnobSkin != nil
         miniProgressKnob.backgroundColor = themed ? .clear : .white
         miniProgressKnob.layer.shadowOpacity = themed ? 0 : 0.9
-        // (77) ②进度配色（推翻 (74) 同色 25% 透明轨）：全
-        // 条统一为现行后半段主题色，未填充轨改同色系实色
-        // 压暗（foliaDarkenedTrack77），明度差辨进度。
+        // (79) 第 2 条进度配色：全条统一一色——轨道与填
+        // 充同色直用，(77) ②的同色压暗整条删除；进度辨
+        // 识靠主题小圆点把手位置（圆点原方案不动）。
         let singleColor = miniBarCollapsed
             ? Self.miniCollapsedFillColor(for: miniTheme)
             : Self.miniFillColor(for: miniTheme)
         miniProgressFill.backgroundColor = singleColor
-        miniProgressTrack.backgroundColor = singleColor.foliaDarkenedTrack77()
+        miniProgressTrack.backgroundColor = singleColor
     }
 
     /// 收起态填充兜底色：只星空改强金（展开态的淡金在无
@@ -1825,7 +1859,8 @@ final class HomeWallViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         // 附加功能行已迁浮层（(60) 第 7 条）：浮层不在台身内，
         // 其触摸不进本识别器，旧上排豁免随之退役。
         miniTheme = miniTheme.next
@@ -1889,7 +1924,8 @@ final class HomeWallViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         // 进度带分域（封面优先于进度带，与旧分发序一致：封面
         // 下缘与 seekHit 带约 2pt 重叠，该重叠落点归封面规格、
         // 不归 seek）：带内落点直接返回，seek 已即时发生。
@@ -1924,7 +1960,8 @@ final class HomeWallViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
             Breadcrumbs.log("minibar.doubletap host=homewall zone=seekband action=skip")
             return
@@ -1995,7 +2032,8 @@ final class HomeWallViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point) { return }
+            || miniModeButton.frame.contains(point)
+            || miniPawButton.frame.contains(point) { return }
         if miniCover.frame.contains(point) { return }
         guard miniSeekHit.frame.contains(point) else { return }
         let track = miniProgressTrack.frame
@@ -2048,7 +2086,8 @@ final class HomeWallViewController: UIViewController,
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint)
-                || miniModeButton.frame.contains(barPoint) { return }
+                || miniModeButton.frame.contains(barPoint)
+                || miniPawButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
             // 拖动期间挂起无操作计时（3.7 (21)），松手后重置。
@@ -2294,12 +2333,15 @@ final class HomeWallViewController: UIViewController,
         // 原样，命中区不随视觉缩小——第 4 项反方向纪律）。
         // 底距 −5.5 使 5pt 线在 16pt 容器内居中。
         miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
-        miniTrackHeightC?.constant = collapsed ? 5 : 4
-        miniTrackLeadC?.isActive = !collapsed
-        miniTrackTrailC?.isActive = !collapsed
-        miniTrackCenterXC?.isActive = collapsed
-        miniTrackWidthC?.isActive = collapsed
-        miniProgressTrack.layer.cornerRadius = collapsed ? 2.5 : 2
+        miniTrackHeightC?.constant = 5
+        // (79) 第 2 条：展开轨与收起轨同尺寸——恒居中
+        // 134×5（与 home indicator 一模一样，横屏同规、
+        // 不拉长），两形态不再切换全宽轨。
+        miniTrackLeadC?.isActive = false
+        miniTrackTrailC?.isActive = false
+        miniTrackCenterXC?.isActive = true
+        miniTrackWidthC?.isActive = true
+        miniProgressTrack.layer.cornerRadius = 2.5
         // (77) ②③：四主题小圆点恢复收起态在场（(74) 以
         // isHidden=collapsed 误删；皮肤两形态同挂、圆点
         // 本体恒可见，(22)/(23) 旧制）。
@@ -2341,14 +2383,14 @@ final class HomeWallViewController: UIViewController,
         // 附加功能行已迁浮层（(60) 第 7 条），不入台形态名单：
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniModeButton]
+                                miniPrevButton, miniNextButton, miniPawButton, miniModeButton]
         for view in views {
             view?.alpha = alpha
         }
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniModeButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniPawButton, miniModeButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }

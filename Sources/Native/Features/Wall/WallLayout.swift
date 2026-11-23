@@ -745,6 +745,13 @@ final class WallScrollMetrics: NSObject {
                 + " img=\(tile.sync) phimg=\(tile.phImg)"
                 + " blank=\(tile.blank)")
         }
+        // (79) 第 3 条：请求发起链同秒冲刷——cfg 与 req
+        // 的差＝没发出请求的配置数，noURL 单列早退因。
+        if let req = WallTileStats78.takeReq79() {
+            Breadcrumbs.log("wall.req79 wall=\(wallName)"
+                + " cfg=\(req.cfg) req=\(req.req)"
+                + " nourl=\(req.noURL)")
+        }
         windowStart = CACurrentMediaTime()
         intervalsMs = []
         didScrollMaxMs = 0

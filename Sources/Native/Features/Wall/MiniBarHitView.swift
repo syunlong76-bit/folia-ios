@@ -172,10 +172,27 @@ final class MiniBarRootTap78: NSObject {
         recognizer.cancelsTouchesInView = false
         hostView.addGestureRecognizer(recognizer)
         self.recognizer = recognizer
+        // (79) 第 13 条在场自证：(78)/(79) 两窗自证链全 0 时
+        // 先分清「没装上」与「装上没响」——装配即落痕。
+        Breadcrumbs.log("mb.root79 on host=\(hostTag)")
     }
 
     @objc private func handleTap() {
-        guard let bar, !bar.isHidden, isCollapsed() else { return }
+        guard let bar, !bar.isHidden else { return }
+        // (79) 第 13 条让行落痕：落点在细条带内却没认领时
+        // 不再静默——形态/宠物让行各落一行（带外点按不落，
+        // 防全屏点按刷屏）。
+        let hostPoint = recognizer.location(in: recognizer.view)
+        let bandInHost = bar.convert(
+            bar.bounds.insetBy(dx: 0, dy: -bar.hitExpansionY),
+            to: recognizer.view)
+        let inBand = bandInHost.contains(hostPoint)
+        guard isCollapsed() else {
+            if inBand {
+                Breadcrumbs.log("mb.root79 bail=form host=\(hostTag)")
+            }
+            return
+        }
         let point = recognizer.location(in: bar)
         // 命中带与台身 point(inside:) 同口径（视觉帧纵向外
         // 扩 hitExpansionY，收起态 44pt 带）。
@@ -185,6 +202,7 @@ final class MiniBarRootTap78: NSObject {
         // 物分支，本路不抢（宠物点按语义不变）。
         if let petStage,
            petStage.claimsPoint(recognizer.location(in: petStage)) {
+            Breadcrumbs.log("mb.root79 bail=pet host=\(hostTag)")
             return
         }
         Breadcrumbs.log("mb.claim78 host=\(hostTag)")

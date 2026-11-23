@@ -65,6 +65,12 @@ final class IslandLiveActivityManager {
     /// 非汪汪队」时走拍（refreshSayTimer 收口）。
     private var sayTimer: Timer?
     private static let sayInterval: TimeInterval = 45
+    /// (79) 第 12 条：app 内镜像节拍 10 秒（Miller 01:22
+    /// 拍板）——独立计时器只推进对话并 publishMirror，
+    /// 不发 Live Activity 更新；app 外仍由 sayTimer 的
+    /// 45 秒拍经 contentChanged 推送，两套节拍不串。
+    private var sayTimer79: Timer?
+    private static let sayInterval79: TimeInterval = 10
     /// (77) ⑧细则：relevance 让位在场标记（让位/夺回边
     /// 沿落 la.yield77/la.back77 去重用）。
     private var relYielded = false
@@ -338,6 +344,43 @@ final class IslandLiveActivityManager {
             sayTimer?.invalidate()
             sayTimer = nil
         }
+        refreshMirrorSay79()
+    }
+
+    /// (79) 第 12 条 in-app 拍收口：与 refreshSayTimer 的
+    /// 后台拍互斥分工（sceneActive 真走本拍、假走 45 秒
+    /// 拍），在 refreshSayTimer 末尾一并刷新。
+    private func refreshMirrorSay79() {
+        let shouldRun = activity != nil && sceneActive
+            && !concertSuspended && PlaybackEngine.shared.isPlaying
+        if shouldRun {
+            guard sayTimer79 == nil else { return }
+            let timer = Timer(timeInterval: Self.sayInterval79,
+                              repeats: true) { [weak self] _ in
+                self?.sayTick79()
+            }
+            RunLoop.main.add(timer, forMode: .common)
+            sayTimer79 = timer
+        } else {
+            sayTimer79?.invalidate()
+            sayTimer79 = nil
+        }
+    }
+
+    private func sayTick79() {
+        guard activity != nil, sceneActive,
+              !concertSuspended,
+              PlaybackEngine.shared.isPlaying else {
+            refreshMirrorSay79()
+            return
+        }
+        if let line = dialogue.advance() {
+            Breadcrumbs.log("la.say79 ch=\(dialogue.chainId)"
+                + " step=\(dialogue.step)"
+                + " side=\(line.isLeft ? "L" : "R") ph=\(line.phase)")
+            // 只喂前台镜像，不推活动更新（app 外节拍独立）。
+            publishMirror(makeState())
+        }
     }
 
     private func sayTick77() {
@@ -359,9 +402,12 @@ final class IslandLiveActivityManager {
         _ state: FoliaIslandAttributes.ContentState?
     ) {
         if let state {
+            // (79) 第 5 条：镜像补传歌名/歌手（原只传宠物/
+            // 台词/播放态，前台镜像层无歌名渲染位）。
             PetIslandLayer.shared.setIslandMirror(
                 leftId: state.leftPetId, rightId: state.rightPetId,
-                phrase: state.phrase, isPlaying: state.isPlaying)
+                phrase: state.phrase, isPlaying: state.isPlaying,
+                songTitle: state.songTitle, artist: state.artist)
         } else {
             PetIslandLayer.shared.setIslandMirror(
                 leftId: nil, rightId: nil, phrase: nil,
