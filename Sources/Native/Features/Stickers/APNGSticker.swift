@@ -534,10 +534,31 @@ enum StickerSettings {
     private static let miniPetsKey = "folia.stickers.miniPetsEnabled"
     static var miniPetsEnabled: Bool {
         get {
-            if UserDefaults.standard.object(forKey: miniPetsKey) == nil { return true }
-            return UserDefaults.standard.bool(forKey: miniPetsKey)
+            let value: Bool
+            if UserDefaults.standard.object(forKey: miniPetsKey) == nil {
+                value = true
+            } else {
+                value = UserDefaults.standard.bool(forKey: miniPetsKey)
+            }
+            auditRead77(value)
+            return value
         }
         set { UserDefaults.standard.set(newValue, forKey: miniPetsKey) }
+    }
+
+    /// (77) 读侧见证（pet.audit77）：读值翻转（与上次读
+    /// 到的值不同，含进程内首读）才落一行——写入若绕开
+    /// setMiniPetsEnabled 收口（无 pet.switch76），翻转
+    /// 时刻由紧随其后的第一次读钉住，配合 AppDelegate
+    /// 启动行的双键原值，下轮日志可判翻转发生在哪一段。
+    /// 去重防高频读（宠物 tick/心跳）刷屏。
+    private static var auditLastValue77: Bool?
+    private static func auditRead77(_ value: Bool) {
+        guard auditLastValue77 != value else { return }
+        let first = auditLastValue77 == nil
+        auditLastValue77 = value
+        Breadcrumbs.log("pet.audit77 v=\(value ? 1 : 0)"
+            + " first=\(first ? 1 : 0)")
     }
 
     /// (76) ⑨写入收口：全部 miniPets 写入点改走此口（双

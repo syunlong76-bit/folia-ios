@@ -386,6 +386,19 @@ enum SettingsConfigTransfer {
         var applied = 0
         for key in keys {
             guard let value = payload[key] else { continue }
+            // (77) 审计收口：miniPets 键不走裸写——裸
+            // defaults.set 只写新键、绕过 (76) 的
+            // setMiniPetsEnabled 收口（无 pet.switch76 留
+            // 名）且与旧键脱同步（设置面与宠物面读到不同
+            // 值）。改走收口（src=import、双键同写）。
+            if key == SettingsStore.Key.miniPetsEnabled {
+                if let number = value as? NSNumber {
+                    StickerSettings.setMiniPetsEnabled(
+                        number.boolValue, src: "import")
+                    applied += 1
+                }
+                continue
+            }
             // 类型护栏：只接受标量（Bool/NSNumber/String），防
             // 异形 JSON 把键写成字典/数组毒化后续读取。
             if value is String || value is NSNumber {

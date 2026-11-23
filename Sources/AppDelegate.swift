@@ -55,6 +55,21 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
         Breadcrumbs.log("pet.settings.read src=appStart"
             + " miniPets=\(StickerSettings.miniPetsEnabled)"
             + " legacyCompanion=\(StickerSettings.companionEnabled)")
+        // (77) 读侧见证（(76) 会话新警情：开关在日志缺口
+        // 内又被写关且 switch76/restore76 均零条）：启动
+        // 时把双键的原始存值（存在性＋值）各落一行——双
+        // 键脱同步（导入旁路只写新键）或旧键被翻转，下次
+        // 启动即对位；运行中翻转由 StickerSettings 读侧
+        // 去重见证（pet.audit77 翻转行）钉时刻。
+        let auditDefaults = UserDefaults.standard
+        func rawKey(_ key: String) -> String {
+            guard let obj = auditDefaults.object(forKey: key)
+            else { return "-" }
+            return (obj as? Bool).map { $0 ? "1" : "0" } ?? "?"
+        }
+        Breadcrumbs.log("pet.audit77 launch"
+            + " new=\(rawKey("settings.general.miniPetsEnabled"))"
+            + " legacy=\(rawKey("folia.stickers.miniPetsEnabled"))")
         // 音乐播放器的音频会话：.playback 让 WKWebView 的网页音频不受静音拨片影响、
         // 锁屏/后台继续出声。此前（含 1.0 壳）从未配置，WebKit 只能用默认会话。
         // 启动时只定类别、不激活：激活会立刻打断其他 App 正在放的声音，而用户可能
