@@ -45,3 +45,7 @@
 4. 版本号：CFBundleVersion 82（ShortVersion 3.7，com.miller.folia）✓
 5. 签名结构：Payload/Folia.app（Mach-O arm64）＋ PlugIns/FoliaWidgets.appex，未签名（设计如此，安装时由 SideStore/开发者证书签名）✓
 附：二进制自证——wit82.live 名册行（ph/tap/loc/cov/fm/rot/light 全 1）与 locate82/minibar.fm82/rot82/light82/console82 字面量、ConsolePanel82/WallLight82/LightSwitch82 类型名均在包内二进制中检出；tap82/wall.ph82/isl.cov82 三条为短字面量（≤15 字节，Swift 内联编码、二进制不留整串），源码与名册双在。
+
+## 交付通道状态
+- IPA 本地落地：~/workspace/folia-deploy/build82/Folia-82.ipa（48,705,317 字节）。
+- 文叔叔上传：wss.ink 游客上传需浏览器任务执行（同 (80) 先例），本施工代理无浏览器权限，已在回报中向主聊天提出浏览器上传请求（文件路径与字节数齐备）；muse.ai 备用链接受平台单次审批限制，未在本轮生成。
