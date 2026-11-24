@@ -1,0 +1,153 @@
+import UIKit
+
+/// (82) 新台字形工厂＋布局常量＋点按见证（单一出处）。
+///
+/// Miller 19:20 新令：上一曲/下一曲/播放/暂停/播放列表/队列
+/// 图标另做 J/K/L/M 四套样板待挑——本工厂即替换位：台面与
+/// 控制台的全部字形只经此处取图，布局代码不焊字形；定版后
+/// 只改本文件的核心四字形绘制（prev/next/play/pause＋list），
+/// 其余调用点零改动。本版核心四字形为手绘路径（朝向逐个
+/// 核对：prev＝左竖条＋左指三角、next＝右指三角＋右竖条，
+/// 盖过 (81) DeckIconSet81 三角画反的定案），次级字形走 SF
+/// Symbols（苹果风、与控制台极简口径一致）。
+enum DeckGlyph82 {
+
+    enum Kind {
+        case prev, next, play, pause
+        case list, console, modeRepeat, modeRepeatOne, modeSequence, shuffle
+        case sparkles, paw, heart, heartFill, pencil, trash, help
+        case layers, speaker, star, starFill, command, sliders
+    }
+
+    static func image(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
+        switch kind {
+        case .prev, .next, .play, .pause:
+            return coreGlyph(kind, pointSize: pointSize)
+        default:
+            let name: String
+            switch kind {
+            case .list: name = "list.bullet"
+            case .console: name = "slider.horizontal.3"
+            case .modeRepeat: name = "repeat"
+            case .modeRepeatOne: name = "repeat.1"
+            case .modeSequence: name = "list.bullet"
+            case .shuffle: name = "shuffle"
+            case .sparkles: name = "sparkles"
+            case .paw: name = "pawprint.fill"
+            case .heart: name = "heart"
+            case .heartFill: name = "heart.fill"
+            case .pencil: name = "pencil"
+            case .trash: name = "trash"
+            case .help: name = "questionmark.circle"
+            case .layers: name = "square.3.layers.3d"
+            case .speaker: name = "speaker.wave.2.fill"
+            case .star: name = "star"
+            case .starFill: name = "star.fill"
+            case .command: name = "command"
+            case .sliders: name = "slider.horizontal.3"
+            default: name = "circle"
+            }
+            let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
+            return UIImage(systemName: name, withConfiguration: config)?
+                .withRenderingMode(.alwaysTemplate)
+        }
+    }
+
+    /// 核心四字形手绘（24×24 画布，模板图、白色由 tint 决定）。
+    /// 朝向定版：prev 三角尖朝左、竖条在左；next 三角尖朝
+    /// 右、竖条在右。出包前已逐字形回读核对（见交付报告）。
+    private static func coreGlyph(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
+        let canvas: CGFloat = 24
+        let scale = pointSize / canvas
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { _ in
+            UIColor.white.setFill()
+            func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, r: CGFloat = 0) {
+                let path = UIBezierPath(roundedRect: CGRect(
+                    x: x * scale, y: y * scale, width: w * scale, height: h * scale),
+                    cornerRadius: r * scale)
+                path.fill()
+            }
+            func tri(_ points: [(CGFloat, CGFloat)]) {
+                let path = UIBezierPath()
+                path.move(to: CGPoint(x: points[0].0 * scale, y: points[0].1 * scale))
+                for p in points.dropFirst() {
+                    path.addLine(to: CGPoint(x: p.0 * scale, y: p.1 * scale))
+                }
+                path.close()
+                path.fill()
+            }
+            switch kind {
+            case .prev:
+                rect(3, 6, 3, 12, r: 1.5)
+                tri([(8, 12), (19.5, 6.3), (19.5, 17.7)])
+            case .next:
+                tri([(4.5, 6.3), (16, 12), (4.5, 17.7)])
+                rect(18, 6, 3, 12, r: 1.5)
+            case .play:
+                tri([(7.5, 5.3), (18.5, 12), (7.5, 18.7)])
+            case .pause:
+                rect(6.5, 5.5, 4, 13, r: 2)
+                rect(13.5, 5.5, 4, 13, r: 2)
+            default:
+                break
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// 花朵进度把手（E 定版：白花瓣＋琥珀心），非模板图。
+    static func flowerImage(size: CGFloat = 22) -> UIImage {
+        let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
+        return renderer.image { context in
+            let cg = context.cgContext
+            let center = CGPoint(x: size / 2, y: size / 2)
+            // 六瓣白花瓣（椭圆绕中心 60° 一瓣）。
+            UIColor.white.setFill()
+            for i in 0..<6 {
+                cg.saveGState()
+                cg.translateBy(x: center.x, y: center.y)
+                cg.rotate(by: CGFloat(i) * .pi / 3)
+                let petal = UIBezierPath(ovalIn: CGRect(
+                    x: -size * 0.115, y: -size * 0.46,
+                    width: size * 0.23, height: size * 0.34))
+                petal.fill()
+                cg.restoreGState()
+            }
+            // 琥珀花心。
+            UIColor(red: 0.96, green: 0.66, blue: 0.10, alpha: 1).setFill()
+            UIBezierPath(ovalIn: CGRect(
+                x: center.x - size * 0.13, y: center.y - size * 0.13,
+                width: size * 0.26, height: size * 0.26)).fill()
+        }
+    }
+}
+
+/// (82) 台面布局常量（单一出处，四页同值）。
+enum DeckLayout82 {
+    /// 展开高：E 定版三行（封面行＋进度行＋控制行）。
+    static let expandedHeight: CGFloat = 132
+    static let collapsedHeight: CGFloat = 16
+    /// 收起态小白条：与 home indicator 同尺寸 134×5。
+    static let collapsedTrackWidth: CGFloat = 134
+    static let collapsedTrackHeight: CGFloat = 5
+    static let deckCornerRadius: CGFloat = 35
+}
+
+/// (82) 第 2 条点按见证：新台/控制台每个按钮动作入口落一
+/// 行，含 zone 与落点坐标（按钮中心，台/面板坐标系）——下
+/// 一份日志必须能数出每次点按，与 (81)「接线齐全但落痕 0
+/// 次」的断点对位。
+enum DeckTap82 {
+    static func log(host: String, zone: String, point: CGPoint) {
+        Breadcrumbs.log("tap82 host=\(host) zone=\(zone)"
+            + " x=\(Int(point.x)) y=\(Int(point.y))")
+    }
+
+    static func log(host: String, zone: String, view: UIView) {
+        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        let point = view.convert(center, to: view.window)
+        log(host: host, zone: zone, point: point)
+    }
+}

@@ -744,6 +744,13 @@ final class WallScrollMetrics: NSObject {
             Breadcrumbs.log("wall.tile78 wall=\(wallName)"
                 + " img=\(tile.sync) phimg=\(tile.phImg)"
                 + " blank=\(tile.blank)")
+            // (82) 第 1 条见证：同窗加载器命中增量＋砖空白
+            // 数——验收口径 blank 趋零、hit 占比显著高于
+            // (81) 会话的 2%。
+            let stats = NativeCoverLoader.shared.takeStatsDelta82()
+            Breadcrumbs.log("wall.ph82 wall=\(wallName)"
+                + " hit=\(stats.hit) miss=\(stats.miss)"
+                + " blank=\(tile.blank)")
         }
         // (79) 第 3 条：请求发起链同秒冲刷——cfg 与 req
         // 的差＝没发出请求的配置数，noURL 单列早退因。

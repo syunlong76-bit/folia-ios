@@ -99,7 +99,12 @@ final class NativeCoverLoader {
     private var memoryObserver: NSObjectProtocol?
 
     private init() {
-        cache.totalCostLimit = 96 * 1024 * 1024
+        // (82) 第 1 条：墙缓存扩容——(81) 会话命中率约 2%
+        // （hit7/miss320）是黑屏根子之一；在全应用硬线内
+        // （墙缓存 LRU ≤120–180MB）提到 160MB，且成本改按
+        // 解码后像素字节计（旧口径用压缩字节 data.count，
+        // 低估真实占用约 10 倍、LRU 淘汰节奏失真）。
+        cache.totalCostLimit = 160 * 1024 * 1024
         let config = URLSessionConfiguration.default
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil
@@ -235,6 +240,75 @@ final class NativeCoverLoader {
             if let color = colorCache.object(forKey: url as NSString) { return color }
         }
         return nil
+    }
+
+    /// (82) 第 1 条：ph82 统计增量（wall.ph82 见证用）——
+    /// 返回自上次取走以来的 hit/miss 增量并推进基线。
+    private var phHitBaseline82 = 0
+    private var phMissBaseline82 = 0
+
+    func takeStatsDelta82() -> (hit: Int, miss: Int) {
+        statLock.lock()
+        defer { statLock.unlock() }
+        let delta = (statHits - phHitBaseline82, statMisses - phMissBaseline82)
+        phHitBaseline82 = statHits
+        phMissBaseline82 = statMisses
+        return delta
+    }
+
+    /// (82) 第 1 条：占位图（主题色块＋音符字形）——砖在封
+    /// 面未就位时画它而不是只垫一层近黑底色：(81) 判读实
+    /// 证旧哈希色明度 0.23 在真机上读作纯黑。占位图带对角
+    /// 渐变＋居中半透明 ♪，按地址哈希色生成、同图恒同图，
+    /// 小缓存（按色键，≤64 张）。
+    private let placeholderCache82 = NSCache<NSString, UIImage>()
+
+    func placeholderImage(for raw: String, size: CGFloat = 96) -> UIImage {
+        let base = Self.placeholderColor(for: raw)
+        let key = "\(base.hashValue)-\(Int(size))" as NSString
+        if let cached = placeholderCache82.object(forKey: key) { return cached }
+        let side = max(size, 48)
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: side, height: side))
+        let image = renderer.image { context in
+            let cg = context.cgContext
+            var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+            base.getRed(&r, green: &g, blue: &b, alpha: &a)
+            let lighter = UIColor(red: min(r * 1.5 + 0.06, 1),
+                                  green: min(g * 1.5 + 0.06, 1),
+                                  blue: min(b * 1.5 + 0.06, 1), alpha: 1)
+            let gradient = CGGradient(
+                colorsSpace: CGColorSpaceCreateDeviceRGB(),
+                colors: [lighter.cgColor, base.cgColor] as CFArray,
+                locations: [0, 1])!
+            cg.drawLinearGradient(gradient,
+                                  start: CGPoint(x: 0, y: 0),
+                                  end: CGPoint(x: side, y: side),
+                                  options: [])
+            // 居中音符：读作「音乐占位」而非黑洞。
+            let glyph = "♪" as NSString
+            let attrs: [NSAttributedString.Key: Any] = [
+                .font: UIFont.systemFont(ofSize: side * 0.42, weight: .light),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.28),
+            ]
+            let glyphSize = glyph.size(withAttributes: attrs)
+            glyph.draw(at: CGPoint(x: (side - glyphSize.width) / 2,
+                                   y: (side - glyphSize.height) / 2),
+                       withAttributes: attrs)
+        }
+        placeholderCache82.setObject(image, forKey: key)
+        return image
+    }
+
+    /// (82) 第 1 条：快滑方向预取入口（宿主在滚动回调里按
+    /// 方向把即将入视的封面先喂进来，走 .prefetch 低优先
+    /// 级、不与可见砖抢 4 个取图槽）。
+    func prefetch82(_ items: [(raw: String, tier: Int)]) {
+        for item in items {
+            guard let url = proxiedURLString(item.raw, tier: item.tier) else { continue }
+            if cachedImage(for: url) != nil { continue }
+            Task { _ = await self.image(for: url, tier: item.tier, priority: .prefetch) }
+        }
     }
 
     /// (72) 无任何缓存时的兜底占位色：按地址哈希取暗调色
@@ -380,7 +454,10 @@ final class NativeCoverLoader {
         await noteDec78(waitMs: waitMs, decMs: decMs, priority: priority)
         if Date().timeIntervalSince(started) > 0.8 { noteSlowLoad() }
         if let image = decoded.image {
-            cache.setObject(image, forKey: key, cost: data.count)
+            // (82) 第 1 条：成本按解码像素字节（与压缩字节取大）。
+            let pixelBytes = Int(image.size.width * image.scale)
+                * Int(image.size.height * image.scale) * 4
+            cache.setObject(image, forKey: key, cost: max(data.count, pixelBytes))
             if let color = decoded.color {
                 colorCache.setObject(color, forKey: key)
             }

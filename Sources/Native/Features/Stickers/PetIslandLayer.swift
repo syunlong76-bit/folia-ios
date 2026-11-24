@@ -271,11 +271,21 @@ final class PetIslandLayer: UIView {
                                     phrase: String, isPlaying: Bool)?
     private var mirrorSpeakLeft = true
 
+    /// (82) 第 4 条：中央簇最近一次输入存根——页 appear
+    /// 强制重发时按此原样重演（切页不重发是竖屏缺席的断
+    /// 点候选之一，重发不依赖活动侧再 publish）。
+    private var lastCenterInput82: (artwork: UIImage?, title: String?,
+                                    active: Bool, isPlaying: Bool)?
+    /// (82) 第 4 条：当前宿主页态（appear 时由宿主写入，
+    /// 进中央簇签名——同曲同态在不同页也算新签名、必重落）。
+    private var pageTag82 = "-"
+
     func setIslandMirror(leftId: String?, rightId: String?,
                          phrase: String?, isPlaying: Bool,
                          songTitle: String? = nil,
                          artist: String? = nil,
                          artwork: UIImage? = nil) {
+        lastCenterInput82 = (artwork, songTitle, leftId != nil, isPlaying)
         syncMirrorCenter81(artwork: artwork, title: songTitle,
                            active: leftId != nil, isPlaying: isPlaying)
         if let leftId, let rightId, let phrase {
@@ -308,6 +318,20 @@ final class PetIslandLayer: UIView {
     /// 缘距中心 ≥58pt 不相撞；横屏不隐藏；镜像撤除/抑制
     /// 期隐藏。五宿主共用本层一处渲染，齐全性由共享保证。
     /// 自证面包屑 isl.cov81（签名变化才落）。
+    /// (82) 第 4 条：各页 appear 强制重发——宿主写入页态
+    /// 后按存根原样重演中央簇同步（绕过签名去重），并落
+    /// isl.cov82 自证（page/on/sup 三字段同行）。
+    func forceResendCenter82(page: String) {
+        pageTag82 = page
+        guard let input = lastCenterInput82 else {
+            Breadcrumbs.log("isl.cov82 page=\(page) on=0 sup=\(liveActivitySuppressed ? 1 : 0) stub=0")
+            return
+        }
+        syncMirrorCenter81(artwork: input.artwork, title: input.title,
+                           active: input.active, isPlaying: input.isPlaying)
+        Breadcrumbs.log("isl.cov82 page=\(page) on=\(input.active ? 1 : 0) sup=\(liveActivitySuppressed ? 1 : 0) stub=1")
+    }
+
     private func syncMirrorCenter81(artwork: UIImage?,
                                     title: String?,
                                     active: Bool,
@@ -316,6 +340,14 @@ final class PetIslandLayer: UIView {
         if signature != lastMirrorCover81 {
             lastMirrorCover81 = signature
             Breadcrumbs.log("isl.cov81 on=\(active ? 1 : 0)")
+        }
+        // (82) 第 4 条：签名加页态＋抑制态——页态变化或抑
+        // 制翻转都算新签名、必重落 isl.cov82（竖屏缺席断点
+        // 候选 = suppressed 门＋切页不重发，两者同治）。
+        let signature82 = "\(signature)|\(pageTag82)|\(liveActivitySuppressed ? 1 : 0)"
+        if signature82 != lastMirrorCover82 {
+            lastMirrorCover82 = signature82
+            Breadcrumbs.log("isl.cov82 page=\(pageTag82) on=\(active ? 1 : 0) sup=\(liveActivitySuppressed ? 1 : 0)")
         }
         guard active, !liveActivitySuppressed else {
             mirrorCenter81?.isHidden = true
@@ -417,6 +449,8 @@ final class PetIslandLayer: UIView {
     private var mirrorCover81: UIImageView?
     private var mirrorNote81: UIImageView?
     private var lastMirrorCover81 = ""
+    /// (82) 第 4 条：含页态/抑制态的中央簇签名存根。
+    private var lastMirrorCover82 = ""
     private var tickTimer: Timer?
     /// 宿主主窗（(53) G）：本层视图本体不再进窗，petRootLayer
     /// （= 本层 layer）直挂它的 layer；hostWindow 只作 graft

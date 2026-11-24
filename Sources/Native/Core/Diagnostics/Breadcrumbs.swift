@@ -66,6 +66,13 @@ enum Breadcrumbs {
         // dir81.pick 导演判定（第 11 条）、rot=webfx.rot81
         // 特效页旋转量测（第 3 条）。
         log("wit81.live form=1 cov=1 geo=1 machi=1 deck=1 paw=1 dir=1 rot=1")
+        // (82) 名册续登：ph=wall.ph82（封面命中/空白）、
+        // tap=tap82（新台/控制台逐钮点按）、loc=locate82
+        // （封面单击切换在播歌曲）、cov=isl.cov82（岛中
+        // 簇重发）、fm=minibar.fm82（小白条形态）、rot=
+        // rot82（特效旋转无门控量测）、light=light82
+        // （开灯/关灯开关与点亮）。
+        log("wit82.live ph=1 tap=1 loc=1 cov=1 fm=1 rot=1 light=1")
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。

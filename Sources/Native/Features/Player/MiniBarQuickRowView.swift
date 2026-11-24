@@ -57,11 +57,11 @@ final class MiniBarQuickRowView: UIView {
     /// 本排的 heightAnchor 应改读本值（现写死 44）。
     static let rowHeight: CGFloat = 48
 
-    /// 展开态点播台总高（唯一出处）：(60) 第 7 条起上排迁出
-    /// 台本体住透明浮层，台高恢复为不含上排的 70（＝ (54) 前
-    /// 的主排/seek 区口径）。宿主读本常量处自动跟随；主排
-    /// centerY 等相对量由宿主按 70 台口径复核（展开 −5）。
-    static let expandedBarHeight: CGFloat = 70
+    /// 展开态点播台总高（唯一出处）：(82) 第 7 条 E 极简
+    /// 台定版改 132（封面行 14+46／进度行／控制行三段）；
+    /// 与 DeckLayout82.expandedHeight 同值，宿主读本常量
+    /// 处自动跟随，四宿主同台同尺寸由此收口。
+    static let expandedBarHeight: CGFloat = 132
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?
@@ -241,13 +241,13 @@ final class MiniBarQuickRowView: UIView {
         refreshLike()
         refreshStar()
         setButtonState(pawButton,
-            image: DeckIconSet81.image(.paw, theme: theme81, pointSize: 17),
+            image: DeckGlyph82.image(.paw, pointSize: 17),
             color: UIColor.white.withAlphaComponent(0.75))
         setButtonState(panelButton,
-            image: DeckIconSet81.image(.sliders, theme: theme81, pointSize: 17),
+            image: DeckGlyph82.image(.sliders, pointSize: 17),
             color: UIColor.white.withAlphaComponent(0.75))
         setButtonState(commandButton,
-            image: DeckIconSet81.image(.command, theme: theme81, pointSize: 17),
+            image: DeckGlyph82.image(.command, pointSize: 17),
             color: UIColor.white.withAlphaComponent(0.75))
     }
 
@@ -289,8 +289,7 @@ final class MiniBarQuickRowView: UIView {
         // 未喜欢维持现行（白 75% 前景、无填充）。
         likeFilled = liked
         setButtonState(likeButton,
-            image: DeckIconSet81.image(liked ? .heartFill : .heart,
-                                       theme: theme81, pointSize: 17),
+            image: DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 17),
             color: liked
                 ? .white
                 : UIColor.white.withAlphaComponent(0.75))
@@ -302,8 +301,7 @@ final class MiniBarQuickRowView: UIView {
         let starred = PlaybackEngine.shared.currentTrack
             .map { StarStore.shared.isStarred($0.id) } ?? false
         setButtonState(starButton,
-            image: DeckIconSet81.image(starred ? .starFill : .star,
-                                       theme: theme81, pointSize: 16),
+            image: DeckGlyph82.image(starred ? .starFill : .star, pointSize: 16),
             color: starred
                 ? UIColor(red: 1, green: 0.8, blue: 0.25, alpha: 1)
                 : UIColor.white.withAlphaComponent(0.75))
@@ -673,8 +671,7 @@ final class DeckPawButton79: UIButton {
     /// 字形（当前主题套）＋明暗（宠物开=亮白、关=灰 0.45，
     /// 即 (79) 真机所见灰态的语义，保留作状态信号）。
     @objc private func refreshFace81() {
-        setImage(DeckIconSet81.image(
-            .paw, theme: MiniPlayerTheme.effective, pointSize: 16),
+        setImage(DeckGlyph82.image(.paw, pointSize: 16),
                  for: .normal)
         tintColor = StickerSettings.miniPetsEnabled
             ? .white : UIColor.white.withAlphaComponent(0.45)
