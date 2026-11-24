@@ -808,6 +808,8 @@ final class HomeWallViewController: UIViewController,
             if let constraint = self.miniBarWidthConstraint {
                 constraint.constant = min(size.width, size.height) - 24
             }
+            // (86) 第 5 条：收起轨宽按新朝向重写（同点收尾）。
+            self.refreshTrackWidth86(portrait: size.width < size.height)
             // ③ 贴纸层：dock/失败/缓冲贴纸是手动帧（缓冲贴纸
             //    依赖迷你台 frame），按新 bounds 重定位一次。
             self.stickerLayoutOverlays()
@@ -1085,7 +1087,13 @@ final class HomeWallViewController: UIViewController,
         minY -= dirY < 0 ? vh : vh * 0.35
         maxY += dirY > 0 ? vh : vh * 0.35
         var seen = Set<Int>()
-        var items: [(raw: String, tier: Int)] = []
+        var items: [(raw: String, tier: Int, dist: Double)] = []
+        // (86) 第 8 条：喂入前按实例中心到视口中心距离升
+        // 序——准入上限截断时先丢最远环（旧顺序由实例集
+        // 顺序定、与滚动方向无关，近环反而可能被远环挤
+        // 掉额度）。
+        let centerX = Double(wallLayout.worldOrigin.x) + vw / 2
+        let centerY = Double(wallLayout.worldOrigin.y) + vh / 2
         for inst in wallLayout.instances {
             guard inst.queueIndex < entries.count,
                   seen.insert(inst.queueIndex).inserted else { continue }
@@ -1098,11 +1106,16 @@ final class HomeWallViewController: UIViewController,
             let pixelExtent = NativeCoverLoader.wallPixelExtent(
                 worldExtent: max(r.width, r.height),
                 cameraScale: Double(wallLayout.cameraScale))
+            let dx = r.x + r.width / 2 - centerX
+            let dy = r.y + r.height / 2 - centerY
             items.append((pic, NativeCoverLoader.wallTier(
-                raw: pic, pixelExtent: pixelExtent)))
+                raw: pic, pixelExtent: pixelExtent), dx * dx + dy * dy))
         }
         guard !items.isEmpty else { return }
-        NativeCoverLoader.shared.prefetch82(items, source: source, wall: "home")
+        items.sort { $0.dist < $1.dist }
+        NativeCoverLoader.shared.prefetch82(
+            items.map { (raw: $0.raw, tier: $0.tier) },
+            source: source, wall: "home")
     }
 
     // MARK: - 数据源
@@ -1450,6 +1463,14 @@ final class HomeWallViewController: UIViewController,
             Breadcrumbs.log("minibar.disp77 host=homewall via=rescue")
             self.expandMiniBar()
         }
+        // (86) 第 9 条：静止点兜底接线（tap86 out=stat86 →
+        // 同路展开；expandMiniBar 有形态守卫、与识别器/根
+        // 认领重复触发不双开）。
+        bar.onStationaryTap86 = { [weak self] in
+            guard let self, self.miniBarCollapsed else { return }
+            Breadcrumbs.log("minibar.disp86 host=homewall via=stat86")
+            self.expandMiniBar()
+        }
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
@@ -1783,13 +1804,15 @@ final class HomeWallViewController: UIViewController,
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
             miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
+            // (86) 第 6 条：双时间距台框 16→28（胶囊弧线内
+            // 收后净距仅 ≈10-13pt、字面贴框，审计施工值）。
+            miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 28),
             miniTimeElapsed.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             // (85) 审计四(b)：时间定宽 34→40——34pt 装 11pt
             // "%d:%02d" 在 ≥10 分钟时已贴满、≥100 分钟冒框。
             miniTimeElapsed.widthAnchor.constraint(equalToConstant: 40),
 
-            miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -28),
             miniTimeDuration.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             miniTimeDuration.widthAnchor.constraint(equalToConstant: 40),
 
@@ -2714,6 +2737,21 @@ final class HomeWallViewController: UIViewController,
             + " r=\(collapsed ? "2.5" : "2")"
             + " orient=\(fmPortrait84 ? "port" : "land")")
         refreshMiniProgressChrome()
+    }
+
+    /// (86) 第 5 条：旋转落定按新朝向重写收起轨宽。轨宽
+    /// 唯一写入点在 setMiniBarForm 尾部、按当刻 bounds 算
+    /// 朝向——旋转不触发形态函数时，竖屏写下的 140 永远
+    /// 留在横屏（(85) 图四定案：量测差 ≈78pt 与代码推演
+    /// 吻合）。completion 按新 size 重跑同一写入，常数
+    /// 218/140 不动；fm86 恒落行——横屏与舞台样本自此
+    /// 必有（补 (84)(85) 两轮 fm84 横屏零样本的缺口）。
+    private func refreshTrackWidth86(portrait: Bool) {
+        let tw = DeckLayout84.collapsedTrackWidth(portrait: portrait)
+        if miniBarCollapsed { miniTrackWidthC?.constant = tw }
+        Breadcrumbs.log("fm86 host=homewall"
+            + " orient=\(portrait ? "port" : "land")"
+            + " col=\(miniBarCollapsed ? 1 : 0) tw=\(Int(tw))")
     }
 
     private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
@@ -3784,8 +3822,9 @@ extension HomeWallViewController {
         let wasImmersive = seamImmersive
         seamImmersive = on
         Breadcrumbs.log("wall.seam.immersive on=\(on) platformSubstitute=1 nonEquivalent=1")
-        // (60) 第 2 条：沉浸隐藏走工具条双态入口——整条与
-        // grabber 横线同藏，退出沉浸回落收起态。
+        // (60) 第 2 条：沉浸隐藏走工具条双态入口——整条
+        // 同藏，退出沉浸回落收起态（(86) 起收起态为头像＋
+        // 无痕展开垫、无 grabber 线身）。
         seamToolbar?.setImmersiveHidden(on)
         seamFilterBar?.isHidden = true
         if on {
@@ -3950,6 +3989,14 @@ extension HomeWallViewController {
             self?.presentSidebarSection84(WorkbenchLocalViewController())
         }
         seam.onLiked = { [weak self] in self?.openLikedPlaylist85() }
+        // (86) 第 1 条：直达双列补云盘（呈现与命令面板
+        // nav.cloud 同款：fullScreen）。
+        seam.onCloud = { [weak self] in
+            guard let self else { return }
+            let drive = CloudDriveViewController()
+            drive.modalPresentationStyle = .fullScreen
+            self.present(drive, animated: true)
+        }
         seam.onSearch = { [weak self] in
             guard let self else { return }
             SearchHostPresenter.presentSearch(from: self)

@@ -94,6 +94,13 @@ enum Breadcrumbs {
         // 斥）／light=light85（关灯放大存活）／console=
         // console85（控制台小卡逐元素点按）。
         log("wit85.live seam=1 loc=1 seek=1 light=1 console=1")
+        // (86) 见证总表：seam=seam86（缝油画底/头像代理链
+        // 落痕）／loc=locate86（歌单页点头像定位全程）／
+        // fm=fm86（旋转落定按朝向重写收起轨宽）／tap=
+        // tap86（收起态点按原始落痕＋静止点兜底）／rot=
+        // rot86（舞台旋转逐段毫秒）／pf=pf86（预取丢弃
+        // 原因细分）／tb=toolbar86（工具条无痕展开入口）。
+        log("wit86.live seam=1 loc=1 fm=1 tap=1 rot=1 pf=1 tb=1")
         // (84) 第 5 条：上次旋转摘要补发——Stage landed 时
         // 存 UserDefaults（emitted=false），本次启动补一行
         // 并置 emitted，杜绝导出截断丢失旋转量测。

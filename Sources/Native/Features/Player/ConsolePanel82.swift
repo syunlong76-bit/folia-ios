@@ -47,8 +47,18 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
     private let lightSwitch = LightSwitch82()
     /// (85) 第 7 条：悬浮卡本体与高度约束（高度在布局时
     /// 按 min(内容高, 62% 屏高) 收口）。
+    /// (86) 第 7 条：卡改底部锚定（cardBottom85）＋宽度代
+    /// 码收口（cardWidth85）；内容约束分横/竖两套
+    /// （portraitConstraints85／landscapeConstraints85），
+    /// 朝向切换时整组换——(85) 横屏满宽大空卡的定案修法
+    /// （单列固定高链被 62% 上限裁掉、宽度按屏宽拉满）。
     private let card85 = UIView()
     private var cardHeight85: NSLayoutConstraint?
+    private var cardWidth85: NSLayoutConstraint?
+    private var cardBottom85: NSLayoutConstraint?
+    private var portraitConstraints85: [NSLayoutConstraint] = []
+    private var landscapeConstraints85: [NSLayoutConstraint] = []
+    private var consoleLandscape86: Bool?
 
     static func present(from host: UIViewController) {
         let panel = ConsolePanel82()
@@ -87,10 +97,18 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
             .translatedBy(x: 0, y: 10)
         view.addSubview(card85)
         cardHeight85 = card85.heightAnchor.constraint(equalToConstant: 424)
+        cardWidth85 = card85.widthAnchor.constraint(equalToConstant: 322)
+        // (86) 第 7 条：底部锚定——卡底＝安全区底 −90（账：
+        // 点播台展开态顶边＝安全区底 −80＝台底锚 −10＋台
+        // 高 70；卡底再上 10pt 间隙，落在 8–12pt 任务带
+        // 内）。(85) 的 centerY 居中退役；宽度改代码收口
+        // （竖 0.82×屏宽、横 min(0.86×屏宽, 640)）。
+        cardBottom85 = card85.bottomAnchor.constraint(
+            equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -90)
         NSLayoutConstraint.activate([
             card85.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            card85.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            card85.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.82),
+            cardWidth85!,
+            cardBottom85!,
             cardHeight85!,
         ])
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
@@ -217,13 +235,26 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         helpButton.addTarget(self, action: #selector(helpTapped), for: .touchUpInside)
         card85.addSubview(helpButton)
 
-        // (85) 第 7 条：内容约束整体改锚卡内边（原锚根视
-        // 图边）；卡内布局数值与 (82) 一致、功能不丢。
+        // 朝向无关的内层约束（分段两钮恒在 segContainer
+        // 内、两钮尺寸恒定）先恒激活。
         NSLayoutConstraint.activate([
-            clearButton.topAnchor.constraint(equalTo: card85.topAnchor, constant: 16),
-            clearButton.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -16),
             clearButton.widthAnchor.constraint(equalToConstant: 32),
             clearButton.heightAnchor.constraint(equalToConstant: 28),
+            segTranslucent.leadingAnchor.constraint(equalTo: segContainer.leadingAnchor, constant: 3),
+            segTranslucent.centerYAnchor.constraint(equalTo: segContainer.centerYAnchor),
+            segTranslucent.widthAnchor.constraint(equalToConstant: 34),
+            segTranslucent.heightAnchor.constraint(equalToConstant: 22),
+            segSolid.trailingAnchor.constraint(equalTo: segContainer.trailingAnchor, constant: -3),
+            segSolid.centerYAnchor.constraint(equalTo: segContainer.centerYAnchor),
+            segSolid.widthAnchor.constraint(equalToConstant: 34),
+            segSolid.heightAnchor.constraint(equalToConstant: 22),
+            helpButton.widthAnchor.constraint(equalToConstant: 38),
+            helpButton.heightAnchor.constraint(equalToConstant: 38),
+        ])
+        // (85) 第 7 条竖屏单列链（数值与 (82) 一致、功能不丢）。
+        portraitConstraints85 = [
+            clearButton.topAnchor.constraint(equalTo: card85.topAnchor, constant: 16),
+            clearButton.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -16),
 
             queueTable.topAnchor.constraint(equalTo: clearButton.bottomAnchor, constant: 2),
             queueTable.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 12),
@@ -251,14 +282,6 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
             segContainer.leadingAnchor.constraint(equalTo: layers.trailingAnchor, constant: 10),
             segContainer.widthAnchor.constraint(equalToConstant: 76),
             segContainer.heightAnchor.constraint(equalToConstant: 28),
-            segTranslucent.leadingAnchor.constraint(equalTo: segContainer.leadingAnchor, constant: 3),
-            segTranslucent.centerYAnchor.constraint(equalTo: segContainer.centerYAnchor),
-            segTranslucent.widthAnchor.constraint(equalToConstant: 34),
-            segTranslucent.heightAnchor.constraint(equalToConstant: 22),
-            segSolid.trailingAnchor.constraint(equalTo: segContainer.trailingAnchor, constant: -3),
-            segSolid.centerYAnchor.constraint(equalTo: segContainer.centerYAnchor),
-            segSolid.widthAnchor.constraint(equalToConstant: 34),
-            segSolid.heightAnchor.constraint(equalToConstant: 22),
             focusSwitch.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
             focusSwitch.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
 
@@ -266,9 +289,51 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
             lightSwitch.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 24),
             helpButton.centerYAnchor.constraint(equalTo: lightSwitch.centerYAnchor),
             helpButton.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
-            helpButton.widthAnchor.constraint(equalToConstant: 38),
-            helpButton.heightAnchor.constraint(equalToConstant: 38),
-        ])
+        ]
+        // (86) 横屏双列链：左列＝队列头＋队列表（表高随卡
+        // 高伸缩、内部滚动），右列＝功能行/音量/外观/灯光
+        // 四行竖排（总高 208＋上下边距 ≤232 卡高内成立）。
+        landscapeConstraints85 = [
+            // 清空钮在横屏归队列列右上（队列头行语义不变）。
+            clearButton.topAnchor.constraint(equalTo: card85.topAnchor, constant: 12),
+            clearButton.trailingAnchor.constraint(equalTo: queueTable.trailingAnchor),
+
+            queueTable.topAnchor.constraint(equalTo: clearButton.bottomAnchor, constant: 2),
+            queueTable.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 12),
+            queueTable.widthAnchor.constraint(equalTo: card85.widthAnchor, multiplier: 0.44),
+            queueTable.bottomAnchor.constraint(equalTo: card85.bottomAnchor, constant: -12),
+
+            functionRow.topAnchor.constraint(equalTo: card85.topAnchor, constant: 16),
+            functionRow.leadingAnchor.constraint(equalTo: queueTable.trailingAnchor, constant: 20),
+            functionRow.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
+            functionRow.heightAnchor.constraint(equalToConstant: 44),
+
+            speaker.topAnchor.constraint(equalTo: functionRow.bottomAnchor, constant: 16),
+            speaker.leadingAnchor.constraint(equalTo: functionRow.leadingAnchor),
+            speaker.widthAnchor.constraint(equalToConstant: 24),
+            speaker.heightAnchor.constraint(equalToConstant: 24),
+            volumeSlider.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
+            volumeSlider.leadingAnchor.constraint(equalTo: speaker.trailingAnchor, constant: 10),
+            volumeSlider.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
+
+            layers.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 18),
+            layers.leadingAnchor.constraint(equalTo: functionRow.leadingAnchor),
+            layers.widthAnchor.constraint(equalToConstant: 24),
+            layers.heightAnchor.constraint(equalToConstant: 24),
+            segContainer.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
+            segContainer.leadingAnchor.constraint(equalTo: layers.trailingAnchor, constant: 10),
+            segContainer.widthAnchor.constraint(equalToConstant: 76),
+            segContainer.heightAnchor.constraint(equalToConstant: 28),
+            focusSwitch.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
+            focusSwitch.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
+
+            lightSwitch.topAnchor.constraint(equalTo: layers.bottomAnchor, constant: 20),
+            lightSwitch.leadingAnchor.constraint(equalTo: functionRow.leadingAnchor),
+            helpButton.centerYAnchor.constraint(equalTo: lightSwitch.centerYAnchor),
+            helpButton.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
+        ]
+        // 初始按竖屏集落位；首个布局回调按真实朝向校正。
+        NSLayoutConstraint.activate(portraitConstraints85)
 
         refreshModeButton()
         refreshShuffleButton()
@@ -283,13 +348,35 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         if let fade = queueTable.layer.mask as? CAGradientLayer {
             fade.frame = queueTable.bounds
         }
-        // (85) 第 7 条：卡高＝内容高 424 与 62% 屏高取小
-        // （横屏矮屏不超屏）；宽度 82% 由乘数约束恒成立，
-        // 横竖屏均居中（centerX/centerY 约束）。
-        let cap = view.bounds.height * 0.62
-        let target = min(424, cap)
-        if let cardHeight85, abs(cardHeight85.constant - target) > 0.5 {
-            cardHeight85.constant = target
+        // (86) 第 7 条＋横屏核查：朝向定布局集与卡尺寸
+        // （切换只在朝向真变时发生、防布局回环）。
+        let bounds = view.bounds
+        let landscape = bounds.width > bounds.height
+        if consoleLandscape86 != landscape {
+            consoleLandscape86 = landscape
+            NSLayoutConstraint.deactivate(
+                landscape ? portraitConstraints85 : landscapeConstraints85)
+            NSLayoutConstraint.activate(
+                landscape ? landscapeConstraints85 : portraitConstraints85)
+            Breadcrumbs.log("console86 land=\(landscape ? 1 : 0)")
+        }
+        let cardW = landscape ? min(bounds.width * 0.86, 640)
+                              : bounds.width * 0.82
+        if let cardWidth85, abs(cardWidth85.constant - cardW) > 0.5 {
+            cardWidth85.constant = cardW
+        }
+        // 卡高：竖屏沿 (85) 口径 min(424, 62% 屏高)；横屏
+        // 按双列内容高 232 与贴底可用高（屏高−安全底−90
+        // 锚距−顶距 8）取小——贴底锚下不超屏。
+        let cardH: CGFloat
+        if landscape {
+            let avail = bounds.height - view.safeAreaInsets.bottom - 90 - 8
+            cardH = min(232, avail)
+        } else {
+            cardH = min(424, bounds.height * 0.62)
+        }
+        if let cardHeight85, abs(cardHeight85.constant - cardH) > 0.5 {
+            cardHeight85.constant = cardH
         }
     }
 

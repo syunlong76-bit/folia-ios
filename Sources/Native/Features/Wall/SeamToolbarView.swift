@@ -48,6 +48,9 @@ enum SeamSegment: Int, CaseIterable {
 /// 展开后无操作 3.5s 自动收回（任一钮点按重置计时）。展开/
 /// 收起只动 transform/alpha，不重排墙面。沉浸模式整条隐藏
 /// 的现行逻辑保留、横线同藏（见 setImmersiveHidden）。
+/// (86) 第 3/4 条改版：grabber 横线整件撤除（(85) 图五
+/// 定案的残留小白线即此线身）——收起态只剩常驻头像＋
+/// 不可见展开命中垫（原垫原位）；头像双态恒可见可点。
 ///
 /// 绕岛形态（3.7 (75) 第 3 项，Miller 2026-11-23 20:29/
 /// 20:31 点名）：(74) 的直条悬在岛下方、与岛毫无关系被
@@ -114,11 +117,17 @@ final class SeamToolbarView: UIView {
     private let layoutButton = UIButton(type: .system)
     private let fullscreenButton = UIButton(type: .system)
 
-    // 双态（(60) 第 2 条）：grabber 横线 + 命中垫（收起态承接
-    // 点按；(61) WA 由全条 44pt 全宽带收窄到线身＋适度外扩
-    // 76×28 居中，收起态不再吞整条带的墙面点按）、闲置收起计时。
-    private let grabberView = UIView()
-    private let grabberHitView = UIView()
+    // 双态（(60) 第 2 条）：收起态承接点按的命中垫（(61)
+    // WA 由全条 44pt 全宽带收窄到 76×28，收起态不吞整条
+    // 带的墙面点按）、闲置收起计时。
+    // (86) 第 4 条：36×4 白色 grabber 横线整件撤除（(85)
+    // 图五定案：缝折叠态侧边残留的「小白线」即此线身；
+    // (85) 撤的是速记簿把手、此线从未撤过）。命中垫保留
+    // 原位原尺寸、改名 expandHitView（无可见绘制），点按
+    // 展开通路不变；落 toolbar86 见证。
+    // (86) 第 3 条：收起态头像常驻可见可点（见
+    // applyToolbarState 的头像豁免与 hitTest 放行）。
+    private let expandHitView = UIView()
     private var idleCollapseWorkItem: DispatchWorkItem?
     private(set) var isToolbarExpanded = false
 
@@ -156,10 +165,8 @@ final class SeamToolbarView: UIView {
     private let maskShapeLayer = CAShapeLayer()
     /// (76) 布局尺寸变更面包屑去重（闪屏审计关连用）。
     private var lastLayoutSize: CGSize = .zero
-    private var grabberLeadingConstraint: NSLayoutConstraint?
-    private var grabberCenterYConstraint: NSLayoutConstraint?
-    private var grabberHitLeadingConstraint: NSLayoutConstraint?
-    private var grabberHitCenterYConstraint: NSLayoutConstraint?
+    private var expandHitLeadingConstraint: NSLayoutConstraint?
+    private var expandHitCenterYConstraint: NSLayoutConstraint?
     private var wrapActiveNow = false
     /// 灵动岛几何（iPhone 14 Pro 实测口径，与 PetIslandLayer
     /// 同源常量）：半宽 63、顶 11、底 48、中心 y≈29.5。
@@ -331,46 +338,30 @@ final class SeamToolbarView: UIView {
             ])
         }
 
-        // grabber 横线（(60) 第 2 条）：36×4pt 白色圆角，居中于
-        // 本条（宿主安装在安全区顶下方，位置口径不变）；命中垫
-        // (61) WA 收窄为 76×28 居中于线身、仅收起态在场，点按即展开。
-        grabberView.backgroundColor = UIColor.white.withAlphaComponent(0.85)
-        grabberView.layer.cornerRadius = 2
-        grabberView.isUserInteractionEnabled = false
-        grabberView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(grabberView)
-        grabberHitView.backgroundColor = .clear
-        grabberHitView.accessibilityLabel = "展开工具条"
-        grabberHitView.accessibilityTraits = .button
-        grabberHitView.translatesAutoresizingMaskIntoConstraints = false
-        grabberHitView.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(grabberTapped)))
-        addSubview(grabberHitView)
-        // (74) 设置台安置口径：收起横线改左锚（本条贴左上
-        // 角，横线落左端：线身 leading+12 起 36 宽，命中垫
-        // leading+2 起 76 宽居于线身），不再居中。
-        // (75) 约束改存引用：绕岛态由 layoutSubviews 按岛几
-        // 何改写常数（横线移到岛左近、与岛同高），平形态
-        // 恢复本组数值。
-        let gLead = grabberView.leadingAnchor.constraint(
-            equalTo: leadingAnchor, constant: 12)
-        let gCY = grabberView.centerYAnchor.constraint(equalTo: centerYAnchor)
-        let hLead = grabberHitView.leadingAnchor.constraint(
+        // (86) 第 4 条：展开命中垫（原 grabber 命中垫原位
+        // 保留：76×28、leading+2、垂直居中本条；线身已撤、
+        // 本垫无任何可见绘制），仅收起态在场，点按即展开。
+        // (75) 约束改存引用：绕岛态由 layoutSubviews 按岛
+        // 几何改写常数（移到岛左近、与岛同高），平形态恢
+        // 复本组数值。
+        expandHitView.backgroundColor = .clear
+        expandHitView.accessibilityLabel = "展开工具条"
+        expandHitView.accessibilityTraits = .button
+        expandHitView.translatesAutoresizingMaskIntoConstraints = false
+        expandHitView.addGestureRecognizer(
+            UITapGestureRecognizer(target: self, action: #selector(expandHitTapped)))
+        addSubview(expandHitView)
+        let hLead = expandHitView.leadingAnchor.constraint(
             equalTo: leadingAnchor, constant: 2)
-        let hCY = grabberHitView.centerYAnchor.constraint(equalTo: centerYAnchor)
-        grabberLeadingConstraint = gLead
-        grabberCenterYConstraint = gCY
-        grabberHitLeadingConstraint = hLead
-        grabberHitCenterYConstraint = hCY
+        let hCY = expandHitView.centerYAnchor.constraint(equalTo: centerYAnchor)
+        expandHitLeadingConstraint = hLead
+        expandHitCenterYConstraint = hCY
         NSLayoutConstraint.activate([
-            gLead, gCY,
-            grabberView.widthAnchor.constraint(equalToConstant: 36),
-            grabberView.heightAnchor.constraint(equalToConstant: 4),
             hLead, hCY,
-            grabberHitView.widthAnchor.constraint(equalToConstant: 76),
-            grabberHitView.heightAnchor.constraint(equalToConstant: 28),
+            expandHitView.widthAnchor.constraint(equalToConstant: 76),
+            expandHitView.heightAnchor.constraint(equalToConstant: 28),
         ])
-        // 初始态 = 收起（只剩横线），无动画直接落位。
+        // 初始态 = 收起（头像常驻、无可见线），无动画直接落位。
         applyToolbarState(expanded: false, animated: false, reason: "init")
     }
 
@@ -446,35 +437,23 @@ final class SeamToolbarView: UIView {
             bandTintView.isHidden = true
             borderView.isHidden = true
         }
-        // 横线对位：绕岛态落岛左近（线身右缘距岛左缘 14pt、
-        // 与岛同高居中）；平形态回 (74) 左锚行内位。
+        // 命中垫对位：绕岛态落岛左近（与岛同高居中）；平
+        // 形态回左锚行内位（(86) 线身撤除后只剩垫的常数）。
         if wrap {
             let islandLeft = bounds.width / 2 - Self.islandHalfWidth
             let cy = Self.islandCenterY - bounds.height / 2
-            if grabberLeadingConstraint?.constant != islandLeft - 50 {
-                grabberLeadingConstraint?.constant = islandLeft - 50
+            if expandHitLeadingConstraint?.constant != islandLeft - 70 {
+                expandHitLeadingConstraint?.constant = islandLeft - 70
             }
-            if grabberHitLeadingConstraint?.constant != islandLeft - 70 {
-                grabberHitLeadingConstraint?.constant = islandLeft - 70
-            }
-            if grabberCenterYConstraint?.constant != cy {
-                grabberCenterYConstraint?.constant = cy
-            }
-            if grabberHitCenterYConstraint?.constant != cy {
-                grabberHitCenterYConstraint?.constant = cy
+            if expandHitCenterYConstraint?.constant != cy {
+                expandHitCenterYConstraint?.constant = cy
             }
         } else {
-            if grabberLeadingConstraint?.constant != 12 {
-                grabberLeadingConstraint?.constant = 12
+            if expandHitLeadingConstraint?.constant != 2 {
+                expandHitLeadingConstraint?.constant = 2
             }
-            if grabberHitLeadingConstraint?.constant != 2 {
-                grabberHitLeadingConstraint?.constant = 2
-            }
-            if grabberCenterYConstraint?.constant != 0 {
-                grabberCenterYConstraint?.constant = 0
-            }
-            if grabberHitCenterYConstraint?.constant != 0 {
-                grabberHitCenterYConstraint?.constant = 0
+            if expandHitCenterYConstraint?.constant != 0 {
+                expandHitCenterYConstraint?.constant = 0
             }
         }
     }
@@ -541,24 +520,34 @@ final class SeamToolbarView: UIView {
         return p.cgPath
     }
 
-    /// 命中纪律（(75)）：收起态只认横线命中垫；展开态只认
-    /// 内容控件（super 命中到本视图/背景即空域、穿透）。高
-    /// 带（绕岛态 100pt+）绝不整带吞页面点按。
+    /// 命中纪律（(75)）：展开态只认内容控件（super 命中
+    /// 到本视图/背景即空域、穿透）。高带（绕岛态 100pt+）
+    /// 绝不整带吞页面点按。
+    /// (86) 第 3/4 条：收起态两路放行——①头像命中区（头
+    /// 像常驻可见可点，(85) 定案双态门挡死点头像定位的
+    /// 修法）；②展开命中垫（原 grabber 垫、无可见线）。
+    /// 其余空域仍穿透给墙面（全带吞触摸会吃掉墙面顶部
+    /// 平移/点按，故不采「点工具条区域任意处」字面义，
+    /// 命中区＝原垫原位，报告注明）。
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01 else { return nil }
         if isToolbarExpanded {
             let hit = super.hitTest(point, with: event)
             return (hit === self || hit === blurView) ? nil : hit
         }
-        return grabberHitView.frame.contains(point) ? grabberHitView : nil
+        if avatarButton.frame.contains(point) { return avatarButton }
+        return expandHitView.frame.contains(point) ? expandHitView : nil
     }
 
     // MARK: - 双态（(60) 第 2 条）
 
-    @objc private func grabberTapped() {
+    @objc private func expandHitTapped() {
         // (76) 闪屏审计埋点：点按时刻落痕，与 morph/lay
         // 面包屑同轴对位（点按前后各帧状态可复原）。
         Breadcrumbs.log("seam.morph76 tap")
+        // (86) 第 4 条：无痕展开入口见证（线身撤除后展开
+        // 入口的存活自证）。
+        Breadcrumbs.log("toolbar86 hit=expand")
         expandToolbar(reason: "tap")
     }
 
@@ -579,8 +568,8 @@ final class SeamToolbarView: UIView {
         applyToolbarState(expanded: false, animated: true, reason: reason)
     }
 
-    /// 沉浸模式（宿主 seamSetImmersive 调用）：整条隐藏、横线
-    /// 同藏；退出沉浸回到收起态（横线在场）。
+    /// 沉浸模式（宿主 seamSetImmersive 调用）：整条隐藏；退
+    /// 出沉浸回到收起态（头像＋展开命中垫在场，(86) 无线身）。
     func setImmersiveHidden(_ on: Bool) {
         if on {
             idleCollapseWorkItem?.cancel()
@@ -610,7 +599,7 @@ final class SeamToolbarView: UIView {
     }
 
     private func applyToolbarState(expanded: Bool, animated: Bool, reason: String) {
-        grabberHitView.isHidden = expanded
+        expandHitView.isHidden = expanded
         // (77) ①③（Miller 22:58/23:02）：展开面全透明——
         // 带身组（毛玻璃/色调/描边）只在绕岛收起态以贴岛
         // 薄框存在，展开即整组淡出、控件直接浮墙面；平
@@ -637,19 +626,29 @@ final class SeamToolbarView: UIView {
         let apply = { [self] in
             for view in contentViews {
                 if view === blurView { continue }
+                // (86) 第 3 条：头像三件豁免双态淡出——收起
+                // 态常驻可见（与 hitTest 头像放行成对，点头
+                // 像定位不再被双态门挡死）。
+                if view === avatarButton || view === avatarInitial
+                    || view === avatarImageView { continue }
                 view.alpha = expanded ? 1 : 0
             }
             let bandAlpha: CGFloat = (wrapActiveNow && !expanded) ? 1 : 0
             blurView.alpha = bandAlpha
             bandTintView.alpha = bandAlpha
             borderView.alpha = bandAlpha
-            grabberView.alpha = expanded ? 0 : 1
+            // (86) 第 4 条：grabber 线身已整件撤除，本行随之
+            // 退役（展开命中垫的显隐在函数首行 isHidden 管）。
         }
         let setInteraction = { [self] in
             for view in contentViews where view !== blurView && view !== avatarInitial
-                && view !== avatarImageView {
+                && view !== avatarImageView && view !== avatarButton {
                 view.isUserInteractionEnabled = expanded
             }
+            // (86) 第 3 条：头像收起态恒可交互（与 alpha 豁
+            // 免成对）；3.5s 自动收回只收其余控件、头像点
+            // 击不再被吞。
+            avatarButton.isUserInteractionEnabled = true
         }
         if animated {
             setInteraction()
@@ -1015,6 +1014,19 @@ enum SeamToolbarForwarding {
         let avatarStatus = loggedIn.first { $0.avatarURL != nil }
             ?? statuses.first { $0.avatarURL != nil }
         bar.setAccount(
+            nickname: loggedIn.first?.displayName,
+            loggedIn: !loggedIn.isEmpty,
+            avatarURLString: avatarStatus?.avatarURL?.absoluteString)
+    }
+
+    /// (86) 第 3 条：歌单缝头像同源回填（与工具条同一数
+    /// 据口径、同一全局查询，不另开数据源）。
+    static func applyAccountState(toSeam seam: PlaylistSeam85View) {
+        let statuses = ProviderSessionStatusQuery.allStatuses()
+        let loggedIn = statuses.filter(\.isLoggedIn)
+        let avatarStatus = loggedIn.first { $0.avatarURL != nil }
+            ?? statuses.first { $0.avatarURL != nil }
+        seam.setAccount85(
             nickname: loggedIn.first?.displayName,
             loggedIn: !loggedIn.isEmpty,
             avatarURLString: avatarStatus?.avatarURL?.absoluteString)

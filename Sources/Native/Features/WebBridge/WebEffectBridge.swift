@@ -1980,6 +1980,12 @@ extension WebEffectBridge: WKNavigationDelegate {
         let backoffTable: [TimeInterval] = [0.6, 1.5, 3, 6, 12, 30]
         let delay = backoffTable[min(terminateDates.count - 1, backoffTable.count - 1)]
         FoliaFileLog.write("bridge", "webContentProcessDidTerminate count180s=\(terminateDates.count) backoff=\(delay)s state=\(UIApplication.shared.applicationState == .active ? "active" : "background")")
+        // (86) 第 9 条：重载路径见证（只加见证、不改重载
+        // 策略）——(85) 日志 WARN「后台被杀延迟重载」与旋
+        // 转 gen=1 landed 缺行同源嫌疑，下轮按本行判读。
+        Breadcrumbs.log("webfx.reload cnt=\(terminateDates.count)"
+            + " backoff=\(delay)"
+            + " state=\(UIApplication.shared.applicationState == .active ? "active" : "bg")")
         let visible = UIApplication.shared.applicationState == .active && webView.window != nil
         if !visible {
             pendingReloadAfterTermination = true

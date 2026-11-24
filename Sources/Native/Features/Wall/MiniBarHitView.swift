@@ -53,6 +53,12 @@ final class MiniBarHitView: UIView {
     var isCollapsedForm = false
     /// 取消救援派发（宿主接 expandMiniBar 同路）。
     var onCancelledTapRescue: (() -> Void)?
+    /// (86) 第 9 条：静止点兜底派发（宿主接 expandMiniBar
+    /// 同路）——触摸正常结束、无任何台身识别器认领、且
+    /// 序列为静止短点时由 touchesEnded 直接派发（见彼处
+    /// 定案注）。与取消救援并列、互不覆盖（cancel 走救
+    /// 援、end 走本路）。
+    var onStationaryTap86: (() -> Void)?
     private var downTime: CFTimeInterval = 0
     private var downLocation: CGPoint = .zero
     private var maxDeviation: CGFloat = 0
@@ -96,7 +102,41 @@ final class MiniBarHitView: UIView {
         Breadcrumbs.log("mb.tch78 e host=\(crumbHostTag)"
             + " col=\(isCollapsedForm ? 1 : 0)")
         if isCollapsedForm { RouteInteractionHold.shared.end() }
-        if !sequenceClaimed { onDispatchUnclaimed?() }
+        // (86) 第 9 条：tap86 原始点按落痕（宿主＋台内坐标
+        // ＋结局）＋静止点兜底。(85) 日志窗内 ≥6 组收起态
+        // 点按终止于 dead76 noRecog——结构性断点：台身点
+        // 按识别器挂在 deckSurface 叶子层，触摸命中轨/钮
+        // 等其他子视图时不经其子树、永不被喂；本视图是台
+        // 身全体子视图的共同祖先、touchesEnded 恒达，故
+        // 兜底落在此处。结局口径：claimed＝识别器已认领
+        // （本路不动）；stat86＝静止短点未认领、本路兜底
+        // 派发展开；moved/long＝非点按语义、只落痕。阈值
+        // <0.5s：覆盖日志实测 461ms 一笔，又与台身 0.55s
+        // 长按切主题留 50ms 余量、不抢长按。兜底派发后
+        // 不再走 unclaimed（序列已被本路认领、dead76 不
+        // 许再误报）。
+        var claimedByFallback86 = false
+        if isCollapsedForm, downTime > 0 {
+            let duration = CACurrentMediaTime() - downTime
+            let out: String
+            if sequenceClaimed {
+                out = "claimed"
+            } else if duration < 0.5, maxDeviation < 10 {
+                out = "stat86"
+            } else if maxDeviation >= 10 {
+                out = "moved"
+            } else {
+                out = "long"
+            }
+            Breadcrumbs.log("tap86 host=\(crumbHostTag)"
+                + " col=1 x=\(Int(downLocation.x)) y=\(Int(downLocation.y))"
+                + " out=\(out)")
+            if out == "stat86" {
+                claimedByFallback86 = true
+                onStationaryTap86?()
+            }
+        }
+        if !sequenceClaimed, !claimedByFallback86 { onDispatchUnclaimed?() }
         super.touchesEnded(touches, with: event)
     }
 
@@ -107,6 +147,12 @@ final class MiniBarHitView: UIView {
         if isCollapsedForm {
             RouteInteractionHold.shared.end()
             onDispatchCancelled?()
+            // (86) 第 9 条：取消结局同落 tap86（与 end 路对位）。
+            if downTime > 0 {
+                Breadcrumbs.log("tap86 host=\(crumbHostTag)"
+                    + " col=1 x=\(Int(downLocation.x)) y=\(Int(downLocation.y))"
+                    + " out=cancel")
+            }
             let stationary = CACurrentMediaTime() - downTime < 0.35
                 && maxDeviation < 10
             if stationary, !sequenceClaimed {
@@ -196,15 +242,29 @@ final class MiniBarRootTap78: NSObject {
         let point = recognizer.location(in: bar)
         // 命中带与台身 point(inside:) 同口径（视觉帧纵向外
         // 扩 hitExpansionY，收起态 44pt 带）。
+        // (86) 第 9 条：本守卫旧为静默 return——(85) 判读
+        // 分不开「没触发」与「静默退出」，tap86 各出口补
+        // 落痕（band/pet/claim，坐标为台内坐标）。
         guard bar.bounds.insetBy(dx: 0, dy: -bar.hitExpansionY)
-            .contains(point) else { return }
+            .contains(point) else {
+            Breadcrumbs.log("tap86 host=\(hostTag)"
+                + " col=1 x=\(Int(point.x)) y=\(Int(point.y))"
+                + " out=band")
+            return
+        }
         // 宠物本体/对话框/气泡认领优先：落点在宠物面上归宠
         // 物分支，本路不抢（宠物点按语义不变）。
         if let petStage,
            petStage.claimsPoint(recognizer.location(in: petStage)) {
             Breadcrumbs.log("mb.root79 bail=pet host=\(hostTag)")
+            Breadcrumbs.log("tap86 host=\(hostTag)"
+                + " col=1 x=\(Int(point.x)) y=\(Int(point.y))"
+                + " out=pet")
             return
         }
+        Breadcrumbs.log("tap86 host=\(hostTag)"
+            + " col=1 x=\(Int(point.x)) y=\(Int(point.y))"
+            + " out=claim")
         Breadcrumbs.log("mb.claim78 host=\(hostTag)")
         Breadcrumbs.log("mb.disp78 host=\(hostTag) via=root")
         expand()

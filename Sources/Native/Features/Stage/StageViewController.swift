@@ -324,6 +324,12 @@ final class StageViewController: UIViewController {
     private var stageRotationFrozen = false
     private var stageLayoutPending = false
     private var stageLayoutRuns = 0
+    /// (86) 第 9 条：alongside 已排轮的几何（尺寸＋安全
+    /// 区），completion 据此判补轮——一致即零补轮、landed
+    /// runs 收敛为 1（(85) 实锤旧法解冻后中间 bounds 反复
+    /// 触发全量 layoutStage、横→竖 runs=6／f2l=329ms）。
+    private var stageRotLaidSize86: CGSize = .zero
+    private var stageRotLaidInsets86: UIEdgeInsets = .zero
     private var lastTimeLabelSecond = -1
     private var tornDown = false
     private var webJumpFired = false
@@ -878,6 +884,12 @@ final class StageViewController: UIViewController {
         Breadcrumbs.logSync("rot84 freeze gen=\(generation)"
             + " style=\(activeStyleId)"
             + " web=\(webEmbedStyleId != nil ? 1 : 0)")
+        // (86) 第 9 条：rot86 逐段见证（freeze 此处／landed
+        // 在 completion／reveal 在 revealWebRotCover81，三
+        // 段毫秒分开落盘）。
+        Breadcrumbs.logSync("rot86 freeze gen=\(generation)"
+            + " style=\(activeStyleId)"
+            + " web=\(webEmbedStyleId != nil ? 1 : 0)")
         Breadcrumbs.log("rot82 freeze gen=\(generation)"
             + " style=\(activeStyleId)"
             + " web=\(webEmbedStyleId != nil ? 1 : 0)"
@@ -900,11 +912,20 @@ final class StageViewController: UIViewController {
             guard let self else { return }
             self.applySeamBandOrientation(portrait: size.width < size.height)
             guard generation == self.stageRotationGeneration else { return }
-            self.stageRotationFrozen = false
+            // (86) 第 9 条：冻结保持到 completion——旧法在
+            // 此处即解冻，转场动画期间中间 bounds/安全区多
+            // 次变化、每次 viewDidLayoutSubviews 都全量
+            // layoutStage（(85) 横→竖 runs=6）。改：冻结中
+            // 以最终 bounds 单轮排版（layoutStage 不查冻结
+            // 旗、直调即排），记录已排几何；转场期间的布
+            // 局请求只记 pending，completion 几何一致即零
+            // 补轮。
             if self.stageLayoutPending {
                 self.stageLayoutPending = false
                 self.layoutStage()
                 self.pushSnapshot()
+                self.stageRotLaidSize86 = size
+                self.stageRotLaidInsets86 = self.view.safeAreaInsets
                 // (82) 第 6 条：rot82 ready 量测点——新尺寸
                 // 首帧布局＋快照已落（原生样式路径；网页样
                 // 式另由 webfx.rot81 ready 对位）。
@@ -913,16 +934,41 @@ final class StageViewController: UIViewController {
                 Breadcrumbs.logSync("rot84 ready gen=\(generation) ms=\(ms)")
                 Breadcrumbs.log("rot82 ready gen=\(generation) ms=\(ms)")
             }
+            // (86) 第 9 条：网页层重排提前到转场期发（新尺
+            // 寸已定）——揭盖回执在转场期内即可到达并由
+            // handleWebStyleFrame 直揭，不再串行等 landed
+            // 后才催（(85) 实锤揭盖迟到 278ms）。
+            if self.webEmbedStyleId != nil {
+                WebEffectBridge.shared.nudgeEffectResize81()
+            }
         }) { [weak self] _ in
             PetIslandLayer.setRefrontSuspended(false)
             PetIslandLayer.shared.refrontIfNeeded()
             guard let self,
                   generation == self.stageRotationGeneration else { return }
+            // (86) 第 9 条：解冻＋按需补轮——转场期 pending
+            // 的布局请求若几何与 alongside 已排一致（纯旋
+            // 转常态），零补轮、runs 收敛为 1；不一致才补
+            // 一轮并落 extra=1。
+            self.stageRotationFrozen = false
+            var extraRun86 = 0
+            if self.stageLayoutPending {
+                self.stageLayoutPending = false
+                if self.view.bounds.size != self.stageRotLaidSize86
+                    || self.view.safeAreaInsets != self.stageRotLaidInsets86 {
+                    self.layoutStage()
+                    self.pushSnapshot()
+                    extraRun86 = 1
+                }
+            }
             Breadcrumbs.log("stage.rotate76 landed gen=\(generation)"
                 + " runs=\(self.stageLayoutRuns)")
             // (82) 第 6 条：rot82 landed 量测点（全样式）。
             let landedMs = Int((CACurrentMediaTime() - self.stageRotStart82) * 1000)
             Breadcrumbs.log("rot82 landed gen=\(generation) ms=\(landedMs)")
+            Breadcrumbs.logSync("rot86 landed gen=\(generation)"
+                + " f2l=\(landedMs) runs=\(self.stageLayoutRuns)"
+                + " extra=\(extraRun86)")
             // (84) 第 5 条：旋转摘要同步落盘＋存 UserDefaults
             // 待下次启动补发（emitted=false）。f2r＝freeze→
             // ready 毫秒（判别字段）；网页样式 ready 在揭盖
@@ -940,6 +986,8 @@ final class StageViewController: UIViewController {
                 + " f2r=\(self.stageRotReadyMs84)"
                 + " style=\(self.activeStyleId)"
                 + " web=\(self.webEmbedStyleId != nil ? 1 : 0)")
+            // (86) 第 5 条：收起轨宽按新朝向重写（同点收尾）。
+            self.refreshTrackWidth86(portrait: size.width < size.height)
             if self.webRotCover81 != nil {
                 Breadcrumbs.log("webfx.rot81 landed gen=\(generation)")
                 self.armWebRotReveal81(generation: generation)
@@ -983,7 +1031,10 @@ final class StageViewController: UIViewController {
     /// （handleWebStyleFrame 转交）或 0.9s 超时，任一先
     /// 到即交叉淡出盖层并落 ready 量测（ms=冻结→揭盖）。
     private func armWebRotReveal81(generation: Int) {
-        WebEffectBridge.shared.nudgeEffectResize81()
+        // (86) 第 9 条：nudge 已提前到 alongside 转场期发
+        // （新尺寸一定即催网页层重排、回执到达由
+        // handleWebStyleFrame 直揭），此处不再重复催——
+        // 只留 0.9s 超时兜底（回执永不到时防永盖）。
         let rotGen = webRotGen81
         webRotRevealWork81?.cancel()
         let work = DispatchWorkItem { [weak self] in
@@ -1001,6 +1052,9 @@ final class StageViewController: UIViewController {
         webRotRevealWork81 = nil
         let ms = Int((CACurrentMediaTime() - webRotStart81) * 1000)
         Breadcrumbs.log("webfx.rot81 ready via=\(via) ms=\(ms)")
+        // (86) 第 9 条：rot86 reveal 段（freeze→揭盖毫秒，
+        // 与 landed 分开落盘——判读揭盖是否仍串行迟到）。
+        Breadcrumbs.logSync("rot86 reveal ms=\(ms) via=\(via)")
         // (84) 第 5 条：网页样式的 ready 点在此——回填本次
         // 旋转摘要的 f2r 并同步落盘（landed 时 ready 未达
         // 的补行）；gen 对位用 webRotGen81。
@@ -2931,6 +2985,12 @@ final class StageViewController: UIViewController {
             Breadcrumbs.log("minibar.disp77 host=stage via=rescue")
             self.expandStageBar()
         }
+        // (86) 第 9 条：静止点兜底接线（同两面墙口径）。
+        bar.onStationaryTap86 = { [weak self] in
+            guard let self, self.stageBarCollapsed else { return }
+            Breadcrumbs.log("minibar.disp86 host=stage via=stat86")
+            self.expandStageBar()
+        }
         // 宠物层（细修 B）：详情页台班底，钩子与墙等价。
         let petStage = MiniBarPetStage(bar: bar, role: .stage)
         view.addSubview(petStage)
@@ -3223,15 +3283,13 @@ final class StageViewController: UIViewController {
             knob.widthAnchor.constraint(equalToConstant: 9),
             knob.heightAnchor.constraint(equalToConstant: 9),
 
-            currentTimeLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
+            currentTimeLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 28),
             currentTimeLabel.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            // (85) 审计四(b)：双时间与墙台同锚同宽——左贴
-            // 左+16、右贴台右−16、定宽 40（≥10 分钟不冒
-            // 框）；旧舞台右时间锚在控制台钮左侧、与钮挤成
-            // 一簇（Miller「时间快超出屏幕」所指），控制台
-            // 钮本版移出进度行（见下主排组）。
+            // (85) 审计四(b)：双时间与墙台同锚同宽、定宽
+            // 40（≥10 分钟不冒框）；(86) 第 6 条：距台框
+            // 16→28 内收（三宿主一致，胶囊弧线净距）。
             currentTimeLabel.widthAnchor.constraint(equalToConstant: 40),
-            totalTimeLabel.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            totalTimeLabel.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -28),
             totalTimeLabel.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             totalTimeLabel.widthAnchor.constraint(equalToConstant: 40),
 
@@ -3872,6 +3930,17 @@ final class StageViewController: UIViewController {
             + " r=\(collapsed ? "2.5" : "2")"
             + " orient=\(fmPortrait84 ? "port" : "land")")
         refreshStageProgressChrome()
+    }
+
+    /// (86) 第 5 条：旋转落定按新朝向重写收起轨宽（同两面
+    /// 墙口径：写入时机修法，常数 218/140 不动，fm86 恒
+    /// 落行保 host=stage 横屏样本）。
+    private func refreshTrackWidth86(portrait: Bool) {
+        let tw = DeckLayout84.collapsedTrackWidth(portrait: portrait)
+        if stageBarCollapsed { stageTrackWidthC?.constant = tw }
+        Breadcrumbs.log("fm86 host=stage"
+            + " orient=\(portrait ? "port" : "land")"
+            + " col=\(stageBarCollapsed ? 1 : 0) tw=\(Int(tw))")
     }
 
     private func setStageBarContentsAlpha(_ alpha: CGFloat) {

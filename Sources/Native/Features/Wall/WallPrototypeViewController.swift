@@ -637,6 +637,12 @@ final class WallPrototypeViewController: UIViewController,
             Breadcrumbs.log("minibar.disp77 host=wallproto via=rescue")
             self.expandMiniBar()
         }
+        // (86) 第 9 条：静止点兜底接线（同主页墙口径）。
+        bar.onStationaryTap86 = { [weak self] in
+            guard let self, self.miniBarCollapsed else { return }
+            Breadcrumbs.log("minibar.disp86 host=wallproto via=stat86")
+            self.expandMiniBar()
+        }
         let petStage = MiniBarPetStage(bar: bar)
         view.addSubview(petStage)
         miniPetStage = petStage
@@ -959,12 +965,13 @@ final class WallPrototypeViewController: UIViewController,
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
             miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
+            // (86) 第 6 条：双时间距台框 16→28（三宿主一致）。
+            miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 28),
             miniTimeElapsed.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             // (85) 审计四(b)：时间定宽 34→40（同主页墙）。
             miniTimeElapsed.widthAnchor.constraint(equalToConstant: 40),
 
-            miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -28),
             miniTimeDuration.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             miniTimeDuration.widthAnchor.constraint(equalToConstant: 40),
 
@@ -1837,6 +1844,17 @@ final class WallPrototypeViewController: UIViewController,
         refreshMiniProgressChrome()
     }
 
+    /// (86) 第 5 条：旋转落定按新朝向重写收起轨宽（同主页
+    /// 墙口径：写入时机修法，常数 218/140 不动，fm86 恒
+    /// 落行保横屏样本）。
+    private func refreshTrackWidth86(portrait: Bool) {
+        let tw = DeckLayout84.collapsedTrackWidth(portrait: portrait)
+        if miniBarCollapsed { miniTrackWidthC?.constant = tw }
+        Breadcrumbs.log("fm86 host=wallproto"
+            + " orient=\(portrait ? "port" : "land")"
+            + " col=\(miniBarCollapsed ? 1 : 0) tw=\(Int(tw))")
+    }
+
     private func setMiniBarContentsAlpha(_ alpha: CGFloat) {
         // 圆点不在淡出名单（3.7 (22)）：收起态保留发光圆点
         // 随进度步进，淡出的只有封面/标题/歌手/按键。
@@ -1881,6 +1899,12 @@ final class WallPrototypeViewController: UIViewController,
         seam.onExpandChange = { [weak self] expanded in
             self?.setPlaylistSeamExpanded85(expanded)
         }
+        // (86) 第 3 条：缝头像绑定位（与工具条头像同路）
+        // ＋账户同源回填（出现时再刷，见 viewWillAppear）。
+        seam.onAvatar = { [weak self] in
+            self?.locateCurrentTrack(via: "avatar")
+        }
+        SeamToolbarForwarding.applyAccountState(toSeam: seam)
         playlistSeam85 = seam
         let tab = SeamEdgeTab85View()
         tab.isHidden = true
@@ -2167,15 +2191,17 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     private func locateCurrentTrack(via: String = "cover") {
-        // (85) 第 2 条：定位全程落 locate85（via/result）；
+        // (85) 第 2 条：定位全程落痕；(86) 第 3 条见证升
+        // locate86（via/result/fail）——判别标准：歌单页
+        // 点头像日志必有 locate86 行且墙真滑。
         // via=avatar 为工具条/缝头像点按（Miller 定版口
         // 径），其余入口（封面区/呈现后消费）沿用 cover。
-        Breadcrumbs.log("locate85 via=\(via) host=wall")
+        Breadcrumbs.log("locate86 via=\(via) host=wall")
         locateGeneration += 1
         guard let current = PlaybackEngine.shared.currentTrack else {
             // (81) 第 2 条：无在播曲目不静默，给可见反馈。
             Breadcrumbs.log("locate miss81 fb=none")
-            Breadcrumbs.log("locate85 result=none host=wall")
+            Breadcrumbs.log("locate86 result=none host=wall")
             NativePlaybackFailureToast.show(message: "现在没有正在播放的歌曲")
             return
         }
@@ -2191,14 +2217,12 @@ final class WallPrototypeViewController: UIViewController,
             + "queueIndex=\(matches.first ?? -1) sameId=\(matches.count) "
             + "ui=\(miniTitle.text ?? "") entries=\(entries.count)/\(wallLayout.totalEntries)")
         guard let queueIndex = matches.first else {
-            // (81) 第 2 条改绑：在播曲不在本歌单时不再只弹
-            // toast 留在原地——按「切换到正在播放的歌曲」
-            // 口径直达其呈现：打开当前曲的舞台详情页（本
-            // 宿主既有开台路径，与双击同路）。
-            Breadcrumbs.log("locate miss81 fb=stage target=\(currentId)")
-            Breadcrumbs.log("locate85 result=miss host=wall")
-            Breadcrumbs.logSync("tap.dispatch host=wallproto via=cover81")
-            openNativeStageFromWall()
+            // (86) 第 3 条：miss 分支与 (85) 主页口径对齐——
+            // 不许改开舞台冒充定位（(81) 的 fb=stage 改绑
+            // 退役）：只给可见反馈＋locate86 fail 落痕。
+            Breadcrumbs.log("locate miss81 fb=toast target=\(currentId)")
+            Breadcrumbs.log("locate86 result=fail why=miss host=wall")
+            NativePlaybackFailureToast.show(message: "正在播放的歌曲不在这个歌单里")
             return
         }
         let scale = wallLayout.cameraScale
@@ -2207,13 +2231,14 @@ final class WallPrototypeViewController: UIViewController,
         let centerX = Double(wallLayout.worldOrigin.x) + viewWorldW / 2
         let centerY = Double(wallLayout.worldOrigin.y) + viewWorldH / 2
         // (85) 审计三死点：locateNearestInstance 返回 nil
-        // 不许静默 return——落 locate85 fail（旧版在此无
-        // 声退出、「locate start」之后再无下文无法判读）。
+        // 不许静默 return——落 fail（旧版在此无声退出、
+        // 「locate start」之后再无下文无法判读）；(86)
+        // 见证名升 locate86。
         guard let target = WallGeometry.locateNearestInstance(
             geometry: wallLayout.geometry, totalEntries: wallLayout.totalEntries,
             queueIndex: queueIndex, pointX: centerX, pointY: centerY,
             metrics: wallLayout.metrics) else {
-            Breadcrumbs.log("locate85 fail why=nilinst host=wall")
+            Breadcrumbs.log("locate86 result=fail why=nilinst host=wall")
             NativePlaybackFailureToast.show(message: "定位失败：找不到这首歌的位置")
             return
         }
@@ -2271,7 +2296,7 @@ final class WallPrototypeViewController: UIViewController,
         }
         if gotId == targetId {
             Breadcrumbs.log("locate ok target=\(targetId) queueIndex=\(targetIndex)")
-            Breadcrumbs.log("locate85 result=ok host=wall")
+            Breadcrumbs.log("locate86 result=ok host=wall")
             return
         }
         let gotTitle = expanded.flatMap {
@@ -2337,8 +2362,9 @@ final class WallPrototypeViewController: UIViewController,
             geometry: wallLayout.geometry, totalEntries: wallLayout.totalEntries,
             queueIndex: targetIndex, pointX: centerX, pointY: centerY,
             metrics: wallLayout.metrics) else {
-            // (85) 审计三死点：重飞路同一静默点补落痕。
-            Breadcrumbs.log("locate85 fail why=nilinst host=wall src=frozen")
+            // (85) 审计三死点：重飞路同一静默点补落痕；
+            // (86) 见证名升 locate86。
+            Breadcrumbs.log("locate86 result=fail why=nilinst host=wall src=frozen")
             return
         }
         if wallLayout.expandedInstanceId != nil {
@@ -2496,11 +2522,18 @@ final class WallPrototypeViewController: UIViewController,
                 + " size=\(Int(size.width))x\(Int(size.height))"
                 + " instances=\(self.wallLayout.instances.count)"
                 + " latticeComputes=\(self.wallLayout.latticeComputeCount)")
+            // (86) 第 5 条：收起轨宽按新朝向重写（同点收尾）。
+            self.refreshTrackWidth86(portrait: size.width < size.height)
         }
     }
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // (86) 第 3 条：缝头像账户态随出现刷新（登录态可
+        // 能在主页侧刚变更）。
+        if let seam = playlistSeam85 {
+            SeamToolbarForwarding.applyAccountState(toSeam: seam)
+        }
         // (72) 单宿主认领：本页在前时迷你台形态归本宿主；
         // 形态与共享旗标不一致时无动画对齐一次（交接不跳变）。
         MiniBarSingleHost.shared.claim("wallproto")
@@ -3010,7 +3043,10 @@ final class WallPrototypeViewController: UIViewController,
         minY -= dirY < 0 ? vh : vh * 0.35
         maxY += dirY > 0 ? vh : vh * 0.35
         var seen = Set<Int>()
-        var items: [(raw: String, tier: Int)] = []
+        var items: [(raw: String, tier: Int, dist: Double)] = []
+        // (86) 第 8 条：按距视口中心升序喂入（同主页墙）。
+        let centerX = Double(wallLayout.worldOrigin.x) + vw / 2
+        let centerY = Double(wallLayout.worldOrigin.y) + vh / 2
         for inst in wallLayout.instances {
             guard inst.queueIndex < entries.count,
                   seen.insert(inst.queueIndex).inserted else { continue }
@@ -3022,11 +3058,16 @@ final class WallPrototypeViewController: UIViewController,
             let pixelExtent = NativeCoverLoader.wallPixelExtent(
                 worldExtent: max(r.width, r.height),
                 cameraScale: Double(wallLayout.cameraScale))
+            let dx = r.x + r.width / 2 - centerX
+            let dy = r.y + r.height / 2 - centerY
             items.append((pic, NativeCoverLoader.wallTier(
-                raw: pic, pixelExtent: pixelExtent)))
+                raw: pic, pixelExtent: pixelExtent), dx * dx + dy * dy))
         }
         guard !items.isEmpty else { return }
-        NativeCoverLoader.shared.prefetch82(items, source: source, wall: "tracks")
+        items.sort { $0.dist < $1.dist }
+        NativeCoverLoader.shared.prefetch82(
+            items.map { (raw: $0.raw, tier: $0.tier) },
+            source: source, wall: "tracks")
     }
 
     // MARK: - 数据源

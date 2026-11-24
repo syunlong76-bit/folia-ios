@@ -129,6 +129,19 @@ final class NativeCoverLoader {
     private var pfEnqueuedKeys84 = Set<String>()
     private var pfConvertedKeys84 = Set<String>()
     private var pfDropped84 = 0
+    /// (86) 第 8 条：预取丢弃原因细分（statLock 守）——
+    /// 在途键集合（按优先级）：准入按「唯一在途键数」计
+    /// （旧计数器对重复键反复占额、滚动每 0.3s 整环重喂
+    /// 时 24 额度被同键吃满、新键全丢——(85) 实锤转化
+    /// 率 44–46%、drp=118 的直接上游）。cap＝超限丢弃
+    /// （与 pfDropped84 同步、pf84 口径不变）；dup＝已在
+    /// 途重复喂入（不占额、不起新 Task）；nourl＝代理给
+    /// 不出地址；cached＝已缓存跳过（信息项、非丢弃）。
+    private var pfOutstandingKeys84: [LoadPriority: Set<String>] = [:]
+    private var pf86Cap = 0
+    private var pf86Dup = 0
+    private var pf86Nourl = 0
+    private var pf86Cached = 0
     /// (84) dec84 见证累加（statLock 守）：自上次取走以来
     /// 各优先级的网络槽等待最大值（与 dec78 的 wait 对照，
     /// 判预取风暴是否还压得住可见请求）。
@@ -413,22 +426,47 @@ final class NativeCoverLoader {
     func prefetch82(_ items: [(raw: String, tier: Int)],
                     source: String = "scroll", wall: String = "?") {
         // (84) 修 b：优先级按来源分档（warm 最低）＋在途准
-        // 入上限（scroll ≤24／warm ≤8，超限丢弃计数 drp）；
-        // 实际入队的键登记 pf84 供转化率见证。
+        // 入上限（超限丢弃计数 drp）；实际入队的键登记
+        // pf84 供转化率见证。
+        // (86) 第 8 条：准入改按唯一在途键计数＋重复键去
+        // 重（见 pfOutstandingKeys84 注）；scroll 上限
+        // 24→40（去重后额度只记唯一键，网络 4 槽/解码 4
+        // 闸的硬限不变、风暴面不放大），warm 仍 8。全部
+        // 出口细分计数 pf86（cap/dup/nourl/cached）。
         let priority: LoadPriority = source == "warm" ? .warm : .prefetch
-        let cap = source == "warm" ? 8 : 24
+        let cap = source == "warm" ? 8 : 40
         var enqueued = 0
         for item in items {
-            guard let url = proxiedURLString(item.raw, tier: item.tier) else { continue }
-            if cachedImage(for: url) != nil { continue }
+            guard let url = proxiedURLString(item.raw, tier: item.tier) else {
+                statLock.lock()
+                pf86Nourl += 1
+                statLock.unlock()
+                continue
+            }
+            if cachedImage(for: url) != nil {
+                statLock.lock()
+                pf86Cached += 1
+                statLock.unlock()
+                continue
+            }
             statLock.lock()
+            if pfOutstandingKeys84[priority]?.contains(url) == true {
+                pf86Dup += 1
+                statLock.unlock()
+                continue
+            }
             let outstanding = pfOutstanding84[priority] ?? 0
             if outstanding >= cap {
                 pfDropped84 += 1
+                pf86Cap += 1
                 statLock.unlock()
                 continue
             }
             pfOutstanding84[priority] = outstanding + 1
+            if pfOutstandingKeys84[priority] == nil {
+                pfOutstandingKeys84[priority] = []
+            }
+            pfOutstandingKeys84[priority]?.insert(url)
             if pfEnqueuedKeys84.count > 6000 {
                 pfEnqueuedKeys84.removeAll()
                 pfConvertedKeys84.removeAll()
@@ -441,6 +479,7 @@ final class NativeCoverLoader {
                 self.statLock.lock()
                 self.pfOutstanding84[priority] =
                     max(0, (self.pfOutstanding84[priority] ?? 1) - 1)
+                self.pfOutstandingKeys84[priority]?.remove(url)
                 self.statLock.unlock()
             }
         }
@@ -473,6 +512,17 @@ final class NativeCoverLoader {
         statLock.lock()
         defer { statLock.unlock() }
         return (pfEnqueuedKeys84.count, pfConvertedKeys84.count, pfDropped84)
+    }
+
+    /// (86) 第 8 条：pf86 快照（累计口径，不重置）：预取
+    /// 全部出口的细分计数——cap 准入丢弃／dup 在途重复／
+    /// nourl 无代理地址／cached 已缓存跳过。判读主口径
+    /// （pf84 转化率的分母是进程累计唯一入队键、含跨歌
+    /// 单历史键，天然被稀释，只作辅证）。
+    func takePf86() -> (cap: Int, dup: Int, nourl: Int, cached: Int) {
+        statLock.lock()
+        defer { statLock.unlock() }
+        return (pf86Cap, pf86Dup, pf86Nourl, pf86Cached)
     }
 
     /// (84) dec84 快照（取走重置）：各优先级网络槽等待最

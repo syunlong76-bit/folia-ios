@@ -392,23 +392,10 @@ final class SettingsViewController: UIViewController {
             lessThanOrEqualTo: view.heightAnchor, multiplier: 0.72)
         NSLayoutConstraint.activate([hugHeight, maxHeight])
 
-        // 顶部小横条（sheet 抓手）
-        let grabber = UIView()
-        grabber.backgroundColor = UIColor.white.withAlphaComponent(0.18)
-        grabber.layer.cornerRadius = 2
-        grabber.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            grabber.widthAnchor.constraint(equalToConstant: 36),
-            grabber.heightAnchor.constraint(equalToConstant: 4)
-        ])
-        let grabberRow = UIView()
-        grabberRow.addSubview(grabber)
-        NSLayoutConstraint.activate([
-            grabber.centerXAnchor.constraint(equalTo: grabberRow.centerXAnchor),
-            grabber.topAnchor.constraint(equalTo: grabberRow.topAnchor),
-            grabber.bottomAnchor.constraint(equalTo: grabberRow.bottomAnchor)
-        ])
-        cardStack.addArrangedSubview(grabberRow)
+        // (86) 第 4 条：顶部 36×4 sheet 抓手横线撤除（与工
+        // 具条 grabber 同款小白线，全仓核查清单第二处）——
+        // 本面板无拖动关闭手势（关闭走页眉「完成」），抓手
+        // 纯装饰、随本条一并退役。
 
         // 页眉：标题 + 「完成」文字按钮
         let header = UIStackView()

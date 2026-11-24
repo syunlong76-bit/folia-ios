@@ -761,6 +761,8 @@ final class WallScrollMetrics: NSObject {
     /// (84) pf84 全局快照去重（两面墙 metrics 共用：入队数
     /// 未变不重复落行）。
     private static var lastPf84Enq = -1
+    /// (86) pf86 全局快照去重（任一细分计数变化才落行）。
+    private static var lastPf86Key = ""
 
     init(wallName: String) {
         self.wallName = wallName
@@ -912,6 +914,15 @@ final class WallScrollMetrics: NSObject {
             Self.lastPf84Enq = pf84.enq
             Breadcrumbs.log("pf84 enq=\(pf84.enq) conv=\(pf84.conv)"
                 + " rate=\(pf84.conv * 100 / pf84.enq) drp=\(pf84.drp)")
+        }
+        // (86) 第 8 条：pf86 丢弃原因细分（与 pf84 同冲刷
+        // 点，任一计数变化才落行）。
+        let pf86 = NativeCoverLoader.shared.takePf86()
+        let pf86Key = "\(pf86.cap)/\(pf86.dup)/\(pf86.nourl)/\(pf86.cached)"
+        if pf86Key != Self.lastPf86Key {
+            Self.lastPf86Key = pf86Key
+            Breadcrumbs.log("pf86 cap=\(pf86.cap) dup=\(pf86.dup)"
+                + " nourl=\(pf86.nourl) cached=\(pf86.cached)")
         }
         // (84) dec84 见证：各优先级网络槽等待最大值＋解码
         // 闸峰值（与 (83) dec78 wait 最大 1922ms 对照）。

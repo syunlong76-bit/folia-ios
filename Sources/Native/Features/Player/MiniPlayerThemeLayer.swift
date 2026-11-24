@@ -313,7 +313,9 @@ final class MiniPlayerThemeLayer: UIView {
         return UIImage(contentsOfFile: url.path)
     }
 
-    private static func backgroundImage(for theme: MiniPlayerTheme) -> UIImage? {
+    /// (86) 第 2 条：改 internal——世界缝油画底同源取图
+    /// （SeamBackdrop86），映射名单源、不许缝侧另抄一份。
+    static func backgroundImage(for theme: MiniPlayerTheme) -> UIImage? {
         switch theme {
         case .none: return nil
         case .meadow: return themeImage(named: "monet-meadow", ext: "jpg")

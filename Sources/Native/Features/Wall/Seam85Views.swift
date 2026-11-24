@@ -25,6 +25,79 @@ enum Seam85Text {
     }
 }
 
+/// (86) 第 1/2 条：缝底（两缝共用）——缝纸改网页原值
+/// rgba(22,22,27,0.8)＋0 0 18px 黑投影（(85) 的黑 0.34
+/// 平涂＋白发丝线整组退役）；油画底与点播台同源 4 套
+/// （MiniPlayerTheme.stored 单源、.foliaMiniPlayerTheme-
+/// Changed 通知跟随），层序＝缝纸→油画→scrim→内容。
+/// 油画 alpha 0.6＋scrim 黑 0.30（点播台 scrim 为 0.18，
+/// 缝内全是竖排小字、按可读性加深，取值见 (86) 报告）；
+/// 主题 none 时油画/scrim 同隐、只剩缝纸。本层不接手
+/// 势（缝命中纪律不变：只认控件本体）。
+final class SeamBackdrop86: UIView {
+
+    private let imageView = UIImageView()
+    private let scrimView = UIView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        backgroundColor = UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                                  blue: 27.0 / 255, alpha: 0.8)
+        layer.shadowColor = UIColor.black.cgColor
+        layer.shadowOpacity = 0.55
+        layer.shadowRadius = 9
+        layer.shadowOffset = .zero
+        isUserInteractionEnabled = false
+        imageView.contentMode = .scaleAspectFill
+        imageView.clipsToBounds = true
+        imageView.alpha = 0.6
+        imageView.isUserInteractionEnabled = false
+        addSubview(imageView)
+        scrimView.backgroundColor = UIColor.black.withAlphaComponent(0.30)
+        scrimView.isUserInteractionEnabled = false
+        addSubview(scrimView)
+        refreshTheme86()
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(themeChanged86),
+            name: .foliaMiniPlayerThemeChanged, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        imageView.frame = bounds
+        scrimView.frame = bounds
+    }
+
+    @objc private func themeChanged86() { refreshTheme86() }
+
+    private func refreshTheme86() {
+        let image = MiniPlayerThemeLayer.backgroundImage(
+            for: MiniPlayerTheme.effective)
+        imageView.image = image
+        imageView.isHidden = image == nil
+        scrimView.isHidden = image == nil
+    }
+}
+
+/// (86) 第 2 条：缝上长按 0.55s 切主题——与点播台长按
+/// 同一通路（写 MiniPlayerTheme.stored.next＋发同一通
+/// 知，主题单源不分叉；特效总开关关时停用、同台口
+/// 径）。识别器挂缝本体：触摸落在缝内任一控件上时祖先
+/// 识别器同收，认领即 cancelsTouchesInView、控件不误
+/// 触；缝空域穿透纪律不变（空域触摸归墙、长按不达）。
+enum SeamThemeCycle86 {
+    static func cycle() {
+        guard MiniPlayerTheme.effectsEnabled else { return }
+        MiniPlayerTheme.stored = MiniPlayerTheme.stored.next
+        NotificationCenter.default.post(
+            name: .foliaMiniPlayerThemeChanged, object: nil)
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+        Breadcrumbs.log("seam86 theme=\(MiniPlayerTheme.stored.rawValue)")
+    }
+}
+
 /// 缝宿主侧边竖标签（网页 BRAVAIS_EDGE_TAB）：缝折叠或被
 /// 平移挤出视口时出现在屏幕侧边，点它在当前视口重新裂开。
 final class SeamEdgeTab85View: UIView {
@@ -77,6 +150,8 @@ final class HomeSeam85View: UIView {
     var onAlbums: (() -> Void)?
     var onLocal: (() -> Void)?
     var onLiked: (() -> Void)?
+    /// (86) 第 1 条：直达入口补云盘列（网页双列同式）。
+    var onCloud: (() -> Void)?
     var onAvatar: (() -> Void)?
     var onSearch: (() -> Void)?
     var onSettings: (() -> Void)?
@@ -91,16 +166,18 @@ final class HomeSeam85View: UIView {
         didSet { contentView.alpha = contentOpacity }
     }
 
+    private let backdrop86 = SeamBackdrop86()
     private let contentView = UIView()
     private let libraryLabel = UILabel()
     private let foldButton = UIButton(type: .system)
     private var tabButtons: [UIButton] = []
-    private let shortcutSeparator = UIView()
     private let likedButton = UIButton(type: .system)
+    private let cloudButton = UIButton(type: .system)
     private let avatarButton = UIButton(type: .custom)
     private let avatarImageView = UIImageView()
     private let avatarInitialLabel = UILabel()
-    private var avatarTask: URLSessionDataTask?
+    /// (86) 第 2 条：头像加载防串图键（当前 URL 串）。
+    private var avatarLoadKey86: String?
     private var toolButtons: [UIButton] = []
 
     override init(frame: CGRect) {
@@ -111,41 +188,47 @@ final class HomeSeam85View: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     private func build() {
-        backgroundColor = UIColor.black.withAlphaComponent(0.34)
-        let hairlineL = UIView()
-        hairlineL.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        hairlineL.tag = 8501
-        addSubview(hairlineL)
-        let hairlineR = UIView()
-        hairlineR.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        hairlineR.tag = 8502
-        addSubview(hairlineR)
+        // (86) 第 1/2 条：缝纸＋油画底由 SeamBackdrop86 承
+        // 担（本视图底色清零）；长按 0.55s 切主题挂本体。
+        backgroundColor = .clear
+        addSubview(backdrop86)
+        let seamPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(seamLongPressed86))
+        seamPress.minimumPressDuration = 0.55
+        addGestureRecognizer(seamPress)
         contentView.isUserInteractionEnabled = true
         addSubview(contentView)
 
-        libraryLabel.text = "书库"
-        libraryLabel.font = .systemFont(ofSize: 11, weight: .semibold)
-        libraryLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+        // 书库标题（网页：extrabold＋字距 0.3em＋white/85）。
+        libraryLabel.attributedText = NSAttributedString(
+            string: "书库",
+            attributes: [
+                .font: UIFont.systemFont(ofSize: 12, weight: .heavy),
+                .foregroundColor: UIColor.white.withAlphaComponent(0.85),
+                .kern: 3.6,
+            ])
         libraryLabel.textAlignment = .center
         contentView.addSubview(libraryLabel)
 
-        foldButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
-        foldButton.tintColor = UIColor.white.withAlphaComponent(0.85)
-        foldButton.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-        foldButton.layer.cornerRadius = 14
+        // 折叠钮（网页：裸 chevron、white/55、无底衬）。
+        foldButton.setImage(UIImage(
+            systemName: "chevron.left",
+            withConfiguration: UIImage.SymbolConfiguration(
+                pointSize: 13, weight: .semibold)), for: .normal)
+        foldButton.tintColor = UIColor.white.withAlphaComponent(0.55)
         foldButton.accessibilityLabel = "折叠"
         foldButton.addTarget(self, action: #selector(foldTapped), for: .touchUpInside)
         contentView.addSubview(foldButton)
 
         // 一级页签（竖排）：歌单默认选中（主页墙当前面即
-        // 歌单集，与 (84) 侧栏去向表一致）。
+        // 歌单集，与 (84) 侧栏去向表一致）。字重改网页
+        // bold；圆角在布局时按帧高取半成全圆 pill。
         for (index, title) in ["歌单", "电台", "专辑", "本地"].enumerated() {
             let button = UIButton(type: .system)
             button.setTitle(Seam85Text.vertical(title), for: .normal)
             button.titleLabel?.numberOfLines = 0
-            button.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
+            button.titleLabel?.font = .systemFont(ofSize: 13, weight: .bold)
             button.titleLabel?.textAlignment = .center
-            button.layer.cornerRadius = 10
             button.accessibilityLabel = title
             button.tag = index
             button.addTarget(self, action: #selector(tabTapped(_:)), for: .touchUpInside)
@@ -154,20 +237,31 @@ final class HomeSeam85View: UIView {
         }
         refreshTabSelection()
 
-        shortcutSeparator.backgroundColor = UIColor.white.withAlphaComponent(0.18)
-        contentView.addSubview(shortcutSeparator)
-        likedButton.setTitle(Seam85Text.vertical("我喜欢的音乐"), for: .normal)
-        likedButton.titleLabel?.numberOfLines = 0
-        likedButton.titleLabel?.font = .systemFont(ofSize: 11)
-        likedButton.titleLabel?.textAlignment = .center
-        likedButton.setTitleColor(UIColor.white.withAlphaComponent(0.7), for: .normal)
-        likedButton.accessibilityLabel = "我喜欢的音乐"
-        likedButton.addTarget(self, action: #selector(likedTapped), for: .touchUpInside)
-        contentView.addSubview(likedButton)
+        // 中段直达（网页：双列竖排小字、white/55、无分隔
+        // 线）——我喜欢的音乐＋云盘，两列顶对齐。
+        for (button, title, action) in [
+            (likedButton, "我喜欢的音乐", #selector(likedTapped)),
+            (cloudButton, "云盘", #selector(cloudTapped)),
+        ] as [(UIButton, String, Selector)] {
+            button.setTitle(Seam85Text.vertical(title), for: .normal)
+            button.titleLabel?.numberOfLines = 0
+            button.titleLabel?.font = .systemFont(ofSize: 11)
+            button.titleLabel?.textAlignment = .center
+            button.setTitleColor(UIColor.white.withAlphaComponent(0.55), for: .normal)
+            button.contentVerticalAlignment = .top
+            button.contentEdgeInsets = UIEdgeInsets(top: 2, left: 0, bottom: 0, right: 0)
+            button.accessibilityLabel = title
+            button.addTarget(self, action: action, for: .touchUpInside)
+            contentView.addSubview(button)
+        }
 
         avatarButton.layer.cornerRadius = 16
         avatarButton.clipsToBounds = true
         avatarButton.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+        // (86) 第 1 条：账户圆补网页白 0.25 描边。
+        avatarButton.layer.borderWidth = 1
+        avatarButton.layer.borderColor =
+            UIColor.white.withAlphaComponent(0.25).cgColor
         avatarButton.accessibilityLabel = "定位正在播放"
         avatarButton.addTarget(self, action: #selector(avatarTapped), for: .touchUpInside)
         avatarImageView.contentMode = .scaleAspectFill
@@ -190,9 +284,9 @@ final class HomeSeam85View: UIView {
         ] as [(String, String, Selector)] {
             let button = UIButton(type: .system)
             button.setImage(UIImage(systemName: glyph), for: .normal)
-            button.tintColor = UIColor.white.withAlphaComponent(0.88)
-            button.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-            button.layer.cornerRadius = 8
+            // (86) 第 1 条：工具格去芯片底（网页裸图标
+            // white/70、无底衬无圆角）。
+            button.tintColor = UIColor.white.withAlphaComponent(0.7)
             button.accessibilityLabel = label
             button.addTarget(self, action: action, for: .touchUpInside)
             contentView.addSubview(button)
@@ -203,18 +297,21 @@ final class HomeSeam85View: UIView {
     private func refreshTabSelection() {
         for (index, button) in tabButtons.enumerated() {
             let selected = index == 0
+            // (86) 第 1 条：网页选中态——白 0.9 全圆 pill＋
+            // 深色字；未选透明底＋white/62。（(85) 做反：
+            // 白 0.13 方块底＋白字，审计三⑤定案走样。）
             button.backgroundColor = selected
-                ? UIColor.white.withAlphaComponent(0.13) : .clear
+                ? UIColor.white.withAlphaComponent(0.9) : .clear
             button.setTitleColor(selected
-                ? .white : UIColor.white.withAlphaComponent(0.5), for: .normal)
+                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                          blue: 27.0 / 255, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.62), for: .normal)
         }
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        viewWithTag(8501)?.frame = CGRect(x: 0, y: 0, width: 0.5, height: bounds.height)
-        viewWithTag(8502)?.frame = CGRect(
-            x: bounds.width - 0.5, y: 0, width: 0.5, height: bounds.height)
+        backdrop86.frame = bounds
         let contentW: CGFloat = 64
         let top = contentTopInset
         let bottom = bounds.height - contentBottomInset
@@ -222,38 +319,53 @@ final class HomeSeam85View: UIView {
         contentView.frame = CGRect(
             x: (bounds.width - contentW) / 2, y: top, width: contentW, height: contentH)
         let cx = contentW / 2
-        libraryLabel.frame = CGRect(x: 0, y: 0, width: contentW, height: 18)
-        foldButton.frame = CGRect(x: cx - 14, y: 22, width: 28, height: 28)
-        // 页签列：每签 54 高、间隔 6。
-        var y: CGFloat = 58
-        for button in tabButtons {
-            button.frame = CGRect(x: 10, y: y, width: contentW - 20, height: 54)
-            y += 60
-        }
-        let tabsBottom = y
-        // 工具格（底，两行两列 28×28、间隔 4）。
-        let toolsTop = contentH - 60
-        for (index, button) in toolButtons.enumerated() {
-            let col = CGFloat(index % 2), row = CGFloat(index / 2)
+        let H = contentH
+        // (86) 第 1 条：全改网页相对比例（BRAVAIS_HOME_
+        // SEAM_GEOMETRY／WallParts 渲染同数，基准＝内容
+        // 高 H；(85) 的固定 pt 排版整组退役）。
+        libraryLabel.frame = CGRect(
+            x: 0, y: 0.028 * H, width: contentW, height: max(16, 0.022 * H))
+        foldButton.frame = CGRect(x: cx - 14, y: 0.066 * H, width: 28, height: 28)
+        // 页签：top 0.118H 起、步距 0.07H、高 0.062H、宽
+        // 0.40×缝宽＝26 居中；圆角取帧高一半成全圆 pill。
+        for (index, button) in tabButtons.enumerated() {
+            let tabH = 0.062 * H
             button.frame = CGRect(
-                x: cx - 30 + col * 32, y: toolsTop + row * 32, width: 28, height: 28)
+                x: cx - 13, y: (0.118 + CGFloat(index) * 0.07) * H,
+                width: 26, height: tabH)
+            button.layer.cornerRadius = tabH / 2
         }
-        // 账户位贴工具格正上方（网页 fb4）。
-        avatarButton.frame = CGRect(x: cx - 16, y: toolsTop - 42, width: 32, height: 32)
+        // 中段直达：双列、top 0.64H（网页同位）；列宽 28、
+        // 两列内沿距中线 4（列间隙 ≈ 网页 12% 口径）。列
+        // 高 84＝6 字竖排实需（11pt 行高 ≈13.4×6＋inset），
+        // 止于 0.64H＋84 < 账户区 0.782H、不压头像。
+        let shortcutH: CGFloat = 84
+        likedButton.frame = CGRect(
+            x: cx - 32, y: 0.64 * H, width: 28, height: shortcutH)
+        cloudButton.frame = CGRect(
+            x: cx + 4, y: 0.64 * H, width: 28, height: shortcutH)
+        // 账户位：top 0.782H、高 0.072H 区内 32 圆居中
+        // （网页圆宽 26% 缝宽≈17pt 触控过小，沿 (85) 的
+        // 32pt 口径、白 0.25 描边已在 build 补）。
+        let accountZoneH = 0.072 * H
+        avatarButton.frame = CGRect(
+            x: cx - 16,
+            y: 0.782 * H + max(0, (accountZoneH - 32) / 2),
+            width: 32, height: 32)
         avatarImageView.frame = avatarButton.bounds
         avatarInitialLabel.frame = avatarButton.bounds
-        // 中段：直达入口在页签与账户之间的剩余空间里靠下
-        // 居中成组（分隔线＋竖排字，网页 fb11）。
-        let midTop = tabsBottom + 8
-        let midBottom = toolsTop - 50
-        let likedH: CGFloat = 11 * 6 * 1.25 + 8
-        let groupH = likedH + 14
-        let groupY = midTop + max(0, (midBottom - midTop - groupH) / 2)
-        shortcutSeparator.frame = CGRect(x: cx - 10, y: groupY, width: 20, height: 0.5)
-        likedButton.frame = CGRect(
-            x: cx - 14, y: groupY + 10, width: 28, height: likedH)
-        likedButton.isHidden = midBottom - midTop < 60
-        shortcutSeparator.isHidden = likedButton.isHidden
+        // 工具格：贴底（底距 0.025H）、区高 0.08H、两行
+        // 两列裸图标（28×28 在格内居中、无底衬）。
+        let toolsH = 0.08 * H
+        let toolsTop = H - 0.025 * H - toolsH
+        for (index, button) in toolButtons.enumerated() {
+            let col = CGFloat(index % 2), row = CGFloat(index / 2)
+            let cellH = toolsH / 2
+            button.frame = CGRect(
+                x: cx - 30 + col * 32,
+                y: toolsTop + row * cellH + (cellH - 28) / 2,
+                width: 28, height: 28)
+        }
     }
 
     // MARK: 命中纪律（只认按钮本体，其余穿透给墙面）
@@ -272,8 +384,12 @@ final class HomeSeam85View: UIView {
     // MARK: 账户回显（与 HomeSidebar84View.setAccount84 同口径）
 
     func setAccount85(nickname: String?, loggedIn: Bool, avatarURLString: String?) {
-        avatarTask?.cancel()
-        avatarTask = nil
+        // (86) 第 2 条：头像改走 WorkbenchCover.loadAvatar
+        // 代理链（工具条同款）——旧裸 URLSession 直下原始
+        // URL：网易云头像是 http 明文域、被 ATS 拦，且失
+        // 败静默、永远停占位「大」字（(85) 图一定案）。失
+        // 败落 seam86 见证（ok/fail＋原因），不许静默。
+        avatarLoadKey86 = avatarURLString
         if loggedIn, let nickname, !nickname.isEmpty {
             avatarInitialLabel.text = String(nickname.prefix(1))
             avatarButton.setImage(nil, for: .normal)
@@ -285,16 +401,34 @@ final class HomeSeam85View: UIView {
         }
         avatarImageView.image = nil
         avatarInitialLabel.isHidden = false
-        guard loggedIn, let avatarURLString,
-              let url = URL(string: avatarURLString) else { return }
-        avatarTask = URLSession.shared.dataTask(with: url) { [weak self] data, _, _ in
-            guard let data, let image = UIImage(data: data) else { return }
-            DispatchQueue.main.async {
-                self?.avatarImageView.image = image
-                self?.avatarInitialLabel.isHidden = true
-            }
+        guard loggedIn else {
+            Breadcrumbs.log("seam86 avatar host=home ok=0 rsn=nologin")
+            return
         }
-        avatarTask?.resume()
+        guard let avatarURLString, let url = URL(string: avatarURLString) else {
+            Breadcrumbs.log("seam86 avatar host=home ok=0 rsn=nourl")
+            return
+        }
+        let key = avatarURLString
+        WorkbenchCover.loadAvatar(url: url, into: avatarImageView,
+            completion: { [weak self] ok in
+                guard let self, self.avatarLoadKey86 == key else { return }
+                if ok {
+                    self.avatarInitialLabel.isHidden = true
+                    Breadcrumbs.log("seam86 avatar host=home ok=1")
+                } else {
+                    Breadcrumbs.log("seam86 avatar host=home ok=0 rsn=load")
+                }
+            },
+            isCurrent: { [weak self] in self?.avatarLoadKey86 == key })
+    }
+
+    /// (86) 第 2 条：缝上长按 0.55s 切主题（通路见
+    /// SeamThemeCycle86）。
+    @objc private func seamLongPressed86(
+        _ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        SeamThemeCycle86.cycle()
     }
 
     // MARK: 点按（逐项落痕 sidebar85）
@@ -324,6 +458,11 @@ final class HomeSeam85View: UIView {
     @objc private func likedTapped() {
         Breadcrumbs.log("sidebar85 tap dest=liked")
         onLiked?()
+    }
+
+    @objc private func cloudTapped() {
+        Breadcrumbs.log("sidebar85 tap dest=cloud")
+        onCloud?()
     }
 
     @objc private func avatarTapped() {
@@ -364,6 +503,9 @@ final class PlaylistSeam85View: UIView {
     var onPlayAll: (() -> Void)?
     var onAppendQueue: (() -> Void)?
     var onExpandChange: ((Bool) -> Void)?
+    /// (86) 第 3 条：书脊补常驻头像入口（与主页缝同位口
+    /// 径：下段、播放钮上方），宿主绑定位。
+    var onAvatar: (() -> Void)?
 
     var contentTopInset: CGFloat = 108
     var contentBottomInset: CGFloat = 132
@@ -375,6 +517,7 @@ final class PlaylistSeam85View: UIView {
     }
 
     private(set) var expanded = false
+    private let backdrop86 = SeamBackdrop86()
     private let spineContent = UIView()
     private let fullContent = UIView()
     private let backButton = UIButton(type: .system)
@@ -383,6 +526,11 @@ final class PlaylistSeam85View: UIView {
     private let countLabel = UILabel()
     private let playButton = UIButton(type: .system)
     private let expandButton = UIButton(type: .system)
+    // (86) 第 3 条：书脊头像（构成同主页缝）。
+    private let avatarButton = UIButton(type: .custom)
+    private let avatarImageView = UIImageView()
+    private let avatarInitialLabel = UILabel()
+    private var avatarLoadKey86: String?
     // 展开档
     private let fullBackButton = UIButton(type: .system)
     private let fullTitleLabel = UILabel()
@@ -399,15 +547,14 @@ final class PlaylistSeam85View: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     private func build() {
-        backgroundColor = UIColor.black.withAlphaComponent(0.34)
-        let hairlineL = UIView()
-        hairlineL.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        hairlineL.tag = 8501
-        addSubview(hairlineL)
-        let hairlineR = UIView()
-        hairlineR.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        hairlineR.tag = 8502
-        addSubview(hairlineR)
+        // (86) 第 1/2 条：缝纸＋油画底同主页缝（SeamBack-
+        // drop86）；长按切主题同挂本体。
+        backgroundColor = .clear
+        addSubview(backdrop86)
+        let seamPress = UILongPressGestureRecognizer(
+            target: self, action: #selector(seamLongPressed86))
+        seamPress.minimumPressDuration = 0.55
+        addGestureRecognizer(seamPress)
         addSubview(spineContent)
         addSubview(fullContent)
         fullContent.isHidden = true
@@ -417,10 +564,9 @@ final class PlaylistSeam85View: UIView {
         backButton.accessibilityLabel = "返回"
         backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
         spineContent.addSubview(backButton)
+        // 折叠钮去芯片底（网页裸钮，同主页缝）。
         foldButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         foldButton.tintColor = UIColor.white.withAlphaComponent(0.85)
-        foldButton.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-        foldButton.layer.cornerRadius = 14
         foldButton.accessibilityLabel = "折叠"
         foldButton.addTarget(self, action: #selector(foldTapped), for: .touchUpInside)
         spineContent.addSubview(foldButton)
@@ -436,13 +582,32 @@ final class PlaylistSeam85View: UIView {
         countLabel.textColor = UIColor.white.withAlphaComponent(0.55)
         countLabel.textAlignment = .center
         spineContent.addSubview(countLabel)
+        // 播放钮去底衬（网页书脊裸钮，同折叠钮口径）。
         playButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
         playButton.tintColor = .white
-        playButton.backgroundColor = UIColor.white.withAlphaComponent(0.16)
-        playButton.layer.cornerRadius = 18
         playButton.accessibilityLabel = "播放全部"
         playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
         spineContent.addSubview(playButton)
+        // (86) 第 3 条：书脊头像（白 0.25 描边、构成同主页缝）。
+        avatarButton.layer.cornerRadius = 16
+        avatarButton.clipsToBounds = true
+        avatarButton.backgroundColor = UIColor.white.withAlphaComponent(0.14)
+        avatarButton.layer.borderWidth = 1
+        avatarButton.layer.borderColor =
+            UIColor.white.withAlphaComponent(0.25).cgColor
+        avatarButton.accessibilityLabel = "定位正在播放"
+        avatarButton.addTarget(self, action: #selector(avatarTapped), for: .touchUpInside)
+        avatarImageView.contentMode = .scaleAspectFill
+        avatarImageView.clipsToBounds = true
+        avatarImageView.isUserInteractionEnabled = false
+        avatarButton.addSubview(avatarImageView)
+        avatarInitialLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        avatarInitialLabel.textColor = .white
+        avatarInitialLabel.textAlignment = .center
+        avatarInitialLabel.isUserInteractionEnabled = false
+        avatarButton.addSubview(avatarInitialLabel)
+        spineContent.addSubview(avatarButton)
+        setAccount85(nickname: nil, loggedIn: false, avatarURLString: nil)
         expandButton.setImage(
             UIImage(systemName: "arrow.up.left.and.arrow.down.right"), for: .normal)
         expandButton.tintColor = UIColor.white.withAlphaComponent(0.85)
@@ -502,29 +667,81 @@ final class PlaylistSeam85View: UIView {
         setNeedsLayout()
     }
 
+    /// (86) 第 2/3 条：书脊头像回填——与主页缝同链
+    /// （WorkbenchCover.loadAvatar 代理链＋seam86 见证，
+    /// host=wall 区分两缝）。
+    func setAccount85(nickname: String?, loggedIn: Bool, avatarURLString: String?) {
+        avatarLoadKey86 = avatarURLString
+        if loggedIn, let nickname, !nickname.isEmpty {
+            avatarInitialLabel.text = String(nickname.prefix(1))
+            avatarButton.setImage(nil, for: .normal)
+        } else {
+            avatarInitialLabel.text = nil
+            avatarButton.setImage(
+                UIImage(systemName: "person.crop.circle"), for: .normal)
+            avatarButton.tintColor = UIColor.white.withAlphaComponent(0.85)
+        }
+        avatarImageView.image = nil
+        avatarInitialLabel.isHidden = false
+        guard loggedIn else {
+            Breadcrumbs.log("seam86 avatar host=wall ok=0 rsn=nologin")
+            return
+        }
+        guard let avatarURLString, let url = URL(string: avatarURLString) else {
+            Breadcrumbs.log("seam86 avatar host=wall ok=0 rsn=nourl")
+            return
+        }
+        let key = avatarURLString
+        WorkbenchCover.loadAvatar(url: url, into: avatarImageView,
+            completion: { [weak self] ok in
+                guard let self, self.avatarLoadKey86 == key else { return }
+                if ok {
+                    self.avatarInitialLabel.isHidden = true
+                    Breadcrumbs.log("seam86 avatar host=wall ok=1")
+                } else {
+                    Breadcrumbs.log("seam86 avatar host=wall ok=0 rsn=load")
+                }
+            },
+            isCurrent: { [weak self] in self?.avatarLoadKey86 == key })
+    }
+
+    /// (86) 第 2 条：缝上长按 0.55s 切主题（同主页缝）。
+    @objc private func seamLongPressed86(
+        _ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began else { return }
+        SeamThemeCycle86.cycle()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
-        viewWithTag(8501)?.frame = CGRect(x: 0, y: 0, width: 0.5, height: bounds.height)
-        viewWithTag(8502)?.frame = CGRect(
-            x: bounds.width - 0.5, y: 0, width: 0.5, height: bounds.height)
+        backdrop86.frame = bounds
         let top = contentTopInset
         let contentH = max(0, bounds.height - contentTopInset - contentBottomInset)
         // 书脊内容（64 宽居中）。
         spineContent.frame = CGRect(
             x: (bounds.width - 64) / 2, y: top, width: 64, height: contentH)
         let cx: CGFloat = 32
-        backButton.frame = CGRect(x: cx - 14, y: 0, width: 28, height: 28)
-        foldButton.frame = CGRect(x: cx - 14, y: 34, width: 28, height: 28)
-        // 播放钮/展开钮贴底（网页书脊几何 play 0.84/expand 0.905）。
-        expandButton.frame = CGRect(x: cx - 14, y: contentH - 34, width: 28, height: 28)
-        playButton.frame = CGRect(x: cx - 18, y: contentH - 82, width: 36, height: 36)
-        // 竖排标题占中段上部、计数紧随其后。
-        let titleTop: CGFloat = 74
-        let titleH = max(60, contentH - 74 - 100 - 44)
-        titleButton.frame = CGRect(x: 8, y: titleTop, width: 48, height: titleH)
-        let countH: CGFloat = 44
+        let H = contentH
+        // (86) 第 1 条：书脊改网页相对比例（BRAVAIS_SPINE_
+        // GEOMETRY 同数，基准＝内容高 H）：back top 0.024、
+        // fold 0.088、title top 0.16 高 0.38、count top
+        // 0.56 高 0.06、play top 0.84、expand top 0.905；
+        // 钮宽网页 0.6×缝宽≈38、原生触控帧 32 居中代偿
+        // （报告注明）。标题不再弹性拉满、计数不再随标题
+        // 底漂移（(85) 走样两处）。
+        backButton.frame = CGRect(x: cx - 16, y: 0.024 * H, width: 32, height: 32)
+        foldButton.frame = CGRect(x: cx - 16, y: 0.088 * H, width: 32, height: 32)
+        titleButton.frame = CGRect(
+            x: 12, y: 0.16 * H, width: 40, height: 0.38 * H)
         countLabel.frame = CGRect(
-            x: 8, y: titleTop + titleH + 6, width: 48, height: countH)
+            x: 8, y: 0.56 * H, width: 48, height: 0.06 * H)
+        // 头像：计数（止 0.62H）与播放（起 0.84H）之间空
+        // 段居中（0.70H 起 32 圆）。
+        avatarButton.frame = CGRect(x: cx - 16, y: 0.70 * H, width: 32, height: 32)
+        avatarImageView.frame = avatarButton.bounds
+        avatarInitialLabel.frame = avatarButton.bounds
+        playButton.frame = CGRect(x: cx - 18, y: 0.84 * H, width: 36, height: 36)
+        expandButton.frame = CGRect(x: cx - 14, y: 0.905 * H, width: 28, height: 28)
         // 展开档内容（300 宽居中、左对齐排版）。
         fullContent.frame = CGRect(
             x: (bounds.width - 300) / 2, y: top, width: 300, height: contentH)
@@ -574,5 +791,10 @@ final class PlaylistSeam85View: UIView {
     @objc private func expandTapped() {
         Breadcrumbs.log("sidebar85 tap dest=\(expanded ? "spine" : "expand")")
         onExpandChange?(!expanded)
+    }
+
+    @objc private func avatarTapped() {
+        Breadcrumbs.log("sidebar85 tap dest=avatar")
+        onAvatar?()
     }
 }
