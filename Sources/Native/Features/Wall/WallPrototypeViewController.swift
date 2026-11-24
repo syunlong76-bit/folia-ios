@@ -1036,8 +1036,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 交互名单含隐藏键也无妨：isHidden 恒压过 alpha 与命中。
     private func applyMiniBarSlots() {
         guard let prev = miniPrevButton, let next = miniNextButton else { return }
-        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 34)
-        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 34)
+        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 40)
+        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 40)
         // queue 键已迁顶部 chrome 排（(53) H 修正），不再受台面
         // 槽位显隐管辖。
     }

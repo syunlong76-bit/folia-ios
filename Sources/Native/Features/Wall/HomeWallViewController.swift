@@ -1785,8 +1785,8 @@ final class HomeWallViewController: UIViewController,
     /// 反查，不改构建期约束块。口径与曲目墙/舞台台一致。
     private func applyMiniBarSlots() {
         guard let prev = miniPrevButton, let next = miniNextButton else { return }
-        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 34)
-        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 34)
+        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 40)
+        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 40)
     }
 
     private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
