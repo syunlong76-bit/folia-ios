@@ -249,6 +249,19 @@ final class WallPrototypeViewController: UIViewController,
     private var miniTimeDuration: UILabel!
     private var miniTrackTopC: NSLayoutConstraint?
     private var miniSeekHit: UIView!
+    /// (85) 第 1 条：歌单页世界缝（PlaylistSeam85View）＋
+    /// 侧边竖标签＋开合补间（与主页缝同骨架、构成不同）。
+    private var playlistSeam85: PlaylistSeam85View?
+    private var seamEdgeTab85: SeamEdgeTab85View?
+    private var seamPlanned85 = false
+    private var seamExpanded85 = false
+    private var seamTween85: CADisplayLink?
+    private var seamTweenStart85: CFTimeInterval = 0
+    private var seamTweenFromOrigin85: CGFloat = 0
+    private var seamTweenToOrigin85: CGFloat = 0
+    private var seamTweenFromWidth85: CGFloat = 0
+    private var seamTweenToWidth85: CGFloat = 0
+    private var seamTweenOrigin85 = false
     private var miniProgressFill: UIView!
     /// 进度拖动中：心跳不覆盖填充，松手 seek 后恢复。
     private var miniSeekDragging = false
@@ -400,6 +413,7 @@ final class WallPrototypeViewController: UIViewController,
         backdrop = backdropView
 
         installPlaylistSeamToolbar()
+        installPlaylistSeam85()
 
         // (76) ④左缘滑动返回（与 ⑧ 摘 ✕ 互为前提、同批落
         // 地）：落点 = closeTapped 既有契约（背板在场时
@@ -947,11 +961,12 @@ final class WallPrototypeViewController: UIViewController,
 
             miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
             miniTimeElapsed.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            miniTimeElapsed.widthAnchor.constraint(equalToConstant: 34),
+            // (85) 审计四(b)：时间定宽 34→40（同主页墙）。
+            miniTimeElapsed.widthAnchor.constraint(equalToConstant: 40),
 
             miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             miniTimeDuration.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            miniTimeDuration.widthAnchor.constraint(equalToConstant: 34),
+            miniTimeDuration.widthAnchor.constraint(equalToConstant: 40),
 
             // (82) 第 7 条：seek 命中带改锚进度行。
             miniSeekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
@@ -1794,6 +1809,10 @@ final class WallPrototypeViewController: UIViewController,
         // 点按识别器组随形态启停（3.7 (61) 第 7 条）：收起态
         // 只认无链单击即时展开，展开态才挂双击判定链。
         syncMiniBarTapRecognizers(collapsed: collapsed)
+        // (85) 第 3 条（审计四(a)，同主页墙）：收起态 seek
+        // 命中带禁交互，堵其截走细条中央带展开点按的盲区。
+        miniSeekHit.isUserInteractionEnabled = !collapsed
+        Breadcrumbs.log("seek85 host=wall hit=\(collapsed ? 0 : 1)")
         // (63) 第 2 条形态面包屑（与主页墙同构）：标志/几何
         // 高/三识别器启停位同行落盘，供失同步判读。
         Breadcrumbs.log("minibar.form host=wallproto collapsed=\(collapsed ? 1 : 0)"
@@ -1836,6 +1855,170 @@ final class WallPrototypeViewController: UIViewController,
                                     miniConsoleButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
+        }
+    }
+
+    // MARK: 世界缝（(85) 第 1 条，歌单页）
+
+    /// 歌单页缝装配：书脊构成＝返回/折叠/竖排歌单名/竖排
+    /// 计数/播放/展开（网页 BravaisSeamCollection 同骨
+    /// 架）；展开档宽 300（完整条）。z 序：装配点在点播
+    /// 台之前，台建成后自然在缝之上（底部中央与缝内容底
+    /// 内边距已避台）。
+    private func installPlaylistSeam85() {
+        guard playlistSeam85 == nil else { return }
+        let seam = PlaylistSeam85View()
+        seam.isHidden = true
+        view.addSubview(seam)
+        seam.setPlaylist85(title: playlistTitle ?? "", count: entries.count)
+        seam.onBack = { [weak self] in self?.closeTapped() }
+        seam.onFold = { [weak self] in self?.foldPlaylistSeam85() }
+        seam.onPlayAll = { [weak self] in
+            guard let self, !self.entries.isEmpty else { return }
+            self.startQueueAt(queueIndex: 0)
+        }
+        seam.onAppendQueue = { [weak self] in self?.appendPlaylistToQueue85() }
+        seam.onExpandChange = { [weak self] expanded in
+            self?.setPlaylistSeamExpanded85(expanded)
+        }
+        playlistSeam85 = seam
+        let tab = SeamEdgeTab85View()
+        tab.isHidden = true
+        view.addSubview(tab)
+        tab.onTap = { [weak self] in self?.reopenPlaylistSeam85() }
+        seamEdgeTab85 = tab
+        wallLayout.seamEnabled85 = true
+        Breadcrumbs.log("seam85 on host=wall hidden=\(SeamState85.levelHidden ? 1 : 0)")
+    }
+
+    /// 展开档切换：开口目标 64↔300 补间（0.36s），内容
+    /// 套随之换（书脊/完整条）；相机让位按新开口重规划
+    /// （preferX 保锚、只让相机）。
+    private func setPlaylistSeamExpanded85(_ expanded: Bool) {
+        seamExpanded85 = expanded
+        playlistSeam85?.setExpanded85(expanded)
+        let target: CGFloat = expanded ? 300 : 64
+        var originX: CGFloat?
+        if let anchor = wallLayout.seamAnchorX85 {
+            originX = wallLayout.seamPlan85(openWidth: target, preferX: anchor).originX
+        }
+        startSeamTween85(toWidth: target, toOriginX: originX)
+        Breadcrumbs.log("seam85 expand host=wall on=\(expanded ? 1 : 0)")
+    }
+
+    /// 加入队列：已加载曲目整单追加（QueueManager
+    /// .appendToQueue）；未加载时给可见反馈。
+    private func appendPlaylistToQueue85() {
+        guard !nativeTracks.isEmpty else {
+            NativePlaybackFailureToast.show(message: "歌单还没加载完")
+            return
+        }
+        QueueManager.shared.appendToQueue(nativeTracks.map { foliaTrack(for: $0) })
+        NativePlaybackFailureToast.show(message: "已加入队列（\(nativeTracks.count) 首）")
+        Breadcrumbs.log("seam85 append host=wall n=\(nativeTracks.count)")
+    }
+
+    private func planPlaylistSeam85IfNeeded() {
+        guard !seamPlanned85, didCenterCamera, playlistSeam85 != nil else { return }
+        seamPlanned85 = true
+        if SeamState85.levelHidden {
+            wallLayout.seamOpenWidth85 = 0
+            updatePlaylistSeam85Frame()
+            return
+        }
+        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        wallLayout.seamAnchorX85 = plan.anchor
+        wallLayout.worldOrigin.x = plan.originX
+        wallLayout.seamOpenWidth85 = 64
+        _ = wallLayout.refreshInstances()
+        collectionView.reloadData()
+        updatePlaylistSeam85Frame()
+        Breadcrumbs.log("seam85 plan host=wall anchor=\(Int(plan.anchor))")
+    }
+
+    private func foldPlaylistSeam85() {
+        SeamState85.levelHidden = true
+        if seamExpanded85 {
+            seamExpanded85 = false
+            playlistSeam85?.setExpanded85(false)
+        }
+        startSeamTween85(toWidth: 0, toOriginX: nil)
+        Breadcrumbs.log("seam85 fold host=wall")
+    }
+
+    private func reopenPlaylistSeam85() {
+        SeamState85.levelHidden = false
+        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        wallLayout.seamAnchorX85 = plan.anchor
+        seamPlanned85 = true
+        startSeamTween85(toWidth: 64, toOriginX: plan.originX)
+        Breadcrumbs.log("seam85 reopen host=wall anchor=\(Int(plan.anchor))")
+    }
+
+    /// 缝开合补间（与主页缝同式：CADisplayLink、开口
+    /// 0.36s/相机 0.42s、easeInOut，逐帧走帧重建路径）。
+    private func startSeamTween85(toWidth: CGFloat, toOriginX: CGFloat?) {
+        seamTween85?.invalidate()
+        seamTweenStart85 = CACurrentMediaTime()
+        seamTweenFromWidth85 = wallLayout.seamOpenWidth85
+        seamTweenToWidth85 = toWidth
+        seamTweenFromOrigin85 = wallLayout.worldOrigin.x
+        seamTweenToOrigin85 = toOriginX ?? wallLayout.worldOrigin.x
+        seamTweenOrigin85 = toOriginX != nil
+        let link = CADisplayLink(target: self, selector: #selector(seamTweenStep85(_:)))
+        link.add(to: .main, forMode: .common)
+        seamTween85 = link
+    }
+
+    @objc private func seamTweenStep85(_ link: CADisplayLink) {
+        let duration = seamTweenOrigin85 ? 0.42 : 0.36
+        let t = min(1, (CACurrentMediaTime() - seamTweenStart85) / duration)
+        let e = t * t * (3 - 2 * t)
+        wallLayout.seamOpenWidth85 = seamTweenFromWidth85
+            + (seamTweenToWidth85 - seamTweenFromWidth85) * CGFloat(e)
+        if seamTweenOrigin85 {
+            wallLayout.worldOrigin.x = seamTweenFromOrigin85
+                + (seamTweenToOrigin85 - seamTweenFromOrigin85) * CGFloat(e)
+        }
+        _ = wallLayout.refreshInstances()
+        wallLayout.invalidateLayout()
+        updatePlaylistSeam85Frame()
+        if t >= 1 {
+            link.invalidate()
+            if seamTween85 === link { seamTween85 = nil }
+        }
+    }
+
+    /// 缝帧逐帧收口（滚动/布局/补间/数据共用）。
+    private func updatePlaylistSeam85Frame() {
+        guard let seam = playlistSeam85 else { return }
+        planPlaylistSeam85IfNeeded()
+        let geo = wallLayout.seamGeometry85()
+        let hidden = SeamState85.levelHidden
+        if hidden || geo.width < 1 {
+            seam.isHidden = true
+        } else {
+            seam.isHidden = false
+            seam.frame = CGRect(
+                x: geo.screenX - geo.width / 2, y: 0,
+                width: geo.width, height: view.bounds.height)
+            seam.contentTopInset = view.safeAreaInsets.top + 56
+            seam.contentBottomInset = view.safeAreaInsets.bottom + 116
+            seam.contentOpacity = SeamState85.contentOpacity(
+                rendered: geo.width, content: seamExpanded85 ? 300 : 64)
+        }
+        guard let tab = seamEdgeTab85 else { return }
+        // 首规划未成（数据未到）前不显侧边标签，免加载
+        // 期边缘闪现（同主页缝）。
+        if seamPlanned85, hidden || geo.collapsed {
+            tab.isHidden = false
+            let tabW: CGFloat = 20, tabH: CGFloat = 96
+            tab.frame = CGRect(
+                x: geo.side < 0 ? 0 : view.bounds.width - tabW,
+                y: view.bounds.height * 0.42,
+                width: tabW, height: tabH)
+        } else {
+            tab.isHidden = true
         }
     }
 
@@ -1983,11 +2166,16 @@ final class WallPrototypeViewController: UIViewController,
         }
     }
 
-    private func locateCurrentTrack() {
+    private func locateCurrentTrack(via: String = "cover") {
+        // (85) 第 2 条：定位全程落 locate85（via/result）；
+        // via=avatar 为工具条/缝头像点按（Miller 定版口
+        // 径），其余入口（封面区/呈现后消费）沿用 cover。
+        Breadcrumbs.log("locate85 via=\(via) host=wall")
         locateGeneration += 1
         guard let current = PlaybackEngine.shared.currentTrack else {
             // (81) 第 2 条：无在播曲目不静默，给可见反馈。
             Breadcrumbs.log("locate miss81 fb=none")
+            Breadcrumbs.log("locate85 result=none host=wall")
             NativePlaybackFailureToast.show(message: "现在没有正在播放的歌曲")
             return
         }
@@ -2008,6 +2196,7 @@ final class WallPrototypeViewController: UIViewController,
             // 口径直达其呈现：打开当前曲的舞台详情页（本
             // 宿主既有开台路径，与双击同路）。
             Breadcrumbs.log("locate miss81 fb=stage target=\(currentId)")
+            Breadcrumbs.log("locate85 result=miss host=wall")
             Breadcrumbs.logSync("tap.dispatch host=wallproto via=cover81")
             openNativeStageFromWall()
             return
@@ -2017,10 +2206,17 @@ final class WallPrototypeViewController: UIViewController,
         let viewWorldH = Double(collectionView.bounds.height) / scale
         let centerX = Double(wallLayout.worldOrigin.x) + viewWorldW / 2
         let centerY = Double(wallLayout.worldOrigin.y) + viewWorldH / 2
+        // (85) 审计三死点：locateNearestInstance 返回 nil
+        // 不许静默 return——落 locate85 fail（旧版在此无
+        // 声退出、「locate start」之后再无下文无法判读）。
         guard let target = WallGeometry.locateNearestInstance(
             geometry: wallLayout.geometry, totalEntries: wallLayout.totalEntries,
             queueIndex: queueIndex, pointX: centerX, pointY: centerY,
-            metrics: wallLayout.metrics) else { return }
+            metrics: wallLayout.metrics) else {
+            Breadcrumbs.log("locate85 fail why=nilinst host=wall")
+            NativePlaybackFailureToast.show(message: "定位失败：找不到这首歌的位置")
+            return
+        }
         if wallLayout.expandedInstanceId != nil {
             wallLayout.expandedInstanceId = nil
             wallLayout.refreshInstances()
@@ -2075,6 +2271,7 @@ final class WallPrototypeViewController: UIViewController,
         }
         if gotId == targetId {
             Breadcrumbs.log("locate ok target=\(targetId) queueIndex=\(targetIndex)")
+            Breadcrumbs.log("locate85 result=ok host=wall")
             return
         }
         let gotTitle = expanded.flatMap {
@@ -2139,7 +2336,11 @@ final class WallPrototypeViewController: UIViewController,
         guard let target = WallGeometry.locateNearestInstance(
             geometry: wallLayout.geometry, totalEntries: wallLayout.totalEntries,
             queueIndex: targetIndex, pointX: centerX, pointY: centerY,
-            metrics: wallLayout.metrics) else { return }
+            metrics: wallLayout.metrics) else {
+            // (85) 审计三死点：重飞路同一静默点补落痕。
+            Breadcrumbs.log("locate85 fail why=nilinst host=wall src=frozen")
+            return
+        }
         if wallLayout.expandedInstanceId != nil {
             wallLayout.expandedInstanceId = nil
             wallLayout.refreshInstances()
@@ -2460,9 +2661,12 @@ final class WallPrototypeViewController: UIViewController,
             guard let self else { return }
             SeamToolbarForwarding.forward("segment-\(segment.crumbName)", from: self)
         }
+        // (85) 第 2 条：歌单墙工具条头像改绑定位（本墙内
+        // 真相机移动，Miller 定版口径；盖过账户卡转发）。
+        // 账户卡改由设置页账户组进入。
         toolbar.onAvatarTapped = { [weak self] in
             guard let self else { return }
-            SeamToolbarForwarding.performInPlace("avatar", from: self, toolbar: toolbar)
+            self.locateCurrentTrack(via: "avatar")
         }
         toolbar.onSearchTapped = { [weak self] in
             guard let self else { return }
@@ -2585,6 +2789,11 @@ final class WallPrototypeViewController: UIViewController,
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.centerCameraIfNeeded()
+                    // (85) 第 1 条：缝计数随种子落地回填（总
+                    // 数以 detail.trackCount 为准、与墙面计数
+                    // 同源）。
+                    self.playlistSeam85?.setPlaylist85(
+                        title: self.playlistTitle ?? "", count: total)
                     // 丝滑切入收口：唤醒等数据的 present、氛围底退场、
                     // 首屏波次从此刻起算。
                     self.loadAttempts = 0
@@ -2710,6 +2919,8 @@ final class WallPrototypeViewController: UIViewController,
         super.viewDidLayoutSubviews()
         centerCameraIfNeeded()
         updateLyricOverlayFrame()
+        // (85) 第 1 条：缝首规划（相机居中后）＋逐布局落位。
+        updatePlaylistSeam85Frame()
         // 迷你台宽度按竖屏定版（3.7 (21)）：min(宽,高) 即竖屏
         // 布局宽（横屏时宽高互换），减两侧各 12 边距；横竖屏
         // 同一宽度、居中，横屏左右留白。
@@ -2775,6 +2986,8 @@ final class WallPrototypeViewController: UIViewController,
                             source: "scroll")
         }
         updateLyricOverlayFrame()
+        // (85) 第 1 条：缝随相机同帧落位。
+        updatePlaylistSeam85Frame()
     }
 
     /// (83) 黑屏定案②③：方向预取／入墙预热共用（与主页
@@ -3862,6 +4075,13 @@ final class WallPosterCell: UICollectionViewCell {
     static let reuseId = "WallPosterCell"
 
     private let shadowView = UIView()
+    /// (85) 审计二选项 B：封面容器层——layoutSubviews 只
+    /// 布容器 frame（容器恒 identity），imageView 的 frame
+    /// 只在容器尺寸变化时设一次，关灯放大 transform 挂
+    /// imageView 本体，从此布局不再吃掉放大（(83) 的
+    /// applyLightFocusZoom83 写在 imageView 上、被每拍
+    /// layoutSubviews 的满幅 frame 重设覆盖，只亮不大）。
+    private let coverContainer85 = UIView()
     private let imageView = UIImageView()
     /// (82) 第 9 条：灯光压暗层（盖封面、不盖标题——关灯时
     /// 砖暗而字仍可读）；alpha 由 WallLight82 按墙名＋条目
@@ -3944,7 +4164,9 @@ final class WallPosterCell: UICollectionViewCell {
         imageView.layer.cornerRadius = 8
         // 未出图占位用深灰而非近黑：拖动中未加载的卡读作灰砖，不读作黑洞。
         imageView.backgroundColor = UIColor(white: 0.13, alpha: 1)
-        shadowView.addSubview(imageView)
+        coverContainer85.isUserInteractionEnabled = false
+        shadowView.addSubview(coverContainer85)
+        coverContainer85.addSubview(imageView)
 
         // (82) 第 9 条：压暗层紧贴封面之上、标题之下。
         lightDimView82.backgroundColor = .black
@@ -4240,7 +4462,18 @@ final class WallPosterCell: UICollectionViewCell {
         shadowView.frame = contentView.bounds
         shadowView.layer.shadowPath = UIBezierPath(
             roundedRect: contentView.bounds, cornerRadius: 8).cgPath
-        imageView.frame = shadowView.bounds
+        // (85) 审计二选项 B：容器 frame 每拍可设（恒
+        // identity、无 transform 可吃）；imageView frame
+        // 只在尺寸真变化时设——且若正处放大态，先摘
+        // transform 设帧再原样挂回（对带 transform 视图设
+        // frame 行为未定义，必须绕开）。
+        coverContainer85.frame = shadowView.bounds
+        if imageView.frame.size != coverContainer85.bounds.size {
+            let zoom = imageView.transform
+            imageView.transform = .identity
+            imageView.frame = coverContainer85.bounds
+            imageView.transform = zoom
+        }
         lightDimView82.frame = shadowView.bounds
         let bounds = shadowView.bounds
         // (66) 歌单卡片样式消费（playlistCardStyle62）：纯图
@@ -4459,8 +4692,10 @@ final class WallPosterCell: UICollectionViewCell {
         guard focused != lightZoomed83 else { return }
         lightZoomed83 = focused
         layer.zPosition = focused ? 10 : 0
+        // (85) 审计二：倍率 1.1→1.15（与点按展开同量级
+        // 感；容器层已根除 frame/transform 之争，见类头）。
         let target: CGAffineTransform = focused
-            ? CGAffineTransform(scaleX: 1.1, y: 1.1) : .identity
+            ? CGAffineTransform(scaleX: 1.15, y: 1.15) : .identity
         if animated {
             UIView.animate(withDuration: 0.45, delay: 0,
                            usingSpringWithDamping: 0.86,
@@ -4472,18 +4707,34 @@ final class WallPosterCell: UICollectionViewCell {
         } else {
             imageView.transform = target
         }
+        // (85) light85 存活见证：落定后 0.6s 读 transform
+        // 实际值——仍为目标 scale＝放大存活；被布局吃掉
+        // 则 sx 回 1.00。下轮日志直接判这条生死。
+        if focused {
+            let wall = lightWall82
+            let entryId = lightEntryId82 ?? "-"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+                guard let self, self.lightZoomed83 else { return }
+                let sx = self.imageView.transform.a
+                Breadcrumbs.log("light85 zoom wall=\(wall) id=\(entryId)"
+                    + " sx=\(String(format: "%.2f", sx))"
+                    + " alive=\(abs(sx - 1.15) < 0.01 ? 1 : 0)")
+            }
+        }
     }
 
     /// (82) 第 9 条：开灯波浪点亮本砖时的闪光＋星尘（宿主
     /// 按对角波次逐砖调用）：白色闪光层一闪而过＋8 颗暖色
     /// 像素粒子自砖面迸出上漂。
     func playLightFlash82() {
-        let flash = UIView(frame: imageView.bounds)
+        // (85) 容器层后：闪光层改插容器之上（imageView 已
+        // 非 shadowView 直子，aboveSubview 须同级）。
+        let flash = UIView(frame: coverContainer85.frame)
         flash.backgroundColor = .white
         flash.layer.cornerRadius = 8
         flash.alpha = 0.55
         flash.isUserInteractionEnabled = false
-        shadowView.insertSubview(flash, aboveSubview: imageView)
+        shadowView.insertSubview(flash, aboveSubview: coverContainer85)
         UIView.animate(withDuration: 0.5, delay: 0, options: [.curveEaseOut]) {
             flash.alpha = 0
         } completion: { _ in flash.removeFromSuperview() }

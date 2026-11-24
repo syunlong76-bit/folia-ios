@@ -69,6 +69,87 @@ final class WallLayout: UICollectionViewLayout {
     /// 当前展开的实例 id（nil = 无展开）。
     var expandedInstanceId: String?
 
+    // MARK: - 世界缝（(85) 第 1 条，网页 seamPlan/bravaisFrame 同式）
+    //
+    /// 缝锚：块边界中线的世界 x（块宽 12×pitch、界线在块左
+    /// 缘前半个 gap 处，见 seamBoundaryX85）；nil = 本墙无缝。
+    /// 缝是世界的一部分：平移时随相机同速移动，实例帧在
+    /// rebuildAttributes 里按锚分左右两半各自让开（砖尺寸
+    /// 不变），与网页 getSeamSplitOffsets 同式。
+    var seamAnchorX85: Double?
+    /// 缝的目标开口（屏幕 pt）：主页/歌单书脊 64、歌单展
+    /// 开档 300；宿主开合时逐帧补间写本值（0.36s 量级），
+    /// 渲染宽由 seamGeometry85 按近边规则收窄（与网页
+    /// getSeamGeometry 同式：room = 离近边距离 − 14 边距，
+    /// 渲染宽 = min(目标开口, room×2)，出界即 0＝关闭）。
+    var seamOpenWidth85: CGFloat = 0
+    /// 缝总开关（宿主装配后置 true；有限队列墙恒 false）。
+    var seamEnabled85 = false
+
+    /// 块边界中线（网页 getSeamBoundaryX：index×块宽 −
+    /// gap/2；块宽 = 12 列 × pitch）。
+    static func seamBoundaryX85(column: Int, pitch: Double, gap: Double) -> Double {
+        Double(column) * 12 * pitch - gap / 2
+    }
+
+    /// 缝的当前渲染几何（屏幕 pt）：screenX = 缝中线屏幕
+    /// 位、width = 近边收窄后的实际开口、collapsed = 本应
+    /// 开着却被挤没（宿主据此出侧边竖标签）、side = 缝中
+    /// 线在视口中线哪侧（−1 左 / +1 右，标签贴边用）。
+    func seamGeometry85() -> (screenX: CGFloat, width: CGFloat, collapsed: Bool, side: Int) {
+        guard seamEnabled85, let anchor = seamAnchorX85,
+              let collectionView, cameraScale > 0 else {
+            return (0, 0, false, -1)
+        }
+        let extent = collectionView.bounds.width
+        guard extent > 0 else { return (0, 0, false, -1) }
+        let screenX = CGFloat(anchor - Double(worldOrigin.x)) * CGFloat(cameraScale)
+        let room = min(screenX, extent - screenX) - 14
+        let width = max(0, min(seamOpenWidth85, room * 2))
+        return (screenX, width,
+                seamOpenWidth85 > 1 && width < 2,
+                screenX < extent / 2 ? -1 : 1)
+    }
+
+    /// 开缝规划（网页 blockSeamPlan/planOnAxis 同式）：在
+    /// 当前相机附近的三个块边界里选「相机让位最小＋离视
+    /// 口中线近」的一条，返回锚与让位后的目标 worldOrigin.x
+    /// （相机只让到整条缝恰好入屏、距边 ≥14）。preferX 给
+    /// 定时只用该界（仅相机让位）。
+    func seamPlan85(openWidth: CGFloat, preferX: Double?)
+        -> (anchor: Double, originX: CGFloat) {
+        let pitch = metrics.pitch
+        let gap = metrics.gap
+        let blockSpan = 12 * pitch
+        let extent = Double(collectionView?.bounds.width ?? 0)
+        let scale = max(cameraScale, 0.01)
+        let line = extent / 2
+        let camera = Double(worldOrigin.x) + line / scale
+        let base = Int(((camera + gap / 2) / blockSpan).rounded())
+        let candidates: [Double]
+        if let preferX {
+            candidates = [preferX]
+        } else {
+            candidates = [base - 1, base, base + 1].map {
+                Self.seamBoundaryX85(column: $0, pitch: pitch, gap: gap)
+            }
+        }
+        let need = Double(openWidth) / 2 + 14
+        var best: (at: Double, camera: Double, score: Double)?
+        for at in candidates {
+            let screen = line + (at - camera) * scale
+            let fit = max(need, min(extent - need, screen))
+            let nextCamera = at - (fit - line) / scale
+            let shift = abs(nextCamera - camera) * scale
+            let score = shift + abs(fit - line) * 0.15
+            if best == nil || score < best!.score {
+                best = (at, nextCamera, score)
+            }
+        }
+        guard let best else { return (camera, worldOrigin.x) }
+        return (best.at, CGFloat(best.camera - line / scale))
+    }
+
     /// 有限队列模式（3.7 (71) Lattice 队列拼贴，port-spec 第一节）：
     /// true 时实例集走有限有序网格——内容 i → 行主序第 i 格
     /// （128 方块、pitch 136），一曲一实例、无周期拷贝，窗口集
@@ -344,11 +425,28 @@ final class WallLayout: UICollectionViewLayout {
     private func rebuildAttributes() {
         guard let collectionView else { attributesCache = []; return }
         let offset = collectionView.contentOffset
+        // (85) 第 1 条：缝分裂偏移（网页 getSeamSplitOffsets
+        // 同式）——渲染开口 width、pad = (gap/2)×scale×
+        // min(1, width/16)；实例按其渲染矩形中心在锚左/右
+        // 各让 ∓(width/2+pad) 屏幕 pt。只动帧、不动实例集
+        // 与世界坐标（定位/预取等世界逻辑零感知）；开口为
+        // 0（出界/折叠）时偏移恒 0、两半自动合拢。
+        let seam85 = seamGeometry85()
+        let seamPad85 = seam85.width > 0
+            ? CGFloat(metrics.gap / 2) * CGFloat(cameraScale)
+                * min(1, seam85.width / 16) : 0
+        let seamLeft85 = -seam85.width / 2 - seamPad85
+        let seamRight85 = seam85.width / 2 + seamPad85
         attributesCache = instances.enumerated().map { index, instance in
             let rect = expandedRects[instance.instanceId] ?? instance.rect
+            var frameX = (rect.x - Double(worldOrigin.x)) * cameraScale + Double(offset.x)
+            if seam85.width > 0, let anchor = seamAnchorX85 {
+                frameX += Double(rect.x + rect.width / 2 < anchor
+                    ? seamLeft85 : seamRight85)
+            }
             let attrs = UICollectionViewLayoutAttributes(forCellWith: IndexPath(item: index, section: 0))
             attrs.frame = CGRect(
-                x: (rect.x - Double(worldOrigin.x)) * cameraScale + Double(offset.x),
+                x: frameX,
                 y: (rect.y - Double(worldOrigin.y)) * cameraScale + Double(offset.y),
                 width: rect.width * cameraScale,
                 height: rect.height * cameraScale

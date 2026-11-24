@@ -1,6 +1,13 @@
 import UIKit
 import Combine
 
+/// (85) 第 7 条改版（Miller 22:44 定）：(82) 的 55% 高底
+/// 部 sheet 改为紧凑悬浮毛玻璃卡——宽 82% 屏宽、高按内
+/// 容（≤62% 屏高）、大圆角、居中浮在墙面上、点卡外关
+/// 闭、入场弹簧缩放淡入；面板内每个可点元素带点击特效
+/// （系统弹簧缩放回弹＋闪光环＋像素方点，v2 定版语言克
+/// 制版），逐元素落 console85。
+///
 /// (82) 第 8 条：控制台面板（G3 紧凑版定版，Miller 18:15
 /// 新口径＋18:20 去文字＋18:53 v2 收紧凑）——台面让出的全
 /// 部功能收进一只底部升起的大圆角毛玻璃 sheet（高约 55%
@@ -38,6 +45,10 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
     private let segSolid = UIButton(type: .system)
     private let focusSwitch = UISwitch()
     private let lightSwitch = LightSwitch82()
+    /// (85) 第 7 条：悬浮卡本体与高度约束（高度在布局时
+    /// 按 min(内容高, 62% 屏高) 收口）。
+    private let card85 = UIView()
+    private var cardHeight85: NSLayoutConstraint?
 
     static func present(from host: UIViewController) {
         let panel = ConsolePanel82()
@@ -47,37 +58,57 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         if let home = host as? HomeWallViewController {
             panel.onSketchbook = { [weak home] in home?.toggleSketchbook82() }
         }
-        panel.modalPresentationStyle = .pageSheet
-        if let sheet = panel.sheetPresentationController {
-            sheet.detents = [.custom { context in
-                context.maximumDetentValue * 0.55
-            }]
-            sheet.prefersGrabberVisible = true
-            sheet.preferredCornerRadius = 28
-        }
+        // (85) 第 7 条：全屏覆盖＋交叉淡入，卡本体再走自
+        // 有弹簧缩放入场（viewDidAppear）；盖过 (82) 的
+        // pageSheet 55% detent。
+        panel.modalPresentationStyle = .overFullScreen
+        panel.modalTransitionStyle = .crossDissolve
         Breadcrumbs.log("console82 present host=\(type(of: host))")
+        Breadcrumbs.log("console85 present form=card")
         host.present(panel, animated: true)
     }
 
     override func viewDidLoad() {
         super.viewDidLoad()
-        view.backgroundColor = .clear
+        // (85) 第 7 条：根视图＝压暗层（点卡外关闭）；卡
+        // 居中悬浮（宽 82% 屏宽、高 ≤62% 屏高、大圆角、
+        // 毛玻璃＋描边）。
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        let dimTap = UITapGestureRecognizer(target: self, action: #selector(dimTapped85(_:)))
+        view.addGestureRecognizer(dimTap)
+        card85.backgroundColor = .clear
+        card85.layer.cornerRadius = 28
+        card85.layer.borderWidth = 1
+        card85.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        card85.clipsToBounds = true
+        card85.translatesAutoresizingMaskIntoConstraints = false
+        card85.alpha = 0
+        card85.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
+            .translatedBy(x: 0, y: 10)
+        view.addSubview(card85)
+        cardHeight85 = card85.heightAnchor.constraint(equalToConstant: 424)
+        NSLayoutConstraint.activate([
+            card85.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            card85.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            card85.widthAnchor.constraint(equalTo: view.widthAnchor, multiplier: 0.82),
+            cardHeight85!,
+        ])
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(blur)
+        card85.addSubview(blur)
         let tint = UIView()
         tint.backgroundColor = UIColor.black.withAlphaComponent(0.25)
         tint.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(tint)
+        card85.addSubview(tint)
         NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            blur.topAnchor.constraint(equalTo: view.topAnchor),
-            blur.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            tint.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tint.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tint.topAnchor.constraint(equalTo: view.topAnchor),
-            tint.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            blur.leadingAnchor.constraint(equalTo: card85.leadingAnchor),
+            blur.trailingAnchor.constraint(equalTo: card85.trailingAnchor),
+            blur.topAnchor.constraint(equalTo: card85.topAnchor),
+            blur.bottomAnchor.constraint(equalTo: card85.bottomAnchor),
+            tint.leadingAnchor.constraint(equalTo: card85.leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: card85.trailingAnchor),
+            tint.topAnchor.constraint(equalTo: card85.topAnchor),
+            tint.bottomAnchor.constraint(equalTo: card85.bottomAnchor),
         ])
 
         // 队列头行：仅右上清空钮（G2 去字口径，无标题）。
@@ -87,7 +118,7 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         clearButton.accessibilityLabel = "清空队列"
         clearButton.translatesAutoresizingMaskIntoConstraints = false
         clearButton.addTarget(self, action: #selector(clearQueueTapped), for: .touchUpInside)
-        view.addSubview(clearButton)
+        card85.addSubview(clearButton)
 
         queueTable.dataSource = self
         queueTable.delegate = self
@@ -97,7 +128,7 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         queueTable.showsVerticalScrollIndicator = false
         queueTable.register(UITableViewCell.self, forCellReuseIdentifier: "q82")
         queueTable.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(queueTable)
+        card85.addSubview(queueTable)
         // 底部渐隐（露约 3.5 行后淡出，示意可滚动）。
         let fade = CAGradientLayer()
         fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor,
@@ -122,32 +153,35 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         functionRow.axis = .horizontal
         functionRow.distribution = .equalSpacing
         functionRow.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(functionRow)
+        card85.addSubview(functionRow)
 
         // 音量行。
         let speaker = UIImageView(image: DeckGlyph82.image(.speaker, pointSize: 16))
         speaker.tintColor = UIColor.white.withAlphaComponent(0.8)
         speaker.contentMode = .center
         speaker.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(speaker)
+        card85.addSubview(speaker)
         volumeSlider.minimumTrackTintColor = .white
         volumeSlider.maximumTrackTintColor = UIColor.white.withAlphaComponent(0.25)
         volumeSlider.value = PlaybackEngine.shared.volume
         volumeSlider.translatesAutoresizingMaskIntoConstraints = false
         volumeSlider.addTarget(self, action: #selector(volumeChanged), for: .valueChanged)
-        view.addSubview(volumeSlider)
+        // (85) 第 7 条：滑杆点按特效只走闪光环（不缩放，
+        // 免拖动中拇指抖动），按下即落 console85。
+        volumeSlider.addTarget(self, action: #selector(volumeTouched85), for: .touchDown)
+        card85.addSubview(volumeSlider)
 
         // 外观行：layers 图标＋透光/实色图形分段＋聚焦开关。
         let layers = UIImageView(image: DeckGlyph82.image(.layers, pointSize: 16))
         layers.tintColor = UIColor.white.withAlphaComponent(0.8)
         layers.contentMode = .center
         layers.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(layers)
+        card85.addSubview(layers)
         let segContainer = UIView()
         segContainer.backgroundColor = UIColor.white.withAlphaComponent(0.12)
         segContainer.layer.cornerRadius = 14
         segContainer.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(segContainer)
+        card85.addSubview(segContainer)
         for (button, translucent) in [(segTranslucent, true), (segSolid, false)] {
             button.translatesAutoresizingMaskIntoConstraints = false
             button.layer.cornerRadius = 11
@@ -162,16 +196,17 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         focusSwitch.translatesAutoresizingMaskIntoConstraints = false
         focusSwitch.accessibilityLabel = "海报聚焦叠色"
         focusSwitch.addTarget(self, action: #selector(focusSwitchChanged), for: .valueChanged)
-        view.addSubview(focusSwitch)
+        card85.addSubview(focusSwitch)
 
         // 底部行：灯钮＋帮助钮。
         lightSwitch.translatesAutoresizingMaskIntoConstraints = false
         lightSwitch.setOn(WallLight82.isOn, animated: false)
         lightSwitch.onToggle = { on in
             DeckTap82.log(host: "console", zone: "light", view: self.lightSwitch)
+            ConsoleFX85.tap(self.lightSwitch, el: "light")
             WallLight82.setOn(on, source: "console")
         }
-        view.addSubview(lightSwitch)
+        card85.addSubview(lightSwitch)
         let helpButton = UIButton(type: .system)
         helpButton.setImage(DeckGlyph82.image(.help, pointSize: 17), for: .normal)
         helpButton.tintColor = .white
@@ -180,34 +215,36 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         helpButton.accessibilityLabel = "帮助"
         helpButton.translatesAutoresizingMaskIntoConstraints = false
         helpButton.addTarget(self, action: #selector(helpTapped), for: .touchUpInside)
-        view.addSubview(helpButton)
+        card85.addSubview(helpButton)
 
+        // (85) 第 7 条：内容约束整体改锚卡内边（原锚根视
+        // 图边）；卡内布局数值与 (82) 一致、功能不丢。
         NSLayoutConstraint.activate([
-            clearButton.topAnchor.constraint(equalTo: view.topAnchor, constant: 16),
-            clearButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            clearButton.topAnchor.constraint(equalTo: card85.topAnchor, constant: 16),
+            clearButton.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -16),
             clearButton.widthAnchor.constraint(equalToConstant: 32),
             clearButton.heightAnchor.constraint(equalToConstant: 28),
 
             queueTable.topAnchor.constraint(equalTo: clearButton.bottomAnchor, constant: 2),
-            queueTable.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            queueTable.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            queueTable.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 12),
+            queueTable.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -12),
             queueTable.heightAnchor.constraint(equalToConstant: 150),
 
             functionRow.topAnchor.constraint(equalTo: queueTable.bottomAnchor, constant: 12),
-            functionRow.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
-            functionRow.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            functionRow.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 24),
+            functionRow.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
             functionRow.heightAnchor.constraint(equalToConstant: 44),
 
             speaker.topAnchor.constraint(equalTo: functionRow.bottomAnchor, constant: 14),
-            speaker.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            speaker.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 24),
             speaker.widthAnchor.constraint(equalToConstant: 24),
             speaker.heightAnchor.constraint(equalToConstant: 24),
             volumeSlider.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
             volumeSlider.leadingAnchor.constraint(equalTo: speaker.trailingAnchor, constant: 10),
-            volumeSlider.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            volumeSlider.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
 
             layers.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 16),
-            layers.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            layers.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 24),
             layers.widthAnchor.constraint(equalToConstant: 24),
             layers.heightAnchor.constraint(equalToConstant: 24),
             segContainer.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
@@ -223,12 +260,12 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
             segSolid.widthAnchor.constraint(equalToConstant: 34),
             segSolid.heightAnchor.constraint(equalToConstant: 22),
             focusSwitch.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
-            focusSwitch.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            focusSwitch.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
 
             lightSwitch.topAnchor.constraint(equalTo: layers.bottomAnchor, constant: 18),
-            lightSwitch.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 24),
+            lightSwitch.leadingAnchor.constraint(equalTo: card85.leadingAnchor, constant: 24),
             helpButton.centerYAnchor.constraint(equalTo: lightSwitch.centerYAnchor),
-            helpButton.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -24),
+            helpButton.trailingAnchor.constraint(equalTo: card85.trailingAnchor, constant: -24),
             helpButton.widthAnchor.constraint(equalToConstant: 38),
             helpButton.heightAnchor.constraint(equalToConstant: 38),
         ])
@@ -246,6 +283,35 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         if let fade = queueTable.layer.mask as? CAGradientLayer {
             fade.frame = queueTable.bounds
         }
+        // (85) 第 7 条：卡高＝内容高 424 与 62% 屏高取小
+        // （横屏矮屏不超屏）；宽度 82% 由乘数约束恒成立，
+        // 横竖屏均居中（centerX/centerY 约束）。
+        let cap = view.bounds.height * 0.62
+        let target = min(424, cap)
+        if let cardHeight85, abs(cardHeight85.constant - target) > 0.5 {
+            cardHeight85.constant = target
+        }
+    }
+
+    /// (85) 第 7 条：入场——卡弹簧缩放＋淡入（iOS 系统
+    /// 弹簧口径，禁线性）。
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        UIView.animate(withDuration: 0.5, delay: 0,
+                       usingSpringWithDamping: 0.82,
+                       initialSpringVelocity: 0.4,
+                       options: [.allowUserInteraction]) {
+            self.card85.alpha = 1
+            self.card85.transform = .identity
+        }
+    }
+
+    /// (85) 第 7 条：点卡外（压暗区）关闭。
+    @objc private func dimTapped85(_ recognizer: UITapGestureRecognizer) {
+        guard recognizer.view === view,
+              !card85.frame.contains(recognizer.location(in: view)) else { return }
+        Breadcrumbs.log("console85 tap el=outside")
+        dismiss(animated: true)
     }
 
     private func bindState() {
@@ -328,6 +394,7 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
             let action = UIAction(title: item.1) { [weak self] _ in
                 guard let self else { return }
                 DeckTap82.log(host: "console", zone: "mode", view: self.modeButton)
+                ConsoleFX85.tap(self.modeButton, el: "mode")
                 QueueManager.shared.playMode = item.0
                 Breadcrumbs.log("console82 mode=\(item.0.rawValue)")
             }
@@ -400,12 +467,14 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
 
     @objc private func clearQueueTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "qclear", view: sender)
+        ConsoleFX85.tap(sender, el: "clear")
         QueueManager.shared.clearQueue()
         Breadcrumbs.log("console82 queue clear")
     }
 
     @objc private func shuffleTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "shuffle", view: sender)
+        ConsoleFX85.tap(sender, el: "shuffle")
         let queue = QueueManager.shared
         queue.playMode = queue.playMode == .shuffle ? .off : .shuffle
         Breadcrumbs.log("console82 shuffle=\(queue.playMode == .shuffle ? 1 : 0)")
@@ -413,6 +482,7 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
 
     @objc private func effectsTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "fx", view: sender)
+        ConsoleFX85.tap(sender, el: "fx")
         if let onEffects {
             dismiss(animated: true) { onEffects() }
             return
@@ -436,13 +506,15 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
 
     @objc private func pawTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "paw", view: sender)
+        ConsoleFX85.tap(sender, el: "paw")
         let was = StickerSettings.miniPetsEnabled
         StickerSettings.miniPetsEnabled = !was
         if !was {
-            PawFirework81.burst(in: view,
+            // (85) 第 7 条：烟花宿主改卡内坐标（内容已迁卡）。
+            PawFirework81.burst(in: card85,
                                 at: sender.convert(
                                     CGPoint(x: sender.bounds.midX,
-                                            y: sender.bounds.midY), to: view))
+                                            y: sender.bounds.midY), to: card85))
         }
         refreshPawButton()
         Breadcrumbs.log("console82 paw on=\(!was ? 1 : 0)")
@@ -450,6 +522,7 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
 
     @objc private func likeTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "like", view: sender)
+        ConsoleFX85.tap(sender, el: "like")
         guard let track = PlaybackEngine.shared.currentTrack else { return }
         let id = track.id
         let newState = LikesStore.shared.toggle(id)
@@ -468,6 +541,7 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
 
     @objc private func sketchbookTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "sketch", view: sender)
+        ConsoleFX85.tap(sender, el: "sketch")
         if let onSketchbook {
             dismiss(animated: true) { onSketchbook() }
         } else {
@@ -480,8 +554,13 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
         PlaybackEngine.shared.setVolume(sender.value)
     }
 
+    @objc private func volumeTouched85(_ sender: UISlider) {
+        ConsoleFX85.tap(sender, el: "volume", pulse: false)
+    }
+
     @objc private func segTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "seg", view: sender)
+        ConsoleFX85.tap(sender, el: "seg")
         let translucent = sender.tag == 0
         SettingsStore.gridCardMinOpacity = translucent ? 0.55 : 1.0
         NotificationCenter.default.post(name: .foliaSettings62AChanged, object: nil)
@@ -491,12 +570,14 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
 
     @objc private func focusSwitchChanged(_ sender: UISwitch) {
         DeckTap82.log(host: "console", zone: "focus", view: sender)
+        ConsoleFX85.tap(sender, el: "focus")
         WallLight82.focusEnabled82 = sender.isOn
         Breadcrumbs.log("console82 focus=\(sender.isOn ? 1 : 0)")
     }
 
     @objc private func helpTapped(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "help", view: sender)
+        ConsoleFX85.tap(sender, el: "help")
         let alert = UIAlertController(
             title: "控制台",
             message: "队列：点任意一行立即播放，右上垃圾桶清空队列。\n"
@@ -543,8 +624,66 @@ final class ConsolePanel82: UIViewController, UITableViewDataSource, UITableView
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         DeckTap82.log(host: "console", zone: "qrow",
                       point: CGPoint(x: indexPath.row, y: 0))
+        if let cell = tableView.cellForRow(at: indexPath) {
+            ConsoleFX85.tap(cell, el: "queue")
+        } else {
+            Breadcrumbs.log("console85 tap el=queue")
+        }
         Breadcrumbs.log("console82 queue play idx=\(indexPath.row)")
         QueueManager.shared.playAtIndex(indexPath.row)
         dismiss(animated: true)
+    }
+}
+
+/// (85) 第 7 条：控制台点击特效（Miller (84)⑦「每个点
+/// 击要有特效」）——按下缩放回弹（iOS 系统弹簧）＋一圈
+/// 闪光环＋6 颗像素方点外迸（v2 定版「像素方点＋闪光
+/// 带」语言的克制版，与爪印烟花/灯钮同族）。逐元素落
+/// console85 见证（el=元素名）。pulse=false 时只走闪光
+/// 环＋方点（滑杆类不缩放、免拖动抖动）。
+enum ConsoleFX85 {
+    static func tap(_ target: UIView, el: String, pulse: Bool = true) {
+        Breadcrumbs.log("console85 tap el=\(el)")
+        if pulse {
+            target.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+            UIView.animate(withDuration: 0.45, delay: 0,
+                           usingSpringWithDamping: 0.5,
+                           initialSpringVelocity: 1.2,
+                           options: [.allowUserInteraction,
+                                     .beginFromCurrentState]) {
+                target.transform = .identity
+            }
+        }
+        guard let host = target.superview else { return }
+        let center = target.center
+        let ring = UIView(frame: target.frame.insetBy(dx: -3, dy: -3))
+        ring.layer.borderColor = UIColor.white.withAlphaComponent(0.85).cgColor
+        ring.layer.borderWidth = 1.5
+        ring.layer.cornerRadius = max(target.layer.cornerRadius + 3, 10)
+        ring.isUserInteractionEnabled = false
+        host.addSubview(ring)
+        var squares: [UIView] = []
+        for _ in 0..<6 {
+            let sq = UIView(frame: CGRect(x: 0, y: 0, width: 3, height: 3))
+            sq.backgroundColor = UIColor.white.withAlphaComponent(0.9)
+            sq.center = center
+            sq.isUserInteractionEnabled = false
+            host.addSubview(sq)
+            squares.append(sq)
+        }
+        UIView.animate(withDuration: 0.38, delay: 0,
+                       options: [.curveEaseOut]) {
+            ring.transform = CGAffineTransform(scaleX: 1.35, y: 1.35)
+            ring.alpha = 0
+            for (index, sq) in squares.enumerated() {
+                let angle = CGFloat(index) / 6 * .pi * 2 + 0.4
+                sq.center = CGPoint(x: center.x + cos(angle) * 30,
+                                    y: center.y + sin(angle) * 30)
+                sq.alpha = 0
+            }
+        } completion: { _ in
+            ring.removeFromSuperview()
+            squares.forEach { $0.removeFromSuperview() }
+        }
     }
 }

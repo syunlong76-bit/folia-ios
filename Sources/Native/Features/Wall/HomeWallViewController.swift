@@ -208,8 +208,22 @@ final class HomeWallViewController: UIViewController,
     // seamRawPlaylists，entries/playlistIds 恒为「当前段 +
     // 隐藏过滤 + 文字过滤」后的呈现集（applyWallData 唯一装配点）。
     private var seamToolbar: SeamToolbarView?
-    /// (84) 第 6 条：主页左缘竖条侧栏（HomeSidebar84View）。
-    private var homeSidebar84: HomeSidebar84View?
+    /// (85) 第 1 条：主页世界缝（HomeSeam85View）＋侧边竖
+    /// 标签＋开合补间。（84）左缘固定条 HomeSidebar84View
+    /// 已整条撤除（Miller (84) 验收第 1 条：缝须是墙面世
+    /// 界的一部分、随墙平移）。
+    private var homeSeam85: HomeSeam85View?
+    private var seamEdgeTab85: SeamEdgeTab85View?
+    /// 缝首规划已完成（相机居中后按 seamPlan85 选界＋让位）。
+    private var seamPlanned85 = false
+    /// 缝开合/相机让位补间（0.36/0.42s，网页同量级）。
+    private var seamTween85: CADisplayLink?
+    private var seamTweenStart85: CFTimeInterval = 0
+    private var seamTweenFromOrigin85: CGFloat = 0
+    private var seamTweenToOrigin85: CGFloat = 0
+    private var seamTweenFromWidth85: CGFloat = 0
+    private var seamTweenToWidth85: CGFloat = 0
+    private var seamTweenOrigin85 = false
     /// (62) WD §1：墙后层（WallSurfaces62）。墙缝信息条
     /// StripSurface62 已于 (63) 第 4 条按 Miller 令整条摘除。
     private var wallBackdrop62: WallBackdrop62?
@@ -463,6 +477,10 @@ final class HomeWallViewController: UIViewController,
         // (54) N 组起持有引用：侧栏开关经 onSidebarVisibilityChanged
         // 调 setExternallyCovered 整层隐藏/恢复（见上闭包）。
         sketchbookDrawer = SketchbookHost.install(into: view)
+        // (85) 第 1 条：左上角小白线（速记簿静息把手）撤
+        // 除在装配点即落旗（(84) 只在侧栏装配处补设、依赖
+        // 装配顺序；抽屉本体保留，控制台速记簿钮仍可开）。
+        sketchbookDrawer?.edgeHandleSuppressed84 = true
         // (53) L 组 chrome 收口留痕：提示条删除 + ✕ 关闭键 +
         // 齿轮/搜索并入侧栏，真机对账以此行确认新包在跑。
         Breadcrumbs.log("wall.chrome home hintBar=removed gearSearch=sidebar close=glass-x")
@@ -964,6 +982,8 @@ final class HomeWallViewController: UIViewController,
         }
         // 贴纸层（3.7 (24)，纯新增）：dock/失败/缓冲贴纸定位。
         stickerLayoutOverlays()
+        // (85) 第 1 条：缝首规划（相机居中后）＋逐布局落位。
+        updateSeam85Frame()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -1039,6 +1059,8 @@ final class HomeWallViewController: UIViewController,
         }
         // (66) 相机位置落盘（记住位置开时，去抖合并写）。
         scheduleWallPositionSave66()
+        // (85) 第 1 条：缝随相机同帧落位（帧换算在 WallLayout）。
+        updateSeam85Frame()
     }
 
     /// (83) 黑屏定案②③：方向预取／入墙预热共用——以相
@@ -1763,11 +1785,13 @@ final class HomeWallViewController: UIViewController,
 
             miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
             miniTimeElapsed.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            miniTimeElapsed.widthAnchor.constraint(equalToConstant: 34),
+            // (85) 审计四(b)：时间定宽 34→40——34pt 装 11pt
+            // "%d:%02d" 在 ≥10 分钟时已贴满、≥100 分钟冒框。
+            miniTimeElapsed.widthAnchor.constraint(equalToConstant: 40),
 
             miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             miniTimeDuration.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            miniTimeDuration.widthAnchor.constraint(equalToConstant: 34),
+            miniTimeDuration.widthAnchor.constraint(equalToConstant: 40),
 
             // (82) 第 7 条：seek 命中带改锚进度行（轨顶
             // −9、高 27），不再贴台底。
@@ -2650,6 +2674,18 @@ final class HomeWallViewController: UIViewController,
         // 点按识别器组随形态启停（3.7 (61) 第 7 条）：收起态
         // 只认无链单击即时展开，展开态才挂双击判定链。
         syncMiniBarTapRecognizers(collapsed: collapsed)
+        // (85) 第 3 条（审计四(a)）：收起态 seek 命中带禁交
+        // 互——(84) 识别器改挂背景层后，seek 带（整台宽×
+        // 27pt）在收起态正盖住细条中央带、其回调收起态空
+        // 转，点中央的展开点按被它截走（点边缘活、点中央
+        // 死＝「有时不弹」）。两态互斥后收起态点细条任意
+        // 位置都落背景层的 collapsedTap → expandMiniBar；
+        // 展开态 seek 点按/拖动行为不变。判读路径：收起态
+        // 中央点 → minibar.touch75 → mb.claim78/minibar
+        // .tap collapsed=1 → minibar expand（与 seek85 本行
+        // hit=0 同窗对位）。
+        miniSeekHit.isUserInteractionEnabled = !collapsed
+        Breadcrumbs.log("seek85 host=home hit=\(collapsed ? 0 : 1)")
         // (63) 第 2 条形态面包屑：每次形态收口落一行——标志/
         // 几何高/三识别器启停位同行，下轮日志一次判清标志与
         // 几何是否同值（细条无法展开的判别证据）。
@@ -3277,7 +3313,11 @@ extension HomeWallViewController {
             guard let self else { return }
             QueueLatticeViewController.present(from: self)
         }
-        toolbar.onAvatarTapped = { [weak self] in self?.seamAvatarTapped() }
+        // (85) 第 2 条：工具条头像单击改绑定位（Miller
+        // 01:33/02:26 定版口径，盖过 (62) 账户卡绑定）；
+        // 账户卡改由设置页账户组进入（见 SettingsView-
+        // Controller 账户卡钮），seamAvatarTapped 本体保留。
+        toolbar.onAvatarTapped = { [weak self] in self?.avatarLocate85() }
         toolbar.onSearchTapped = { [weak self] in
             guard let self else { return }
             Breadcrumbs.log("wall.seam.search")
@@ -3300,7 +3340,7 @@ extension HomeWallViewController {
         toolbar.onLayoutTapped = { [weak self] in self?.seamToggleLayout() }
         toolbar.onFullscreenTapped = { [weak self] in self?.seamSetImmersive(true) }
         seamToolbar = toolbar
-        installHomeSidebar84()
+        installHomeSeam85()
 
         buildSeamFilterBar(below: toolbar)
         buildSeamImmersiveExitRecognizer77()
@@ -3877,58 +3917,278 @@ extension HomeWallViewController {
         (seamSegment, seamGridMode)
     }
 
-    /// (84) 第 6 条：主页左缘竖条侧栏装配——速记簿左缘把
-    /// 手撤除（抽屉本体保留、控制台仍可开），换网页版式竖
-    /// 条。z 序：插在速记簿宿主之下、工具条之下（条本体只
-    /// 认按钮命中、不吞墙面手势，见 HomeSidebar84View）。
-    /// 纵向：顶部工具条（104）之下起、避台与宠物停靠区；
-    /// 横向：锚左缘安全区（横屏岛在侧边时安全区自动让位）。
-    private func installHomeSidebar84() {
-        guard homeSidebar84 == nil else { return }
-        let sidebar = HomeSidebar84View()
-        sidebar.translatesAutoresizingMaskIntoConstraints = false
-        if let drawer = sketchbookDrawer {
-            view.insertSubview(sidebar, belowSubview: drawer)
+    /// (85) 第 1 条：主页世界缝装配——撤 (84) 左缘固定条，
+    /// 改网页版式「墙中间裂开的缝」：缝锚在世界块边界上、
+    /// 随墙相机平移（帧由 wallLayout.seamGeometry85 逐帧
+    /// 换算，实例让位在 WallLayout.rebuildAttributes 内）。
+    /// z 序：点播台之下（台横贯底部中央、缝内容底内边距
+    /// 已避台）、工具条之下。缝本体只认按钮命中（见
+    /// HomeSeam85View），不吞墙面平移手势。
+    private func installHomeSeam85() {
+        guard homeSeam85 == nil else { return }
+        let seam = HomeSeam85View()
+        seam.isHidden = true
+        if let bar = miniBar {
+            view.insertSubview(seam, belowSubview: bar)
         } else if let toolbar = seamToolbar {
-            view.insertSubview(sidebar, belowSubview: toolbar)
+            view.insertSubview(seam, belowSubview: toolbar)
         } else {
-            view.addSubview(sidebar)
+            view.addSubview(seam)
         }
-        NSLayoutConstraint.activate([
-            sidebar.leadingAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.leadingAnchor),
-            sidebar.topAnchor.constraint(
-                equalTo: view.topAnchor, constant: 112),
-            sidebar.bottomAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -130),
-            sidebar.widthAnchor.constraint(equalToConstant: 48),
-        ])
-        sidebar.onAvatar = { [weak self] in self?.seamAvatarTapped() }
-        sidebar.onPlaylists = { [weak self] in
+        seam.onFold = { [weak self] in self?.foldHomeSeam85() }
+        seam.onAvatar = { [weak self] in self?.avatarLocate85() }
+        seam.onPlaylists = { [weak self] in
             self?.presentSidebarSection84(WorkbenchPlaylistListViewController())
         }
-        sidebar.onRadio = { [weak self] in
+        seam.onRadio = { [weak self] in
             self?.presentSidebarSection84(WorkbenchRadioViewController())
         }
-        sidebar.onAlbums = { [weak self] in
+        seam.onAlbums = { [weak self] in
             self?.presentSidebarSection84(WorkbenchAlbumListViewController())
         }
-        sidebar.onLocal = { [weak self] in
+        seam.onLocal = { [weak self] in
             self?.presentSidebarSection84(WorkbenchLocalViewController())
         }
-        sidebar.onSearch = { [weak self] in
+        seam.onLiked = { [weak self] in self?.openLikedPlaylist85() }
+        seam.onSearch = { [weak self] in
             guard let self else { return }
             SearchHostPresenter.presentSearch(from: self)
         }
-        sidebar.onSettings = { [weak self] in
+        seam.onSettings = { [weak self] in
             guard let self else { return }
             let settings = SettingsViewController()
             settings.modalPresentationStyle = .overFullScreen
             self.present(settings, animated: false)
         }
-        homeSidebar84 = sidebar
-        sketchbookDrawer?.edgeHandleSuppressed84 = true
-        Breadcrumbs.log("sidebar84 on")
+        seam.onQueue = { [weak self] in
+            guard let self else { return }
+            QueueLatticeViewController.present(from: self)
+        }
+        seam.onMore = { [weak self] in self?.presentSeamMore85() }
+        homeSeam85 = seam
+        let tab = SeamEdgeTab85View()
+        tab.isHidden = true
+        view.insertSubview(tab, belowSubview: seam)
+        tab.onTap = { [weak self] in self?.reopenHomeSeam85() }
+        seamEdgeTab85 = tab
+        wallLayout.seamEnabled85 = true
+        Breadcrumbs.log("seam85 on host=home hidden=\(SeamState85.levelHidden ? 1 : 0)")
+    }
+
+    /// 缝首规划：相机居中后按 seamPlan85 选界——首次直接
+    /// 落位（入场视频掩盖、无需补间）；用户折叠后重开走
+    /// reopenHomeSeam85 的补间路径。
+    private func planHomeSeam85IfNeeded() {
+        guard !seamPlanned85, didCenterCamera, homeSeam85 != nil else { return }
+        seamPlanned85 = true
+        if SeamState85.levelHidden {
+            wallLayout.seamOpenWidth85 = 0
+            updateSeam85Frame()
+            return
+        }
+        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        wallLayout.seamAnchorX85 = plan.anchor
+        wallLayout.worldOrigin.x = plan.originX
+        wallLayout.seamOpenWidth85 = 64
+        _ = wallLayout.refreshInstances()
+        collectionView.reloadData()
+        updateSeam85Frame()
+        Breadcrumbs.log("seam85 plan host=home anchor=\(Int(plan.anchor))")
+    }
+
+    /// 折叠：开口补间收 0（0.36s），等级落盘（跨面沿用）。
+    private func foldHomeSeam85() {
+        SeamState85.levelHidden = true
+        startSeamTween85(toWidth: 0, toOriginX: nil)
+        Breadcrumbs.log("seam85 fold host=home")
+    }
+
+    /// 侧边标签重开：在当前视口重新选界（旧锚多半已出
+    /// 界），相机让位＋开口补间同程（0.42s）。
+    private func reopenHomeSeam85() {
+        SeamState85.levelHidden = false
+        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        wallLayout.seamAnchorX85 = plan.anchor
+        seamPlanned85 = true
+        startSeamTween85(toWidth: 64, toOriginX: plan.originX)
+        Breadcrumbs.log("seam85 reopen host=home anchor=\(Int(plan.anchor))")
+    }
+
+    /// 缝开合补间（CADisplayLink 驱动：开口 0.36s、相机
+    /// 0.42s 网页同量级，easeInOut；逐帧写 worldOrigin/
+    /// seamOpenWidth85 并走既有帧重建路径，不 reloadData）。
+    private func startSeamTween85(toWidth: CGFloat, toOriginX: CGFloat?) {
+        seamTween85?.invalidate()
+        seamTweenStart85 = CACurrentMediaTime()
+        seamTweenFromWidth85 = wallLayout.seamOpenWidth85
+        seamTweenToWidth85 = toWidth
+        seamTweenFromOrigin85 = wallLayout.worldOrigin.x
+        seamTweenToOrigin85 = toOriginX ?? wallLayout.worldOrigin.x
+        seamTweenOrigin85 = toOriginX != nil
+        let link = CADisplayLink(target: self, selector: #selector(seamTweenStep85(_:)))
+        link.add(to: .main, forMode: .common)
+        seamTween85 = link
+    }
+
+    @objc private func seamTweenStep85(_ link: CADisplayLink) {
+        let duration = seamTweenOrigin85 ? 0.42 : 0.36
+        let t = min(1, (CACurrentMediaTime() - seamTweenStart85) / duration)
+        let e = t * t * (3 - 2 * t)
+        wallLayout.seamOpenWidth85 = seamTweenFromWidth85
+            + (seamTweenToWidth85 - seamTweenFromWidth85) * CGFloat(e)
+        if seamTweenOrigin85 {
+            wallLayout.worldOrigin.x = seamTweenFromOrigin85
+                + (seamTweenToOrigin85 - seamTweenFromOrigin85) * CGFloat(e)
+        }
+        _ = wallLayout.refreshInstances()
+        wallLayout.invalidateLayout()
+        updateSeam85Frame()
+        if t >= 1 {
+            link.invalidate()
+            if seamTween85 === link { seamTween85 = nil }
+        }
+    }
+
+    /// 缝帧逐帧收口（滚动/布局/补间共用）：按 seamGeo-
+    /// metry85 落缝视图帧与内容淡出、侧边标签显隐与贴边。
+    /// 网格形态下缝不存在（另一面墙），整套隐藏。
+    private func updateSeam85Frame() {
+        guard let seam = homeSeam85 else { return }
+        if seamGridMode || seamImmersive {
+            seam.isHidden = true
+            seamEdgeTab85?.isHidden = true
+            return
+        }
+        planHomeSeam85IfNeeded()
+        let geo = wallLayout.seamGeometry85()
+        let hidden = SeamState85.levelHidden
+        if hidden || geo.width < 1 {
+            seam.isHidden = true
+        } else {
+            seam.isHidden = false
+            seam.frame = CGRect(
+                x: geo.screenX - geo.width / 2, y: 0,
+                width: geo.width, height: view.bounds.height)
+            seam.contentTopInset = view.safeAreaInsets.top + 56
+            seam.contentBottomInset = view.safeAreaInsets.bottom + 116
+            seam.contentOpacity = SeamState85.contentOpacity(
+                rendered: geo.width, content: 64)
+        }
+        // 侧边标签：折叠态恒显；开着但被平移挤出视口
+        // （collapsed）时显在缝离开的那侧。首规划未成
+        // （数据未到）前不显，免加载期边缘闪现。
+        guard let tab = seamEdgeTab85 else { return }
+        if seamPlanned85, hidden || geo.collapsed {
+            tab.isHidden = false
+            let side = hidden ? (geo.side == 0 ? -1 : geo.side) : geo.side
+            let tabW: CGFloat = 20, tabH: CGFloat = 96
+            tab.frame = CGRect(
+                x: side < 0 ? 0 : view.bounds.width - tabW,
+                y: view.bounds.height * 0.42,
+                width: tabW, height: tabH)
+        } else {
+            tab.isHidden = true
+        }
+    }
+
+    /// 中段直达入口「我喜欢的音乐」：在当前呈现集里找喜
+    /// 欢歌单（网易云惯例：歌单名即「我喜欢的音乐」/以用
+    /// 户名开头）打开其曲目墙（与点海报同路）；不在当前
+    /// 集时给可见反馈、不静默。
+    private func openLikedPlaylist85() {
+        let idx = entries.indices.first { i in
+            entries[i].title.contains("我喜欢的音乐")
+        }
+        guard let idx, idx < playlistIds.count else {
+            NativePlaybackFailureToast.show(message: "喜欢歌单不在当前列表里")
+            Breadcrumbs.log("seam85 liked miss")
+            return
+        }
+        let entry = entries[idx]
+        let wall = WallPrototypeViewController(
+            playlistId: playlistIds[idx], title: entry.title, coverUrl: entry.picUrl)
+        wall.modalPresentationStyle = .fullScreen
+        wall.modalTransitionStyle = .crossDissolve
+        beginPosterTransition(source: "seam-liked", playlistId: playlistIds[idx])
+        wall.startPreload()
+        Task { [weak self] in
+            guard let self else { return }
+            let seed = await wall.awaitSeed(timeout: 0.25)
+            self.present(wall, animated: true) { [weak self] in
+                self?.endPosterTransition(source: "seam-liked", seedReady: seed)
+            }
+        }
+    }
+
+    /// 工具格「⋯」菜单（网页同位：本面项在前、app 级在
+    /// 后）：管理隐藏（已隐藏歌单的恢复面，HiddenPlay-
+    /// listsStore 真源）／回到播放页（有在播时开舞台）／
+    /// 折叠缝。无对应原生面的项不列（不做假按钮）。
+    private func presentSeamMore85() {
+        let sheet = UIAlertController(title: nil, message: nil, preferredStyle: .actionSheet)
+        let hidden = HiddenPlaylistsStore.shared.hiddenIds
+        if !hidden.isEmpty {
+            sheet.addAction(UIAlertAction(
+                title: "恢复已隐藏歌单（\(hidden.count)）", style: .default) { _ in
+                    // unhide 内部已发 .foliaHiddenPlaylistsChanged。
+                    for id in hidden { HiddenPlaylistsStore.shared.unhide(id: id) }
+                    Breadcrumbs.log("seam85 more unhide n=\(hidden.count)")
+                })
+        }
+        if PlaybackEngine.shared.currentTrack != nil {
+            sheet.addAction(UIAlertAction(
+                title: "回到播放页", style: .default) { [weak self] _ in
+                    self?.openNativeStageFromHome()
+                })
+        }
+        sheet.addAction(UIAlertAction(title: "折叠缝", style: .default) { [weak self] _ in
+            self?.foldHomeSeam85()
+        })
+        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
+        if let pop = sheet.popoverPresentationController {
+            pop.sourceView = homeSeam85 ?? view
+            pop.sourceRect = CGRect(x: 32, y: view.bounds.height - 200, width: 1, height: 1)
+        }
+        present(sheet, animated: true)
+    }
+
+    /// (85) 第 2 条：点头像＝定位正在播放（工具条头像与
+    /// 缝内账户头像共用）。语义（Miller 01:33/02:26 定
+    /// 版）：主页墙点头像＝切换到正在播放的歌曲——来源歌
+    /// 单可知时打开其曲目墙并真定位（相机移动到实例）；
+    /// 来源不可知时**不许改开舞台页冒充定位**（审计三死
+    /// 点），落 locate85 result=nosrc＋可见反馈；无在播
+    /// 曲目落 result=none＋toast。账户卡入口已迁设置页。
+    private func avatarLocate85() {
+        Breadcrumbs.log("locate85 via=avatar host=home")
+        guard PlaybackEngine.shared.currentTrack != nil else {
+            Breadcrumbs.log("locate85 result=none host=home")
+            NativePlaybackFailureToast.show(message: "现在没有正在播放的歌曲")
+            return
+        }
+        guard let playlistId = QueueManager.shared.sourcePlaylistId,
+              let idx = playlistIds.firstIndex(of: playlistId),
+              idx < entries.count else {
+            Breadcrumbs.log("locate85 result=nosrc host=home")
+            NativePlaybackFailureToast.show(message: "正在播放的歌曲不在主页歌单里")
+            return
+        }
+        Breadcrumbs.log("locate85 result=wallopen host=home")
+        let entry = entries[idx]
+        let wall = WallPrototypeViewController(
+            playlistId: playlistId, title: entry.title, coverUrl: entry.picUrl)
+        wall.modalPresentationStyle = .fullScreen
+        wall.modalTransitionStyle = .crossDissolve
+        wall.locateCurrentTrackWhenReady = true
+        beginPosterTransition(source: "avatar-locate", playlistId: playlistId)
+        wall.startPreload()
+        Task { [weak self] in
+            guard let self else { return }
+            let seed = await wall.awaitSeed(timeout: 0.25)
+            self.present(wall, animated: true) { [weak self] in
+                self?.endPosterTransition(source: "avatar-locate", seedReady: seed)
+            }
+        }
     }
 
     /// 分区页呈现（与 WorkbenchOverlayHostView.present-
@@ -3958,7 +4218,7 @@ extension HomeWallViewController {
             nickname: syncNickname,
             loggedIn: syncLoggedIn,
             avatarURLString: avatarURLString)
-        homeSidebar84?.setAccount84(
+        homeSeam85?.setAccount85(
             nickname: syncNickname, loggedIn: syncLoggedIn,
             avatarURLString: avatarURLString)
         Breadcrumbs.log("wall.seam.account sync loggedIn=\(syncLoggedIn) avatar=\(avatarURLString != nil ? 1 : 0)")
@@ -3984,7 +4244,7 @@ extension HomeWallViewController {
                     nickname: status.nickname ?? syncNickname,
                     loggedIn: status.loggedIn,
                     avatarURLString: effectiveAvatar)
-                self.homeSidebar84?.setAccount84(
+                self.homeSeam85?.setAccount85(
                     nickname: status.nickname ?? syncNickname,
                     loggedIn: status.loggedIn,
                     avatarURLString: effectiveAvatar)

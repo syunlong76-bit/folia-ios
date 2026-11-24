@@ -599,6 +599,28 @@ final class SettingsViewController: UIViewController {
             accountActionButton.heightAnchor.constraint(equalToConstant: 42)
         ])
         accountGroup.addArrangedSubview(accountButtonWrap)
+        // (85) 第 2 条：账户卡新入口——点头像已改绑定位
+        // （Miller 定版），原账户卡 popover 不删、改由本行
+        // 进入（三平台登录/退出全在卡内，与旧通路同物）。
+        let accountCardButton85 = UIButton(type: .system)
+        accountCardButton85.setTitle("查看账户卡（三平台）", for: .normal)
+        accountCardButton85.setTitleColor(FoliaUI.accent, for: .normal)
+        accountCardButton85.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        accountCardButton85.backgroundColor = FoliaUI.buttonFill
+        accountCardButton85.layer.cornerRadius = 12
+        accountCardButton85.translatesAutoresizingMaskIntoConstraints = false
+        accountCardButton85.addTarget(
+            self, action: #selector(accountCardTapped85(_:)), for: .touchUpInside)
+        let accountCardWrap85 = UIView()
+        accountCardWrap85.addSubview(accountCardButton85)
+        NSLayoutConstraint.activate([
+            accountCardButton85.topAnchor.constraint(equalTo: accountCardWrap85.topAnchor, constant: 2),
+            accountCardButton85.bottomAnchor.constraint(equalTo: accountCardWrap85.bottomAnchor, constant: -12),
+            accountCardButton85.leadingAnchor.constraint(equalTo: accountCardWrap85.leadingAnchor, constant: 14),
+            accountCardButton85.trailingAnchor.constraint(equalTo: accountCardWrap85.trailingAnchor, constant: -14),
+            accountCardButton85.heightAnchor.constraint(equalToConstant: 42)
+        ])
+        accountGroup.addArrangedSubview(accountCardWrap85)
         cardStack.addArrangedSubview(accountGroup)
         reg(accountGroup, tab: 8)
 
@@ -927,6 +949,23 @@ final class SettingsViewController: UIViewController {
         }, completion: { _ in
             self.dismiss(animated: false)
         })
+    }
+
+    /// (85) 第 2 条：账户卡入口（本页账户组）——与旧工具
+    /// 条头像同一只 AccountCard62、同 present 形态
+    /// （popover 锚本钮）；卡内登录/会话变化回刷本段。
+    @objc private func accountCardTapped85(_ sender: UIButton) {
+        let card = AccountCard62ViewController()
+        card.onLoginSuccess = { [weak self] in self?.refreshAccountSection() }
+        card.onSessionChanged = { [weak self] in self?.refreshAccountSection() }
+        card.modalPresentationStyle = .popover
+        if let pop = card.popoverPresentationController {
+            pop.sourceView = sender
+            pop.sourceRect = sender.bounds
+            pop.permittedArrowDirections = [.up, .down]
+        }
+        Breadcrumbs.log("locate85 acct src=settings")
+        present(card, animated: true)
     }
 
     /// 账号按钮：未登录 → 原生扫码登录页；已登录 → 确认后退出

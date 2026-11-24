@@ -3225,10 +3225,15 @@ final class StageViewController: UIViewController {
 
             currentTimeLabel.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
             currentTimeLabel.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            currentTimeLabel.widthAnchor.constraint(equalToConstant: 44),
-            totalTimeLabel.trailingAnchor.constraint(equalTo: stageConsoleButton82.leadingAnchor, constant: -8),
+            // (85) 审计四(b)：双时间与墙台同锚同宽——左贴
+            // 左+16、右贴台右−16、定宽 40（≥10 分钟不冒
+            // 框）；旧舞台右时间锚在控制台钮左侧、与钮挤成
+            // 一簇（Miller「时间快超出屏幕」所指），控制台
+            // 钮本版移出进度行（见下主排组）。
+            currentTimeLabel.widthAnchor.constraint(equalToConstant: 40),
+            totalTimeLabel.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             totalTimeLabel.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            totalTimeLabel.widthAnchor.constraint(equalToConstant: 44),
+            totalTimeLabel.widthAnchor.constraint(equalToConstant: 40),
 
             // (84) 第 1 条：封面/标题复原 (80) 锚法（封面左
             // 置 44、标题贴封面右）。
@@ -3256,8 +3261,14 @@ final class StageViewController: UIViewController {
             nextButton.leadingAnchor.constraint(equalTo: playButton.trailingAnchor, constant: 20),
             nextButton.widthAnchor.constraint(equalToConstant: 34),
             nextButton.heightAnchor.constraint(equalToConstant: 40),
-            stageConsoleButton82.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
-            stageConsoleButton82.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            // (85) 审计四(b)：控制台钮移出进度行、回主排
+            // 右端（与墙台同位：trailing −12、纵向随主排
+            // 组 −5，见 stageMainCenterY）；进度行右端让给
+            // 右时间标签。
+            stageConsoleButton82.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
+            // 纵向恒为主排位（收起态该钮 alpha 0 不上屏、
+            // 不必随收起组换位；恒定约束免收起态纵向无约束）。
+            stageConsoleButton82.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
             stageConsoleButton82.widthAnchor.constraint(equalToConstant: 30),
             stageConsoleButton82.heightAnchor.constraint(equalToConstant: 30),
 
@@ -3834,6 +3845,12 @@ final class StageViewController: UIViewController {
         stageBlurView?.isHidden = collapsed
         stageRimLight?.isHidden = collapsed
         stageGlassTint?.isHidden = collapsed
+        // (85) 第 3 条（审计四(a)，同两面墙）：收起态 seek
+        // 命中带禁交互，堵其截走细条中央带展开点按的盲区
+        // （舞台 seek 带只有 pan、无 tap，收起态拖动本就不
+        // 响应，禁交互后点按直达台身识别器组展开）。
+        stageSeekHit?.isUserInteractionEnabled = !collapsed
+        Breadcrumbs.log("seek85 host=stage hit=\(collapsed ? 0 : 1)")
         // (63) 第 2 条形态面包屑（舞台宿主）：标志/几何高/双
         // 击识别器启停位同行（本宿主形态识别器只有双击一位，
         // 单击恒启停于 require 链，见 syncStageBarDoubleTapEnabled）。

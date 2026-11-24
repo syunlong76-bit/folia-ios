@@ -158,14 +158,15 @@ enum DeckLayout82 {
 /// 轨带 15–20、线带 8–13、相接间隙 2）；横屏 inset 21
 /// → C=11.5，同式成立（(83) 的 C=inset−2.5 使轨带落回
 /// 8–13 与线重合，系 Miller ⑥点名的实根）。
-/// 横屏条宽 209：iPhone 横屏 home indicator 的公开实测
-/// 惯例值（notched 机型横屏量测 209×5pt；竖屏 140×5 为
-/// Miller 截图实测，见 (83) 报告）——横屏宽为惯例值、
-/// 待 Miller 横屏截图复核，高度/底距两向同值。
+/// 横屏条宽 218：(84) 的 209 系上一代机型惯例值、被
+/// Miller (84)⑤ 点名仍小；(85) 审计五以 (84) 真机横屏
+/// 图逐像素量测为准——系统线 ≈218pt（高 5.1、底距
+/// 7.9），本版改 218（仅此一处常数，高度/底距/竖屏
+/// 140/锚位公式全不动）。
 enum DeckLayout84 {
-    /// 收起轨宽（按朝向）：竖 140（实测）／横 209（惯例值）。
+    /// 收起轨宽（按朝向）：竖 140（实测）／横 218（(85) 实测量定）。
     static func collapsedTrackWidth(portrait: Bool) -> CGFloat {
-        portrait ? 140 : 209
+        portrait ? 140 : 218
     }
     /// 收起底锚常量（相对安全区底）：C = inset − 9.5。
     static func collapsedBottomConstant(safeAreaBottom inset: CGFloat) -> CGFloat {

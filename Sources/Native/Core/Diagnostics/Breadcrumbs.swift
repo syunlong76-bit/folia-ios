@@ -88,6 +88,12 @@ enum Breadcrumbs {
         // 总）／minibar.fm84（小白条新口径）／DeckLayout84
         // （台高 70 单源）／sidebar84（主页竖条侧栏）。
         log("wit84.live tap=1 hit=1 pf=1 dec=1 rot=1 fm=1 deck=1 side=1")
+        // (85) 见证总表：seam=seam85/sidebar85（世界缝开
+        // 合/选界/逐钮去向）／loc=locate85（点头像定位
+        // via/result/fail）／seek=seek85（收起态 seek 带互
+        // 斥）／light=light85（关灯放大存活）／console=
+        // console85（控制台小卡逐元素点按）。
+        log("wit85.live seam=1 loc=1 seek=1 light=1 console=1")
         // (84) 第 5 条：上次旋转摘要补发——Stage landed 时
         // 存 UserDefaults（emitted=false），本次启动补一行
         // 并置 emitted，杜绝导出截断丢失旋转量测。
