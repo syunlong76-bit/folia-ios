@@ -3831,7 +3831,7 @@ enum WallTileStats78 {
         guard let bucket = byWall84[wall],
               bucket.sync + bucket.ph + bucket.blank > 0 else { return nil }
         byWall84[wall] = nil
-        return bucket
+        return (sync: bucket.sync, phImg: bucket.ph, blank: bucket.blank)
     }
 
     static func noteCfg79() { lock.lock(); cfg79 += 1; lock.unlock() }
