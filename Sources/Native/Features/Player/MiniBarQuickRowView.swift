@@ -58,10 +58,11 @@ final class MiniBarQuickRowView: UIView {
     static let rowHeight: CGFloat = 48
 
     /// 展开态点播台总高（唯一出处）：(82) 第 7 条 E 极简
-    /// 台定版改 132（封面行 14+46／进度行／控制行三段）；
-    /// 与 DeckLayout82.expandedHeight 同值，宿主读本常量
-    /// 处自动跟随，四宿主同台同尺寸由此收口。
-    static let expandedBarHeight: CGFloat = 132
+    /// 台定版改 132；(83) 第 6 条按网页版紧凑台重做改 106
+    /// （歌名行／控制行／进度行）；与 DeckLayout82
+    /// .expandedHeight 同值，宿主读本常量处自动跟随，四
+    /// 宿主同台同尺寸由此收口。
+    static let expandedBarHeight: CGFloat = 106
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?

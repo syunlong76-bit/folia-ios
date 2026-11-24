@@ -133,6 +133,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
     }
 
     func sceneWillEnterForeground(_ scene: UIScene) {
+        // (83) 第 3 条：每次从后台重新进入 App 自动恢复开
+        // 灯（白天）模式——关灯态不跨「退出再进入」保留
+        // （冷启一路在 AppDelegate，两路幂等）。
+        WallLight82.resetOnEntry83(source: "fg")
         // 状态机 armed → foregroundPending：呈现决策等
         // didBecomeActive 后场景稳定再做（DS 定案时机）。
         guard routeState == .armed else { return }

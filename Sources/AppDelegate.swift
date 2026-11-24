@@ -72,6 +72,22 @@ final class AppDelegate: UIResponder, UIApplicationDelegate {
             + " legacy=\(rawKey("folia.stickers.miniPetsEnabled"))")
         // (78) 见证启动自检（见 Breadcrumbs.witnessBoot78）。
         Breadcrumbs.witnessBoot78()
+        // (83) 第 3 条：灯光不跨启动保留——冷启即恢复开灯
+        // （白天）模式（回前台一路在 SceneDelegate）。
+        WallLight82.resetOnEntry83(source: "launch")
+        // (83) 第 2 条取证回收：上一会话若在双击链中途消
+        // 亡（闪退），尾巴里最后一条 dbltap83 的 step 即
+        // 崩溃前最后一步——带回本会话日志头（crash83），
+        // 不必等导出整份日志才判读。无双击痕迹则静默。
+        let prevTail83 = FoliaBridgeLogStore.shared.prevTailText()
+        let dblLines83 = prevTail83.split(separator: "\n")
+            .filter { $0.contains("dbltap83") }
+        if let lastDbl83 = dblLines83.last {
+            let step83 = lastDbl83.split(separator: " ")
+                .first { $0.hasPrefix("step=") } ?? "step=?"
+            Breadcrumbs.log("crash83 prevDbl=1 n=\(dblLines83.count)"
+                + " last=\(step83)")
+        }
         // (80) 下一首预备协调器：进程级订阅当前曲/队列，播
         // 放期间为下一首预拉歌词＋预派生行表＋预热记忆样式。
         NextTrackPrep80.shared.startIfNeeded()

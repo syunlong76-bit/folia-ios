@@ -751,6 +751,29 @@ final class WallScrollMetrics: NSObject {
             Breadcrumbs.log("wall.ph82 wall=\(wallName)"
                 + " hit=\(stats.hit) miss=\(stats.miss)"
                 + " blank=\(tile.blank)")
+            // (83) 第 1 条取证：同窗补解码队列深度（在途任
+            // 务 fly／正在解码 dec）＋主线程帧耗时（本窗
+            // max 与 didScrollMax）——快滑黑屏下轮判读三
+            // 分流：fly 高＝任务排队、dec 高＝解码堵、都低
+            // 而 fmax 高＝主线程绘制堵。只取证不改逻辑。
+            let depth83 = NativeCoverLoader.shared.loadDepth83()
+            Breadcrumbs.log("wall.q83 wall=\(wallName)"
+                + " fly=\(depth83.fly) dec=\(depth83.dec)"
+                + " fmax=\(Self.fmt(sorted.last ?? 0))ms"
+                + " did=\(Self.fmt(didScrollMaxMs))ms")
+            // (83) 黑屏定案④：命中率口径改 cell 同步命中
+            // （tile78 的 img 口径：配置瞬间同步出真图的砖
+            // 占比）——ph82 的 loader 口径按「发出的请求」
+            // 计、异步回填也算 hit，结构性高估砖面真实到
+            // 图率（(82) 窗 tile 同步命中仅 29% 而 loader
+            // 口径读数高得多），自本版起判读以 hit83 为准、
+            // ph82 只留作管线侧参考。
+            let tot83 = tile.sync + tile.phImg + tile.blank
+            if tot83 > 0 {
+                Breadcrumbs.log("wall.hit83 wall=\(wallName)"
+                    + " rate=\(tile.sync * 100 / tot83)"
+                    + " sync=\(tile.sync) tot=\(tot83)")
+            }
         }
         // (79) 第 3 条：请求发起链同秒冲刷——cfg 与 req
         // 的差＝没发出请求的配置数，noURL 单列早退因。

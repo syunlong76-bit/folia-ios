@@ -68,6 +68,27 @@ enum WallLight82 {
         focusByWall[wall] = entryId
         Breadcrumbs.log("light82 focus wall=\(wall) id=\(entryId)"
             + " mv=\(transfer ? 1 : 0)")
+        // (83) 第 3 条见证：点亮伴随封面放大（宿主 cell 在
+        // applyLight82 内按焦点态落放大动画，曲线与点按展
+        // 开同参，见 WallPosterCell.applyLightFocusZoom83）。
+        Breadcrumbs.log("light83 focus wall=\(wall) id=\(entryId)"
+            + " mv=\(transfer ? 1 : 0) zoom=1")
+        NotificationCenter.default.post(name: .foliaWallLight82Changed, object: nil)
+    }
+
+    /// (83) 第 3 条：灯光状态不跨启动保留——冷启动与每次
+    /// 从后台重新进入 App 都自动恢复开灯（白天）模式；会
+    /// 话内（不进后台）状态不变。AppDelegate 启动与
+    /// SceneDelegate willEnterForeground 各调一次（幂等：
+    /// 已是开灯且无焦点时不落痕不广播）。
+    static func resetOnEntry83(source: String) {
+        let was = isOn
+        let hadFocus = !focusByWall.isEmpty
+        guard !was || hadFocus else { return }
+        UserDefaults.standard.set(true, forKey: onKey)
+        focusByWall.removeAll()
+        Breadcrumbs.log("light83 reset src=\(source)"
+            + " was=\(was ? 1 : 0) focus=\(hadFocus ? 1 : 0)")
         NotificationCenter.default.post(name: .foliaWallLight82Changed, object: nil)
     }
 

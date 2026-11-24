@@ -22,6 +22,9 @@ final class HomeWallViewController: UIViewController,
     private let wallLayout = WallLayout()
     /// 滚动帧统计（(58) 定稿③）：逐秒 wall.scroll 面包屑。
     private let scrollMetrics = WallScrollMetrics(wallName: "home")
+    /// (83) 黑屏定案②：方向预取节流戳（滚动回调内 ≥0.3s
+    /// 或实例集身份变化才再喂 prefetch82）。
+    private var lastPrefetch83: TimeInterval = 0
     private var collectionView: UICollectionView!
     // 顶部行动胶囊已整段撤除（3.7 (54) 工作流 L）：原 statusLabel
     // 及其 showStatusNotice/statusTapped 一并删除——未登录入口归
@@ -116,6 +119,10 @@ final class HomeWallViewController: UIViewController,
     /// (82) 第 7/8 条：控制台入口圆钮（纯图标）＋双时间标
     /// 签（E 极简台定版）。旧主排模式钮/爪印/爱心/列表四
     /// 钮随旧台退役，职能全进控制台面板（ConsolePanel82）。
+    /// (83) 第 6 条：网页版紧凑台重做——模式钮与列表钮回
+    /// 台面（控制行两端），控制台入口移进度行右端。
+    private var miniModeButton: UIButton!
+    private var miniListButton: UIButton!
     private var miniConsoleButton: UIButton!
     private var miniTimeElapsed: UILabel!
     private var miniTimeDuration: UILabel!
@@ -1017,8 +1024,57 @@ final class HomeWallViewController: UIViewController,
             layout: wallLayout,
             didScrollMs: (CACurrentMediaTime() - scrollStart) * 1000,
             panDelta: delta)
+        // (83) 黑屏定案②：按滚动方向预取下一屏封面——
+        // prefetch82 本版真接线（(82) 零调用假交付的纠
+        // 正）；实例集身份变化即喂、否则 0.3s 节流。
+        let now83 = CACurrentMediaTime()
+        if identityChanged || now83 - lastPrefetch83 >= 0.3 {
+            lastPrefetch83 = now83
+            prefetchWall83(dirX: delta.x > 0 ? 1 : (delta.x < 0 ? -1 : 0),
+                            dirY: delta.y > 0 ? 1 : (delta.y < 0 ? -1 : 0),
+                            source: "scroll")
+        }
         // (66) 相机位置落盘（记住位置开时，去抖合并写）。
         scheduleWallPositionSave66()
+    }
+
+    /// (83) 黑屏定案②③：方向预取／入墙预热共用——以相
+    /// 机世界视口为心，运动方向侧扩一屏、余侧扩 0.35
+    /// 屏，取实例环内条目封面（queueIndex 去重）按 cell
+    /// 同式 tier 喂 prefetch82（.prefetch 低优先级、跳
+    /// 过已缓存，计数落 pf83）。dir=(0,0) 即入墙预热：
+    /// 当前列表在场实例整环批量入缓存。
+    private func prefetchWall83(dirX: Int, dirY: Int, source: String) {
+        guard !entries.isEmpty, wallLayout.cameraScale > 0 else { return }
+        let viewSize = collectionView.bounds.size.width > 0
+            ? collectionView.bounds.size : view.bounds.size
+        guard viewSize.width > 0 else { return }
+        let vw = Double(viewSize.width) / wallLayout.cameraScale
+        let vh = Double(viewSize.height) / wallLayout.cameraScale
+        var minX = Double(wallLayout.worldOrigin.x)
+        var minY = Double(wallLayout.worldOrigin.y)
+        var maxX = minX + vw
+        var maxY = minY + vh
+        minX -= dirX < 0 ? vw : vw * 0.35
+        maxX += dirX > 0 ? vw : vw * 0.35
+        minY -= dirY < 0 ? vh : vh * 0.35
+        maxY += dirY > 0 ? vh : vh * 0.35
+        var seen = Set<Int>()
+        var items: [(raw: String, tier: Int)] = []
+        for inst in wallLayout.instances {
+            guard inst.queueIndex < entries.count,
+                  seen.insert(inst.queueIndex).inserted else { continue }
+            let r = inst.rect
+            guard r.x + r.width >= minX, r.x <= maxX,
+                  r.y + r.height >= minY, r.y <= maxY else { continue }
+            guard let pic = entries[inst.queueIndex].picUrl else { continue }
+            let pixelExtent = max(r.width, r.height)
+                * wallLayout.cameraScale * Double(UIScreen.main.scale)
+            items.append((pic, NativeCoverLoader.wallTier(
+                raw: pic, pixelExtent: pixelExtent)))
+        }
+        guard !items.isEmpty else { return }
+        NativeCoverLoader.shared.prefetch82(items, source: source, wall: "home")
     }
 
     // MARK: - 数据源
@@ -1476,18 +1532,21 @@ final class HomeWallViewController: UIViewController,
         // 琥珀心，DeckGlyph82 绘制）；主题圆点皮肤仍可叠
         // 在其上（refreshMiniProgressChrome）。收起态压平
         // 由 setMiniBarForm 的 transform 收口（第 5 条）。
+        // (83) 第 6 条：把手收成小圆点量级 20→14（图一那朵
+        // 大花压细轨是反面教材，Miller 点名）；四主题皮肤
+        // 本就 13pt 不动。
         knob.backgroundColor = .clear
         knob.isUserInteractionEnabled = false
         knob.translatesAutoresizingMaskIntoConstraints = false
-        let knobFlower = UIImageView(image: DeckGlyph82.flowerImage(size: 20))
+        let knobFlower = UIImageView(image: DeckGlyph82.flowerImage(size: 14))
         knobFlower.translatesAutoresizingMaskIntoConstraints = false
         knobFlower.isUserInteractionEnabled = false
         knob.addSubview(knobFlower)
         NSLayoutConstraint.activate([
             knobFlower.centerXAnchor.constraint(equalTo: knob.centerXAnchor),
             knobFlower.centerYAnchor.constraint(equalTo: knob.centerYAnchor),
-            knobFlower.widthAnchor.constraint(equalToConstant: 20),
-            knobFlower.heightAnchor.constraint(equalToConstant: 20),
+            knobFlower.widthAnchor.constraint(equalToConstant: 14),
+            knobFlower.heightAnchor.constraint(equalToConstant: 14),
         ])
         bar.addSubview(knob)
         miniProgressKnob = knob
@@ -1499,10 +1558,16 @@ final class HomeWallViewController: UIViewController,
         miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         miniCover.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniCover)
+        // (83) 第 6 条：网页版紧凑台无封面行——封面/歌手视
+        // 图保留（刷新代码照常写图写字）但不上台面；点按
+        // 分域的「封面区」改挂标题（见 miniBarTapped 等的
+        // miniTitle.frame 判定，语义＝点歌名定位当前曲）。
+        miniCover.isHidden = true
 
         miniTitle = UILabel()
         miniTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         miniTitle.textColor = .white
+        miniTitle.textAlignment = .center
         miniTitle.lineBreakMode = .byTruncatingTail
         miniTitle.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniTitle)
@@ -1513,9 +1578,15 @@ final class HomeWallViewController: UIViewController,
         miniArtist.lineBreakMode = .byTruncatingTail
         miniArtist.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniArtist)
+        miniArtist.isHidden = true
 
         miniPlayButton = UIButton(type: .system)
-        miniPlayButton.tintColor = .white
+        // (83) 第 6 条：播放钮改白色大圆＋深色字形（网页版
+        // 图三式样）；回刷只换图不换 tint（refreshDeck
+        // Icons82），圆底在此装配一次。
+        miniPlayButton.tintColor = UIColor(white: 0.12, alpha: 1)
+        miniPlayButton.backgroundColor = .white
+        miniPlayButton.layer.cornerRadius = 24
         // (82) 第 7 条：字形走 DeckGlyph82 独立绘制函数
         // （图标样板 J/K/L/M 定版后只换此出处，不动布局）。
         miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 21), for: .normal)
@@ -1537,13 +1608,35 @@ final class HomeWallViewController: UIViewController,
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
         bar.addSubview(miniNextButton)
 
+        // (83) 第 6 条：模式钮回台面（控制行左端灰圆，菜单
+        // 四档与控制台同源同字）＋列表钮回台面（控制行右
+        // 端）——Miller 明令台面控件集与详情页一致；字形/
+        // 菜单在 refreshMiniModeButton83 统一回刷。
+        miniModeButton = UIButton(type: .system)
+        miniModeButton.backgroundColor = UIColor.white.withAlphaComponent(0.16)
+        miniModeButton.layer.cornerRadius = 19
+        miniModeButton.tintColor = .white
+        miniModeButton.accessibilityLabel = "播放模式"
+        miniModeButton.showsMenuAsPrimaryAction = true
+        miniModeButton.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(miniModeButton)
+        refreshMiniModeButton83()
+
+        miniListButton = UIButton(type: .system)
+        miniListButton.setImage(DeckGlyph82.image(.list, pointSize: 17), for: .normal)
+        miniListButton.tintColor = .white
+        miniListButton.accessibilityLabel = "播放队列"
+        miniListButton.translatesAutoresizingMaskIntoConstraints = false
+        miniListButton.addTarget(self, action: #selector(miniListTapped83), for: .touchUpInside)
+        bar.addSubview(miniListButton)
+
         // (82) 第 7/8 条：控制台入口（纯图标圆钮、无字）＋
-        // 双时间标签。旧 mode/paw/heart/list 四钮退役，职
-        // 能全进控制台（模式/宠物/喜欢/队列）。
+        // 双时间标签。(83) 第 6 条：入口移进度行右端（图三
+        // 右下 sliders 位）、收小为 30 圆钮。
         miniConsoleButton = UIButton(type: .system)
         miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        miniConsoleButton.layer.cornerRadius = 19
-        miniConsoleButton.setImage(DeckGlyph82.image(.console, pointSize: 18), for: .normal)
+        miniConsoleButton.layer.cornerRadius = 15
+        miniConsoleButton.setImage(DeckGlyph82.image(.console, pointSize: 15), for: .normal)
         miniConsoleButton.tintColor = .white
         miniConsoleButton.accessibilityLabel = "控制台"
         miniConsoleButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1597,7 +1690,9 @@ final class HomeWallViewController: UIViewController,
         miniTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: miniTimeDuration.leadingAnchor, constant: -8)
         miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
         miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
-        miniTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 134)
+        // (83) 第 5 条：收起宽 134→140（图像量测系统横线
+        // 420px@3x，账见 DeckLayout82 与 (83) 报告）。
+        miniTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 140)
         miniBarBottomC = bar.bottomAnchor.constraint(
             equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10)
         NSLayoutConstraint.activate([
@@ -1619,48 +1714,61 @@ final class HomeWallViewController: UIViewController,
             fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
 
             knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            knob.widthAnchor.constraint(equalToConstant: 20),
-            knob.heightAnchor.constraint(equalToConstant: 20),
+            knob.widthAnchor.constraint(equalToConstant: 14),
+            knob.heightAnchor.constraint(equalToConstant: 14),
 
             miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
             miniCover.topAnchor.constraint(equalTo: bar.topAnchor, constant: 14),
             miniCover.widthAnchor.constraint(equalToConstant: 46),
             miniCover.heightAnchor.constraint(equalToConstant: 46),
 
-            miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
-            miniTitle.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
-            // 标题跟封面顶对齐（旧口径 = 封面顶 +5）：(54) H 主
-            // 排下移后改相对锚，形态切换只动 centerY 常量一处。
-            miniTitle.topAnchor.constraint(equalTo: miniCover.topAnchor, constant: 5),
+            // (83) 第 6 条：歌名行居中（第一行）——左右以
+            // ≥/≤ 钳住、centerX 定心，长题截断在中段。
+            miniTitle.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
+            miniTitle.leadingAnchor.constraint(greaterThanOrEqualTo: bar.leadingAnchor, constant: 20),
+            miniTitle.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -20),
+            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 9),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            // (82) 第 7 条：控制行——播放居中、上下曲两侧、
-            // 控制台圆钮右端（E2 定版几何，居中轴在
-            // setMiniBarForm 按形态给常量）。
+            // (83) 第 6 条：控制行（第二行）——模式钮左端
+            // 灰圆、播放白色大圆居中、上下曲两侧小一号、
+            // 列表钮右端（居中轴在 setMiniBarForm 按形态
+            // 给常量，展开 = 台中心 0）。
             miniPlayButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            miniPlayButton.widthAnchor.constraint(equalToConstant: 44),
-            miniPlayButton.heightAnchor.constraint(equalToConstant: 44),
+            miniPlayButton.widthAnchor.constraint(equalToConstant: 48),
+            miniPlayButton.heightAnchor.constraint(equalToConstant: 48),
 
-            miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -26),
-            miniPrevButton.widthAnchor.constraint(equalToConstant: 40),
-            miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
+            miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -20),
+            miniPrevButton.widthAnchor.constraint(equalToConstant: 36),
+            miniPrevButton.heightAnchor.constraint(equalToConstant: 36),
 
-            miniNextButton.leadingAnchor.constraint(equalTo: miniPlayButton.trailingAnchor, constant: 26),
-            miniNextButton.widthAnchor.constraint(equalToConstant: 40),
-            miniNextButton.heightAnchor.constraint(equalToConstant: 40),
+            miniNextButton.leadingAnchor.constraint(equalTo: miniPlayButton.trailingAnchor, constant: 20),
+            miniNextButton.widthAnchor.constraint(equalToConstant: 36),
+            miniNextButton.heightAnchor.constraint(equalToConstant: 36),
 
+            miniModeButton.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            miniModeButton.widthAnchor.constraint(equalToConstant: 38),
+            miniModeButton.heightAnchor.constraint(equalToConstant: 38),
+
+            miniListButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
+            miniListButton.widthAnchor.constraint(equalToConstant: 38),
+            miniListButton.heightAnchor.constraint(equalToConstant: 38),
+
+            // (83) 第 6 条：控制台入口移进度行（第三行）右
+            // 端、与轨同心（图三右下 sliders 位）。
             miniConsoleButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
-            miniConsoleButton.widthAnchor.constraint(equalToConstant: 38),
-            miniConsoleButton.heightAnchor.constraint(equalToConstant: 38),
+            miniConsoleButton.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            miniConsoleButton.widthAnchor.constraint(equalToConstant: 30),
+            miniConsoleButton.heightAnchor.constraint(equalToConstant: 30),
 
             miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
             miniTimeElapsed.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             miniTimeElapsed.widthAnchor.constraint(equalToConstant: 34),
 
-            miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
+            miniTimeDuration.trailingAnchor.constraint(equalTo: miniConsoleButton.leadingAnchor, constant: -8),
             miniTimeDuration.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             miniTimeDuration.widthAnchor.constraint(equalToConstant: 34),
 
@@ -1672,22 +1780,24 @@ final class HomeWallViewController: UIViewController,
             miniSeekHit.heightAnchor.constraint(equalToConstant: 27),
         ])
         miniKnobLeading = knob.leadingAnchor.constraint(
-            equalTo: progressTrack.leadingAnchor, constant: -10)
+            equalTo: progressTrack.leadingAnchor, constant: -7)
         miniKnobLeading?.isActive = true
-        // (82) 第 7 条：控制行纵向——展开态中心 = 台底
-        // −36（常量相对台中心 +30，台高 132）；收起态内
-        // 容整体淡出、位置不论。封面改顶锚（top+14）已出
-        // 本组。
+        // (83) 第 6 条：控制行纵向——展开态居台中心（常量
+        // 0，台高 106：歌名行 9–26／控制行 29–77／进度行
+        // 88–92 三段成立）；收起态内容整体淡出、位置不
+        // 论。控制台钮已移进度行、不在本组。
         miniMainCenterY = [miniPlayButton, miniPrevButton, miniNextButton,
-                           miniConsoleButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 30)
+                           miniModeButton, miniListButton].map {
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 0)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
-        // (82) 第 7 条：轨道纵向改顶锚制——展开态轨顶 =
-        // 封面底 +13（miniTrackTopC 在场、底锚撤）；收起
-        // 态换底锚 −5.5＋高 5（第 5 条小白条形态），两锚
-        // 由 setMiniBarForm 互斥切换。
-        miniTrackTopC = progressTrack.topAnchor.constraint(equalTo: miniCover.bottomAnchor, constant: 13)
+        // (82) 第 7 条：轨道纵向锚制——展开态一锚在场、收
+        // 起态换底锚 −5.5＋高 5（小白条形态），两锚由
+        // setMiniBarForm 互斥切换。(83) 第 6 条：展开锚由
+        // 「封面底 +13」改「台底 −14」（封面行已退役、三
+        // 行版式按台底收口），miniTrackTopC 语义不变（展
+        // 开态纵锚）。
+        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -14)
         miniTrackTopC?.isActive = true
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5.5)
         miniTrackBottomConstraint?.isActive = false
@@ -1809,8 +1919,8 @@ final class HomeWallViewController: UIViewController,
         miniProgressFill.transform = CGAffineTransform(scaleX: clamped, y: 1)
         let trackWidth = miniProgressTrack.bounds.width
         if trackWidth > 0 {
-            // (82) 花朵把手 20pt 宽，领先常量按半宽居中。
-            miniKnobLeading?.constant = clamped * trackWidth - 10
+            // (83) 把手 14pt 宽，领先常量按半宽居中。
+            miniKnobLeading?.constant = clamped * trackWidth - 7
         }
         miniThemeLayer?.setFraction(Double(clamped))
         // (82) 第 7 条：双时间标签随进度同刷（数据源＝引擎
@@ -1849,6 +1959,54 @@ final class HomeWallViewController: UIViewController,
                 PlaybackEngine.shared.playbackState == .playing ? .pause : .play,
                 pointSize: 21),
             for: .normal)
+        // (83) 第 6 条：模式钮随同点回刷（他处改模式后
+        // 台面字形/菜单勾选不许 stale）。
+        refreshMiniModeButton83()
+    }
+
+    /// (83) 第 6 条：模式钮字形＋菜单回刷（与控制台
+    /// ConsolePanel82.refreshModeButton 同源同字：四档
+    /// 顺序/循环/单曲/随机、off 态压暗）。装配时调一次；
+    /// 模式在他处（控制台/舞台）被改后由 refreshMiniBar
+    /// 的既有回刷链带到（refreshDeckIcons82 同点追加）。
+    private func refreshMiniModeButton83() {
+        guard miniModeButton != nil else { return }
+        let mode = QueueManager.shared.playMode
+        let glyph: DeckGlyph82.Kind
+        switch mode {
+        case .off: glyph = .modeSequence
+        case .loopAll: glyph = .modeRepeat
+        case .repeatOne: glyph = .modeRepeatOne
+        case .shuffle: glyph = .shuffle
+        }
+        miniModeButton.setImage(DeckGlyph82.image(glyph, pointSize: 16), for: .normal)
+        miniModeButton.tintColor = mode == .off
+            ? UIColor.white.withAlphaComponent(0.55) : .white
+        let items: [(QueueManager.PlayMode, String)] = [
+            (.off, "顺序"), (.loopAll, "循环"), (.repeatOne, "单曲"), (.shuffle, "随机"),
+        ]
+        miniModeButton.menu = UIMenu(children: items.map { item in
+            let action = UIAction(title: item.1) { [weak self] _ in
+                guard let self else { return }
+                DeckTap82.log(host: "homewall", zone: "mode", view: self.miniModeButton)
+                QueueManager.shared.playMode = item.0
+                self.refreshMiniModeButton83()
+                self.resetMiniIdleTimer()
+                Breadcrumbs.log("deck83 mode host=homewall m=\(item.0.rawValue)")
+            }
+            action.state = item.0 == mode ? .on : .off
+            return action
+        })
+    }
+
+    /// (83) 第 6 条：列表钮——打开播放队列面板（与舞台/
+    /// 曲目墙同一静态入口），关闭回调重置闲置计时。
+    @objc private func miniListTapped83() {
+        DeckTap82.log(host: "homewall", zone: "list", view: miniListButton)
+        resetMiniIdleTimer()
+        QueuePanelViewController.present(from: self) { [weak self] in
+            self?.resetMiniIdleTimer()
+        }
     }
 
     /// 进度填充与圆点配色的形态收口（3.7 (22) 立、(23) 修）：
@@ -2015,17 +2173,18 @@ final class HomeWallViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
+            || miniModeButton.frame.contains(point)
+            || miniListButton.frame.contains(point)
             || miniConsoleButton.frame.contains(point) { return }
-        // 进度带分域（封面优先于进度带，与旧分发序一致：封面
-        // 下缘与 seekHit 带约 2pt 重叠，该重叠落点归封面规格、
-        // 不归 seek）：带内落点直接返回，seek 已即时发生。
-        if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
+        // 进度带分域（标题优先于进度带，与旧封面分发序一
+        // 致）：带内落点直接返回，seek 已即时发生。
+        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
             Breadcrumbs.log("minibar.tap host=homewall zone=seekband action=skip")
             return
         }
         // (62) 尾波第 5 组：封面区单击换动作——回封面播放页，
         // 不再与台身同走浮层开关。
-        if miniCover.frame.contains(point) {
+        if miniTitle.frame.contains(point) {
             locateCurrentTrackFromCover()
             return
         }
@@ -2044,21 +2203,35 @@ final class HomeWallViewController: UIViewController,
     /// 触发详情（每击已由 seekHit 识别器即时 seek）；按键区
     /// 自理。宠物占位区双击被宠物识别器接走、到不了台身。
     @objc private func miniBarDoubleTapped(_ gesture: UITapGestureRecognizer) {
-        guard let bar = miniBar, !miniBarCollapsed else { return }
+        // (83) 第 2 条取证：双击全路径同步落盘（只取证、
+        // 不改分发逻辑；步名见 DblTap83）。
+        DblTap83.step("home", "recv")
+        guard let bar = miniBar, !miniBarCollapsed else {
+            DblTap83.step("home", "guardform")
+            return
+        }
         resetMiniIdleTimer()
         let point = gesture.location(in: bar)
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniConsoleButton.frame.contains(point) { return }
-        if miniSeekHit.frame.contains(point), !miniCover.frame.contains(point) {
+            || miniModeButton.frame.contains(point)
+            || miniListButton.frame.contains(point)
+            || miniConsoleButton.frame.contains(point) {
+            DblTap83.step("home", "skipbtn")
+            return
+        }
+        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
             Breadcrumbs.log("minibar.doubletap host=homewall zone=seekband action=skip")
+            DblTap83.step("home", "skipseek")
             return
         }
         Breadcrumbs.log("minibar.doubletap host=homewall action=stage")
         // (63) DS R63 B0：分发边界同步落盘——崩溃会话里本行
         // 在不在，直接判「双击到底有没有走到开台分发」。
         Breadcrumbs.logSync("tap.dispatch host=homewall")
+        DblTap83.arm("home")
+        DblTap83.step("home", "call")
         openNativeStageFromHome()
     }
 
@@ -2140,7 +2313,7 @@ final class HomeWallViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniConsoleButton.frame.contains(point) { return }
-        if miniCover.frame.contains(point) { return }
+        if miniTitle.frame.contains(point) { return }
         guard miniSeekHit.frame.contains(point) else { return }
         let track = miniProgressTrack.frame
         let engine = PlaybackEngine.shared
@@ -2188,10 +2361,12 @@ final class HomeWallViewController: UIViewController,
         case .began:
             // 收起态不响应拖动（3.7 (21)）：细条只认点按展开。
             if miniBarCollapsed { return }
-            if miniCover.frame.contains(barPoint)
+            if miniTitle.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint)
+                || miniModeButton.frame.contains(barPoint)
+                || miniListButton.frame.contains(barPoint)
                 || miniConsoleButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
@@ -2414,8 +2589,14 @@ final class HomeWallViewController: UIViewController,
         guard let bottomC = miniBarBottomC else { return }
         let inset = view.window?.safeAreaInsets.bottom
             ?? view.safeAreaInsets.bottom
+        // (83) 第 5 条量测对齐：收起轨带（容器 16 高、轨在
+        // 其底 −5.5、高 5）须落在屏底上方 8–13pt（系统横
+        // 线实测带）——容器底距 = inset − 2.5（竖屏 inset
+        // 34 → 31.5、横屏 21 → 18.5，随 inset 公式化，不
+        // 再写死常数；(78) 的 24.5 使轨带高出系统带 7pt
+        // 即「对不齐」的实根）。
         bottomC.constant = collapsed
-            ? (inset > 0 ? 24.5 : -10) : -10
+            ? (inset > 0 ? inset - 2.5 : -10) : -10
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -2429,9 +2610,9 @@ final class HomeWallViewController: UIViewController,
         applyMiniBarBottom77(collapsed: collapsed)
         (miniBar as? MiniBarHitView)?.isCollapsedForm = collapsed
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
-        // (82) 第 7 条：控制行中心常量按形态——展开 +30
-        // （中心落在台底 −36 处）、收起内容已淡出不论。
-        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 30 }
+        // (83) 第 6 条：控制行中心常量按形态——展开 0（台
+        // 中心）、收起内容已淡出不论。
+        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 0 }
         // (74) 第 5 项小横线：收起态轨道不再整宽——换居中
         // 134×5 圆角小横线（Home 指示条量级），进度填充仍在
         // 线内表达（fill 宽随轨道宽、scaleX 分数不变）；圆点
@@ -2503,16 +2684,20 @@ final class HomeWallViewController: UIViewController,
         // 展开＝台宽−40），下轮日志免像素量测即可自证两态。
         Breadcrumbs.log("minibar.form host=homewall collapsed=\(collapsed ? 1 : 0)"
             + " h=\(Int(miniBarHeightConstraint?.constant ?? -1))"
-            + " tw=\(collapsed ? 134 : Int(miniBarWidthConstraint?.constant ?? 0) - 40)"
+            + " tw=\(collapsed ? 140 : Int(miniBarWidthConstraint?.constant ?? 0) - 40)"
             + " recog=\((miniBarTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
             + "\((miniBarDoubleTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
             + "\((miniBarCollapsedTapRecognizer?.isEnabled ?? false) ? 1 : 0)")
-        // (82) 第 5 条：小白条形态自证——tw/th 为轨道目
-        // 标宽高（收起 134×5 对齐 home indicator）、横竖
-        // 屏字段同行，下轮日志免量测自证两态两向。
-        Breadcrumbs.log("minibar.fm82 host=home"
-            + " tw=\(collapsed ? 134 : Int(miniBarWidthConstraint?.constant ?? 0) - 116)"
+        // (83) 第 5 条：小白条量测对齐自证——收起四项与图
+        // 三系统横线实测逐项同值（tw=140 th=5 gap=8
+        // r=2.5，量测账见 (83) 报告）；展开态 gap=-1/r=2
+        // （台内长轨口径不变）。
+        Breadcrumbs.log("minibar.fm83 host=home"
+            + " col=\(collapsed ? 1 : 0)"
+            + " tw=\(collapsed ? 140 : Int(miniBarWidthConstraint?.constant ?? 0) - 116)"
             + " th=\(collapsed ? 5 : 4)"
+            + " gap=\(collapsed ? 8 : -1)"
+            + " r=\(collapsed ? "2.5" : "2")"
             + " orient=\(view.bounds.width > view.bounds.height ? "land" : "port")")
         refreshMiniProgressChrome()
     }
@@ -2523,7 +2708,8 @@ final class HomeWallViewController: UIViewController,
         // 附加功能行已迁浮层（(60) 第 7 条），不入台形态名单：
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniConsoleButton,
+                                miniPrevButton, miniNextButton, miniModeButton,
+                                miniListButton, miniConsoleButton,
                                 miniTimeElapsed, miniTimeDuration]
         for view in views {
             view?.alpha = alpha
@@ -2531,7 +2717,8 @@ final class HomeWallViewController: UIViewController,
     }
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
-        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton, miniConsoleButton]
+        let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton,
+                                    miniModeButton, miniListButton, miniConsoleButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
@@ -2661,6 +2848,8 @@ final class HomeWallViewController: UIViewController,
         guard view.window != nil, presentedViewController == nil else {
             Breadcrumbs.logSync("guard.decision host=homewall go=0"
                 + " pvc=\(pvcName) gate=\(gatePhase)")
+            // (83) 第 2 条取证：双击链守卫拦截步（同步落盘）。
+            DblTap83.step("home", "guard0")
             Breadcrumbs.log("minibar.doubletap action=stage-skipped reason=busy host=homewall")
             return
         }
@@ -2672,6 +2861,10 @@ final class HomeWallViewController: UIViewController,
         stage.modalPresentationStyle = .fullScreen
         present(stage, animated: true) {
             Breadcrumbs.log("stage.present.done host=homewall")
+            // (83) 第 2 条取证：present 完成步改同步落盘
+            // （(82) 窗 present.done 全窗 0 次——本步在不在
+            // 直接判呈现链是否走完）。
+            DblTap83.step("home", "done")
         }
     }
 
@@ -3282,6 +3475,10 @@ extension HomeWallViewController {
         centerCameraIfNeeded()
         Breadcrumbs.log("wall.seam.data segment=\(seamSegment.crumbName)"
             + " n=\(entries.count) filter=\(!filter.isEmpty) hidden=\(hidden.count)")
+        // (83) 黑屏定案③：入墙预热——数据落地即把当前在
+        // 场实例环封面按已解码档批量喂缓存（pf83 src=
+        // warm），首屏与紧邻屏不再等滚动才开取。
+        prefetchWall83(dirX: 0, dirY: 0, source: "warm")
     }
 
     @objc func seamHiddenPlaylistsChanged() {

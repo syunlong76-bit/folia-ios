@@ -73,6 +73,15 @@ enum Breadcrumbs {
         // rot82（特效旋转无门控量测）、light=light82
         // （开灯/关灯开关与点亮）。
         log("wit82.live ph=1 tap=1 loc=1 cov=1 fm=1 rot=1 light=1")
+        // (83) 名册续登：q=wall.q83（快滑窗解码队列深度＋
+        // 帧max）、dbl=dbltap83（双击全路径同步落盘）、
+        // light=light83（关灯点亮放大＋启动复位）、cov=
+        // isl.cov83（岛簇声波条＋横屏隐藏）、fm=minibar
+        // .fm83（小白条量测对齐四项）、pf=pf83（prefetch
+        // 真接线触发/入队计数）、hit=wall.hit83（cell 同
+        // 步命中率新口径）。双击闪退已由 .ips 定行修复
+        // （约束块删除），ph83 相位行随之取消、未入册。
+        log("wit83.live q=1 dbl=1 light=1 cov=1 fm=1 pf=1 hit=1")
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。

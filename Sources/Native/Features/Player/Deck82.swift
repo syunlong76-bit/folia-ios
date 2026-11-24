@@ -126,13 +126,45 @@ enum DeckGlyph82 {
 
 /// (82) 台面布局常量（单一出处，四页同值）。
 enum DeckLayout82 {
-    /// 展开高：E 定版三行（封面行＋进度行＋控制行）。
-    static let expandedHeight: CGFloat = 132
+    /// 展开高：(82) E 定版三行 132 → (83) 第 6 条按网页版
+    /// 紧凑台重做（歌名行＋控制行＋进度行，网页版比例约
+    /// 100–110），改 106。
+    static let expandedHeight: CGFloat = 106
     static let collapsedHeight: CGFloat = 16
-    /// 收起态小白条：与 home indicator 同尺寸 134×5。
-    static let collapsedTrackWidth: CGFloat = 134
+    /// 收起态小白条：(83) 第 5 条图像量测对齐系统 home
+    /// indicator（量测账见 delivery-83-report：图三系统条
+    /// 420×15px @3x、底边距屏底 24px、圆角约 7.5px）——
+    /// 宽 140、高 5、底边距屏底 8、圆角 2.5（全胶囊）。
+    /// (82) 的 134 系文档常数、与实测不符，本版盖过。
+    static let collapsedTrackWidth: CGFloat = 140
     static let collapsedTrackHeight: CGFloat = 5
+    static let collapsedBottomGap: CGFloat = 8
+    static let collapsedCornerRadius: CGFloat = 2.5
     static let deckCornerRadius: CGFloat = 35
+}
+
+/// (83) 第 2 条取证：双击播放台全路径同步落盘见证（只取
+/// 证、不改双击逻辑）。双击闪退自 (63) 起无日志定案——本
+/// 链把「识别器触发→分域判定→分发→present 守卫→present
+/// 完成→舞台露面」每步以 logSync 写盘，崩在哪一步，下一
+/// 次启动由 AppDelegate 扫上一会话尾巴（folia-prev-tail）
+/// 把最后一步以 crash83 行带回新会话日志头。armed 旗由
+/// 分发点置位、舞台露面消费，避免普通开台也冒充双击链。
+enum DblTap83 {
+    private static var armedHost: String?
+
+    static func step(_ host: String, _ step: String) {
+        Breadcrumbs.logSync("dbltap83 host=\(host) step=\(step)")
+    }
+
+    static func arm(_ host: String) { armedHost = host }
+
+    /// 舞台露面消费点：仅双击链在飞时落 step=appear 并落旗。
+    static func consumeAppear() {
+        guard let host = armedHost else { return }
+        armedHost = nil
+        step(host, "appear")
+    }
 }
 
 /// (82) 第 2 条点按见证：新台/控制台每个按钮动作入口落一

@@ -242,6 +242,25 @@ final class NativeCoverLoader {
         return nil
     }
 
+    /// (83) 第 1 条取证：解码在途计数（loadFromNetwork 解
+    /// 码段前后增减，statLock 守）——与在途任务数一起供
+    /// 滚动窗 wall.q83 同窗落痕：快滑黑屏时段到底堵在
+    /// 「任务排队」还是「解码在途」，下轮日志凭此分流，
+    /// 本版只补取证、不改调度逻辑（日志未到不许猜修）。
+    private var decInFlight83 = 0
+
+    /// (83) 第 1 条取证：当前在途加载任务数（排队＋取图
+    /// ＋解码全含）与正在解码数，同步读（滚动窗冲刷点用）。
+    func loadDepth83() -> (fly: Int, dec: Int) {
+        inFlightLock.lock()
+        let fly = inFlightLoads.count
+        inFlightLock.unlock()
+        statLock.lock()
+        let dec = decInFlight83
+        statLock.unlock()
+        return (fly, dec)
+    }
+
     /// (82) 第 1 条：ph82 统计增量（wall.ph82 见证用）——
     /// 返回自上次取走以来的 hit/miss 增量并推进基线。
     private var phHitBaseline82 = 0
@@ -261,6 +280,10 @@ final class NativeCoverLoader {
     /// 证旧哈希色明度 0.23 在真机上读作纯黑。占位图带对角
     /// 渐变＋居中半透明 ♪，按地址哈希色生成、同图恒同图，
     /// 小缓存（按色键，≤64 张）。
+    /// (83) 黑屏定案①：(82) 会话日志证实快滑时砖面只剩占
+    /// 位、0.23 明度成片读作黑——占位底色明度提到 0.45
+    /// （placeholderColor），先把黑感止住（真图到达率由
+    /// prefetch83 真接线与入墙预热另治）。
     private let placeholderCache82 = NSCache<NSString, UIImage>()
 
     func placeholderImage(for raw: String, size: CGFloat = 96) -> UIImage {
@@ -300,24 +323,50 @@ final class NativeCoverLoader {
         return image
     }
 
+    /// (83) 黑屏定案②③见证计数：pf83 触发次数与实际入队
+    /// 预取量（statLock 守）——(82) 本函数全仓零调用、从未
+    /// 运行（假交付，见 (83) 报告）；本版两面墙滚动回调按
+    /// 方向真接线＋入墙预热，落痕须下轮日志数得到。
+    private var pfTrig83 = 0
+    private var pfItems83 = 0
+
     /// (82) 第 1 条：快滑方向预取入口（宿主在滚动回调里按
     /// 方向把即将入视的封面先喂进来，走 .prefetch 低优先
     /// 级、不与可见砖抢 4 个取图槽）。
-    func prefetch82(_ items: [(raw: String, tier: Int)]) {
+    /// (83) 真接线：两面墙 scrollViewDidScroll 按方向调用
+    /// （src=scroll）、数据落地入墙预热调用（src=warm）；
+    /// 每次调用落 pf83（trig 累计触发、n 本次入队、tot
+    /// 累计入队），warm 即使全命中缓存也落一行（n=0 可读）。
+    func prefetch82(_ items: [(raw: String, tier: Int)],
+                    source: String = "scroll", wall: String = "?") {
+        var enqueued = 0
         for item in items {
             guard let url = proxiedURLString(item.raw, tier: item.tier) else { continue }
             if cachedImage(for: url) != nil { continue }
+            enqueued += 1
             Task { _ = await self.image(for: url, tier: item.tier, priority: .prefetch) }
+        }
+        statLock.lock()
+        pfTrig83 += 1
+        pfItems83 += enqueued
+        let trig = pfTrig83, tot = pfItems83
+        statLock.unlock()
+        if enqueued > 0 || source == "warm" {
+            Breadcrumbs.log("pf83 wall=\(wall) src=\(source)"
+                + " n=\(enqueued) trig=\(trig) tot=\(tot)")
         }
     }
 
-    /// (72) 无任何缓存时的兜底占位色：按地址哈希取暗调色
-    /// （低饱和、低明度），同图恒同色、不许纯黑。
+    /// (72) 无任何缓存时的兜底占位色：按地址哈希取色，同
+    /// 图恒同色、不许纯黑。(83) 黑屏定案①：明度 0.23→0.45
+    /// ——(82) 日志证实快滑时配置瞬间有真图的砖仅 29%、其
+    /// 余只剩占位，0.23 在真机成片读作纯黑；0.45 起占位
+    /// 读作彩色砖面、黑感先消（饱和不变、色相仍按哈希）。
     static func placeholderColor(for raw: String) -> UIColor {
         var hash: UInt64 = 5381
         for byte in raw.utf8 { hash = (hash &* 33) &+ UInt64(byte) }
         return UIColor(hue: CGFloat(hash % 360) / 360,
-                       saturation: 0.28, brightness: 0.23, alpha: 1)
+                       saturation: 0.28, brightness: 0.45, alpha: 1)
     }
 
     private func noteStat(hit: Bool) {
@@ -445,11 +494,18 @@ final class NativeCoverLoader {
             return nil
         }
         // (78) 第 6 条：解码耗时单独计时（降采样＋主色同段）。
+        // (83) 第 1 条取证：解码在途计数同段增减（wall.q83 读）。
         let decStart = Date()
+        statLock.lock()
+        decInFlight83 += 1
+        statLock.unlock()
         let decoded = await Task.detached(priority: .utility) {
             (image: Self.downsample(data: data, targetPixels: tier),
              color: Self.averageColor(data: data))
         }.value
+        statLock.lock()
+        decInFlight83 -= 1
+        statLock.unlock()
         let decMs = Int(Date().timeIntervalSince(decStart) * 1000)
         await noteDec78(waitMs: waitMs, decMs: decMs, priority: priority)
         if Date().timeIntervalSince(started) > 0.8 { noteSlowLoad() }

@@ -247,7 +247,7 @@ final class PetIslandLayer: UIView {
         if on {
             hideBubble()
             mirrorCenter81?.isHidden = true
-            setMirrorNote81(playing: false)
+            setMirrorWave83(playing: false)
             islandBackdrop74?.removeFromSuperview()
             islandBackdrop74 = nil
             backdropSegL = nil
@@ -325,11 +325,18 @@ final class PetIslandLayer: UIView {
         pageTag82 = page
         guard let input = lastCenterInput82 else {
             Breadcrumbs.log("isl.cov82 page=\(page) on=0 sup=\(liveActivitySuppressed ? 1 : 0) stub=0")
+            Breadcrumbs.log("isl.cov83 page=\(page) on=0"
+                + " sup=\(liveActivitySuppressed ? 1 : 0)"
+                + " land=\(isPortrait ? 0 : 1) wave=1 resend=1 stub=0")
             return
         }
         syncMirrorCenter81(artwork: input.artwork, title: input.title,
                            active: input.active, isPlaying: input.isPlaying)
         Breadcrumbs.log("isl.cov82 page=\(page) on=\(input.active ? 1 : 0) sup=\(liveActivitySuppressed ? 1 : 0) stub=1")
+        // (83) 第 4 条：重发同拍落 cov83（横屏字段现读）。
+        Breadcrumbs.log("isl.cov83 page=\(page) on=\(input.active ? 1 : 0)"
+            + " sup=\(liveActivitySuppressed ? 1 : 0)"
+            + " land=\(isPortrait ? 0 : 1) wave=1 resend=1")
     }
 
     private func syncMirrorCenter81(artwork: UIImage?,
@@ -349,9 +356,18 @@ final class PetIslandLayer: UIView {
             lastMirrorCover82 = signature82
             Breadcrumbs.log("isl.cov82 page=\(pageTag82) on=\(active ? 1 : 0) sup=\(liveActivitySuppressed ? 1 : 0)")
         }
+        // (83) 第 4 条见证：声波簇签名（页态/抑制/横屏三
+        // 字段）——横屏隐藏与竖屏在场都可凭日志判读。
+        let signature83 = "\(signature82)|wave|\(isPortrait ? 0 : 1)"
+        if signature83 != lastMirrorCover83 {
+            lastMirrorCover83 = signature83
+            Breadcrumbs.log("isl.cov83 page=\(pageTag82) on=\(active ? 1 : 0)"
+                + " sup=\(liveActivitySuppressed ? 1 : 0)"
+                + " land=\(isPortrait ? 0 : 1) wave=1")
+        }
         guard active, !liveActivitySuppressed else {
             mirrorCenter81?.isHidden = true
-            setMirrorNote81(playing: false)
+            setMirrorWave83(playing: false)
             return
         }
         let cluster: UIView
@@ -368,15 +384,13 @@ final class PetIslandLayer: UIView {
             cover.backgroundColor = UIColor.white.withAlphaComponent(0.14)
             cluster.addSubview(cover)
             mirrorCover81 = cover
-            let note = UIImageView()
-            note.frame = CGRect(x: 29, y: 4, width: 18, height: 18)
-            note.image = UIImage(systemName: "music.note",
-                withConfiguration: UIImage.SymbolConfiguration(
-                    pointSize: 15, weight: .semibold))
-            note.tintColor = .white
-            note.contentMode = .center
-            cluster.addSubview(note)
-            mirrorNote81 = note
+            // (83) 第 4 条：音符 ♪ 退役，换声波竖条（图二
+            // 式样：5 根竖条、播放跳动/暂停静止，苹果 Live
+            // Activity 风），几何位不变（簇宽仍 47）。
+            let wave = IslandWave83View()
+            wave.frame = CGRect(x: 29, y: 5, width: 18, height: 16)
+            cluster.addSubview(wave)
+            mirrorWave83 = wave
             addSubview(cluster)
             mirrorCenter81 = cluster
         }
@@ -384,41 +398,28 @@ final class PetIslandLayer: UIView {
         cluster.isHidden = false
         positionMirrorCenter81()
         bringSubviewToFront(cluster)
-        setMirrorNote81(playing: isPlaying)
+        setMirrorWave83(playing: isPlaying)
     }
 
-    /// 中央簇落位：岛框中心（横竖屏同位，横屏不隐藏）。
+    /// 中央簇落位：岛框中心。(83) 第 4 条：横屏时中央簇
+    /// 整体隐藏（封面与声波都不显示）——显隐在此按当前
+    /// bounds 与存根状态统一裁决，layoutSubviews 旋转时
+    /// 经本函数自动重裁，不依赖宿主再 publish。
     private func positionMirrorCenter81() {
         guard let cluster = mirrorCenter81 else { return }
         cluster.frame = CGRect(
             x: bounds.width / 2 - 23.5,
             y: Self.islandTopY + Self.islandHeight / 2 - 13,
             width: 47, height: 26)
+        let shouldShow = (lastCenterInput82?.active ?? false)
+            && !liveActivitySuppressed && isPortrait
+        cluster.isHidden = !shouldShow
     }
 
-    /// 音符跳动：播放中挂双轨关键帧动画（纵跳＋轻摆，
-    /// 0.9s 一轮无限循环）；暂停/隐藏摘除并压暗静置。
-    private func setMirrorNote81(playing: Bool) {
-        guard let note = mirrorNote81 else { return }
-        let key = "noteBounce81"
-        if playing {
-            note.alpha = 1
-            guard note.layer.animation(forKey: key) == nil else { return }
-            let bounce = CAKeyframeAnimation(keyPath: "transform.translation.y")
-            bounce.values = [0, -3.5, 0, -1.5, 0]
-            bounce.duration = 0.9
-            let sway = CAKeyframeAnimation(keyPath: "transform.rotation.z")
-            sway.values = [0, -0.14, 0, 0.14, 0]
-            sway.duration = 0.9
-            let group = CAAnimationGroup()
-            group.animations = [bounce, sway]
-            group.duration = 0.9
-            group.repeatCount = .infinity
-            note.layer.add(group, forKey: key)
-        } else {
-            note.layer.removeAnimation(forKey: key)
-            note.alpha = 0.55
-        }
+    /// 声波条播放态：播放中 5 根竖条高低跳动，暂停静止
+    /// 压暗（动画本体在 IslandWave83View）。
+    private func setMirrorWave83(playing: Bool) {
+        mirrorWave83?.setPlaying(playing)
     }
 
     /// 岛面台词唯一出口：镜像期 = 活动的当前句（与后台
@@ -444,13 +445,16 @@ final class PetIslandLayer: UIView {
     private var lastPerchSignature74 = ""
     /// (79) 第 4 条岛带几何去重签名（isl.geo79）。
     private var lastGeoSignature79 = ""
-    /// (81) 第 4 条中央簇（封面＋跳动音符）与去重签名。
+    /// (81) 第 4 条中央簇（封面＋音符）与去重签名。
+    /// (83) 第 4 条：音符换声波竖条（mirrorWave83）。
     private var mirrorCenter81: UIView?
     private var mirrorCover81: UIImageView?
-    private var mirrorNote81: UIImageView?
+    private var mirrorWave83: IslandWave83View?
     private var lastMirrorCover81 = ""
     /// (82) 第 4 条：含页态/抑制态的中央簇签名存根。
     private var lastMirrorCover82 = ""
+    /// (83) 第 4 条：声波簇签名（含横屏字段）。
+    private var lastMirrorCover83 = ""
     private var tickTimer: Timer?
     /// 宿主主窗（(53) G）：本层视图本体不再进窗，petRootLayer
     /// （= 本层 layer）直挂它的 layer；hostWindow 只作 graft
@@ -1249,3 +1253,65 @@ final class PetIslandLayer: UIView {
     }
 }
 
+
+/// (83) 第 4 条：岛中央簇声波竖条（Miller 图二式样，苹果
+/// Live Activity 风）：5 根圆角竖条居中对称伸缩——播放
+/// 时高低跳动（各条相位错开、0.9s 一轮，与系统声波同
+/// 节奏感），暂停时静止在高低不一的基线并压暗。条本体
+/// 高 16、宽 2.6、间距 1.25，总宽 18，与封面同住 47 簇。
+final class IslandWave83View: UIView {
+
+    private var bars: [UIView] = []
+    /// 静止基线（归一化高）：中高、两侧低，图二的声波轮廓。
+    private let baseScales: [CGFloat] = [0.44, 0.81, 0.56, 0.94, 0.5]
+    private var playing83 = false
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        for i in 0..<5 {
+            let bar = UIView()
+            bar.backgroundColor = .white
+            bar.layer.cornerRadius = 1.3
+            bar.frame = CGRect(x: CGFloat(i) * 3.85, y: 0,
+                               width: 2.6, height: 16)
+            addSubview(bar)
+            bars.append(bar)
+        }
+        applyStatic83()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    private func applyStatic83() {
+        for (i, bar) in bars.enumerated() {
+            bar.layer.removeAnimation(forKey: "wave83")
+            bar.transform = CGAffineTransform(
+                scaleX: 1, y: baseScales[i])
+        }
+        alpha = 0.55
+    }
+
+    func setPlaying(_ playing: Bool) {
+        // 同态重复调用空转（宿主每次 publish 都回刷，动画
+        // 不许被反复重启打出顿挫）。
+        guard playing != playing83 else { return }
+        playing83 = playing
+        guard playing else { applyStatic83(); return }
+        alpha = 1
+        for (i, bar) in bars.enumerated() {
+            let base = baseScales[i]
+            bar.transform = CGAffineTransform(scaleX: 1, y: base)
+            let anim = CAKeyframeAnimation(keyPath: "transform.scale.y")
+            anim.values = [base * 0.62, base * 1.18, base * 0.8,
+                           base * 1.28, base * 0.7, base * 1.02,
+                           base * 0.62]
+            anim.duration = 0.9
+            anim.repeatCount = .infinity
+            anim.beginTime = CACurrentMediaTime() + Double(i) * 0.07
+            anim.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            bar.layer.add(anim, forKey: "wave83")
+        }
+    }
+}
