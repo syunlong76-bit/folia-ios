@@ -180,6 +180,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 台面毛玻璃层（3.7 (20)）：入场时 effect 从 nil 渐入做
     /// 「显影」联动，须持有引用（原为 buildMiniBar 局部量）。
     private var miniBlurView: UIVisualEffectView?
+    /// (84) 第 3 条：台身手势背景层（同主页墙）。
+    private var miniDeckSurface84: UIView?
     /// 迷你台逻辑显隐（3.7 (20)）：动画边沿的唯一事实源，与
     /// isHidden（视觉落定态）分工，防进/退动画互相打架。
     private var miniBarPresented = false
@@ -240,8 +242,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 钮随旧台退役，职能全进控制台面板。
     /// (83) 第 6 条：网页版紧凑台重做——模式钮与列表钮回
     /// 台面（控制行两端），控制台入口移进度行右端。
-    private var miniModeButton: UIButton!
-    private var miniListButton: UIButton!
+    // (84) 第 1 条：模式钮/列表钮撤下台面（职能由控制台
+    // 承接），台面只留播放/上一曲/下一曲/控制台入口。
     private var miniConsoleButton: UIButton!
     private var miniTimeElapsed: UILabel!
     private var miniTimeDuration: UILabel!
@@ -644,6 +646,8 @@ final class WallPrototypeViewController: UIViewController,
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
         blur.translatesAutoresizingMaskIntoConstraints = false
+        // (84) 第 3 条：毛玻璃禁交互（命中结构，同主页墙）。
+        blur.isUserInteractionEnabled = false
         bar.addSubview(blur)
         miniBlurView = blur
         NSLayoutConstraint.activate([
@@ -655,12 +659,24 @@ final class WallPrototypeViewController: UIViewController,
 
         // 台内主题层（13.5）：垫在玻璃材质之上、高光/文字/
         // 按钮之下，全幅圆角裁切；整层不拦手势。
+        // (84) 第 3 条：台身手势背景层（按钮的兄弟层）。
+        let deckSurface84 = UIView()
+        deckSurface84.backgroundColor = .clear
+        deckSurface84.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(deckSurface84)
+        miniDeckSurface84 = deckSurface84
+        NSLayoutConstraint.activate([
+            deckSurface84.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
+            deckSurface84.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
+            deckSurface84.topAnchor.constraint(equalTo: bar.topAnchor),
+            deckSurface84.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
+        ])
+
         let themeLayer = MiniPlayerThemeLayer()
         themeLayer.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(themeLayer)
         miniThemeLayer = themeLayer
-        // (82) 第 7 条：E 毛玻璃定版——主题图层退役隐藏。
-        themeLayer.isHidden = true
+        // (84) 第 1 条：主题底复原（(82) E 毛玻璃恒隐藏退役）。
         NSLayoutConstraint.activate([
             themeLayer.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
             themeLayer.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
@@ -727,6 +743,8 @@ final class WallPrototypeViewController: UIViewController,
         progressTrack.layer.cornerRadius = 2
         progressTrack.clipsToBounds = true
         progressTrack.translatesAutoresizingMaskIntoConstraints = false
+        // (84) 第 3 条：轨道纯视觉禁交互（同主页墙）。
+        progressTrack.isUserInteractionEnabled = false
         bar.addSubview(progressTrack)
         miniProgressTrack = progressTrack
         let fill = UIView()
@@ -740,37 +758,31 @@ final class WallPrototypeViewController: UIViewController,
         // 墙同款）；位置由 setMiniProgress 按填充比例同步。
         // (83) 第 6 条：把手收成小圆点量级 20→14。
         let knob = UIView()
-        knob.backgroundColor = .clear
+        // (84) 第 1 条：把手复原 (80) 形态——9pt 白色发光
+        // 圆点＋主题皮肤叠层（同主页墙）；(82) 花朵图退役。
+        knob.backgroundColor = .white
+        knob.layer.cornerRadius = 4.5
+        knob.layer.shadowColor = UIColor.white.cgColor
+        knob.layer.shadowOpacity = 0.9
+        knob.layer.shadowRadius = 4
+        knob.layer.shadowOffset = .zero
         knob.isUserInteractionEnabled = false
         knob.translatesAutoresizingMaskIntoConstraints = false
-        let knobFlower = UIImageView(image: DeckGlyph82.flowerImage(size: 14))
-        knobFlower.translatesAutoresizingMaskIntoConstraints = false
-        knobFlower.isUserInteractionEnabled = false
-        knob.addSubview(knobFlower)
-        NSLayoutConstraint.activate([
-            knobFlower.centerXAnchor.constraint(equalTo: knob.centerXAnchor),
-            knobFlower.centerYAnchor.constraint(equalTo: knob.centerYAnchor),
-            knobFlower.widthAnchor.constraint(equalToConstant: 14),
-            knobFlower.heightAnchor.constraint(equalToConstant: 14),
-        ])
         bar.addSubview(knob)
         miniProgressKnob = knob
 
         miniCover = UIImageView()
         miniCover.contentMode = .scaleAspectFill
         miniCover.clipsToBounds = true
-        miniCover.layer.cornerRadius = 23
+        miniCover.layer.cornerRadius = 22
         miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         miniCover.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniCover)
-        // (83) 第 6 条：同主页墙——封面/歌手保留刷新、隐
-        // 藏不上台面；点按分域「封面区」改挂标题。
-        miniCover.isHidden = true
+        // (84) 第 1 条：封面/歌手复原上台面（(80) 版式）。
 
         miniTitle = UILabel()
         miniTitle.font = .systemFont(ofSize: 14, weight: .semibold)
         miniTitle.textColor = .white
-        miniTitle.textAlignment = .center
         miniTitle.lineBreakMode = .byTruncatingTail
         miniTitle.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniTitle)
@@ -781,17 +793,15 @@ final class WallPrototypeViewController: UIViewController,
         miniArtist.lineBreakMode = .byTruncatingTail
         miniArtist.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniArtist)
-        miniArtist.isHidden = true
 
         miniPlayButton = UIButton(type: .system)
-        // (83) 第 6 条：白色大圆＋深色字形（同主页墙）。
-        miniPlayButton.tintColor = UIColor(white: 0.12, alpha: 1)
-        miniPlayButton.backgroundColor = .white
-        miniPlayButton.layer.cornerRadius = 24
-        // (82) 第 7 条：字形走 DeckGlyph82 独立绘制函数。
+        // (84) 第 1 条：播放钮复原 (80) 形态（白字形、无圆
+        // 底）；字形仍走 DeckGlyph82 现行临时套。
+        miniPlayButton.tintColor = .white
         miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 21), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
+        miniPlayButton.addTarget(self, action: #selector(miniPlayDown84), for: .touchDown)
         bar.addSubview(miniPlayButton)
 
         miniPrevButton = UIButton(type: .system)
@@ -799,6 +809,7 @@ final class WallPrototypeViewController: UIViewController,
         miniPrevButton.setImage(DeckGlyph82.image(.prev, pointSize: 19), for: .normal)
         miniPrevButton.translatesAutoresizingMaskIntoConstraints = false
         miniPrevButton.addTarget(self, action: #selector(miniPrevTapped), for: .touchUpInside)
+        miniPrevButton.addTarget(self, action: #selector(miniPrevDown84), for: .touchDown)
         bar.addSubview(miniPrevButton)
 
         miniNextButton = UIButton(type: .system)
@@ -806,27 +817,12 @@ final class WallPrototypeViewController: UIViewController,
         miniNextButton.setImage(DeckGlyph82.image(.next, pointSize: 19), for: .normal)
         miniNextButton.translatesAutoresizingMaskIntoConstraints = false
         miniNextButton.addTarget(self, action: #selector(miniNextTapped), for: .touchUpInside)
+        miniNextButton.addTarget(self, action: #selector(miniNextDown84), for: .touchDown)
         bar.addSubview(miniNextButton)
 
-        // (83) 第 6 条：模式钮（左端灰圆菜单）＋列表钮
-        // （右端）回台面，与主页墙同构同值。
-        miniModeButton = UIButton(type: .system)
-        miniModeButton.backgroundColor = UIColor.white.withAlphaComponent(0.16)
-        miniModeButton.layer.cornerRadius = 19
-        miniModeButton.tintColor = .white
-        miniModeButton.accessibilityLabel = "播放模式"
-        miniModeButton.showsMenuAsPrimaryAction = true
-        miniModeButton.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(miniModeButton)
-        refreshMiniModeButton83()
-
-        miniListButton = UIButton(type: .system)
-        miniListButton.setImage(DeckGlyph82.image(.list, pointSize: 17), for: .normal)
-        miniListButton.tintColor = .white
-        miniListButton.accessibilityLabel = "播放队列"
-        miniListButton.translatesAutoresizingMaskIntoConstraints = false
-        miniListButton.addTarget(self, action: #selector(miniListTapped83), for: .touchUpInside)
-        bar.addSubview(miniListButton)
+        // (84) 第 1 条：模式钮/列表钮不上台面（职能由控
+        // 制台承接），refreshMiniModeButton83/miniList
+        // Tapped83 随之删除。
 
         // (82) 第 7/8 条：控制台入口（纯图标圆钮）＋双时
         // 间标签。(83) 第 6 条：入口移进度行右端、收小
@@ -839,6 +835,7 @@ final class WallPrototypeViewController: UIViewController,
         miniConsoleButton.accessibilityLabel = "控制台"
         miniConsoleButton.translatesAutoresizingMaskIntoConstraints = false
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleTapped82), for: .touchUpInside)
+        miniConsoleButton.addTarget(self, action: #selector(miniConsoleDown84), for: .touchDown)
         bar.addSubview(miniConsoleButton)
 
         miniTimeElapsed = UILabel()
@@ -914,57 +911,45 @@ final class WallPrototypeViewController: UIViewController,
             fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
 
             knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            knob.widthAnchor.constraint(equalToConstant: 14),
-            knob.heightAnchor.constraint(equalToConstant: 14),
+            knob.widthAnchor.constraint(equalToConstant: 9),
+            knob.heightAnchor.constraint(equalToConstant: 9),
 
-            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
-            miniCover.topAnchor.constraint(equalTo: bar.topAnchor, constant: 14),
-            miniCover.widthAnchor.constraint(equalToConstant: 46),
-            miniCover.heightAnchor.constraint(equalToConstant: 46),
+            miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
+            miniCover.widthAnchor.constraint(equalToConstant: 44),
+            miniCover.heightAnchor.constraint(equalToConstant: 44),
 
-            // (83) 第 6 条：歌名行居中（与主页墙逐项同值）。
-            miniTitle.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            miniTitle.leadingAnchor.constraint(greaterThanOrEqualTo: bar.leadingAnchor, constant: 20),
-            miniTitle.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -20),
-            miniTitle.topAnchor.constraint(equalTo: bar.topAnchor, constant: 9),
+            // (84) 第 1 条：标题复原 (80) 锚法（同主页墙）。
+            miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
+            miniTitle.trailingAnchor.constraint(lessThanOrEqualTo: miniPrevButton.leadingAnchor, constant: -6),
+            miniTitle.topAnchor.constraint(equalTo: miniCover.topAnchor, constant: 5),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
             miniArtist.trailingAnchor.constraint(equalTo: miniTitle.trailingAnchor),
             miniArtist.topAnchor.constraint(equalTo: miniTitle.bottomAnchor, constant: 2),
 
-            // (83) 第 6 条：控制行——模式左端、播放白色大
-            // 圆居中、上下曲小一号、列表右端（同主页墙）。
-            miniPlayButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            miniPlayButton.widthAnchor.constraint(equalToConstant: 48),
-            miniPlayButton.heightAnchor.constraint(equalToConstant: 48),
-
-            miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -20),
-            miniPrevButton.widthAnchor.constraint(equalToConstant: 36),
-            miniPrevButton.heightAnchor.constraint(equalToConstant: 36),
-
-            miniNextButton.leadingAnchor.constraint(equalTo: miniPlayButton.trailingAnchor, constant: 20),
-            miniNextButton.widthAnchor.constraint(equalToConstant: 36),
-            miniNextButton.heightAnchor.constraint(equalToConstant: 36),
-
-            miniModeButton.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            miniModeButton.widthAnchor.constraint(equalToConstant: 38),
-            miniModeButton.heightAnchor.constraint(equalToConstant: 38),
-
-            miniListButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
-            miniListButton.widthAnchor.constraint(equalToConstant: 38),
-            miniListButton.heightAnchor.constraint(equalToConstant: 38),
-
-            // (83) 第 6 条：控制台入口移进度行右端、与轨同心。
-            miniConsoleButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -14),
-            miniConsoleButton.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            // (84) 第 1 条：主排右端簇复原 (80) 链式锚（同
+            // 主页墙）：控制台居最右，向左次/播/上一曲。
+            miniConsoleButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
             miniConsoleButton.widthAnchor.constraint(equalToConstant: 30),
             miniConsoleButton.heightAnchor.constraint(equalToConstant: 30),
+
+            miniNextButton.trailingAnchor.constraint(equalTo: miniConsoleButton.leadingAnchor, constant: -2),
+            miniNextButton.widthAnchor.constraint(equalToConstant: 34),
+            miniNextButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
+            miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
+            miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
+
+            miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
+            miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
+            miniPrevButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniTimeElapsed.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 16),
             miniTimeElapsed.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             miniTimeElapsed.widthAnchor.constraint(equalToConstant: 34),
 
-            miniTimeDuration.trailingAnchor.constraint(equalTo: miniConsoleButton.leadingAnchor, constant: -8),
+            miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -16),
             miniTimeDuration.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             miniTimeDuration.widthAnchor.constraint(equalToConstant: 34),
 
@@ -975,19 +960,20 @@ final class WallPrototypeViewController: UIViewController,
             miniSeekHit.heightAnchor.constraint(equalToConstant: 27),
         ])
         miniKnobLeading = knob.leadingAnchor.constraint(
-            equalTo: progressTrack.leadingAnchor, constant: -7)
+            equalTo: progressTrack.leadingAnchor, constant: -4.5)
         miniKnobLeading?.isActive = true
-        // (83) 第 6 条：控制行纵向——展开态居台中心（常量
-        // 0，台高 106）；控制台钮已移进度行、不在本组。
-        miniMainCenterY = [miniPlayButton, miniPrevButton, miniNextButton,
-                           miniModeButton, miniListButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 0)
+        // (84) 第 1 条：主排纵向复原 (80)——封面与四钮同组
+        // 居台中心 −5，两形态同值。
+        miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton,
+                           miniNextButton, miniConsoleButton].map {
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // (82) 第 7 条：轨道纵锚制（展开）/底锚（收起）由
         // setMiniBarForm 互斥切换。(83) 第 6 条：展开锚改
         // 台底 −14（封面行退役），先按展开装配。
-        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -14)
+        // (84) 第 1 条：展开轨底锚复原 (80) 的 −7。
+        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
         miniTrackTopC?.isActive = true
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5.5)
         miniTrackBottomConstraint?.isActive = false
@@ -1005,20 +991,20 @@ final class WallPrototypeViewController: UIViewController,
         let longPress = UILongPressGestureRecognizer(
             target: self, action: #selector(miniBarLongPressed(_:)))
         longPress.minimumPressDuration = 0.55
-        bar.addGestureRecognizer(longPress)
+        deckSurface84.addGestureRecognizer(longPress)
         let doubleTap = UITapGestureRecognizer(target: self, action: #selector(miniBarDoubleTapped(_:)))
         doubleTap.numberOfTapsRequired = 2
         doubleTap.require(toFail: longPress)
-        bar.addGestureRecognizer(doubleTap)
+        deckSurface84.addGestureRecognizer(doubleTap)
         miniBarDoubleTapRecognizer = doubleTap
         let tap = UITapGestureRecognizer(target: self, action: #selector(miniBarTapped(_:)))
         tap.require(toFail: longPress)
         tap.require(toFail: doubleTap)
-        bar.addGestureRecognizer(tap)
+        deckSurface84.addGestureRecognizer(tap)
         miniBarTapRecognizer = tap
         let collapsedTap = UITapGestureRecognizer(target: self, action: #selector(miniBarCollapsedTapped(_:)))
         collapsedTap.isEnabled = false
-        bar.addGestureRecognizer(collapsedTap)
+        deckSurface84.addGestureRecognizer(collapsedTap)
         miniBarCollapsedTapRecognizer = collapsedTap
         // (74) 第 4 项兜底识别器（同主页墙）：与形态无关、
         // 恒启用、无 require 链，几何细条时先纠标志再展开。
@@ -1034,14 +1020,9 @@ final class WallPrototypeViewController: UIViewController,
         // 几何兜底语义不变。
         agnosticTap74.cancelsTouchesInView = false
         agnosticTap74.require(toFail: doubleTap)
-        bar.addGestureRecognizer(agnosticTap74)
-        // (82) 第 2 条：按钮命中独立——台身识别器组关
-        // delaysTouchesEnded 并挂 delegate（UIControl 落点
-        // 拒收），与主页墙同修。
-        for recognizer in [tap, doubleTap, longPress, agnosticTap74] {
-            recognizer.delaysTouchesEnded = false
-            recognizer.delegate = self
-        }
+        // (84) 第 3 条：识别器改挂背景手势层＋(82) delegate
+        // 豁免接线整套退役（同主页墙）。
+        deckSurface84.addGestureRecognizer(agnosticTap74)
 
         applyMiniTheme()
         applyMiniBarSlots()
@@ -1083,8 +1064,8 @@ final class WallPrototypeViewController: UIViewController,
     /// 交互名单含隐藏键也无妨：isHidden 恒压过 alpha 与命中。
     private func applyMiniBarSlots() {
         guard let prev = miniPrevButton, let next = miniNextButton else { return }
-        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 40)
-        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 40)
+        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 34)
+        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 34)
         // queue 键已迁顶部 chrome 排（(53) H 修正），不再受台面
         // 槽位显隐管辖。
     }
@@ -1140,50 +1121,10 @@ final class WallPrototypeViewController: UIViewController,
                 PlaybackEngine.shared.playbackState == .playing ? .pause : .play,
                 pointSize: 21),
             for: .normal)
-        // (83) 第 6 条：模式钮随同点回刷（同主页墙）。
-        refreshMiniModeButton83()
+        // (84) 第 1 条：模式钮已撤下台面（同主页墙）。
     }
 
-    /// (83) 第 6 条：模式钮字形＋菜单回刷（与主页墙/控制
-    /// 台同源同字：顺序/循环/单曲/随机、off 态压暗）。
-    private func refreshMiniModeButton83() {
-        guard miniModeButton != nil else { return }
-        let mode = QueueManager.shared.playMode
-        let glyph: DeckGlyph82.Kind
-        switch mode {
-        case .off: glyph = .modeSequence
-        case .loopAll: glyph = .modeRepeat
-        case .repeatOne: glyph = .modeRepeatOne
-        case .shuffle: glyph = .shuffle
-        }
-        miniModeButton.setImage(DeckGlyph82.image(glyph, pointSize: 16), for: .normal)
-        miniModeButton.tintColor = mode == .off
-            ? UIColor.white.withAlphaComponent(0.55) : .white
-        let items: [(QueueManager.PlayMode, String)] = [
-            (.off, "顺序"), (.loopAll, "循环"), (.repeatOne, "单曲"), (.shuffle, "随机"),
-        ]
-        miniModeButton.menu = UIMenu(children: items.map { item in
-            let action = UIAction(title: item.1) { [weak self] _ in
-                guard let self else { return }
-                DeckTap82.log(host: "wallproto", zone: "mode", view: self.miniModeButton)
-                QueueManager.shared.playMode = item.0
-                self.refreshMiniModeButton83()
-                self.resetMiniIdleTimer()
-                Breadcrumbs.log("deck83 mode host=wallproto m=\(item.0.rawValue)")
-            }
-            action.state = item.0 == mode ? .on : .off
-            return action
-        })
-    }
-
-    /// (83) 第 6 条：列表钮——播放队列面板（同一静态入口）。
-    @objc private func miniListTapped83() {
-        DeckTap82.log(host: "wallproto", zone: "list", view: miniListButton)
-        resetMiniIdleTimer()
-        QueuePanelViewController.present(from: self) { [weak self] in
-            self?.resetMiniIdleTimer()
-        }
-    }
+    // (84) 第 1 条：refreshMiniModeButton83 与 miniListTapped83 已删（同主页墙）。
 
     /// 进度填充与圆点配色的形态收口（3.7 (22) 立、(23) 修）：
     /// 展开态 = 主题口径（皮肤 + 主题填充色）；收起态背景已
@@ -1214,9 +1155,14 @@ final class WallPrototypeViewController: UIViewController,
             ])
             miniKnobSkin = skin
         }
-        // (82) 第 7 条：把手底图改花朵，钮身恒透明无阴影。
-        miniProgressKnob.backgroundColor = .clear
-        miniProgressKnob.layer.shadowOpacity = 0
+        // (84) 第 1 条：把手复原 (80) 口径（同主页墙）。
+        if miniKnobSkin != nil {
+            miniProgressKnob.backgroundColor = .clear
+            miniProgressKnob.layer.shadowOpacity = 0
+        } else {
+            miniProgressKnob.backgroundColor = .white
+            miniProgressKnob.layer.shadowOpacity = 0.9
+        }
         if miniBarCollapsed {
             // (82) 第 5 条：收起态改系统白系（填充纯白、
             // 轨道白 35%），对齐 home indicator 观感。
@@ -1283,13 +1229,32 @@ final class WallPrototypeViewController: UIViewController,
         resetMiniIdleTimer()
     }
 
+    // (84) 第 3 条：四钮 touchDown 见证（同主页墙）。
+    @objc private func miniPlayDown84() {
+        Tap84.log(host: "wallproto", btn: "play", ev: "down", view: miniPlayButton)
+    }
+
+    @objc private func miniPrevDown84() {
+        Tap84.log(host: "wallproto", btn: "prev", ev: "down", view: miniPrevButton)
+    }
+
+    @objc private func miniNextDown84() {
+        Tap84.log(host: "wallproto", btn: "next", ev: "down", view: miniNextButton)
+    }
+
+    @objc private func miniConsoleDown84() {
+        Tap84.log(host: "wallproto", btn: "console", ev: "down", view: miniConsoleButton)
+    }
+
     @objc private func miniPlayTapped() {
+        Tap84.log(host: "wallproto", btn: "play", ev: "up", view: miniPlayButton)
         DeckTap82.log(host: "wall", zone: "play", view: miniPlayButton)
         resetMiniIdleTimer()
         PlaybackEngine.shared.togglePlayPause()
     }
 
     @objc private func miniPrevTapped() {
+        Tap84.log(host: "wallproto", btn: "prev", ev: "up", view: miniPrevButton)
         DeckTap82.log(host: "wall", zone: "prev", view: miniPrevButton)
         resetMiniIdleTimer()
         stickerNoteTrackChangeTap()
@@ -1297,6 +1262,7 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     @objc private func miniNextTapped() {
+        Tap84.log(host: "wallproto", btn: "next", ev: "up", view: miniNextButton)
         DeckTap82.log(host: "wall", zone: "next", view: miniNextButton)
         resetMiniIdleTimer()
         stickerNoteTrackChangeTap()
@@ -1305,6 +1271,7 @@ final class WallPrototypeViewController: UIViewController,
 
     /// (82) 第 8 条：控制台入口——升起 ConsolePanel82。
     @objc private func miniConsoleTapped82() {
+        Tap84.log(host: "wallproto", btn: "console", ev: "up", view: miniConsoleButton)
         DeckTap82.log(host: "wall", zone: "console", view: miniConsoleButton)
         resetMiniIdleTimer()
         ConsolePanel82.present(from: self)
@@ -1350,8 +1317,6 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point)
-            || miniListButton.frame.contains(point)
             || miniConsoleButton.frame.contains(point) { return }
         // 进度带分域（标题优先于进度带，与旧封面分发序一致）。
         if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
@@ -1395,8 +1360,6 @@ final class WallPrototypeViewController: UIViewController,
         if miniPlayButton.frame.contains(point)
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
-            || miniModeButton.frame.contains(point)
-            || miniListButton.frame.contains(point)
             || miniConsoleButton.frame.contains(point) {
             DblTap83.step("wall", "skipbtn")
             return
@@ -1504,8 +1467,6 @@ final class WallPrototypeViewController: UIViewController,
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint)
-                || miniModeButton.frame.contains(barPoint)
-                || miniListButton.frame.contains(barPoint)
                 || miniConsoleButton.frame.contains(barPoint) { return }
             guard engine.duration > 0 else { return }
             miniSeekDragging = true
@@ -1756,8 +1717,9 @@ final class WallPrototypeViewController: UIViewController,
         guard let bottomC = miniBarBottomC else { return }
         let inset = view.window?.safeAreaInsets.bottom
             ?? view.safeAreaInsets.bottom
+        // (84) 第 2 条：改回 (80) 形态公式（同主页墙）。
         bottomC.constant = collapsed
-            ? (inset > 0 ? inset - 2.5 : -10) : -10
+            ? DeckLayout84.collapsedBottomConstant(safeAreaBottom: inset) : -10
     }
 
     override func viewSafeAreaInsetsDidChange() {
@@ -1771,9 +1733,8 @@ final class WallPrototypeViewController: UIViewController,
         applyMiniBarBottom77(collapsed: collapsed)
         (miniBar as? MiniBarHitView)?.isCollapsedForm = collapsed
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
-        // (83) 第 6 条：控制行中心常量按形态——展开 0、
-        // 收起内容已淡出不论（与主页墙同账）。
-        for constraint in miniMainCenterY { constraint.constant = collapsed ? -5 : 0 }
+        // (84) 第 1 条：主排纵向复原 (80)——两形态恒 −5。
+        for constraint in miniMainCenterY { constraint.constant = -5 }
         // (74) 第 5 项小横线（同主页墙口径）：收起态轨道换
         // 居中 134×5 小横线、圆点收起；台体容器与命中带不
         // 动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
@@ -1809,9 +1770,9 @@ final class WallPrototypeViewController: UIViewController,
         // 两形态恒可见（(22)/(23) 旧制：13pt 皮肤压 9pt
         // knob、溢出显示）。
         miniProgressKnob.isHidden = false
-        // (82) 第 5 条：收起态花朵把手收平不凸起。
-        miniProgressKnob.transform = collapsed
-            ? CGAffineTransform(scaleX: 1, y: 0.25) : .identity
+        // (84) 第 1 条：把手已复原 (80) 圆点/皮肤形态，收
+        // 起态不再压平（同主页墙）。
+        miniProgressKnob.transform = .identity
         let radius: CGFloat = collapsed ? 8 : 35
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
@@ -1825,8 +1786,8 @@ final class WallPrototypeViewController: UIViewController,
         // 0.25 极淡底轨，属进度条本体）+ 填充 + 发光圆点；
         // 展开态全部恢复。填充/圆点配色同步经形态收口重算
         // （对比度兜底）。
-        // (82) 第 7 条：主题图层已退役恒隐藏（E 毛玻璃）。
-        miniThemeLayer?.isHidden = true
+        // (84) 第 1 条：主题层复原 (80) 形态口径（同主页墙）。
+        miniThemeLayer?.isHidden = collapsed
         miniBlurView?.isHidden = collapsed
         miniRimLight?.isHidden = collapsed
         miniGlassTint?.isHidden = collapsed
@@ -1841,15 +1802,19 @@ final class WallPrototypeViewController: UIViewController,
             + " recog=\((miniBarTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
             + "\((miniBarDoubleTapRecognizer?.isEnabled ?? false) ? 1 : 0)"
             + "\((miniBarCollapsedTapRecognizer?.isEnabled ?? false) ? 1 : 0)")
-        // (83) 第 5 条：小白条量测对齐自证（与主页墙同
-        // 式：收起 tw=140 th=5 gap=8 r=2.5）。
-        Breadcrumbs.log("minibar.fm83 host=wall"
+        // (84) 第 2 条：小白条形态自证新口径（同主页墙）。
+        let fmPortrait84 = view.bounds.width <= view.bounds.height
+        if collapsed {
+            miniTrackWidthC?.constant =
+                DeckLayout84.collapsedTrackWidth(portrait: fmPortrait84)
+        }
+        Breadcrumbs.log("minibar.fm84 host=wall"
             + " col=\(collapsed ? 1 : 0)"
-            + " tw=\(collapsed ? 140 : Int(miniBarWidthConstraint?.constant ?? 0) - 116)"
+            + " tw=\(collapsed ? Int(DeckLayout84.collapsedTrackWidth(portrait: fmPortrait84)) : Int(miniBarWidthConstraint?.constant ?? 0) - 116)"
             + " th=\(collapsed ? 5 : 4)"
-            + " gap=\(collapsed ? 8 : -1)"
+            + " gap=\(collapsed ? 2 : -1)"
             + " r=\(collapsed ? "2.5" : "2")"
-            + " orient=\(view.bounds.width > view.bounds.height ? "land" : "port")")
+            + " orient=\(fmPortrait84 ? "port" : "land")")
         refreshMiniProgressChrome()
     }
 
@@ -1859,8 +1824,7 @@ final class WallPrototypeViewController: UIViewController,
         // 附加功能行已迁浮层（(60) 第 7 条），不入台形态名单：
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
-                                miniPrevButton, miniNextButton, miniModeButton,
-                                miniListButton, miniConsoleButton,
+                                miniPrevButton, miniNextButton, miniConsoleButton,
                                 miniTimeElapsed, miniTimeDuration]
         for view in views {
             view?.alpha = alpha
@@ -1869,7 +1833,7 @@ final class WallPrototypeViewController: UIViewController,
 
     private func setMiniBarContentsInteractive(_ interactive: Bool) {
         let buttons: [UIButton?] = [miniPlayButton, miniPrevButton, miniNextButton,
-                                    miniModeButton, miniListButton, miniConsoleButton]
+                                    miniConsoleButton]
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
@@ -2841,8 +2805,10 @@ final class WallPrototypeViewController: UIViewController,
             guard r.x + r.width >= minX, r.x <= maxX,
                   r.y + r.height >= minY, r.y <= maxY else { continue }
             guard let pic = entries[inst.queueIndex].picUrl else { continue }
-            let pixelExtent = max(r.width, r.height)
-                * wallLayout.cameraScale * Double(UIScreen.main.scale)
+            // (84) 修 a：像素量单源（同主页墙）。
+            let pixelExtent = NativeCoverLoader.wallPixelExtent(
+                worldExtent: max(r.width, r.height),
+                cameraScale: Double(wallLayout.cameraScale))
             items.append((pic, NativeCoverLoader.wallTier(
                 raw: pic, pixelExtent: pixelExtent)))
         }
@@ -2870,8 +2836,10 @@ final class WallPrototypeViewController: UIViewController,
             return cell
         }
         let entry = entries[instance.queueIndex]
-        let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
-        let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
+        // (84) 修 a：配置侧单源（实例世界 rect，与预取侧同式同键）。
+        let pixelExtent = NativeCoverLoader.wallPixelExtent(
+            worldExtent: Double(max(instance.rect.width, instance.rect.height)),
+            cameraScale: Double(wallLayout.cameraScale))
         let tier = entry.picUrl.map { NativeCoverLoader.wallTier(raw: $0, pixelExtent: pixelExtent) }
             ?? NativeCoverLoader.tier(forPixelExtent: pixelExtent)
         cell.configure(entry: entry, tier: tier)
@@ -3509,8 +3477,10 @@ final class WallPrototypeViewController: UIViewController,
         guard instance.queueIndex < entries.count else { return }
         let entry = entries[instance.queueIndex]
         guard let pic = entry.picUrl else { return }
-        let frame = collectionView.layoutAttributesForItem(at: indexPath)?.frame ?? .zero
-        let pixelExtent = Double(max(frame.width, frame.height)) * Double(UIScreen.main.scale)
+        // (84) 修 a：单源（实例世界 rect，与配置侧同式）。
+        let pixelExtent = NativeCoverLoader.wallPixelExtent(
+            worldExtent: Double(max(instance.rect.width, instance.rect.height)),
+            cameraScale: Double(wallLayout.cameraScale))
         let tier = NativeCoverLoader.wallTier(raw: pic, pixelExtent: pixelExtent)
         guard let urlString = NativeCoverLoader.shared.proxiedURLString(pic, tier: tier) else { return }
         if NativeCoverLoader.shared.cachedImage(for: urlString) != nil { return }
@@ -3834,6 +3804,34 @@ enum WallTileStats78 {
         else if placeholderImage { phImg += 1 }
         else { phBlank += 1 }
         lock.unlock()
+    }
+
+    /// (84) 第 4 条量测：分墙口径桶——(83) 前计数全局共
+    /// 用、由先冲刷的那面墙领走，主页墙的 hit 窗口长期缺
+    /// 席（(83) 判读：hit83 四窗全在歌单墙）。note84 与全
+    /// 局 note 同拍记账（tile78 全局口径保留不断链），
+    /// take(wall:) 按墙取走供 wall.hit84 分墙落窗。
+    private static var byWall84: [String: (sync: Int, ph: Int, blank: Int)] = [:]
+
+    static func note84(sync: Bool, placeholderImage: Bool, wall: String) {
+        note(sync: sync, placeholderImage: placeholderImage)
+        lock.lock()
+        var bucket = byWall84[wall] ?? (0, 0, 0)
+        if sync { bucket.sync += 1 }
+        else if placeholderImage { bucket.ph += 1 }
+        else { bucket.blank += 1 }
+        byWall84[wall] = bucket
+        lock.unlock()
+    }
+
+    /// (84) 按墙取走并清零（无样本返回 nil）。
+    static func take84(wall: String) -> (sync: Int, phImg: Int, blank: Int)? {
+        lock.lock()
+        defer { lock.unlock() }
+        guard let bucket = byWall84[wall],
+              bucket.sync + bucket.ph + bucket.blank > 0 else { return nil }
+        byWall84[wall] = nil
+        return bucket
     }
 
     static func noteCfg79() { lock.lock(); cfg79 += 1; lock.unlock() }
@@ -4376,6 +4374,9 @@ final class WallPosterCell: UICollectionViewCell {
         }
         noURLRetry79 = 0
         currentUrl = urlString
+        // (84) pf84 转化登记：本砖请求键若曾被预取入队，
+        // 记一次转化（口径见 NativeCoverLoader.noteConfigure84）。
+        NativeCoverLoader.shared.noteConfigure84(urlString: urlString)
         // 缓存命中同步上图：reloadData/复用重建时不先清空、不异步等一帧，
         // 这是拖动闪黑的主修复。
         if let cached = NativeCoverLoader.shared.cachedImage(for: urlString) {
@@ -4383,7 +4384,7 @@ final class WallPosterCell: UICollectionViewCell {
             stopPlaceholderPulse()
             imageView.backgroundColor = .clear
             imageView.image = cached
-            WallTileStats78.note(sync: true, placeholderImage: false)
+            WallTileStats78.note84(sync: true, placeholderImage: false, wall: wall)
             return
         }
         // (72) 主色占位：无目标档图时先垫色——任一档已解码图
@@ -4396,7 +4397,7 @@ final class WallPosterCell: UICollectionViewCell {
             coverPlaceholder = true
             stopPlaceholderPulse()
             imageView.image = placeholder
-            WallTileStats78.note(sync: false, placeholderImage: true)
+            WallTileStats78.note84(sync: false, placeholderImage: true, wall: wall)
         } else {
             // (82) 第 1 条：无任何缓存图时画占位图（主题色
             // 块＋音符）而非只垫近黑底色——(81) 判读定案旧
@@ -4406,7 +4407,7 @@ final class WallPosterCell: UICollectionViewCell {
             coverPlaceholder = true
             stopPlaceholderPulse()
             imageView.image = NativeCoverLoader.shared.placeholderImage(for: pic)
-            WallTileStats78.note(sync: false, placeholderImage: true)
+            WallTileStats78.note84(sync: false, placeholderImage: true, wall: wall)
         }
         WallTileStats78.noteReq79()
         loadTask = Task { [weak self] in
@@ -4820,21 +4821,4 @@ extension WallPrototypeViewController {
     }
 }
 
-// MARK: - (82) 第 2 条：台身识别器按钮豁免
-
-extension WallPrototypeViewController: UIGestureRecognizerDelegate {
-    /// 台身识别器对 UIControl 落点拒收（与主页墙同修）：
-    /// 按钮触摸直达自身 .touchUpInside，不被台身 require
-    /// 链扣住或取消。非按钮落点照旧放行。
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
-                           shouldReceive touch: UITouch) -> Bool {
-        guard gestureRecognizer.view === miniBar else { return true }
-        var node = touch.view
-        while let view = node {
-            if view is UIControl { return false }
-            if view === miniBar { break }
-            node = view.superview
-        }
-        return true
-    }
-}
+// (84) 第 3 条：(82) 的 UIGestureRecognizerDelegate 豁免扩展已删（同主页墙）。

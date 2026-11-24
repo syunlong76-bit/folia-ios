@@ -82,6 +82,25 @@ enum Breadcrumbs {
         // 步命中率新口径）。双击闪退已由 .ips 定行修复
         // （约束块删除），ph83 相位行随之取消、未入册。
         log("wit83.live q=1 dbl=1 light=1 cov=1 fm=1 pf=1 hit=1")
+        // (84) 见证总表：tap84（逐钮 down/up＋命中链）／
+        // wall.hit84（分墙命中窗）／pf84（预取转化率）／
+        // wall.dec84（解码队列等待）／rot84（旋转落盘汇
+        // 总）／minibar.fm84（小白条新口径）／DeckLayout84
+        // （台高 70 单源）／sidebar84（主页竖条侧栏）。
+        log("wit84.live tap=1 hit=1 pf=1 dec=1 rot=1 fm=1 deck=1 side=1")
+        // (84) 第 5 条：上次旋转摘要补发——Stage landed 时
+        // 存 UserDefaults（emitted=false），本次启动补一行
+        // 并置 emitted，杜绝导出截断丢失旋转量测。
+        if var last = UserDefaults.standard.dictionary(forKey: "folia.rot84.last"),
+           (last["emitted"] as? Bool) != true {
+            log("rot84 prev gen=\(last["gen"] as? Int ?? -1)"
+                + " f2l=\(last["f2l"] as? Int ?? -1)"
+                + " f2r=\(last["f2r"] as? Int ?? -1)"
+                + " style=\(last["style"] as? String ?? "?")"
+                + " web=\(last["web"] as? Int ?? -1)")
+            last["emitted"] = true
+            UserDefaults.standard.set(last, forKey: "folia.rot84.last")
+        }
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。

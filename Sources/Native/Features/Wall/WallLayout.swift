@@ -653,6 +653,16 @@ final class WallScrollMetrics: NSObject {
     private var panEventCount = 0
     private var panAbsDx: Double = 0
     private var panAbsDy: Double = 0
+    /// (84) 第 4 条量测：窗口内滚动速度峰值（pt/s，按相邻
+    /// noteScrollActivity 的位移/间隔折算）——wall.hit84 带
+    /// pkV 与 fling 标记（峰值 >1500pt/s 记 fling=1），保
+    /// 证判读时能把「猛滑窗」与温和窗分开（(83) 判读盲区：
+    /// 抓到的四窗全是温和窗、主页墙猛滑窗缺席）。
+    private var lastNoteAt84: CFTimeInterval = 0
+    private var peakSpeed84: Double = 0
+    /// (84) pf84 全局快照去重（两面墙 metrics 共用：入队数
+    /// 未变不重复落行）。
+    private static var lastPf84Enq = -1
 
     init(wallName: String) {
         self.wallName = wallName
@@ -671,6 +681,15 @@ final class WallScrollMetrics: NSObject {
         panEventCount += 1
         panAbsDx += abs(Double(panDelta.x))
         panAbsDy += abs(Double(panDelta.y))
+        // (84) 速度峰值采样（相邻回调间隔折算）。
+        if lastNoteAt84 > 0 {
+            let dt = now - lastNoteAt84
+            if dt > 0.001 {
+                let speed = hypot(Double(panDelta.x), Double(panDelta.y)) / dt
+                if speed > peakSpeed84 { peakSpeed84 = speed }
+            }
+        }
+        lastNoteAt84 = now
         guard !active else { return }
         active = true
         self.layout = layout
@@ -775,6 +794,38 @@ final class WallScrollMetrics: NSObject {
                     + " sync=\(tile.sync) tot=\(tot83)")
             }
         }
+        // (84) 第 4 条量测：分墙 hit 口径窗——两面墙各自成
+        // 窗（take84 按墙取，不再被另一面墙的冲刷领走），
+        // 带滚动速度峰值与 fling 标记，主页墙猛滑必有窗。
+        if let tile84 = WallTileStats78.take84(wall: wallName) {
+            let tot84 = tile84.sync + tile84.phImg + tile84.blank
+            if tot84 > 0 {
+                Breadcrumbs.log("wall.hit84 wall=\(wallName)"
+                    + " rate=\(tile84.sync * 100 / tot84)"
+                    + " sync=\(tile84.sync) tot=\(tot84)"
+                    + " pkv=\(Int(peakSpeed84))"
+                    + " fling=\(peakSpeed84 > 1500 ? 1 : 0)")
+            }
+        }
+        // (84) pf84 转化见证：预取入队键被 configure 真实
+        // 命中的比例（累计口径，入队数变化时才落行）。
+        let pf84 = NativeCoverLoader.shared.takePf84()
+        if pf84.enq > 0, pf84.enq != Self.lastPf84Enq {
+            Self.lastPf84Enq = pf84.enq
+            Breadcrumbs.log("pf84 enq=\(pf84.enq) conv=\(pf84.conv)"
+                + " rate=\(pf84.conv * 100 / pf84.enq) drp=\(pf84.drp)")
+        }
+        // (84) dec84 见证：各优先级网络槽等待最大值＋解码
+        // 闸峰值（与 (83) dec78 wait 最大 1922ms 对照）。
+        let wallName84 = wallName
+        Task {
+            let d84 = await NativeCoverLoader.shared.takeDec84()
+            if d84.vis + d84.pre + d84.warm + d84.dqpk > 0 {
+                Breadcrumbs.log("wall.dec84 wall=\(wallName84)"
+                    + " wv=\(d84.vis) wp=\(d84.pre) ww=\(d84.warm)"
+                    + " dqpk=\(d84.dqpk)")
+            }
+        }
         // (79) 第 3 条：请求发起链同秒冲刷——cfg 与 req
         // 的差＝没发出请求的配置数，noURL 单列早退因。
         if let req = WallTileStats78.takeReq79() {
@@ -792,6 +843,8 @@ final class WallScrollMetrics: NSObject {
         panEventCount = 0
         panAbsDx = 0
         panAbsDy = 0
+        peakSpeed84 = 0
+        lastNoteAt84 = 0
     }
 
     private static func fmt(_ v: Double) -> String {

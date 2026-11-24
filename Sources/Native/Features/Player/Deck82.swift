@@ -126,21 +126,79 @@ enum DeckGlyph82 {
 
 /// (82) 台面布局常量（单一出处，四页同值）。
 enum DeckLayout82 {
-    /// 展开高：(82) E 定版三行 132 → (83) 第 6 条按网页版
-    /// 紧凑台重做（歌名行＋控制行＋进度行，网页版比例约
-    /// 100–110），改 106。
-    static let expandedHeight: CGFloat = 106
+    /// 展开高：(82) E 定版三行 132 → (83) 紧凑台 106 →
+    /// (84) 第 1 条改回 (80) 版台为底，复原 70（与
+    /// MiniBarQuickRowView.expandedBarHeight 同值）。
+    static let expandedHeight: CGFloat = 70
     static let collapsedHeight: CGFloat = 16
     /// 收起态小白条：(83) 第 5 条图像量测对齐系统 home
     /// indicator（量测账见 delivery-83-report：图三系统条
     /// 420×15px @3x、底边距屏底 24px、圆角约 7.5px）——
     /// 宽 140、高 5、底边距屏底 8、圆角 2.5（全胶囊）。
     /// (82) 的 134 系文档常数、与实测不符，本版盖过。
+    /// (84) 第 2 条：尺寸口径不变（与该方向系统小白线一
+    /// 致），变的只是纵向位置——见 DeckLayout84（条贴在
+    /// 小白线上方、不重合，复原 (80) 锚法）。
     static let collapsedTrackWidth: CGFloat = 140
     static let collapsedTrackHeight: CGFloat = 5
     static let collapsedBottomGap: CGFloat = 8
     static let collapsedCornerRadius: CGFloat = 2.5
     static let deckCornerRadius: CGFloat = 35
+}
+
+/// (84) 第 2 条：收起条改回 (80) 形态——我方条贴在系统
+/// 小白线**上方**（条底与线顶相接、不重叠），横竖屏下条
+/// 尺寸与该方向小白线一致。纵向账（pt，屏底起算）：
+/// 系统小白线带 = 底距 gap(8) + 高(5) → 线顶在 13；我方
+/// 轨（高 5）在 16pt 容器内底距 5.5（既有装配），故容器
+/// 底须落在 13 + join(2) − 5.5 = 9.5。容器底锚相对安全
+/// 区底的常量 C 满足 inset − C = 9.5，即 **C = inset −
+/// 9.5**：竖屏 inset 34 → C=24.5，与 (80) 的
+/// applyMiniBarBottom77 收起常数逐点吻合（(80) 同账：
+/// 轨带 15–20、线带 8–13、相接间隙 2）；横屏 inset 21
+/// → C=11.5，同式成立（(83) 的 C=inset−2.5 使轨带落回
+/// 8–13 与线重合，系 Miller ⑥点名的实根）。
+/// 横屏条宽 209：iPhone 横屏 home indicator 的公开实测
+/// 惯例值（notched 机型横屏量测 209×5pt；竖屏 140×5 为
+/// Miller 截图实测，见 (83) 报告）——横屏宽为惯例值、
+/// 待 Miller 横屏截图复核，高度/底距两向同值。
+enum DeckLayout84 {
+    /// 收起轨宽（按朝向）：竖 140（实测）／横 209（惯例值）。
+    static func collapsedTrackWidth(portrait: Bool) -> CGFloat {
+        portrait ? 140 : 209
+    }
+    /// 收起底锚常量（相对安全区底）：C = inset − 9.5。
+    static func collapsedBottomConstant(safeAreaBottom inset: CGFloat) -> CGFloat {
+        inset > 0 ? inset - 9.5 : -10
+    }
+}
+
+/// (84) 第 3 条点按见证（DS 定案配套）：台面四钮逐钮
+/// touchDown 与 touchUpInside **分离落痕**，每行带该次点
+/// 按的 hitTest 链摘要（自命中视图沿 superview 上溯的类
+/// 名链，截断 6 层）——下轮判读口径预登记：真机点任一
+/// 台面钮，tap84 须出现对应 down/up 两行；down 有 up 无
+/// ＝触摸被取消（识别器/覆盖层）；双无＝命中没到按钮
+/// （与台身原始触摸 mb.tch78 对位分环）。链摘要在
+/// touchDown 时刻以钮中心点对 window 现做 hitTest 取
+/// （与真实触摸同点同链）。
+enum Tap84 {
+    static func log(host: String, btn: String, ev: String, view: UIView) {
+        let center = CGPoint(x: view.bounds.midX, y: view.bounds.midY)
+        let point = view.convert(center, to: view.window)
+        var chain = "?"
+        if let window = view.window, let hit = window.hitTest(point, with: nil) {
+            var names: [String] = []
+            var node: UIView? = hit
+            while let current = node, names.count < 6 {
+                names.append(String(describing: type(of: current)))
+                node = current.superview
+            }
+            chain = names.joined(separator: "<")
+        }
+        Breadcrumbs.log("tap84 host=\(host) btn=\(btn) ev=\(ev)"
+            + " x=\(Int(point.x)) y=\(Int(point.y)) hit=\(chain)")
+    }
 }
 
 /// (83) 第 2 条取证：双击播放台全路径同步落盘见证（只取

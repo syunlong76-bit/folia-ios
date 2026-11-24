@@ -25,7 +25,11 @@ final class NativeCoverLoader {
     static let maxSize = 1200
 
     /// 取图优先级：可见 cell 高、视口外预取低（调度排序用）。
+    /// (84) 修 b：新增 warm（入墙预热）最低档——预热只许在
+    /// 可见与滚动预取都无等待时出队，治冷启预热风暴压住
+    /// 可见请求（(83) 日志 dec78 wait 最大 1922ms 的滞留窗）。
     enum LoadPriority: Int {
+        case warm = -1
         case prefetch = 0
         case visible = 1
     }
@@ -69,10 +73,66 @@ final class NativeCoverLoader {
         }
     }
 
+    /// (84) 修 b：解码并发闸——此前解码走 Task.detached 无
+    /// 上限，冷启预热＋滚动预取同涌时解码任务无界堆积
+    /// （dec78 的 wait 只量网络槽等待、解码段无账）。本闸
+    /// 上限 4（与取图并发硬线同值），等待者按优先级出队
+    /// （visible＞prefetch＞warm），峰值队列深度供 dec84
+    /// 见证取走。
+    private actor DecodeGate84 {
+        private var running = 0
+        private let limit = 4
+        private var waiters: [(priority: Int,
+                                continuation: CheckedContinuation<Void, Never>)] = []
+        private var peakWaiting = 0
+
+        func acquire(priority: Int) async {
+            if running < limit {
+                running += 1
+                return
+            }
+            await withCheckedContinuation { continuation in
+                waiters.append((priority, continuation))
+                waiters.sort { $0.priority > $1.priority }
+                peakWaiting = max(peakWaiting, waiters.count)
+            }
+        }
+
+        func takePeakWaiting() -> Int {
+            defer { peakWaiting = 0 }
+            return peakWaiting
+        }
+
+        func release() {
+            if waiters.isEmpty {
+                running -= 1
+            } else {
+                waiters.removeFirst().continuation.resume()
+            }
+        }
+    }
+
     private let cache = NSCache<NSString, UIImage>()
     /// (72) 主色缓存（与图缓存同键）：解码成功时顺带写入。
     private let colorCache = NSCache<NSString, UIColor>()
     private let scheduler = LoadScheduler()
+    /// (84) 修 b：解码并发闸（见 DecodeGate84）。
+    private let decodeGate84 = DecodeGate84()
+    /// (84) 修 b：预取在途上限（准入控制，statLock 守）——
+    /// 滚动预取同时在途 ≤24、入墙预热 ≤8，超出即丢弃计数
+    /// （pf84 的 drp），不许再现 (83) 一次入队 509 张的风暴。
+    private var pfOutstanding84: [LoadPriority: Int] = [:]
+    /// (84) pf84 转化见证（statLock 守）：预取实际入队的
+    /// 缓存键集合与其中已被 cell configure 请求过的键集
+    /// 合——转化率＝|交集|/|入队|，由 WallScrollMetrics 冲
+    /// 刷 pf84。集合超 6000 键整体重置（防无界增长）。
+    private var pfEnqueuedKeys84 = Set<String>()
+    private var pfConvertedKeys84 = Set<String>()
+    private var pfDropped84 = 0
+    /// (84) dec84 见证累加（statLock 守）：自上次取走以来
+    /// 各优先级的网络槽等待最大值（与 dec78 的 wait 对照，
+    /// 判预取风暴是否还压得住可见请求）。
+    private var dec84WaitMax: [Int: Int] = [:]
     /// (72) 在途合并表（同 URL 一份 Task，多方 await 同结果）。
     private var inFlightLoads: [String: Task<UIImage?, Never>] = [:]
     private let inFlightLock = NSLock()
@@ -123,6 +183,19 @@ final class NativeCoverLoader {
             Breadcrumbs.log("wall.dec78 memwarn=1")
             self?.cache.removeAllObjects()
         }
+    }
+
+    /// (84) 第 4 条修 a：墙砖像素量**单源表达式**——预取侧
+    /// 与 cell 配置侧对同一砖必须用同一公式产出同一缓存
+    /// 键。此前预取侧＝世界边长×cameraScale×屏幕 scale、
+    /// 配置侧＝布局帧边长×屏幕 scale（帧经布局取整/变换
+    /// 后与世界式不等），两键可分叉、预取暖错键。本式为
+    /// 唯一出处：入参恒为**世界 rect 边长**与当前
+    /// cameraScale；网格形态无相机（cameraScale=1、世界
+    /// 边长＝帧边长）同式成立。
+    static func wallPixelExtent(worldExtent: Double,
+                                cameraScale: Double) -> Double {
+        worldExtent * cameraScale * Double(UIScreen.main.scale)
     }
 
     /// 按显示像素量选档（向上取档，超顶用 1200）。
@@ -339,12 +412,37 @@ final class NativeCoverLoader {
     /// 累计入队），warm 即使全命中缓存也落一行（n=0 可读）。
     func prefetch82(_ items: [(raw: String, tier: Int)],
                     source: String = "scroll", wall: String = "?") {
+        // (84) 修 b：优先级按来源分档（warm 最低）＋在途准
+        // 入上限（scroll ≤24／warm ≤8，超限丢弃计数 drp）；
+        // 实际入队的键登记 pf84 供转化率见证。
+        let priority: LoadPriority = source == "warm" ? .warm : .prefetch
+        let cap = source == "warm" ? 8 : 24
         var enqueued = 0
         for item in items {
             guard let url = proxiedURLString(item.raw, tier: item.tier) else { continue }
             if cachedImage(for: url) != nil { continue }
+            statLock.lock()
+            let outstanding = pfOutstanding84[priority] ?? 0
+            if outstanding >= cap {
+                pfDropped84 += 1
+                statLock.unlock()
+                continue
+            }
+            pfOutstanding84[priority] = outstanding + 1
+            if pfEnqueuedKeys84.count > 6000 {
+                pfEnqueuedKeys84.removeAll()
+                pfConvertedKeys84.removeAll()
+            }
+            pfEnqueuedKeys84.insert(url)
+            statLock.unlock()
             enqueued += 1
-            Task { _ = await self.image(for: url, tier: item.tier, priority: .prefetch) }
+            Task {
+                _ = await self.image(for: url, tier: item.tier, priority: priority)
+                self.statLock.lock()
+                self.pfOutstanding84[priority] =
+                    max(0, (self.pfOutstanding84[priority] ?? 1) - 1)
+                self.statLock.unlock()
+            }
         }
         statLock.lock()
         pfTrig83 += 1
@@ -355,6 +453,40 @@ final class NativeCoverLoader {
             Breadcrumbs.log("pf83 wall=\(wall) src=\(source)"
                 + " n=\(enqueued) trig=\(trig) tot=\(tot)")
         }
+    }
+
+    /// (84) pf84 转化见证登记：cell configure 每次算出请求
+    /// 键时调用——键若曾被预取入队，记一次转化（同一键多
+    /// 次 configure 只记一次，口径＝入队键被真实需求命中
+    /// 的比例）。
+    func noteConfigure84(urlString: String) {
+        statLock.lock()
+        if pfEnqueuedKeys84.contains(urlString) {
+            pfConvertedKeys84.insert(urlString)
+        }
+        statLock.unlock()
+    }
+
+    /// (84) pf84 快照（累计口径，不重置）：入队键数／已转
+    /// 化键数／准入丢弃数。
+    func takePf84() -> (enq: Int, conv: Int, drp: Int) {
+        statLock.lock()
+        defer { statLock.unlock() }
+        return (pfEnqueuedKeys84.count, pfConvertedKeys84.count, pfDropped84)
+    }
+
+    /// (84) dec84 快照（取走重置）：各优先级网络槽等待最
+    /// 大值（vis/pre/warm）＋解码闸峰值队列——与 (83) 日志
+    /// dec78 的 wait 最大 1922ms 对照判读。
+    func takeDec84() async -> (vis: Int, pre: Int, warm: Int, dqpk: Int) {
+        statLock.lock()
+        let snapshot = dec84WaitMax
+        dec84WaitMax = [:]
+        statLock.unlock()
+        let dqpk = await decodeGate84.takePeakWaiting()
+        return (snapshot[LoadPriority.visible.rawValue] ?? 0,
+                snapshot[LoadPriority.prefetch.rawValue] ?? 0,
+                snapshot[LoadPriority.warm.rawValue] ?? 0, dqpk)
     }
 
     /// (72) 无任何缓存时的兜底占位色：按地址哈希取色，同
@@ -474,6 +606,12 @@ final class NativeCoverLoader {
         let waitStart = Date()
         await scheduler.acquire(priority: priority.rawValue)
         let waitMs = Int(Date().timeIntervalSince(waitStart) * 1000)
+        // (84) dec84 见证：网络槽等待按优先级记最大值（冲
+        // 刷点 takeDec84 取走，与 dec78 同窗对照）。
+        statLock.lock()
+        dec84WaitMax[priority.rawValue] =
+            max(dec84WaitMax[priority.rawValue] ?? 0, waitMs)
+        statLock.unlock()
         let data: Data
         let response: URLResponse
         do {
@@ -495,7 +633,10 @@ final class NativeCoverLoader {
         }
         // (78) 第 6 条：解码耗时单独计时（降采样＋主色同段）。
         // (83) 第 1 条取证：解码在途计数同段增减（wall.q83 读）。
+        // (84) 修 b：解码段过并发闸（上限 4、按优先级出队）
+        // ——此前 detached 无界，预热/预取风暴时解码堆积无账。
         let decStart = Date()
+        await decodeGate84.acquire(priority: priority.rawValue)
         statLock.lock()
         decInFlight83 += 1
         statLock.unlock()
@@ -506,6 +647,7 @@ final class NativeCoverLoader {
         statLock.lock()
         decInFlight83 -= 1
         statLock.unlock()
+        await decodeGate84.release()
         let decMs = Int(Date().timeIntervalSince(decStart) * 1000)
         await noteDec78(waitMs: waitMs, decMs: decMs, priority: priority)
         if Date().timeIntervalSince(started) > 0.8 { noteSlowLoad() }

@@ -34,6 +34,14 @@ import Combine
 
 final class SketchbookDrawerView: UIView {
 
+    /// (84) 第 6 条：左缘把手簇抑制旗标——主页改竖条侧栏
+    /// 后把手撤除（Miller 定），抽屉本体保留（控制台「速
+    /// 记簿」钮仍可开合）；置 true 只藏把手簇、hitTest 随
+    /// isHidden 自然穿透，不动抽屉任何既有逻辑。
+    var edgeHandleSuppressed84 = false {
+        didSet { updateHandleVisibility() }
+    }
+
     private let store = SketchbookStore.shared
     private let queueManager = QueueManager.shared
 
@@ -596,6 +604,7 @@ final class SketchbookDrawerView: UIView {
     /// 设置 show / 设置 style）推导，不许各处散着改 isHidden 打架。
     private func updateHandleVisibility() {
         let clusterHidden = isOpen || isExternallyCovered
+            || edgeHandleSuppressed84
             || !handleSettings.show
         edgeHotButton.isHidden = clusterHidden || isHandleExpanded
         let restHidden = clusterHidden || isHandleExpanded
