@@ -241,13 +241,13 @@ final class MiniBarQuickRowView: UIView {
         refreshLike()
         refreshStar()
         setButtonState(pawButton,
-            image: DeckGlyph82.image(.paw, pointSize: 17),
+            image: DeckGlyph82.image(.paw, pointSize: 17) ?? UIImage(),
             color: UIColor.white.withAlphaComponent(0.75))
         setButtonState(panelButton,
-            image: DeckGlyph82.image(.sliders, pointSize: 17),
+            image: DeckGlyph82.image(.sliders, pointSize: 17) ?? UIImage(),
             color: UIColor.white.withAlphaComponent(0.75))
         setButtonState(commandButton,
-            image: DeckGlyph82.image(.command, pointSize: 17),
+            image: DeckGlyph82.image(.command, pointSize: 17) ?? UIImage(),
             color: UIColor.white.withAlphaComponent(0.75))
     }
 
@@ -289,7 +289,7 @@ final class MiniBarQuickRowView: UIView {
         // 未喜欢维持现行（白 75% 前景、无填充）。
         likeFilled = liked
         setButtonState(likeButton,
-            image: DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 17),
+            image: DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 17) ?? UIImage(),
             color: liked
                 ? .white
                 : UIColor.white.withAlphaComponent(0.75))
@@ -301,7 +301,7 @@ final class MiniBarQuickRowView: UIView {
         let starred = PlaybackEngine.shared.currentTrack
             .map { StarStore.shared.isStarred($0.id) } ?? false
         setButtonState(starButton,
-            image: DeckGlyph82.image(starred ? .starFill : .star, pointSize: 16),
+            image: DeckGlyph82.image(starred ? .starFill : .star, pointSize: 16) ?? UIImage(),
             color: starred
                 ? UIColor(red: 1, green: 0.8, blue: 0.25, alpha: 1)
                 : UIColor.white.withAlphaComponent(0.75))
