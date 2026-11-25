@@ -449,6 +449,167 @@ final class EdgeOneAPIClient {
         return resp.lrc?.lyric ?? resp.lyric ?? ""
     }
 
+    // MARK: - (87) 评论（三家接口主代理 2026-11-25 curl 实测在线，零后端改动）
+
+    /// 评论统一入口。按 track.sourceType 分三家解析；本地曲目无评论
+    /// 通路，抛 providerUnverified（面板层据 sourceType 先行拦截显
+    /// 示「本地歌曲暂无评论」，走到这里属调用方疏漏）。解析/网络
+    /// 失败一律原样抛，不静默吞——面板层显示错误态＋重试。
+    func fetchComments87(track: FoliaTrack, limit: Int = 20) async throws -> [FoliaComment87] {
+        switch track.sourceType {
+        case .netease:
+            return try await fetchNeteaseComments87(track: track, limit: limit)
+        case .kugou:
+            return try await fetchKugouComments87(track: track, limit: limit)
+        case .qq:
+            return try await fetchQQComments87(track: track, limit: limit)
+        case .local:
+            throw EdgeOneError.providerUnverified(provider: .local, method: "comment/music")
+        }
+    }
+
+    /// FoliaTrack.id 去来源前缀取原始 id：网易云 "ncm_<数字>"→数字、
+    /// QQ "qq_<songmid>"→songmid、酷狗 "kg_<FileHash>"→FileHash；
+    /// 无前缀（旧数据）原样返回。
+    private static func rawId87(of track: FoliaTrack) -> String {
+        for prefix in ["ncm_", "qq_", "kg_", "local_"] where track.id.hasPrefix(prefix) {
+            return String(track.id.dropFirst(prefix.count))
+        }
+        return track.id
+    }
+
+    /// 评论时间文案（解析时定稿）：1 小时内「x分钟前」、当天
+    /// 「x小时前」、30 天内「x天前」，更久回日期 yyyy-MM-dd。
+    private static func commentTimeText87(from date: Date) -> String {
+        let seconds = max(0, Date().timeIntervalSince(date))
+        if seconds < 60 { return "刚刚" }
+        if seconds < 3600 { return "\(Int(seconds / 60))分钟前" }
+        if seconds < 86400 { return "\(Int(seconds / 3600))小时前" }
+        if seconds < 86400 * 30 { return "\(Int(seconds / 86400))天前" }
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+
+    /// 网易云：GET /comment/music?id=<数字id>&limit= → hotComments[]
+    /// （热门，置顶）＋ comments[]（最新）。字段 2026-11-25 实测：
+    /// content / user.nickname / user.avatarUrl / likedCount /
+    /// time（毫秒时间戳）。
+    private func fetchNeteaseComments87(track: FoliaTrack, limit: Int) async throws -> [FoliaComment87] {
+        let resp = try await requestJSON(
+            provider: .netease,
+            path: "/comment/music",
+            queryItems: [
+                URLQueryItem(name: "id", value: Self.rawId87(of: track)),
+                URLQueryItem(name: "limit", value: "\(limit)")
+            ],
+            as: NeteaseComments87Response.self
+        )
+        func map(_ item: NeteaseComments87Response.Item) -> FoliaComment87? {
+            guard let content = item.content, !content.isEmpty else { return nil }
+            let date = item.time.map { Date(timeIntervalSince1970: Double($0) / 1000.0) }
+            return FoliaComment87(
+                nickname: item.user?.nickname ?? "匿名用户",
+                content: content,
+                avatarURL: item.user?.avatarUrl.flatMap(Self.secureURL),
+                likedCount: item.likedCount ?? 0,
+                timeText: date.map(Self.commentTimeText87(from:)) ?? "")
+        }
+        let hot = (resp.hotComments ?? []).compactMap(map)
+        let latest = (resp.comments ?? []).compactMap(map)
+        return hot + latest
+    }
+
+    /// 酷狗两步链：GET /privilege/lite?hash=<FileHash> →
+    /// data[0].album_audio_id（mixsongid）；再 GET
+    /// /comment/music?mixsongid=&page=1&pagesize= → list[]。
+    /// list 字段 2026-11-25 以 hash B3A52A7A958BF0AED0EBFBA2E9A818B7 /
+    /// mixsongid 32100650 实测确认：content / user_name（昵称）/
+    /// user_pic（头像）/ like.count（点赞，likenum 同值回退）/
+    /// addtime（"yyyy-MM-dd HH:mm:ss" 字符串，非时间戳）。
+    private func fetchKugouComments87(track: FoliaTrack, limit: Int) async throws -> [FoliaComment87] {
+        let hash = Self.rawId87(of: track)
+        let privilege = try await requestJSON(
+            provider: .kugou,
+            path: "/privilege/lite",
+            queryItems: [URLQueryItem(name: "hash", value: hash)],
+            as: KugouPrivilege87Response.self
+        )
+        guard let mixsongid = privilege.data?.first?.album_audio_id else {
+            throw EdgeOneError.invalidResponse
+        }
+        let resp = try await requestJSON(
+            provider: .kugou,
+            path: "/comment/music",
+            queryItems: [
+                URLQueryItem(name: "mixsongid", value: "\(mixsongid)"),
+                URLQueryItem(name: "page", value: "1"),
+                URLQueryItem(name: "pagesize", value: "\(limit)")
+            ],
+            as: KugouComments87Response.self
+        )
+        let timeFormatter = DateFormatter()
+        timeFormatter.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        timeFormatter.timeZone = TimeZone(identifier: "Asia/Shanghai")
+        return (resp.list ?? []).compactMap { item in
+            guard let content = item.content, !content.isEmpty else { return nil }
+            let date = item.addtime.flatMap { timeFormatter.date(from: $0) }
+            return FoliaComment87(
+                nickname: item.user_name ?? "匿名用户",
+                content: content,
+                avatarURL: item.user_pic.flatMap(Self.secureURL),
+                likedCount: item.like?.count ?? item.like?.likenum ?? 0,
+                timeText: date.map(Self.commentTimeText87(from:)) ?? (item.addtime ?? ""))
+        }
+    }
+
+    /// QQ 两步链：先 GET /search?keywords=<歌名> 在 data.song.list
+    /// 里按 songmid 匹配取数字 songid（形状与 SearchWorkspaceView
+    /// 的 parseQQSearch62 同源假设：list[].songmid / .songid）；
+    /// 再 GET /comment/list?id=<songid>&page=0&limit=&biztype=1 →
+    /// data.comment.commentlist[]。评论字段 2026-11-25 以
+    /// id=97773 实测确认：rootcommentcontent / nick / avatarurl /
+    /// praisenum / time（秒时间戳）。page>0 需 cursor，面板只取
+    /// 第一页。搜索匹配不到 songid 抛 invalidResponse（不冒充空评论）。
+    private func fetchQQComments87(track: FoliaTrack, limit: Int) async throws -> [FoliaComment87] {
+        let songmid = Self.rawId87(of: track)
+        let search = try await requestJSON(
+            provider: .qq,
+            path: "/search",
+            queryItems: [
+                URLQueryItem(name: "keywords", value: track.title),
+                URLQueryItem(name: "limit", value: "30"),
+                URLQueryItem(name: "type", value: "1")
+            ],
+            as: QQSearch87Response.self
+        )
+        guard let songid = search.data?.song?.list?
+            .first(where: { $0.songmid == songmid })?.songid else {
+            throw EdgeOneError.invalidResponse
+        }
+        let resp = try await requestJSON(
+            provider: .qq,
+            path: "/comment/list",
+            queryItems: [
+                URLQueryItem(name: "id", value: "\(songid)"),
+                URLQueryItem(name: "page", value: "0"),
+                URLQueryItem(name: "limit", value: "\(limit)"),
+                URLQueryItem(name: "biztype", value: "1")
+            ],
+            as: QQComments87Response.self
+        )
+        return (resp.data?.comment?.commentlist ?? []).compactMap { item in
+            guard let content = item.rootcommentcontent, !content.isEmpty else { return nil }
+            let date = item.time.map { Date(timeIntervalSince1970: Double($0)) }
+            return FoliaComment87(
+                nickname: item.nick ?? "匿名用户",
+                content: content,
+                avatarURL: item.avatarurl.flatMap(Self.secureURL),
+                likedCount: item.praisenum ?? 0,
+                timeText: date.map(Self.commentTimeText87(from:)) ?? "")
+        }
+    }
+
     /// 歌单详情。实测：GET /api/netease/playlist/detail?id=19723756（飙升榜）→ 200。
     func fetchPlaylistDetail(playlistId: String) async throws -> NeteasePlaylistDetail {
         let resp = try await requestJSON(
@@ -1161,4 +1322,84 @@ struct NeteaseAlbumDetail {
 private struct NeteaseAlbumDetailResponse: Decodable {
     let album: NeteaseAlbumDetail.AlbumInfoDTO?
     let songs: [SongDetailDTO]?
+}
+
+// MARK: - (87) 评论 DTO（三家形状均经 2026-11-25 curl 实测，见 fetch*Comments87 注）
+
+/// 评论统一模型：三家原始响应在 EdgeOneAPIClient.fetchComments87
+/// 里归一化到此形状，timeText 在解析时已格式化（相对时间/日期）。
+struct FoliaComment87 {
+    let nickname: String
+    let content: String
+    let avatarURL: URL?
+    let likedCount: Int
+    let timeText: String
+}
+
+private struct NeteaseComments87Response: Decodable {
+    let hotComments: [Item]?
+    let comments: [Item]?
+    struct Item: Decodable {
+        let content: String?
+        let likedCount: Int?
+        let time: Int64?
+        let user: UserDTO?
+        struct UserDTO: Decodable {
+            let nickname: String?
+            let avatarUrl: String?
+        }
+    }
+}
+
+private struct KugouPrivilege87Response: Decodable {
+    let data: [Item]?
+    struct Item: Decodable {
+        let album_audio_id: Int?
+    }
+}
+
+private struct KugouComments87Response: Decodable {
+    let list: [Item]?
+    struct Item: Decodable {
+        let content: String?
+        let user_name: String?
+        let user_pic: String?
+        let addtime: String?
+        let like: LikeDTO?
+        struct LikeDTO: Decodable {
+            let count: Int?
+            let likenum: Int?
+        }
+    }
+}
+
+private struct QQSearch87Response: Decodable {
+    let data: DataBody?
+    struct DataBody: Decodable {
+        let song: SongBody?
+    }
+    struct SongBody: Decodable {
+        let list: [Item]?
+    }
+    struct Item: Decodable {
+        let songmid: String?
+        let songid: Int?
+    }
+}
+
+private struct QQComments87Response: Decodable {
+    let data: DataBody?
+    struct DataBody: Decodable {
+        let comment: CommentBody?
+    }
+    struct CommentBody: Decodable {
+        let commentlist: [Item]?
+    }
+    struct Item: Decodable {
+        let rootcommentcontent: String?
+        let nick: String?
+        let avatarurl: String?
+        let praisenum: Int?
+        let time: Int64?
+    }
 }

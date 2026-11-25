@@ -105,6 +105,9 @@ final class StageViewController: UIViewController {
     private let prevButton = UIButton(type: .system)
     private let playButton = UIButton(type: .system)
     private let nextButton = UIButton(type: .system)
+    /// (87) 主题四圆点（台面右上，与两面墙同件同位）。
+    private var stageThemeDots87: UIStackView?
+    private var stageThemeDotButtons87: [UIButton] = []
     /// (82) 第 7/8 条：E 极简台补件——台内封面/歌名/歌手
     /// （与两面墙同位同尺寸）＋控制台入口圆钮。旧模式钮/
     /// 爪印/槽位钮保留对象但不再上台（职能进控制台），
@@ -3131,7 +3134,11 @@ final class StageViewController: UIViewController {
         // 墙；refreshPlayButton 只换图不换 tint/底色）。
         // (84) 第 1 条：播放钮复原 (80) 形态（白字形、无圆
         // 底）；(83) 白圆＋深色字形退役。
+        // (87) 样片台：播放钮改 42 圆玻璃底（白 0.13，与
+        // 两面墙同式——居中三键版式退役、改右端簇）。
         playButton.tintColor = .white
+        playButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
+        playButton.layer.cornerRadius = 21
         playButton.translatesAutoresizingMaskIntoConstraints = false
         playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
         playButton.addTarget(self, action: #selector(stagePlayDown84), for: .touchDown)
@@ -3170,12 +3177,14 @@ final class StageViewController: UIViewController {
         // 度行右端收小 30；模式/列表钮实际上台（两端）。
         stageCover82.contentMode = .scaleAspectFill
         stageCover82.clipsToBounds = true
-        stageCover82.layer.cornerRadius = 22
+        // (87) 样片台：封面 42 圆角方（10）代 44 圆。
+        stageCover82.layer.cornerRadius = 10
         stageCover82.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         stageCover82.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(stageCover82)
         // (84) 第 1 条：封面/歌手复原上台面（(80) 版式）。
-        stageTitle82.font = .systemFont(ofSize: 14, weight: .semibold)
+        // (87) 样片台：标题 15 bold。
+        stageTitle82.font = .systemFont(ofSize: 15, weight: .bold)
         stageTitle82.textColor = .white
         stageTitle82.lineBreakMode = .byTruncatingTail
         stageTitle82.translatesAutoresizingMaskIntoConstraints = false
@@ -3202,15 +3211,66 @@ final class StageViewController: UIViewController {
         stageListButton83.addTarget(self, action: #selector(stageListTapped83), for: .touchUpInside)
         // (84) 第 1 条：列表钮撤下台面（队列由控制台承
         // 接）——不 addSubview、约束不装配。
-        stageConsoleButton82.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        stageConsoleButton82.layer.cornerRadius = 15
-        stageConsoleButton82.setImage(DeckGlyph82.image(.console, pointSize: 15), for: .normal)
+        // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
+        stageConsoleButton82.backgroundColor = UIColor.white.withAlphaComponent(0.13)
+        stageConsoleButton82.layer.cornerRadius = 21
+        stageConsoleButton82.setImage(DeckGlyph82.image(.console, pointSize: 20), for: .normal)
         stageConsoleButton82.tintColor = .white
         stageConsoleButton82.accessibilityLabel = "控制台"
         stageConsoleButton82.translatesAutoresizingMaskIntoConstraints = false
         stageConsoleButton82.addTarget(self, action: #selector(stageConsoleTapped82), for: .touchUpInside)
         stageConsoleButton82.addTarget(self, action: #selector(stageConsoleDown84), for: .touchDown)
         bar.addSubview(stageConsoleButton82)
+
+        // (87) 主题四圆点（样片 .tdots，与两面墙同件同位）。
+        let stageDots87 = UIStackView()
+        stageDots87.axis = .horizontal
+        stageDots87.spacing = 5
+        stageDots87.alignment = .center
+        stageDots87.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(stageDots87)
+        stageThemeDots87 = stageDots87
+        stageThemeDotButtons87 = []
+        for (index, color) in Deck87.dotColors.enumerated() {
+            let button = UIButton(type: .custom)
+            button.tag = index
+            button.accessibilityLabel = "播放台主题"
+            button.translatesAutoresizingMaskIntoConstraints = false
+            let ring = UIView()
+            ring.layer.cornerRadius = 6.5
+            ring.layer.borderWidth = 2
+            ring.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
+            ring.isUserInteractionEnabled = false
+            ring.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(ring)
+            let circle = UIView()
+            circle.backgroundColor = color
+            circle.layer.cornerRadius = 4.5
+            circle.layer.borderWidth = 1
+            circle.layer.borderColor = UIColor.white.withAlphaComponent(0.55).cgColor
+            circle.isUserInteractionEnabled = false
+            circle.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(circle)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 20),
+                button.heightAnchor.constraint(equalToConstant: 20),
+                ring.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                ring.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                ring.widthAnchor.constraint(equalToConstant: 13),
+                ring.heightAnchor.constraint(equalToConstant: 13),
+                circle.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                circle.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                circle.widthAnchor.constraint(equalToConstant: 9),
+                circle.heightAnchor.constraint(equalToConstant: 9),
+            ])
+            button.addTarget(self, action: #selector(stageThemeDotTapped87(_:)), for: .touchUpInside)
+            stageDots87.addArrangedSubview(button)
+            stageThemeDotButtons87.append(button)
+        }
+        NSLayoutConstraint.activate([
+            stageDots87.topAnchor.constraint(equalTo: bar.topAnchor, constant: 2),
+            stageDots87.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+        ])
 
         // 播放列表入口已于 (60) 第 10 条整钮删除（原 (48) 落台面、
         // (53) H 迁顶栏隐藏排）；队列面板本体保留，经面板页签进入。
@@ -3296,8 +3356,8 @@ final class StageViewController: UIViewController {
             // (84) 第 1 条：封面/标题复原 (80) 锚法（封面左
             // 置 44、标题贴封面右）。
             stageCover82.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            stageCover82.widthAnchor.constraint(equalToConstant: 44),
-            stageCover82.heightAnchor.constraint(equalToConstant: 44),
+            stageCover82.widthAnchor.constraint(equalToConstant: 42),
+            stageCover82.heightAnchor.constraint(equalToConstant: 42),
             stageTitle82.leadingAnchor.constraint(equalTo: stageCover82.trailingAnchor, constant: 12),
             stageTitle82.trailingAnchor.constraint(lessThanOrEqualTo: prevButton.leadingAnchor, constant: -6),
             stageTitle82.topAnchor.constraint(equalTo: stageCover82.topAnchor, constant: 5),
@@ -3310,13 +3370,16 @@ final class StageViewController: UIViewController {
             // 面、约束不装配；控制台入口保留进度行右端现位
             // （(82)/(83) 舞台位，与墙台主排位不同——舞台
             // (80) 主排为居中三键、无右端簇，报告注明）。
-            playButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            playButton.widthAnchor.constraint(equalToConstant: 40),
-            playButton.heightAnchor.constraint(equalToConstant: 40),
-            prevButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -20),
+            // (87) 样片台：播放钮撤离居中、改右端簇（与两面
+            // 墙同链：控制台最右、次/播/上一曲向左排布）；
+            // prev/next 恒隐藏宽 0（藏进控制台），链锚保留。
+            playButton.trailingAnchor.constraint(equalTo: nextButton.leadingAnchor, constant: -2),
+            playButton.widthAnchor.constraint(equalToConstant: 42),
+            playButton.heightAnchor.constraint(equalToConstant: 42),
+            prevButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -2),
             prevButton.widthAnchor.constraint(equalToConstant: 34),
             prevButton.heightAnchor.constraint(equalToConstant: 40),
-            nextButton.leadingAnchor.constraint(equalTo: playButton.trailingAnchor, constant: 20),
+            nextButton.trailingAnchor.constraint(equalTo: stageConsoleButton82.leadingAnchor, constant: -2),
             nextButton.widthAnchor.constraint(equalToConstant: 34),
             nextButton.heightAnchor.constraint(equalToConstant: 40),
             // (85) 审计四(b)：控制台钮移出进度行、回主排
@@ -3326,9 +3389,10 @@ final class StageViewController: UIViewController {
             stageConsoleButton82.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
             // 纵向恒为主排位（收起态该钮 alpha 0 不上屏、
             // 不必随收起组换位；恒定约束免收起态纵向无约束）。
-            stageConsoleButton82.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5),
-            stageConsoleButton82.widthAnchor.constraint(equalToConstant: 30),
-            stageConsoleButton82.heightAnchor.constraint(equalToConstant: 30),
+            // (87) 样片台：控制台钮并入主行组 −14、42 圆。
+            stageConsoleButton82.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -14),
+            stageConsoleButton82.widthAnchor.constraint(equalToConstant: 42),
+            stageConsoleButton82.heightAnchor.constraint(equalToConstant: 42),
 
             // (82) 第 7 条：seek 命中带改锚进度行。
             seekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
@@ -3343,7 +3407,8 @@ final class StageViewController: UIViewController {
         // setStageBarForm 互斥切换，先按展开装配。(83) 第
         // 6 条：展开锚改台底 −14（封面行退役，同两面墙）。
         // (84) 第 1 条：展开轨底锚复原 (80) 的 −7。
-        stageTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
+        // (87) 样片台：展开轨底锚 −9（进度行独立成行）。
+        stageTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -9)
         stageTrackTopC?.isActive = true
         stageTrackBottomConstraint = progressTrack.bottomAnchor.constraint(
             equalTo: bar.bottomAnchor, constant: -5.5)
@@ -3354,8 +3419,9 @@ final class StageViewController: UIViewController {
         // 在 setStageBarForm 收口。
         // (84) 第 1 条：主排纵向复原 (80)——封面与三键同组
         // 居台中心 −5（模式/列表钮已撤、退出本组）。
+        // (87) 样片台两行版式：主行恒 −14（台高 84）。
         stageMainCenterY = [stageCover82, playButton, prevButton, nextButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -14)
         }
         NSLayoutConstraint.activate(stageMainCenterY)
         // (83) 双击闪退定行删除：原「模式钮纵向跟随主排」
@@ -3453,8 +3519,12 @@ final class StageViewController: UIViewController {
         // 三键为既有显隐真源；mode 键管舞台主排模式钮，like/sleep
         // 在舞台无独立钮（like 在顶栏、sleep 在面板），仅落面包屑。
         let slots62 = SettingsStore.barSlots62
-        applySlot(prevButton, visible: MiniBarSlotSettings.showPrev && slots62.contains("prev"), width: 34)
-        applySlot(nextButton, visible: MiniBarSlotSettings.showNext && slots62.contains("next"), width: 34)
+        // (87) 播放台换代：上一曲/下一曲撤下台面、藏进控制
+        // 台顶部圆形玻璃钮排——两钮恒隐藏＋宽 0（槽位设置
+        // 自此不再驱动台面两钮显隐，舞台与两面墙同口径）。
+        _ = slots62
+        applySlot(prevButton, visible: false, width: 34)
+        applySlot(nextButton, visible: false, width: 34)
         stageModeButton.isHidden = !slots62.contains("mode")
         // queue 键已迁顶栏隐藏排（(53) H 修正），不再受台面槽位
         // 显隐管辖；MiniBarSlotSettings.showQueue 对墙原型台与
@@ -3498,6 +3568,26 @@ final class StageViewController: UIViewController {
         refreshStageProgressChrome()
         // (82) 第 7 条：字形与主题解耦（DeckGlyph82 单套）。
         refreshDeckIcons82()
+        // (87) 主题四圆点选中环随主题回刷。
+        refreshStageThemeDots87()
+    }
+
+    /// (87) 主题四圆点点选（与两面墙同通路）。
+    @objc private func stageThemeDotTapped87(_ sender: UIButton) {
+        guard sender.tag < Deck87.dotThemes.count else { return }
+        let theme = Deck87.dotThemes[sender.tag]
+        MiniPlayerTheme.stored = theme
+        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
+        Breadcrumbs.log("deck87 dot host=stage t=\(theme.rawValue)")
+        refreshStageThemeDots87()
+    }
+
+    private func refreshStageThemeDots87() {
+        let current = MiniPlayerTheme.stored
+        for (index, button) in stageThemeDotButtons87.enumerated() {
+            let selected = Deck87.dotThemes[index] == current
+            button.subviews.first?.isHidden = !selected
+        }
     }
 
     /// 填充/圆点配色的形态收口（与墙 refreshMiniProgress-
@@ -3512,8 +3602,9 @@ final class StageViewController: UIViewController {
             NSLayoutConstraint.activate([
                 skin.centerXAnchor.constraint(equalTo: stageProgressKnob!.centerXAnchor),
                 skin.centerYAnchor.constraint(equalTo: stageProgressKnob!.centerYAnchor),
-                skin.widthAnchor.constraint(equalToConstant: 13),
-                skin.heightAnchor.constraint(equalToConstant: 13),
+                // (87) 样片花朵把手 17pt（原 13pt 皮肤放大）。
+                skin.widthAnchor.constraint(equalToConstant: 17),
+                skin.heightAnchor.constraint(equalToConstant: 17),
             ])
             stageKnobSkin = skin
         }
@@ -3855,8 +3946,9 @@ final class StageViewController: UIViewController {
         stageBar.isCollapsedForm = collapsed
         stageBarHeightConstraint?.constant = collapsed
             ? 16 : MiniBarQuickRowView.expandedBarHeight
-        // (84) 第 1 条：主排纵向复原 (80)——两形态恒 −5。
-        for constraint in stageMainCenterY { constraint.constant = -5 }
+        // (84) 第 1 条：主排纵向复原 (80)——两形态恒同值。
+        // (87) 样片台两行版式：恒 −14（台高 84）。
+        for constraint in stageMainCenterY { constraint.constant = -14 }
         // (74) 第 5 项小横线（同两面墙台口径）：收起态轨道
         // 换居中 134×5 小横线、圆点收起；台体容器与命中带
         // 不动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
@@ -3954,6 +4046,8 @@ final class StageViewController: UIViewController {
                      stageTitle82, stageArtist82] as [UIView] {
             view.alpha = alpha
         }
+        // (87) 主题四圆点随内容组同淡。
+        stageThemeDots87?.alpha = alpha
     }
 
     private func setStageBarContentsInteractive(_ interactive: Bool) {
@@ -3962,6 +4056,8 @@ final class StageViewController: UIViewController {
                        stageConsoleButton82] {
             button.isUserInteractionEnabled = interactive
         }
+        // (87) 主题四圆点随内容组同启停。
+        stageThemeDots87?.isUserInteractionEnabled = interactive
     }
 
     // MARK: 附加功能浮层（3.7 (60) 第 7 条，舞台宿主）

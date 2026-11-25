@@ -237,6 +237,9 @@ final class WallPrototypeViewController: UIViewController,
     private var miniPlayButton: UIButton!
     private var miniPrevButton: UIButton!
     private var miniNextButton: UIButton!
+    /// (87) 主题四圆点（台面右上，与主页墙同件同位）。
+    private var miniThemeDots87: UIStackView?
+    private var miniThemeDotButtons87: [UIButton] = []
     /// (82) 第 7/8 条：控制台入口圆钮＋双时间标签（E 极简
     /// 台定版，与主页墙同构）。旧 mode/paw/heart/list 四
     /// 钮随旧台退役，职能全进控制台面板。
@@ -794,14 +797,16 @@ final class WallPrototypeViewController: UIViewController,
         miniCover = UIImageView()
         miniCover.contentMode = .scaleAspectFill
         miniCover.clipsToBounds = true
-        miniCover.layer.cornerRadius = 22
+        // (87) 样片台：封面 42 圆角方（10）代 44 圆。
+        miniCover.layer.cornerRadius = 10
         miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         miniCover.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniCover)
         // (84) 第 1 条：封面/歌手复原上台面（(80) 版式）。
 
         miniTitle = UILabel()
-        miniTitle.font = .systemFont(ofSize: 14, weight: .semibold)
+        // (87) 样片台：标题 15 bold。
+        miniTitle.font = .systemFont(ofSize: 15, weight: .bold)
         miniTitle.textColor = .white
         miniTitle.lineBreakMode = .byTruncatingTail
         miniTitle.translatesAutoresizingMaskIntoConstraints = false
@@ -817,8 +822,11 @@ final class WallPrototypeViewController: UIViewController,
         miniPlayButton = UIButton(type: .system)
         // (84) 第 1 条：播放钮复原 (80) 形态（白字形、无圆
         // 底）；字形仍走 DeckGlyph82 现行临时套。
+        // (87) 样片台：播放钮改 42 圆玻璃底（白 0.13）。
         miniPlayButton.tintColor = .white
-        miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 21), for: .normal)
+        miniPlayButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
+        miniPlayButton.layer.cornerRadius = 21
+        miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 20), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
         miniPlayButton.addTarget(self, action: #selector(miniPlayDown84), for: .touchDown)
@@ -848,15 +856,66 @@ final class WallPrototypeViewController: UIViewController,
         // 间标签。(83) 第 6 条：入口移进度行右端、收小
         // 为 30 圆钮（同主页墙）。
         miniConsoleButton = UIButton(type: .system)
-        miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        miniConsoleButton.layer.cornerRadius = 15
-        miniConsoleButton.setImage(DeckGlyph82.image(.console, pointSize: 15), for: .normal)
+        // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
+        miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
+        miniConsoleButton.layer.cornerRadius = 21
+        miniConsoleButton.setImage(DeckGlyph82.image(.console, pointSize: 20), for: .normal)
         miniConsoleButton.tintColor = .white
         miniConsoleButton.accessibilityLabel = "控制台"
         miniConsoleButton.translatesAutoresizingMaskIntoConstraints = false
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleTapped82), for: .touchUpInside)
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleDown84), for: .touchDown)
         bar.addSubview(miniConsoleButton)
+
+        // (87) 主题四圆点（样片 .tdots，与主页墙同件同位）。
+        let dotsStack = UIStackView()
+        dotsStack.axis = .horizontal
+        dotsStack.spacing = 5
+        dotsStack.alignment = .center
+        dotsStack.translatesAutoresizingMaskIntoConstraints = false
+        bar.addSubview(dotsStack)
+        miniThemeDots87 = dotsStack
+        miniThemeDotButtons87 = []
+        for (index, color) in Deck87.dotColors.enumerated() {
+            let button = UIButton(type: .custom)
+            button.tag = index
+            button.accessibilityLabel = "播放台主题"
+            button.translatesAutoresizingMaskIntoConstraints = false
+            let ring = UIView()
+            ring.layer.cornerRadius = 6.5
+            ring.layer.borderWidth = 2
+            ring.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
+            ring.isUserInteractionEnabled = false
+            ring.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(ring)
+            let circle = UIView()
+            circle.backgroundColor = color
+            circle.layer.cornerRadius = 4.5
+            circle.layer.borderWidth = 1
+            circle.layer.borderColor = UIColor.white.withAlphaComponent(0.55).cgColor
+            circle.isUserInteractionEnabled = false
+            circle.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(circle)
+            NSLayoutConstraint.activate([
+                button.widthAnchor.constraint(equalToConstant: 20),
+                button.heightAnchor.constraint(equalToConstant: 20),
+                ring.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                ring.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                ring.widthAnchor.constraint(equalToConstant: 13),
+                ring.heightAnchor.constraint(equalToConstant: 13),
+                circle.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                circle.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                circle.widthAnchor.constraint(equalToConstant: 9),
+                circle.heightAnchor.constraint(equalToConstant: 9),
+            ])
+            button.addTarget(self, action: #selector(miniThemeDotTapped87(_:)), for: .touchUpInside)
+            dotsStack.addArrangedSubview(button)
+            miniThemeDotButtons87.append(button)
+        }
+        NSLayoutConstraint.activate([
+            dotsStack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 2),
+            dotsStack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
+        ])
 
         miniTimeElapsed = UILabel()
         miniTimeElapsed.font = .systemFont(ofSize: 11, weight: .medium)
@@ -935,8 +994,8 @@ final class WallPrototypeViewController: UIViewController,
             knob.heightAnchor.constraint(equalToConstant: 9),
 
             miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            miniCover.widthAnchor.constraint(equalToConstant: 44),
-            miniCover.heightAnchor.constraint(equalToConstant: 44),
+            miniCover.widthAnchor.constraint(equalToConstant: 42),
+            miniCover.heightAnchor.constraint(equalToConstant: 42),
 
             // (84) 第 1 条：标题复原 (80) 锚法（同主页墙）。
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
@@ -950,16 +1009,16 @@ final class WallPrototypeViewController: UIViewController,
             // (84) 第 1 条：主排右端簇复原 (80) 链式锚（同
             // 主页墙）：控制台居最右，向左次/播/上一曲。
             miniConsoleButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
-            miniConsoleButton.widthAnchor.constraint(equalToConstant: 30),
-            miniConsoleButton.heightAnchor.constraint(equalToConstant: 30),
+            miniConsoleButton.widthAnchor.constraint(equalToConstant: 42),
+            miniConsoleButton.heightAnchor.constraint(equalToConstant: 42),
 
             miniNextButton.trailingAnchor.constraint(equalTo: miniConsoleButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
-            miniPlayButton.widthAnchor.constraint(equalToConstant: 40),
-            miniPlayButton.heightAnchor.constraint(equalToConstant: 40),
+            miniPlayButton.widthAnchor.constraint(equalToConstant: 42),
+            miniPlayButton.heightAnchor.constraint(equalToConstant: 42),
 
             miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
@@ -986,16 +1045,18 @@ final class WallPrototypeViewController: UIViewController,
         miniKnobLeading?.isActive = true
         // (84) 第 1 条：主排纵向复原 (80)——封面与四钮同组
         // 居台中心 −5，两形态同值。
+        // (87) 样片台两行版式：主行恒 −14（台高 84）。
         miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton,
                            miniNextButton, miniConsoleButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -5)
+            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -14)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // (82) 第 7 条：轨道纵锚制（展开）/底锚（收起）由
         // setMiniBarForm 互斥切换。(83) 第 6 条：展开锚改
         // 台底 −14（封面行退役），先按展开装配。
         // (84) 第 1 条：展开轨底锚复原 (80) 的 −7。
-        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
+        // (87) 样片台：展开轨底锚 −9（进度行独立成行）。
+        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -9)
         miniTrackTopC?.isActive = true
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5.5)
         miniTrackBottomConstraint?.isActive = false
@@ -1085,11 +1146,32 @@ final class WallPrototypeViewController: UIViewController,
     /// 约束归按钮所有），不改构建期的约束块。收起态的 alpha/
     /// 交互名单含隐藏键也无妨：isHidden 恒压过 alpha 与命中。
     private func applyMiniBarSlots() {
+        // (87) 播放台换代：上一曲/下一曲撤下台面、藏进控制
+        // 台顶部圆形玻璃钮排——两钮恒隐藏＋宽 0；槽位设置
+        // 自此不再驱动台面两钮显隐。
         guard let prev = miniPrevButton, let next = miniNextButton else { return }
-        applySlot(prev, visible: MiniBarSlotSettings.showPrev, width: 34)
-        applySlot(next, visible: MiniBarSlotSettings.showNext, width: 34)
+        applySlot(prev, visible: false, width: 34)
+        applySlot(next, visible: false, width: 34)
         // queue 键已迁顶部 chrome 排（(53) H 修正），不再受台面
         // 槽位显隐管辖。
+    }
+
+    /// (87) 主题四圆点点选（与主页墙同通路）。
+    @objc private func miniThemeDotTapped87(_ sender: UIButton) {
+        guard sender.tag < Deck87.dotThemes.count else { return }
+        let theme = Deck87.dotThemes[sender.tag]
+        MiniPlayerTheme.stored = theme
+        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
+        Breadcrumbs.log("deck87 dot host=wallproto t=\(theme.rawValue)")
+        refreshThemeDots87()
+    }
+
+    private func refreshThemeDots87() {
+        let current = MiniPlayerTheme.stored
+        for (index, button) in miniThemeDotButtons87.enumerated() {
+            let selected = Deck87.dotThemes[index] == current
+            button.subviews.first?.isHidden = !selected
+        }
     }
 
     private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
@@ -1132,6 +1214,8 @@ final class WallPrototypeViewController: UIViewController,
         refreshMiniProgressChrome()
         // (82) 第 7 条：字形与主题解耦（DeckGlyph82 单套）。
         refreshDeckIcons82()
+        // (87) 主题四圆点选中环随主题回刷。
+        refreshThemeDots87()
     }
 
     /// (82) 第 7 条：台面字形回刷——仅播/停态（与主页墙
@@ -1172,8 +1256,9 @@ final class WallPrototypeViewController: UIViewController,
             NSLayoutConstraint.activate([
                 skin.centerXAnchor.constraint(equalTo: miniProgressKnob.centerXAnchor),
                 skin.centerYAnchor.constraint(equalTo: miniProgressKnob.centerYAnchor),
-                skin.widthAnchor.constraint(equalToConstant: 13),
-                skin.heightAnchor.constraint(equalToConstant: 13),
+                // (87) 样片花朵把手 17pt（原 13pt 皮肤放大）。
+                skin.widthAnchor.constraint(equalToConstant: 17),
+                skin.heightAnchor.constraint(equalToConstant: 17),
             ])
             miniKnobSkin = skin
         }
@@ -1755,8 +1840,9 @@ final class WallPrototypeViewController: UIViewController,
         applyMiniBarBottom77(collapsed: collapsed)
         (miniBar as? MiniBarHitView)?.isCollapsedForm = collapsed
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
-        // (84) 第 1 条：主排纵向复原 (80)——两形态恒 −5。
-        for constraint in miniMainCenterY { constraint.constant = -5 }
+        // (84) 第 1 条：主排纵向复原 (80)——两形态恒同值。
+        // (87) 样片台两行版式：恒 −14（台高 84）。
+        for constraint in miniMainCenterY { constraint.constant = -14 }
         // (74) 第 5 项小横线（同主页墙口径）：收起态轨道换
         // 居中 134×5 小横线、圆点收起；台体容器与命中带不
         // 动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
@@ -1862,7 +1948,7 @@ final class WallPrototypeViewController: UIViewController,
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
                                 miniPrevButton, miniNextButton, miniConsoleButton,
-                                miniTimeElapsed, miniTimeDuration]
+                                miniTimeElapsed, miniTimeDuration, miniThemeDots87]
         for view in views {
             view?.alpha = alpha
         }
@@ -1874,6 +1960,8 @@ final class WallPrototypeViewController: UIViewController,
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
+        // (87) 主题四圆点随内容组同启停。
+        miniThemeDots87?.isUserInteractionEnabled = interactive
     }
 
     // MARK: 世界缝（(85) 第 1 条，歌单页）

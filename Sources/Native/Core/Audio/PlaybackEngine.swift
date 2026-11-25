@@ -357,6 +357,9 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         registerCurrentItemObservers(item)
 
         currentTrack = track
+        // (87) 听歌统计：新曲装载收口计次（暂停/恢复不经
+        // 此路，不重复计）。
+        ListenStats87Store.shared.recordPlay(track: track)
         currentArtwork = artwork
         duration = track.duration > 0 ? track.duration : 0
         currentTime = 0
@@ -641,6 +644,8 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
         }
         flushListeningHistory(isCompleted: true)
         currentTrack = newTrack
+        // (87) 听歌统计：crossfade 切歌同计次。
+        ListenStats87Store.shared.recordPlay(track: newTrack)
         currentTime = 0
         listenedSeconds = 0
         lastTickDate = nil
@@ -915,6 +920,9 @@ final class PlaybackEngine: NSObject, ObservableObject, AudioPlaybackProtocol {
             listenedMs: Int(listenedSeconds * 1000),
             isCompleted: isCompleted
         )
+        // (87) 听歌统计时长同源结算（与历史库同一 ≥15s
+        // 口径、同一收口点，防双计）。
+        ListenStats87Store.shared.addListening(seconds: listenedSeconds)
         listenedSeconds = 0
     }
 }

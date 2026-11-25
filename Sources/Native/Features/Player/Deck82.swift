@@ -17,12 +17,25 @@ enum DeckGlyph82 {
         case list, console, modeRepeat, modeRepeatOne, modeSequence, shuffle
         case sparkles, paw, heart, heartFill, pencil, trash, help
         case layers, speaker, star, starFill, command, sliders
+        // (87) 四特效钮字形：烟花/孔明灯 SF 无对应符号，手绘
+        // 线条（照样片 SVG 路径简化）；雪/风走 SF。
+        case fxFirework, fxLantern, fxSnow, fxWind
     }
 
     static func image(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
         switch kind {
         case .prev, .next, .play, .pause:
             return coreGlyph(kind, pointSize: pointSize)
+        case .fxFirework, .fxLantern:
+            return fxGlyph(kind, pointSize: pointSize)
+        case .fxSnow:
+            let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
+            return UIImage(systemName: "snowflake", withConfiguration: config)?
+                .withRenderingMode(.alwaysTemplate)
+        case .fxWind:
+            let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
+            return UIImage(systemName: "wind", withConfiguration: config)?
+                .withRenderingMode(.alwaysTemplate)
         default:
             let name: String
             switch kind {
@@ -90,6 +103,74 @@ enum DeckGlyph82 {
             case .pause:
                 rect(6.5, 5.5, 4, 13, r: 2)
                 rect(13.5, 5.5, 4, 13, r: 2)
+            default:
+                break
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// (87) 特效字形手绘（24×24 画布、描边模板图）：烟花＝
+    /// 中心点＋8 条放射线＋底座两脚；孔明灯＝灯体轮廓＋顶
+    /// 线＋灯口线＋中央小火芯（填充小水滴）。照样片控制台
+    /// 四钮 SVG 的几何简化，线宽 1.7/24 比例。
+    private static func fxGlyph(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { _ in
+            UIColor.white.setStroke()
+            UIColor.white.setFill()
+            func line(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat, w: CGFloat = 1.7) {
+                let path = UIBezierPath()
+                path.move(to: CGPoint(x: x1 * scale, y: y1 * scale))
+                path.addLine(to: CGPoint(x: x2 * scale, y: y2 * scale))
+                path.lineWidth = w * scale
+                path.lineCapStyle = .round
+                path.stroke()
+            }
+            switch kind {
+            case .fxFirework:
+                // 放射光丝（样片 fwBtn：上/左上/右上/左/右/左下/右下 7 线＋竖线）。
+                line(12, 10.2, 12, 3.4)
+                line(12, 10.2, 6.6, 5.6)
+                line(12, 10.2, 17.4, 5.6)
+                line(12, 10.2, 4.9, 9.7)
+                line(12, 10.2, 19.1, 9.7)
+                line(12, 10.2, 7.7, 14.9)
+                line(12, 10.2, 16.3, 14.9)
+                UIBezierPath(ovalIn: CGRect(x: 10.9 * scale, y: 9.1 * scale,
+                                             width: 2.2 * scale, height: 2.2 * scale)).fill()
+                // 底座。
+                line(10.9, 20.8, 12, 16.3, w: 1.5)
+                line(13.1, 20.8, 12, 16.3, w: 1.5)
+            case .fxLantern:
+                // 灯体：顶部横线起、两侧弧线收至灯口。
+                line(8.4, 3.8, 15.6, 3.8)
+                let body = UIBezierPath()
+                body.move(to: CGPoint(x: 8.7 * scale, y: 3.8 * scale))
+                body.addCurve(to: CGPoint(x: 9.5 * scale, y: 17.1 * scale),
+                              controlPoint1: CGPoint(x: 7.2 * scale, y: 6.4 * scale),
+                              controlPoint2: CGPoint(x: 6.3 * scale, y: 12.5 * scale))
+                body.move(to: CGPoint(x: 15.3 * scale, y: 3.8 * scale))
+                body.addCurve(to: CGPoint(x: 14.5 * scale, y: 17.1 * scale),
+                              controlPoint1: CGPoint(x: 16.8 * scale, y: 6.4 * scale),
+                              controlPoint2: CGPoint(x: 17.7 * scale, y: 12.5 * scale))
+                body.lineWidth = 1.7 * scale
+                body.lineCapStyle = .round
+                body.stroke()
+                line(9.5, 17.1, 14.5, 17.1)
+                // 火芯：小水滴填充。
+                let flame = UIBezierPath()
+                flame.move(to: CGPoint(x: 12 * scale, y: 13.6 * scale))
+                flame.addCurve(to: CGPoint(x: 12 * scale, y: 16.5 * scale),
+                               controlPoint1: CGPoint(x: 13.1 * scale, y: 14.8 * scale),
+                               controlPoint2: CGPoint(x: 13.1 * scale, y: 15.6 * scale))
+                flame.addCurve(to: CGPoint(x: 12 * scale, y: 16.5 * scale),
+                               controlPoint1: CGPoint(x: 10.9 * scale, y: 15.6 * scale),
+                               controlPoint2: CGPoint(x: 10.9 * scale, y: 14.8 * scale))
+                flame.close()
+                flame.fill()
             default:
                 break
             }
@@ -223,6 +304,31 @@ enum DblTap83 {
         guard let host = armedHost else { return }
         armedHost = nil
         step(host, "appear")
+    }
+}
+
+/// (87) 播放台换代共享口径（样片定版 2026-11-25 15:07）：
+/// 主题四圆点（台面右上）与模式合并钮循环序的单一出处。
+enum Deck87 {
+    /// 四圆点对应的油画主题（与 MiniPlayerTheme 四套画作
+    /// 一一对应；.none 仍由长按循环/设置到达，点位只管四
+    /// 套画作）。圆点底色取各主题画作的代表色。
+    static let dotThemes: [MiniPlayerTheme] = [.meadow, .snow, .star, .ocean]
+    static let dotColors: [UIColor] = [
+        UIColor(red: 0.48, green: 0.54, blue: 0.29, alpha: 1),  // 花海·绿
+        UIColor(red: 0.75, green: 0.85, blue: 0.91, alpha: 1),  // 雪景·雪蓝白
+        UIColor(red: 0.17, green: 0.23, blue: 0.45, alpha: 1),  // 星空·深蓝
+        UIColor(red: 0.17, green: 0.48, blue: 0.45, alpha: 1),  // 海洋·青
+    ]
+
+    /// 模式合并钮单击循环序（87 定版）：随机→顺序→循环→单曲→随机。
+    static func nextMode(after mode: QueueManager.PlayMode) -> QueueManager.PlayMode {
+        switch mode {
+        case .shuffle: return .off
+        case .off: return .loopAll
+        case .loopAll: return .repeatOne
+        case .repeatOne: return .shuffle
+        }
     }
 }
 

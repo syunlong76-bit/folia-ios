@@ -64,7 +64,9 @@ final class MiniBarQuickRowView: UIView {
     /// 进度行单排版式）；与 DeckLayout82.expandedHeight
     /// 同值，宿主读本常量处自动跟随，三宿主同台同尺寸
     /// 由此收口。
-    static let expandedBarHeight: CGFloat = 70
+    /// (87) 播放台换代：样片台两行版式（主行 42＋进度行）
+    /// 展开高 70→84，三宿主同源跟随、本常量仍是唯一出处。
+    static let expandedBarHeight: CGFloat = 84
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?

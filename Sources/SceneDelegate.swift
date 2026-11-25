@@ -4,11 +4,49 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
 
     var window: UIWindow?
 
+    /// (87) 烟花收尾「今日推荐」的待播曲（推荐回调与播
+    /// 放回调之间传递；进程级单份即可）。
+    static var fxRecommended87: FoliaTrack?
+
     func scene(_ scene: UIScene,
                willConnectTo session: UISceneSession,
                options connectionOptions: UIScene.ConnectionOptions) {
         guard let windowScene = scene as? UIWindowScene else { return }
         Breadcrumbs.log("scene.connect")
+        // (87) 四特效全局叠加层装配：独立穿透窗（level
+        // 1500），覆盖全屏全场景、不绑控制台开合；渲染层
+        // 每帧只清自己、绝不压暗/染色照片墙背景。
+        GlobalFx87.shared.install(in: windowScene)
+        GlobalFx87.shared.recommendationProvider = {
+            // 今日推荐：队列里挑当前曲之外的一首（优先下
+            // 一首），封面走缓存同步取、取不到传 nil。
+            let queue = QueueManager.shared
+            let tracks = queue.queue
+            guard !tracks.isEmpty else { return nil }
+            let current = queue.currentIndex
+            var candidate: FoliaTrack?
+            if tracks.count > 1 {
+                let next = (current + 1) % tracks.count
+                candidate = tracks[next]
+            } else if current != 0 {
+                candidate = tracks[0]
+            }
+            guard let track = candidate else { return nil }
+            SceneDelegate.fxRecommended87 = track
+            var cover: UIImage?
+            if let raw = track.artworkURL?.absoluteString {
+                cover = NativeCoverLoader.shared.cachedImage(for: raw)
+                    ?? NativeCoverLoader.shared.cachedImageAnyTier(raw: raw, excludingTier: -1)
+            }
+            return (title: track.title, artist: track.artist, cover: cover)
+        }
+        GlobalFx87.shared.onPlayRecommendation = {
+            guard let track = SceneDelegate.fxRecommended87,
+                  let index = QueueManager.shared.queue.firstIndex(where: { $0.id == track.id })
+            else { return }
+            QueueManager.shared.playAtIndex(index)
+            Breadcrumbs.log("fx87 rec play idx=\(index)")
+        }
         // (75) 真 Live Activity 协调器装配（认领既有活动+
         // 订阅播放/名单边沿；拉起在 sceneDidBecomeActive
         // 的闸上裁决，此处只装配不拉起）。
