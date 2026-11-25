@@ -262,8 +262,9 @@ final class LoginViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -32),
             avatarView.widthAnchor.constraint(equalToConstant: 56),
             avatarView.heightAnchor.constraint(equalToConstant: 56),
-            qrImageView.widthAnchor.constraint(equalToConstant: 220),
-            qrImageView.heightAnchor.constraint(equalToConstant: 220),
+            // (89) §12-2：码瓷砖 220 → 200（网页 LoginTile 200×200）。
+            qrImageView.widthAnchor.constraint(equalToConstant: 200),
+            qrImageView.heightAnchor.constraint(equalToConstant: 200),
             actionButton.widthAnchor.constraint(equalToConstant: 200),
             syncButton.widthAnchor.constraint(equalToConstant: 200),
             closeButton.widthAnchor.constraint(equalToConstant: 160)
@@ -1080,12 +1081,30 @@ final class LoginViewController: UIViewController {
             let body = raw.contains(",")
                 ? String(raw.split(separator: ",", maxSplits: 1).last ?? "") : raw
             if let data = Data(base64Encoded: body), let image = UIImage(data: data) {
-                qrImageView.image = image
+                qrImageView.image = Self.tileQRImage89(image)
                 return
             }
         }
         if let content, let image = Self.makeQRImage(text: content) {
-            qrImageView.image = image
+            qrImageView.image = Self.tileQRImage89(image)
+        }
+    }
+
+    /// (89) §12-2：网页码瓷砖口径——白瓷砖 200×200 内码图
+    /// 176×176 居中（四周 12 白边）。两条图源（服务端图／
+    /// 本地生成）统一在此垫边，视图侧只管 200 见方。
+    private static func tileQRImage89(_ image: UIImage) -> UIImage {
+        let tile: CGFloat = 200, code: CGFloat = 176
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: tile, height: tile), format: format)
+        return renderer.image { _ in
+            UIColor.white.setFill()
+            UIRectFill(CGRect(x: 0, y: 0, width: tile, height: tile))
+            image.draw(in: CGRect(
+                x: (tile - code) / 2, y: (tile - code) / 2,
+                width: code, height: code))
         }
     }
 

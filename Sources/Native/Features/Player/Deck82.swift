@@ -264,10 +264,10 @@ enum DeckGlyph82 {
 
 /// (82) 台面布局常量（单一出处，四页同值）。
 enum DeckLayout82 {
-    /// 展开高：(82) E 定版三行 132 → (83) 紧凑台 106 →
-    /// (84) 第 1 条改回 (80) 版台为底，复原 70（与
-    /// MiniBarQuickRowView.expandedBarHeight 同值）。
-    static let expandedHeight: CGFloat = 70
+    /// 展开高单一出处在 MiniBarQuickRowView.expandedBarHeight
+    /// （现值 84，(87) 换代定版）。(89) 清账：本枚举原有
+    /// expandedHeight=70 死常数（(84) 复原值、未跟 (87)
+    /// 改版、全仓零引用）已删除，防误读。
     static let collapsedHeight: CGFloat = 16
     /// 收起态小白条：(83) 第 5 条图像量测对齐系统 home
     /// indicator（量测账见 delivery-83-report：图三系统条

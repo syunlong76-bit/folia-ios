@@ -3121,7 +3121,8 @@ final class StageViewController: UIViewController {
         stageProgressKnob = knob
 
         for label in [currentTimeLabel, totalTimeLabel] {
-            label.font = .monospacedDigitSystemFont(ofSize: 11, weight: .regular)
+            // (89) §3-6 对齐网页 ProgressBar：时间标签 10px 等宽。
+            label.font = .monospacedDigitSystemFont(ofSize: 10, weight: .regular)
             label.textColor = UIColor.white.withAlphaComponent(0.6)
             label.translatesAutoresizingMaskIntoConstraints = false
             bar.addSubview(label)
@@ -3299,7 +3300,9 @@ final class StageViewController: UIViewController {
         // (82) 第 7 条：展开态轨道夹在双时间标签之间（与墙台同式）。
         stageTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: currentTimeLabel.trailingAnchor, constant: 8)
         stageTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: totalTimeLabel.leadingAnchor, constant: -8)
-        stageTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
+        // (89) §3-4：展开态轨道高 4 → 6（网页 ProgressBar h-1.5）。
+        stageTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 6)
+        Breadcrumbs.log("port89 deck=track6/time10x32 host=stage")
         stageTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
         // (83) 第 5 条：收起宽 134→140（量测对齐，同两面墙）。
         stageTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 140)
@@ -3348,10 +3351,10 @@ final class StageViewController: UIViewController {
             // (85) 审计四(b)：双时间与墙台同锚同宽、定宽
             // 40（≥10 分钟不冒框）；(86) 第 6 条：距台框
             // 16→28 内收（三宿主一致，胶囊弧线净距）。
-            currentTimeLabel.widthAnchor.constraint(equalToConstant: 40),
+            currentTimeLabel.widthAnchor.constraint(equalToConstant: 32),
             totalTimeLabel.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -28),
             totalTimeLabel.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            totalTimeLabel.widthAnchor.constraint(equalToConstant: 40),
+            totalTimeLabel.widthAnchor.constraint(equalToConstant: 32),
 
             // (84) 第 1 条：封面/标题复原 (80) 锚法（封面左
             // 置 44、标题贴封面右）。
@@ -3974,8 +3977,8 @@ final class StageViewController: UIViewController {
             stageTrackWidthC?.isActive = false
             stageTrackLeadC?.isActive = true
             stageTrackTrailC?.isActive = true
-            stageTrackHeightC?.constant = 4
-            stageProgressTrack?.layer.cornerRadius = 2
+            stageTrackHeightC?.constant = 6
+            stageProgressTrack?.layer.cornerRadius = 3
             // (82) 第 7 条：展开态轨道换顶锚（底锚撤）。
             stageTrackBottomConstraint?.isActive = false
             stageTrackTopC?.isActive = true

@@ -223,7 +223,8 @@ final class HomeSeam85View: UIView {
             let button = UIButton(type: .system)
             button.setTitle(Seam85Text.vertical(title), for: .normal)
             button.titleLabel?.numberOfLines = 0
-            button.titleLabel?.font = .systemFont(ofSize: 13, weight: .bold)
+            // (89) §5-8：缝页签字号对齐网页 14。
+            button.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
             button.titleLabel?.textAlignment = .center
             button.accessibilityLabel = title
             button.tag = index
@@ -305,7 +306,8 @@ final class HomeSeam85View: UIView {
         // 高 H；(85) 的固定 pt 排版整组退役）。
         libraryLabel.frame = CGRect(
             x: 0, y: 0.028 * H, width: contentW, height: max(16, 0.022 * H))
-        foldButton.frame = CGRect(x: cx - 14, y: 0.066 * H, width: 28, height: 28)
+        // (89) §5-7：折叠钮 28 → 36（网页缝图标钮 36×36）。
+        foldButton.frame = CGRect(x: cx - 18, y: 0.066 * H, width: 36, height: 36)
         // 页签：top 0.118H 起、步距 0.07H、高 0.062H、宽
         // 0.40×缝宽＝26 居中；圆角取帧高一半成全圆 pill。
         for (index, button) in tabButtons.enumerated() {
@@ -597,7 +599,8 @@ final class PlaylistSeam85View: UIView {
         // （报告注明）。标题不再弹性拉满、计数不再随标题
         // 底漂移（(85) 走样两处）。
         backButton.frame = CGRect(x: cx - 16, y: 0.024 * H, width: 32, height: 32)
-        foldButton.frame = CGRect(x: cx - 16, y: 0.088 * H, width: 32, height: 32)
+        // (89) §5-7：书脊折叠钮 32 → 36（网页缝图标钮 36×36）。
+        foldButton.frame = CGRect(x: cx - 18, y: 0.088 * H, width: 36, height: 36)
         titleButton.frame = CGRect(
             x: 12, y: 0.16 * H, width: 40, height: 0.38 * H)
         countLabel.frame = CGRect(
@@ -605,11 +608,13 @@ final class PlaylistSeam85View: UIView {
         // 计数（止 0.62H）与播放（起 0.84H）之间空段：
         // port88 前为头像位（0.70H 起 32 圆），已摘除留空。
         playButton.frame = CGRect(x: cx - 18, y: 0.84 * H, width: 36, height: 36)
-        expandButton.frame = CGRect(x: cx - 14, y: 0.905 * H, width: 28, height: 28)
+        // (89) §5-7：展开钮 28 → 36（网页缝图标钮 36×36）。
+        expandButton.frame = CGRect(x: cx - 18, y: 0.905 * H, width: 36, height: 36)
         // 展开档内容（300 宽居中、左对齐排版）。
         fullContent.frame = CGRect(
             x: (bounds.width - 300) / 2, y: top, width: 300, height: contentH)
-        fullBackButton.frame = CGRect(x: 0, y: 0, width: 28, height: 28)
+        // (89) §5-7：展开档返回钮 28 → 32（网页返回钮 32×32）。
+        fullBackButton.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
         fullTitleLabel.frame = CGRect(x: 36, y: 2, width: 264, height: 44)
         fullMetaLabel.frame = CGRect(x: 36, y: 48, width: 264, height: 18)
         fullPlayButton.frame = CGRect(x: 16, y: 84, width: 268, height: 44)

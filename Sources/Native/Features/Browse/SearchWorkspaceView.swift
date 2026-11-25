@@ -296,7 +296,8 @@ struct SearchWorkspaceView: View {
             }
 
             // 种类排（序号 11px 等宽 + 标签 22px/900，选中前 11×11 强调方块）。
-            HStack(spacing: 26) {
+            // (89) §10-1：种类签间距对齐网页 28。
+            HStack(spacing: 28) {
                 ForEach(Array(SearchKind.allCases.enumerated()), id: \.offset) { index, item in
                     Button {
                         guard item != kind else { return }
@@ -462,7 +463,8 @@ struct SearchWorkspaceView: View {
                 Text(String(format: "%02d", index + 1))
                     .font(.system(size: 12, design: .monospaced))
                     .foregroundColor(FoliaTheme.secondary)
-                    .frame(width: 20, alignment: .leading)
+                    // (89) §10-2：序号列宽对齐网页 28。
+                    .frame(width: 28, alignment: .leading)
             }
 
             NativeCoverView(url: track.artworkURL, targetPixels: 150)
@@ -591,7 +593,8 @@ struct SearchWorkspaceView: View {
     private func collectionRow(index: Int, item: SearchCollection) -> some View {
         HStack(spacing: 14) {
             NativeCoverView(url: item.coverURL, targetPixels: 200)
-                .frame(width: 58, height: 58)
+                // (89) §10-3：集合行封面对齐网页 48×48。
+                .frame(width: 48, height: 48)
 
             VStack(alignment: .leading, spacing: 4) {
                 Text(item.name)

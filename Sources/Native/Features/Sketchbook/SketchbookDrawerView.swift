@@ -98,7 +98,8 @@ final class SketchbookDrawerView: UIView {
     private var applyDraftDeadline: Date?
     private weak var outsideTapRecognizer: UITapGestureRecognizer?
 
-    private static let drawerMaxWidth: CGFloat = 330
+    // (89) §14-1：抽屉宽对齐网页 min(368px, 100vw−24px)。
+    private static let drawerMaxWidth: CGFloat = 368
 
     /// 暂存的呈现形态（工具栏切换；画布时整幅换画布）。
     private enum NotesMode: Int {
@@ -167,7 +168,8 @@ final class SketchbookDrawerView: UIView {
         restStrip.addSubview(restMark)
 
         restDot.backgroundColor = Self.markColor
-        restDot.layer.cornerRadius = 7
+        // (89) §14-2：圆点记号对齐网页 7×14（胶囊、圆角 3.5）。
+        restDot.layer.cornerRadius = 3.5
         restDot.alpha = 0.55
         restDot.isUserInteractionEnabled = false
         restDot.isHidden = true
@@ -552,10 +554,11 @@ final class SketchbookDrawerView: UIView {
             x: edgeX, y: edgeTop + (edgeHeight - 56) / 2,
             width: 6, height: 56)
         restMark.frame = CGRect(x: 0, y: 0, width: 6, height: 2)
-        // 圆点骑在左缘上（网页版 marginLeft -7：圆心落在缘线上）。
+        // 圆点骑在左缘上（圆心落在缘线上）；(89) §14-2
+        // 宽 14 → 7（网页 dot 记号 7×14），圆心口径不变。
         restDot.frame = CGRect(
-            x: edgeX - 7, y: edgeTop + (edgeHeight - 14) / 2,
-            width: 14, height: 14)
+            x: edgeX - 3.5, y: edgeTop + (edgeHeight - 14) / 2,
+            width: 7, height: 14)
         restShapes.frame = CGRect(
             x: edgeX + 4, y: edgeTop + (edgeHeight - 36) / 2,
             width: 8, height: 36)
@@ -573,7 +576,7 @@ final class SketchbookDrawerView: UIView {
         expandedCountBadge.frame = CGRect(x: 5, y: 106, width: 32, height: 22)
         expandedCountLabel.frame = expandedCountBadge.bounds
         expandedBottomCircle.frame = CGRect(x: 15, y: 138, width: 12, height: 12)
-        let width = min(Self.drawerMaxWidth, bounds.width * 0.86)
+        let width = min(Self.drawerMaxWidth, bounds.width - 24)
         drawerView.frame = CGRect(
             x: isOpen ? 0 : -width, y: 0, width: width, height: bounds.height)
     }
@@ -719,7 +722,8 @@ final class SketchbookDrawerView: UIView {
         guard open != isOpen else { return }
         isOpen = open
         Breadcrumbs.log("sketchbook.drawer open=\(open) source=\(source)")
-        let width = min(Self.drawerMaxWidth, bounds.width * 0.86)
+        Breadcrumbs.log("port89 sketch=w368/dot7x14")
+        let width = min(Self.drawerMaxWidth, bounds.width - 24)
         if open {
             // 抽屉开着时把手整个不在场（网页版 !isOpen 才渲染
             // ScratchpadEdge，Host.tsx 同口径）。

@@ -277,17 +277,19 @@ final class WorkbenchTrackCell: UITableViewCell {
         coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         coverView.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(coverView)
-        titleLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        // (89) §5-6：分区行字号对齐网页列表行（歌名 13/700、
+        // 歌手 11、时长 11）；行高 64 网页为运行时值、无从对。
+        titleLabel.font = .systemFont(ofSize: 13, weight: .bold)
         titleLabel.textColor = WorkbenchTheme.primary
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(titleLabel)
-        subtitleLabel.font = .systemFont(ofSize: 12)
+        subtitleLabel.font = .systemFont(ofSize: 11)
         subtitleLabel.textColor = WorkbenchTheme.secondary
         subtitleLabel.lineBreakMode = .byTruncatingTail
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(subtitleLabel)
-        durationLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        durationLabel.font = UIFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         durationLabel.textColor = WorkbenchTheme.secondary
         durationLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(durationLabel)

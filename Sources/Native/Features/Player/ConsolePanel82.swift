@@ -56,6 +56,9 @@ final class ConsolePanel82: UIViewController,
     private let transPlay87 = UIButton(type: .system)
     private let transNext87 = UIButton(type: .system)
     private let volumeSlider = UISlider()
+    /// (89) §4 音量数值：网页两处控制台均有音量数值显示
+    /// （宽 38、12px/600、右对齐），原生原缺，补齐。
+    private let volumeValue89 = UILabel()
     private let segTranslucent = UIButton(type: .system)
     private let segSolid = UIButton(type: .system)
     private let focusSwitch = UISwitch()
@@ -114,7 +117,8 @@ final class ConsolePanel82: UIViewController,
         let dimTap = UITapGestureRecognizer(target: self, action: #selector(dimTapped85(_:)))
         view.addGestureRecognizer(dimTap)
         card85.backgroundColor = .clear
-        card85.layer.cornerRadius = 28
+        // (89) §4：卡圆角 28 → 24（网页 WallTools 面板圆角 24）。
+        card85.layer.cornerRadius = 24
         card85.layer.borderWidth = 1
         card85.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
         card85.clipsToBounds = true
@@ -123,17 +127,22 @@ final class ConsolePanel82: UIViewController,
         card85.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
             .translatedBy(x: 0, y: 10)
         view.addSubview(card85)
-        cardHeight85 = card85.heightAnchor.constraint(equalToConstant: 424)
+        cardHeight85 = card85.heightAnchor.constraint(equalToConstant: 400)
         cardWidth85 = card85.widthAnchor.constraint(equalToConstant: 322)
         // (86) 第 7 条：底部锚定——卡底＝安全区底 −90（账：
         // 点播台展开态顶边＝安全区底 −80＝台底锚 −10＋台
         // 高 70；卡底再上 10pt 间隙，落在 8–12pt 任务带
         // 内）。(85) 的 centerY 居中退役；宽度改代码收口
-        // （竖 0.82×屏宽、横 min(0.86×屏宽, 640)）。
+        // （横 min(0.86×屏宽, 640)；(89) §4 竖屏宽对齐网页
+        // 面板 min(296, 屏宽−32)，竖屏高改为内容链高 400）。
         cardBottom85 = card85.bottomAnchor.constraint(
             equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -90)
+        // (89) §4 定位：卡片改右对齐贴边（网页 WallTools 面板
+        // 右对齐、手机档右边距 16），底锚 −90 贴播放条不变
+        // （(85)「向下贴近播放条」口径保留，仅水平轴对齐）。
         NSLayoutConstraint.activate([
-            card85.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            card85.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
             cardWidth85!,
             cardBottom85!,
             cardHeight85!,
@@ -236,7 +245,8 @@ final class ConsolePanel82: UIViewController,
         mainView87.addSubview(functionRow)
 
         // 音量行。
-        let speaker = UIImageView(image: DeckGlyph82.image(.speaker, pointSize: 16))
+        // (89) §4：音量图标对齐网页 17px（盒 30×30 见约束集）。
+        let speaker = UIImageView(image: DeckGlyph82.image(.speaker, pointSize: 17))
         speaker.tintColor = UIColor.white.withAlphaComponent(0.8)
         speaker.contentMode = .center
         speaker.translatesAutoresizingMaskIntoConstraints = false
@@ -250,9 +260,17 @@ final class ConsolePanel82: UIViewController,
         // 免拖动中拇指抖动），按下即落 console85。
         volumeSlider.addTarget(self, action: #selector(volumeTouched85), for: .touchDown)
         mainView87.addSubview(volumeSlider)
+        // (89) §4 音量数值标签：12pt semibold、白 0.66、右对齐，
+        // 初值与滑杆同源（PlaybackEngine 音量 0…1 → 百分比）。
+        volumeValue89.font = .systemFont(ofSize: 12, weight: .semibold)
+        volumeValue89.textColor = UIColor.white.withAlphaComponent(0.66)
+        volumeValue89.textAlignment = .right
+        volumeValue89.text = "\(Int((PlaybackEngine.shared.volume * 100).rounded()))"
+        volumeValue89.translatesAutoresizingMaskIntoConstraints = false
+        mainView87.addSubview(volumeValue89)
 
         // 图层行：layers 图标＋透光/实色图形分段＋四特效钮。
-        let layers = UIImageView(image: DeckGlyph82.image(.layers, pointSize: 16))
+        let layers = UIImageView(image: DeckGlyph82.image(.layers, pointSize: 17))
         layers.tintColor = UIColor.white.withAlphaComponent(0.8)
         layers.contentMode = .center
         layers.translatesAutoresizingMaskIntoConstraints = false
@@ -300,7 +318,7 @@ final class ConsolePanel82: UIViewController,
         }
 
         // 聚焦行：layers 图标＋海报聚焦叠色开关。
-        let focusIcon = UIImageView(image: DeckGlyph82.image(.layers, pointSize: 16))
+        let focusIcon = UIImageView(image: DeckGlyph82.image(.layers, pointSize: 17))
         focusIcon.tintColor = UIColor.white.withAlphaComponent(0.8)
         focusIcon.contentMode = .center
         focusIcon.translatesAutoresizingMaskIntoConstraints = false
@@ -325,7 +343,8 @@ final class ConsolePanel82: UIViewController,
         helpButton.setImage(DeckGlyph82.image(.help, pointSize: 17), for: .normal)
         helpButton.tintColor = .white
         helpButton.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        helpButton.layer.cornerRadius = 19
+        // (89) §4：帮助钮 38 → 32（网页帮助触发钮 32×32）。
+        helpButton.layer.cornerRadius = 16
         helpButton.accessibilityLabel = "帮助"
         helpButton.translatesAutoresizingMaskIntoConstraints = false
         helpButton.addTarget(self, action: #selector(helpTapped), for: .touchUpInside)
@@ -377,11 +396,13 @@ final class ConsolePanel82: UIViewController,
             segSolid.centerYAnchor.constraint(equalTo: segContainer.centerYAnchor),
             segSolid.widthAnchor.constraint(equalToConstant: 34),
             segSolid.heightAnchor.constraint(equalToConstant: 22),
-            helpButton.widthAnchor.constraint(equalToConstant: 38),
-            helpButton.heightAnchor.constraint(equalToConstant: 38),
+            helpButton.widthAnchor.constraint(equalToConstant: 32),
+            helpButton.heightAnchor.constraint(equalToConstant: 32),
+            // (89) §4：音量行高对齐网页 38（滑杆命中高）。
+            volumeSlider.heightAnchor.constraint(equalToConstant: 38),
         ])
         // (87) 竖屏单列链（自上而下：条带/钮排/功能行/
-        // 音量/图层/聚焦/灯行，总高约 398 ≤ 424 卡高）。
+        // 音量/图层/聚焦/灯行；(89) 后总高 390 ≤ 400 卡高）。
         portraitConstraints85 = [
             clearButton.topAnchor.constraint(equalTo: mainView87.topAnchor, constant: 12),
             clearButton.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -16),
@@ -395,18 +416,23 @@ final class ConsolePanel82: UIViewController,
             transRow87.centerXAnchor.constraint(equalTo: mainView87.centerXAnchor),
             transRow87.heightAnchor.constraint(equalToConstant: 54),
 
+            // (89) §4：功能行边距 24 → 12（296 卡宽下六格
+            // 42 宽＋间隙 4 的网页账）、行高 44 → 40。
             functionRow.topAnchor.constraint(equalTo: transRow87.bottomAnchor, constant: 12),
-            functionRow.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
-            functionRow.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
-            functionRow.heightAnchor.constraint(equalToConstant: 44),
+            functionRow.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 12),
+            functionRow.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -12),
+            functionRow.heightAnchor.constraint(equalToConstant: 40),
 
             speaker.topAnchor.constraint(equalTo: functionRow.bottomAnchor, constant: 12),
             speaker.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
-            speaker.widthAnchor.constraint(equalToConstant: 24),
-            speaker.heightAnchor.constraint(equalToConstant: 24),
+            speaker.widthAnchor.constraint(equalToConstant: 30),
+            speaker.heightAnchor.constraint(equalToConstant: 30),
             volumeSlider.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
             volumeSlider.leadingAnchor.constraint(equalTo: speaker.trailingAnchor, constant: 10),
-            volumeSlider.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            volumeSlider.trailingAnchor.constraint(equalTo: volumeValue89.leadingAnchor, constant: -8),
+            volumeValue89.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
+            volumeValue89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            volumeValue89.widthAnchor.constraint(equalToConstant: 38),
 
             layers.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 14),
             layers.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
@@ -449,15 +475,18 @@ final class ConsolePanel82: UIViewController,
             functionRow.topAnchor.constraint(equalTo: transRow87.bottomAnchor, constant: 8),
             functionRow.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 16),
             functionRow.trailingAnchor.constraint(equalTo: stripScroll87.trailingAnchor),
-            functionRow.heightAnchor.constraint(equalToConstant: 44),
+            functionRow.heightAnchor.constraint(equalToConstant: 40),
 
             speaker.topAnchor.constraint(equalTo: mainView87.topAnchor, constant: 16),
             speaker.leadingAnchor.constraint(equalTo: stripScroll87.trailingAnchor, constant: 28),
-            speaker.widthAnchor.constraint(equalToConstant: 24),
-            speaker.heightAnchor.constraint(equalToConstant: 24),
+            speaker.widthAnchor.constraint(equalToConstant: 30),
+            speaker.heightAnchor.constraint(equalToConstant: 30),
             volumeSlider.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
             volumeSlider.leadingAnchor.constraint(equalTo: speaker.trailingAnchor, constant: 10),
-            volumeSlider.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            volumeSlider.trailingAnchor.constraint(equalTo: volumeValue89.leadingAnchor, constant: -8),
+            volumeValue89.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
+            volumeValue89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            volumeValue89.widthAnchor.constraint(equalToConstant: 38),
 
             layers.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 14),
             layers.leadingAnchor.constraint(equalTo: speaker.leadingAnchor),
@@ -495,6 +524,7 @@ final class ConsolePanel82: UIViewController,
             self?.refreshFxButtons87()
         }
         bindState()
+        Breadcrumbs.log("port89 console=right/w296/r24/fn42x40/vol30+val")
     }
 
     override func viewDidLayoutSubviews() {
@@ -512,20 +542,25 @@ final class ConsolePanel82: UIViewController,
             grid87?.collectionViewLayout.invalidateLayout()
             Breadcrumbs.log("console86 land=\(landscape ? 1 : 0)")
         }
+        // (89) §4：竖屏卡宽对齐网页面板 min(296, 屏宽−32)；
+        // 横屏双列 640 系 (86) 定案，不在本次对齐面。
         let cardW = landscape ? min(bounds.width * 0.86, 640)
-                              : bounds.width * 0.82
+                              : min(296, bounds.width - 32)
         if let cardWidth85, abs(cardWidth85.constant - cardW) > 0.5 {
             cardWidth85.constant = cardW
         }
-        // 卡高：竖屏沿 (85) 口径 min(424, 62% 屏高)；横屏
-        // 按双列内容高 232 与贴底可用高（屏高−安全底−90
-        // 锚距−顶距 8）取小——贴底锚下不超屏。
+        // 卡高：竖屏 (89) §4 改内容链高口径 min(400, 62%
+        // 屏高)——链账：顶 12＋条带 86＋10＋钮排 54＋12＋
+        // 功能 40＋12＋音量 30＋14＋图层 24＋12＋聚焦 24
+        // ＋14＋灯 46＝390，底留 10；横屏按双列内容高
+        // 232 与贴底可用高（屏高−安全底−90 锚距−顶距 8）
+        // 取小——贴底锚下不超屏。
         let cardH: CGFloat
         if landscape {
             let avail = bounds.height - view.safeAreaInsets.bottom - 90 - 8
             cardH = min(232, avail)
         } else {
-            cardH = min(424, bounds.height * 0.62)
+            cardH = min(400, bounds.height * 0.62)
         }
         if let cardHeight85, abs(cardHeight85.constant - cardH) > 0.5 {
             cardHeight85.constant = cardH
@@ -711,15 +746,16 @@ final class ConsolePanel82: UIViewController,
 
     private func configureIconButton(_ button: UIButton,
                                      glyph: DeckGlyph82.Kind, label: String) {
-        button.setImage(DeckGlyph82.image(glyph, pointSize: 17), for: .normal)
+        // (89) §4：功能格对齐网页快捷格——图标 18、格 42×40。
+        button.setImage(DeckGlyph82.image(glyph, pointSize: 18), for: .normal)
         button.tintColor = .white
         button.backgroundColor = UIColor.white.withAlphaComponent(0.10)
         button.layer.cornerRadius = 12
         button.accessibilityLabel = label
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 44),
-            button.heightAnchor.constraint(equalToConstant: 44),
+            button.widthAnchor.constraint(equalToConstant: 42),
+            button.heightAnchor.constraint(equalToConstant: 40),
         ])
     }
 
@@ -759,7 +795,7 @@ final class ConsolePanel82: UIViewController,
         case .repeatOne: glyph = .modeRepeatOne
         case .shuffle: glyph = .shuffle
         }
-        modeButton.setImage(DeckGlyph82.image(glyph, pointSize: 17), for: .normal)
+        modeButton.setImage(DeckGlyph82.image(glyph, pointSize: 18), for: .normal)
         modeButton.tintColor = mode == .off
             ? UIColor.white.withAlphaComponent(0.55) : .white
         modeButton.backgroundColor = mode == .shuffle
@@ -771,7 +807,7 @@ final class ConsolePanel82: UIViewController,
         let liked = PlaybackEngine.shared.currentTrack
             .map { LikesStore.shared.isLiked($0.id) } ?? false
         likeButton.setImage(
-            DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 17), for: .normal)
+            DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 18), for: .normal)
         likeButton.tintColor = liked
             ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 1) : .white
     }
@@ -967,6 +1003,8 @@ final class ConsolePanel82: UIViewController,
 
     @objc private func volumeChanged(_ sender: UISlider) {
         PlaybackEngine.shared.setVolume(sender.value)
+        // (89) §4：数值标签与滑杆同拍更新。
+        volumeValue89.text = "\(Int((sender.value * 100).rounded()))"
     }
 
     @objc private func volumeTouched85(_ sender: UISlider) {

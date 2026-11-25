@@ -124,7 +124,9 @@ final class QueuePanelViewController: UIViewController {
 
         // 标题行
         titleLabel.text = "播放列表"
-        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
+        // (89) §7-4：头行标题对齐网页 QueueTab 头行 13 semibold
+        //（头行总高由关闭钮 36 决定、与网页 HEAD_PX 36 同值）。
+        titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = .white
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(titleLabel)

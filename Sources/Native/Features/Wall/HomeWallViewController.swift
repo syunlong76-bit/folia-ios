@@ -1761,13 +1761,14 @@ final class HomeWallViewController: UIViewController,
         ])
 
         miniTimeElapsed = UILabel()
-        miniTimeElapsed.font = .systemFont(ofSize: 11, weight: .medium)
+        // (89) §3-6 对齐网页 ProgressBar：时间标签 10px 等宽。
+        miniTimeElapsed.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
         miniTimeElapsed.textColor = UIColor.white.withAlphaComponent(0.85)
         miniTimeElapsed.text = "0:00"
         miniTimeElapsed.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(miniTimeElapsed)
         miniTimeDuration = UILabel()
-        miniTimeDuration.font = .systemFont(ofSize: 11, weight: .medium)
+        miniTimeDuration.font = .monospacedDigitSystemFont(ofSize: 10, weight: .medium)
         miniTimeDuration.textColor = UIColor.white.withAlphaComponent(0.85)
         miniTimeDuration.textAlignment = .right
         miniTimeDuration.text = "0:00"
@@ -1805,7 +1806,9 @@ final class HomeWallViewController: UIViewController,
         // setMiniBarForm 换 centerX＋134 宽。
         miniTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: miniTimeElapsed.trailingAnchor, constant: 8)
         miniTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: miniTimeDuration.leadingAnchor, constant: -8)
-        miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 4)
+        // (89) §3-4：展开态轨道高 4 → 6（网页 ProgressBar h-1.5）。
+        miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 6)
+        Breadcrumbs.log("port89 deck=track6/time10x32 host=home")
         miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
         // (83) 第 5 条：收起宽 134→140（图像量测系统横线
         // 420px@3x，账见 DeckLayout82 与 (83) 报告）。
@@ -1874,11 +1877,11 @@ final class HomeWallViewController: UIViewController,
             miniTimeElapsed.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             // (85) 审计四(b)：时间定宽 34→40——34pt 装 11pt
             // "%d:%02d" 在 ≥10 分钟时已贴满、≥100 分钟冒框。
-            miniTimeElapsed.widthAnchor.constraint(equalToConstant: 40),
+            miniTimeElapsed.widthAnchor.constraint(equalToConstant: 32),
 
             miniTimeDuration.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -28),
             miniTimeDuration.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
-            miniTimeDuration.widthAnchor.constraint(equalToConstant: 40),
+            miniTimeDuration.widthAnchor.constraint(equalToConstant: 32),
 
             // (82) 第 7 条：seek 命中带改锚进度行（轨顶
             // −9、高 27），不再贴台底。
@@ -2739,8 +2742,8 @@ final class HomeWallViewController: UIViewController,
         // 里短轨悬在中段系 (79) 做过头，Miller (79) 验收图
         // 证点名）：收起态居中 134×5 短轨（与 home
         // indicator 同尺寸、横竖屏同规不拉长）；展开态还
-        // 原台内全宽长 seek 轨（lead/trail ±20、高 4、圆角
-        // 2，装配原值）。花朵圆点把手两态恒在场（下文
+        // 原台内全宽长 seek 轨（lead/trail ±20、高 6、圆角
+        // 3，(89) 对齐网页轨道高）。花朵圆点把手两态恒在场（下文
         // isHidden=false 与皮肤重挂不变）。
         if collapsed {
             miniTrackLeadC?.isActive = false
@@ -2757,8 +2760,8 @@ final class HomeWallViewController: UIViewController,
             miniTrackWidthC?.isActive = false
             miniTrackLeadC?.isActive = true
             miniTrackTrailC?.isActive = true
-            miniTrackHeightC?.constant = 4
-            miniProgressTrack.layer.cornerRadius = 2
+            miniTrackHeightC?.constant = 6
+            miniProgressTrack.layer.cornerRadius = 3
             // (82) 第 7 条：展开态轨道换顶锚（底锚撤）。
             miniTrackBottomConstraint?.isActive = false
             miniTrackTopC?.isActive = true
