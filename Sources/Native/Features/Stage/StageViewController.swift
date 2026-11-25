@@ -2921,11 +2921,11 @@ final class StageViewController: UIViewController {
             toolbar.setSegment(state.segment)
             toolbar.setLayoutMode(grid: state.grid)
         }
-        SeamToolbarForwarding.applyAccountState(to: toolbar)
+        // port88：工具条账户态回填与头像绑定随头像摘除退役
+        // （转发链 "avatar" 动作已同包摘除）。
         toolbar.onSegmentChanged = { [weak self] segment in
             self?.stageSeamForward74("segment-\(segment.crumbName)")
         }
-        toolbar.onAvatarTapped = { [weak self] in self?.stageSeamForward74("avatar") }
         toolbar.onSearchTapped = { [weak self] in self?.stageSeamForward74("search") }
         toolbar.onSettingsTapped = { [weak self] in self?.stageSeamForward74("settings") }
         toolbar.onGuideTapped = { [weak self] in self?.stageSeamForward74("guide") }

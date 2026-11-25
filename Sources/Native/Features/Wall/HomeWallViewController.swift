@@ -3449,11 +3449,9 @@ extension HomeWallViewController {
             guard let self else { return }
             QueueLatticeViewController.present(from: self)
         }
-        // (85) 第 2 条：工具条头像单击改绑定位（Miller
-        // 01:33/02:26 定版口径，盖过 (62) 账户卡绑定）；
-        // 账户卡改由设置页账户组进入（见 SettingsView-
-        // Controller 账户卡钮），seamAvatarTapped 本体保留。
-        toolbar.onAvatarTapped = { [weak self] in self?.avatarLocate85() }
+        // port88：工具条头像已摘除——(85) 第 2 条的头像绑
+        // 定位随之退役，账户卡入口只剩设置页账户组（见
+        // SettingsViewController 账户卡钮）。
         toolbar.onSearchTapped = { [weak self] in
             guard let self else { return }
             Breadcrumbs.log("wall.seam.search")
@@ -4020,33 +4018,10 @@ extension HomeWallViewController {
         return chain
     }
 
-    // MARK: 账户（双入口并存：与侧栏头像同一登录页/同一态）
-
-    func seamAvatarTapped() {
-        Breadcrumbs.log("wall.seam.avatar")
-        // (62) WD §1：墙上头像改 popover 账户卡（头像/昵称/ID/
-        // 登录态/平台丸/退出，见 AccountCard62），不再整页
-        // present 登录页；卡内登录走压墙弹层（pageSheet）。
-        // 侧栏深处入口保持整页 LoginViewController 不变。
-        let card = AccountCard62ViewController()
-        card.modalPresentationStyle = .popover
-        card.onLoginSuccess = { [weak self] in
-            guard let self else { return }
-            self.wallNotLoggedIn = false
-            self.loadAttempts = 0
-            self.loadEntries()
-            self.seamRefreshAccount()
-        }
-        card.onSessionChanged = { [weak self] in self?.seamRefreshAccount() }
-        if let pop = card.popoverPresentationController {
-            pop.sourceView = seamToolbar ?? view
-            // (74) 锚点回正：头像在工具条左端（leading 6 起
-            // 32×32），旧锚点落在条右端、卡片箭头指错位。
-            pop.sourceRect = CGRect(x: 6, y: 6, width: 32, height: 32)
-            pop.permittedArrowDirections = [.up]
-        }
-        present(card, animated: true)
-    }
+    // port88：seamAvatarTapped（墙上点头像开账户卡）随工
+    // 具条头像摘除整组退役——其全部调用方（转发链
+    // "avatar" 动作）已同包摘除；账户卡入口只剩设置页账
+    // 户组，侧栏深处入口保持整页 LoginViewController 不变。
 
     /// (62) 追加三：歌单页同款导航台的初始态读口（当前段 +
     /// 布局模式），歌单墙/歌单详情装配工具条时同步用。
@@ -4073,7 +4048,6 @@ extension HomeWallViewController {
             view.addSubview(seam)
         }
         seam.onFold = { [weak self] in self?.foldHomeSeam85() }
-        seam.onAvatar = { [weak self] in self?.avatarLocate85() }
         seam.onPlaylists = { [weak self] in
             self?.presentSidebarSection84(WorkbenchPlaylistListViewController())
         }
@@ -4297,44 +4271,11 @@ extension HomeWallViewController {
         present(sheet, animated: true)
     }
 
-    /// (85) 第 2 条：点头像＝定位正在播放（工具条头像与
-    /// 缝内账户头像共用）。语义（Miller 01:33/02:26 定
-    /// 版）：主页墙点头像＝切换到正在播放的歌曲——来源歌
-    /// 单可知时打开其曲目墙并真定位（相机移动到实例）；
-    /// 来源不可知时**不许改开舞台页冒充定位**（审计三死
-    /// 点），落 locate85 result=nosrc＋可见反馈；无在播
-    /// 曲目落 result=none＋toast。账户卡入口已迁设置页。
-    private func avatarLocate85() {
-        Breadcrumbs.log("locate85 via=avatar host=home")
-        guard PlaybackEngine.shared.currentTrack != nil else {
-            Breadcrumbs.log("locate85 result=none host=home")
-            NativePlaybackFailureToast.show(message: "现在没有正在播放的歌曲")
-            return
-        }
-        guard let playlistId = QueueManager.shared.sourcePlaylistId,
-              let idx = playlistIds.firstIndex(of: playlistId),
-              idx < entries.count else {
-            Breadcrumbs.log("locate85 result=nosrc host=home")
-            NativePlaybackFailureToast.show(message: "正在播放的歌曲不在主页歌单里")
-            return
-        }
-        Breadcrumbs.log("locate85 result=wallopen host=home")
-        let entry = entries[idx]
-        let wall = WallPrototypeViewController(
-            playlistId: playlistId, title: entry.title, coverUrl: entry.picUrl)
-        wall.modalPresentationStyle = .fullScreen
-        wall.modalTransitionStyle = .crossDissolve
-        wall.locateCurrentTrackWhenReady = true
-        beginPosterTransition(source: "avatar-locate", playlistId: playlistId)
-        wall.startPreload()
-        Task { [weak self] in
-            guard let self else { return }
-            let seed = await wall.awaitSeed(timeout: 0.25)
-            self.present(wall, animated: true) { [weak self] in
-                self?.endPosterTransition(source: "avatar-locate", seedReady: seed)
-            }
-        }
-    }
+    // port88：avatarLocate85（(85) 第 2 条点头像＝定位正在
+    // 播放）随头像摘除整组退役——两处绑定（工具条/主页缝）
+    // 已摘、本体无调用方。台身标题区单击定位
+    // （locateCurrentTrackFromCover）是另一入口、不在本退役
+    // 范围，原样保留。
 
     /// 分区页呈现（与 WorkbenchOverlayHostView.present-
     /// SectionVC 同式：fullScreen＋dismissToWall 回墙）。
@@ -4346,54 +4287,25 @@ extension HomeWallViewController {
         present(vc, animated: true)
     }
 
+    /// port88 瘦身：原「缝账户回显」的两路 UI 回填（工具条
+    /// 头像 setAccount、主页缝头像 setAccount85）随头像摘除
+    /// 退役；本函数只剩资料缓存刷新一职——fetchLoginStatus
+    /// 回程把网易云资料回填 NativeSessionStore（(62) 尾波
+    /// 第 3 组口径：网络值落盘，侧栏账户区/设置页账户组同
+    /// 源读它）。露面调用点不变（viewWillAppear）。
     func seamRefreshAccount() {
-        // 同步缓存先行（3.7 (61) 第 1.4 条）：头像 URL 与昵称同
-        // 源——ProviderSessionStatusQuery 同步缓存里当前登录平
-        // 台的 profile（取数口径与工作台侧栏 refreshAccountUI
-        // 一致：第一家已登录且有头像者优先）。先用缓存把工具
-        // 条头像刷出来，不等 fetchLoginStatus 网络回程。
-        let statuses = ProviderSessionStatusQuery.allStatuses()
-        let loggedInStatuses = statuses.filter(\.isLoggedIn)
-        let avatarStatus = loggedInStatuses.first { $0.avatarURL != nil }
-            ?? statuses.first { $0.avatarURL != nil }
-        let avatarURLString = avatarStatus?.avatarURL?.absoluteString
-        let syncNickname = loggedInStatuses.first?.displayName
-        let syncLoggedIn = !loggedInStatuses.isEmpty
-        seamToolbar?.setAccount(
-            nickname: syncNickname,
-            loggedIn: syncLoggedIn,
-            avatarURLString: avatarURLString)
-        homeSeam85?.setAccount85(
-            nickname: syncNickname, loggedIn: syncLoggedIn,
-            avatarURLString: avatarURLString)
-        Breadcrumbs.log("wall.seam.account sync loggedIn=\(syncLoggedIn) avatar=\(avatarURLString != nil ? 1 : 0)")
         Task { [weak self] in
             guard let self else { return }
             let status = try? await NativeDataClient.shared.fetchLoginStatus()
             await MainActor.run {
-                // (62) 尾波第 3 组：fetchLoginStatus 自 (61) 起带
-                // avatarURL——网络值优先于同步缓存落工具条，并
-                // 回填资料缓存（旧注释口径停在 (61) 前、原样回
-                // 传缓存值，网络头像永远用不上、存量缓存的头像
-                // 键永不回填）。失败时保留已刷的同步缓存值，不
-                // 回退成未登录占位。
                 guard let status else { return }
-                let effectiveAvatar = status.avatarURL ?? avatarURLString
                 if status.loggedIn {
                     NativeSessionStore.shared.saveProfile(
                         provider: .netease, accountId: status.userId,
                         displayName: status.nickname,
                         avatarURLString: status.avatarURL)
                 }
-                self.seamToolbar?.setAccount(
-                    nickname: status.nickname ?? syncNickname,
-                    loggedIn: status.loggedIn,
-                    avatarURLString: effectiveAvatar)
-                self.homeSeam85?.setAccount85(
-                    nickname: status.nickname ?? syncNickname,
-                    loggedIn: status.loggedIn,
-                    avatarURLString: effectiveAvatar)
-                Breadcrumbs.log("wall.seam.account fetch loggedIn=\(status.loggedIn) avatar=\(effectiveAvatar != nil ? 1 : 0)")
+                Breadcrumbs.log("wall.seam.account fetch loggedIn=\(status.loggedIn) avatar=\(status.avatarURL != nil ? 1 : 0)")
             }
         }
     }

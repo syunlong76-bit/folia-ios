@@ -1987,12 +1987,8 @@ final class WallPrototypeViewController: UIViewController,
         seam.onExpandChange = { [weak self] expanded in
             self?.setPlaylistSeamExpanded85(expanded)
         }
-        // (86) 第 3 条：缝头像绑定位（与工具条头像同路）
-        // ＋账户同源回填（出现时再刷，见 viewWillAppear）。
-        seam.onAvatar = { [weak self] in
-            self?.locateCurrentTrack(via: "avatar")
-        }
-        SeamToolbarForwarding.applyAccountState(toSeam: seam)
+        // port88：缝头像绑定位（(86) 第 3 条）＋账户同源回
+        // 填随书脊头像摘除一并退役，本缝无头像位。
         playlistSeam85 = seam
         let tab = SeamEdgeTab85View()
         tab.isHidden = true
@@ -2280,10 +2276,10 @@ final class WallPrototypeViewController: UIViewController,
 
     private func locateCurrentTrack(via: String = "cover") {
         // (85) 第 2 条：定位全程落痕；(86) 第 3 条见证升
-        // locate86（via/result/fail）——判别标准：歌单页
-        // 点头像日志必有 locate86 行且墙真滑。
-        // via=avatar 为工具条/缝头像点按（Miller 定版口
-        // 径），其余入口（封面区/呈现后消费）沿用 cover。
+        // locate86（via/result/fail）。
+        // port88：via=avatar 入口（工具条/缝头像点按）随头
+        // 像摘除退役，现行调用方只剩 cover（封面区/呈现后
+        // 消费）；via 参数保留备查。
         Breadcrumbs.log("locate86 via=\(via) host=wall")
         locateGeneration += 1
         guard let current = PlaybackEngine.shared.currentTrack else {
@@ -2617,11 +2613,7 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        // (86) 第 3 条：缝头像账户态随出现刷新（登录态可
-        // 能在主页侧刚变更）。
-        if let seam = playlistSeam85 {
-            SeamToolbarForwarding.applyAccountState(toSeam: seam)
-        }
+        // port88：(86) 第 3 条的缝头像账户态随出现刷新已退役。
         // (72) 单宿主认领：本页在前时迷你台形态归本宿主；
         // 形态与共享旗标不一致时无动画对齐一次（交接不跳变）。
         MiniBarSingleHost.shared.claim("wallproto")
@@ -2777,18 +2769,15 @@ final class WallPrototypeViewController: UIViewController,
             toolbar.setSegment(state.segment)
             toolbar.setLayoutMode(grid: state.grid)
         }
-        SeamToolbarForwarding.applyAccountState(to: toolbar)
+        // port88：工具条账户态回填（applyAccountState）随头
+        // 像摘除退役，本条建成即无头像（port88 bar 见证）。
         toolbar.onSegmentChanged = { [weak self] segment in
             guard let self else { return }
             SeamToolbarForwarding.forward("segment-\(segment.crumbName)", from: self)
         }
-        // (85) 第 2 条：歌单墙工具条头像改绑定位（本墙内
-        // 真相机移动，Miller 定版口径；盖过账户卡转发）。
-        // 账户卡改由设置页账户组进入。
-        toolbar.onAvatarTapped = { [weak self] in
-            guard let self else { return }
-            self.locateCurrentTrack(via: "avatar")
-        }
+        // port88：(85) 第 2 条的工具条头像绑定位随头像摘除
+        // 退役；locateCurrentTrack 只剩 cover 入口（封面区/
+        // 呈现后消费）。账户卡入口只剩设置页账户组。
         toolbar.onSearchTapped = { [weak self] in
             guard let self else { return }
             SeamToolbarForwarding.performInPlace("search", from: self, toolbar: toolbar)

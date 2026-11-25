@@ -30,7 +30,7 @@ enum SeamSegment: Int, CaseIterable {
 
 /// 主页墙缝合工具条（3.7 (55) 工作流 E）：骑在主页墙顶部
 /// 安全区下的一条毛玻璃浮动条，按网页版缝合工具条语义适配
-/// 原生墙：歌/推/探三段切换、账户头像（点开登录页）、搜索
+/// 原生墙：歌/推/探三段切换、搜索
 /// （SearchWorkspaceView）、设置（SettingsViewController）、
 /// 布局钮（网格 ⇄ Bravais 墙）、「…」菜单钮、全屏钮（iOS
 /// 无窗口全屏——宿主落为沉浸模式，见 HomeWall 接线）。
@@ -51,6 +51,9 @@ enum SeamSegment: Int, CaseIterable {
 /// (86) 第 3/4 条改版：grabber 横线整件撤除（(85) 图五
 /// 定案的残留小白线即此线身）——收起态只剩常驻头像＋
 /// 不可见展开命中垫（原垫原位）；头像双态恒可见可点。
+/// port88：常驻头像随之整件摘除（Miller 定「头像全部去
+/// 掉」）——收起态只剩不可见展开命中垫；段控回收头像腾
+/// 出的 40pt（137→177、总账 356 不变）。
 ///
 /// 绕岛形态（3.7 (75) 第 3 项，Miller 2026-11-23 20:29/
 /// 20:31 点名）：(74) 的直条悬在岛下方、与岛毫无关系被
@@ -86,7 +89,6 @@ final class SeamToolbarView: UIView {
     /// (71) 数据段尾「拼」格（队列拼贴）：动作格非数据段——
     /// 点按走本回调 present 队列墙，选中态立即回弹当前数据段。
     var onLatticeTapped: (() -> Void)?
-    var onAvatarTapped: (() -> Void)?
     var onSearchTapped: (() -> Void)?
     var onSettingsTapped: (() -> Void)?
     /// (74) 导播台入口（小灯泡）：(73) 工作台大台撤除后
@@ -99,15 +101,6 @@ final class SeamToolbarView: UIView {
 
     private let blurView = UIVisualEffectView(
         effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-    private let avatarButton = UIButton(type: .system)
-    private let avatarInitial = UILabel()
-    /// 头像照片图位（(61) WA 4③）：圆形裁剪、盖在 avatarButton
-    /// 之上；无图时透明，露出按钮自身的首字/人形兜底。
-    private let avatarImageView = UIImageView()
-    /// 头像加载防串图键（当前 URL 串；回调落地前比对，照侧栏同款）。
-    private var avatarLoadKey: String?
-    /// (78) 第 3 条：占位字图层约束（摘除/挂回时整组开关）。
-    private var avatarInitialConstraints: [NSLayoutConstraint] = []
     /// 数据段三段 + (71)「拼」动作格（队列拼贴入口）。
     private let segmentControl = UISegmentedControl(
         items: SeamSegment.allCases.map { $0.title } + ["拼"])
@@ -125,8 +118,8 @@ final class SeamToolbarView: UIView {
     // (85) 撤的是速记簿把手、此线从未撤过）。命中垫保留
     // 原位原尺寸、改名 expandHitView（无可见绘制），点按
     // 展开通路不变；落 toolbar86 见证。
-    // (86) 第 3 条：收起态头像常驻可见可点（见
-    // applyToolbarState 的头像豁免与 hitTest 放行）。
+    // (86) 第 3 条：收起态头像常驻可见可点——port88 随头
+    // 像摘除退役，收起态只剩本命中垫。
     private let expandHitView = UIView()
     private var idleCollapseWorkItem: DispatchWorkItem?
     private(set) var isToolbarExpanded = false
@@ -147,8 +140,9 @@ final class SeamToolbarView: UIView {
     /// 高、控件行心落在带心（104 带心 52）——分段控件上沿
     /// 37 与岛底 48 纵向交叠且横向压进岛左段，Miller 真机
     /// 点名「贴着灵动岛干涉」。主页宿主置 30：行心下移至
-    /// 67，分段上沿 52、头像上沿 51，与岛底拉开 3–4pt 间
-    /// 距。仅主页宿主赋值，其余宿主恒 0 不动。
+    /// 67，分段上沿 52，与岛底拉开 3–4pt 间距（port88 前
+    /// 此处并记头像上沿 51，头像已摘除）。仅主页宿主赋值，
+    /// 其余宿主恒 0 不动。
     var flatRowTop: CGFloat = 0
     /// 内容行布局带：内容控件的 centerY 全部锚到本带，绕
     /// 岛态带落到凹口下方、平形态带 = 全高（与旧 centerY
@@ -176,7 +170,7 @@ final class SeamToolbarView: UIView {
 
     /// 全条内容视图组（双态只动这组的 alpha/transform）。
     private var contentViews: [UIView] {
-        [blurView, avatarButton, avatarInitial, avatarImageView, segmentControl,
+        [blurView, segmentControl,
          searchButton, settingsButton, guideButton, layoutButton,
          fullscreenButton]
     }
@@ -251,31 +245,8 @@ final class SeamToolbarView: UIView {
         rowTopConstraint = rowTop
         rowHeightConstraint = rowHeight
 
-        // 头像：圆形底 + 昵称首字（登录态由宿主回填）；未登录
-        // 显示 person 符号。与侧栏头像同一登录态口径。
-        avatarButton.backgroundColor = UIColor.white.withAlphaComponent(0.16)
-        avatarButton.layer.cornerRadius = 16
-        avatarButton.clipsToBounds = true
-        avatarButton.accessibilityLabel = "账户"
-        avatarButton.translatesAutoresizingMaskIntoConstraints = false
-        avatarButton.setImage(UIImage(systemName: "person.fill",
-            withConfiguration: UIImage.SymbolConfiguration(pointSize: 13)), for: .normal)
-        avatarButton.tintColor = .white
-        avatarButton.addTarget(self, action: #selector(avatarTapped), for: .touchUpInside)
-        addSubview(avatarButton)
-        avatarImageView.contentMode = .scaleAspectFill
-        avatarImageView.clipsToBounds = true
-        avatarImageView.layer.cornerRadius = 16
-        avatarImageView.isUserInteractionEnabled = false
-        avatarImageView.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(avatarImageView)
-        avatarInitial.font = .systemFont(ofSize: 14, weight: .semibold)
-        avatarInitial.textColor = .white
-        avatarInitial.textAlignment = .center
-        avatarInitial.isUserInteractionEnabled = false
-        avatarInitial.isHidden = true
-        avatarInitial.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(avatarInitial)
+        // port88：头像三件（钮/照片图位/首字层）整件摘除，
+        // 段控自左缘起（见下方约束账）。
 
         segmentControl.selectedSegmentIndex = SeamSegment.songs.rawValue
         segmentControl.selectedSegmentTintColor = UIColor.white.withAlphaComponent(0.28)
@@ -301,18 +272,7 @@ final class SeamToolbarView: UIView {
                       label: "沉浸模式", action: #selector(fullscreenTapped))
 
         NSLayoutConstraint.activate([
-            avatarButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
-            avatarButton.centerYAnchor.constraint(equalTo: rowGuide.centerYAnchor),
-            avatarButton.widthAnchor.constraint(equalToConstant: 32),
-            avatarButton.heightAnchor.constraint(equalToConstant: 32),
-            avatarInitial.centerXAnchor.constraint(equalTo: avatarButton.centerXAnchor),
-            avatarInitial.centerYAnchor.constraint(equalTo: avatarButton.centerYAnchor),
-            avatarImageView.centerXAnchor.constraint(equalTo: avatarButton.centerXAnchor),
-            avatarImageView.centerYAnchor.constraint(equalTo: avatarButton.centerYAnchor),
-            avatarImageView.widthAnchor.constraint(equalToConstant: 32),
-            avatarImageView.heightAnchor.constraint(equalToConstant: 32),
-
-            segmentControl.leadingAnchor.constraint(equalTo: avatarButton.trailingAnchor, constant: 8),
+            segmentControl.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 6),
             segmentControl.centerYAnchor.constraint(equalTo: rowGuide.centerYAnchor),
             // (74) 宽度账：加导播台灯泡后六钮并排，分段由
             // 132 收至 104、图标钮 36 收至 33，整条内容
@@ -320,7 +280,10 @@ final class SeamToolbarView: UIView {
             // 宽内成立；横屏更宽不顶。
             // (77) ④：「…」钮摘除腾出 33pt，分段等量放宽
             // 104→137（四格均宽 ≈34），总账不变仍 356pt。
-            segmentControl.widthAnchor.constraint(equalToConstant: 137),
+            // port88：头像摘除腾出 32＋间隙 8＝40pt，段控等
+            // 量放宽 137→177（四格均宽 ≈44），总账不变仍
+            // 356pt，其余五钮位置一字不动。
+            segmentControl.widthAnchor.constraint(equalToConstant: 177),
             segmentControl.heightAnchor.constraint(equalToConstant: 30),
 
             searchButton.leadingAnchor.constraint(equalTo: segmentControl.trailingAnchor, constant: 4),
@@ -361,8 +324,11 @@ final class SeamToolbarView: UIView {
             expandHitView.widthAnchor.constraint(equalToConstant: 76),
             expandHitView.heightAnchor.constraint(equalToConstant: 28),
         ])
-        // 初始态 = 收起（头像常驻、无可见线），无动画直接落位。
+        // 初始态 = 收起（port88：无头像、无可见线），无动画
+        // 直接落位。
         applyToolbarState(expanded: false, animated: false, reason: "init")
+        // port88 见证：工具条建成即无头像（站点存活自证）。
+        Breadcrumbs.log("port88 bar=avatarless")
     }
 
     // MARK: - (75) 绕岛几何（布局期判定，常数只在变化时写）
@@ -523,19 +489,17 @@ final class SeamToolbarView: UIView {
     /// 命中纪律（(75)）：展开态只认内容控件（super 命中
     /// 到本视图/背景即空域、穿透）。高带（绕岛态 100pt+）
     /// 绝不整带吞页面点按。
-    /// (86) 第 3/4 条：收起态两路放行——①头像命中区（头
-    /// 像常驻可见可点，(85) 定案双态门挡死点头像定位的
-    /// 修法）；②展开命中垫（原 grabber 垫、无可见线）。
-    /// 其余空域仍穿透给墙面（全带吞触摸会吃掉墙面顶部
-    /// 平移/点按，故不采「点工具条区域任意处」字面义，
-    /// 命中区＝原垫原位，报告注明）。
+    /// (86) 第 3/4 条：收起态放行展开命中垫（原 grabber
+    /// 垫、无可见线）。port88：头像命中区随头像摘除退役，
+    /// 收起态只剩命中垫一路。其余空域仍穿透给墙面（全带
+    /// 吞触摸会吃掉墙面顶部平移/点按，故不采「点工具条区
+    /// 域任意处」字面义，命中区＝原垫原位，报告注明）。
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
         guard !isHidden, alpha > 0.01 else { return nil }
         if isToolbarExpanded {
             let hit = super.hitTest(point, with: event)
             return (hit === self || hit === blurView) ? nil : hit
         }
-        if avatarButton.frame.contains(point) { return avatarButton }
         return expandHitView.frame.contains(point) ? expandHitView : nil
     }
 
@@ -569,7 +533,7 @@ final class SeamToolbarView: UIView {
     }
 
     /// 沉浸模式（宿主 seamSetImmersive 调用）：整条隐藏；退
-    /// 出沉浸回到收起态（头像＋展开命中垫在场，(86) 无线身）。
+    /// 出沉浸回到收起态（展开命中垫在场，port88 无头像无线身）。
     func setImmersiveHidden(_ on: Bool) {
         if on {
             idleCollapseWorkItem?.cancel()
@@ -626,11 +590,8 @@ final class SeamToolbarView: UIView {
         let apply = { [self] in
             for view in contentViews {
                 if view === blurView { continue }
-                // (86) 第 3 条：头像三件豁免双态淡出——收起
-                // 态常驻可见（与 hitTest 头像放行成对，点头
-                // 像定位不再被双态门挡死）。
-                if view === avatarButton || view === avatarInitial
-                    || view === avatarImageView { continue }
+                // port88：(86) 第 3 条的头像双态豁免随头像摘
+                // 除退役——内容组全员随双态淡出/淡入。
                 view.alpha = expanded ? 1 : 0
             }
             let bandAlpha: CGFloat = (wrapActiveNow && !expanded) ? 1 : 0
@@ -641,14 +602,10 @@ final class SeamToolbarView: UIView {
             // 退役（展开命中垫的显隐在函数首行 isHidden 管）。
         }
         let setInteraction = { [self] in
-            for view in contentViews where view !== blurView && view !== avatarInitial
-                && view !== avatarImageView && view !== avatarButton {
+            for view in contentViews where view !== blurView {
                 view.isUserInteractionEnabled = expanded
             }
-            // (86) 第 3 条：头像收起态恒可交互（与 alpha 豁
-            // 免成对）；3.5s 自动收回只收其余控件、头像点
-            // 击不再被吞。
-            avatarButton.isUserInteractionEnabled = true
+            // port88：(86) 第 3 条的头像恒可交互随头像摘除退役。
         }
         if animated {
             setInteraction()
@@ -718,74 +675,9 @@ final class SeamToolbarView: UIView {
         layoutButton.accessibilityLabel = grid ? "切换为照片墙布局" : "切换为网格布局"
     }
 
-    /// 登录态回填：已登录显示昵称首字，未登录回 person 符号
-    /// （与侧栏账户头同一口径：双入口、同一登录态显示）。
-    /// (61) WA 4③：avatarURLString 有值时用 WorkbenchCover
-    /// .loadAvatar 加载真头像（圆形图位盖在兜底之上、带 key
-    /// 防串图，照侧栏同款）；无值/加载未回时回退现行首字/
-    /// person.fill 逻辑。参数带默认值 nil，旧调用点源码兼容。
-    /// (78) 第 3 条：占位字图层挂回（登录无图/换图加载中才
-    /// 需要它在场）。约束首次摘除前从本视图约束表里捞出存
-    /// 档，挂回时整组重新激活。
-    private func attachAvatarInitialIfNeeded() {
-        guard avatarInitial.superview == nil else { return }
-        addSubview(avatarInitial)
-        NSLayoutConstraint.activate(avatarInitialConstraints)
-    }
-
-    /// (78) 第 3 条：占位字图层整层摘除——真头像图已落地时
-    /// 调用，removeFromSuperview 连图带层一起走，不是改透
-    /// 明度（(77) 真机实证：图已显示、字还压在图上）。
-    private func detachAvatarInitial() {
-        guard avatarInitial.superview != nil else { return }
-        if avatarInitialConstraints.isEmpty {
-            avatarInitialConstraints = constraints.filter {
-                ($0.firstItem as? UIView) == avatarInitial
-                    || ($0.secondItem as? UIView) == avatarInitial
-            }
-        }
-        NSLayoutConstraint.deactivate(avatarInitialConstraints)
-        avatarInitial.removeFromSuperview()
-    }
-
-    func setAccount(nickname: String?, loggedIn: Bool, avatarURLString: String? = nil) {
-        if loggedIn, let first = nickname?.first {
-            attachAvatarInitialIfNeeded()
-            avatarInitial.text = String(first)
-            avatarInitial.isHidden = false
-            avatarButton.setImage(nil, for: .normal)
-        } else {
-            avatarInitial.isHidden = true
-            avatarButton.setImage(UIImage(systemName: "person.fill",
-                withConfiguration: UIImage.SymbolConfiguration(pointSize: 13)), for: .normal)
-        }
-        let key = (loggedIn ? avatarURLString : nil).flatMap { $0.isEmpty ? nil : $0 }
-        guard key != avatarLoadKey else {
-            // 同键重入：图已在位则占位字保持摘除，防回填复活。
-            if avatarImageView.image != nil { detachAvatarInitial() }
-            return
-        }
-        avatarLoadKey = key
-        guard let key, let url = URL(string: key) else {
-            avatarImageView.image = nil
-            return
-        }
-        let expectedKey = key
-        WorkbenchCover.loadAvatar(url: url, into: avatarImageView,
-            completion: { [weak self] success in
-                // 真图落地即整层摘除占位字（(78) 第 3 条）。
-                guard let self, success,
-                      self.avatarLoadKey == expectedKey else { return }
-                self.detachAvatarInitial()
-            },
-            isCurrent: { [weak self] in
-                self?.avatarLoadKey == expectedKey
-            })
-        // 缓存同步命中在 loadAvatar 返回前已置图（completion
-        // 亦已同步回调），此处兜底再核一次，双路都摘干净。
-        if avatarImageView.image != nil { detachAvatarInitial() }
-        Breadcrumbs.log("seam.toolbar avatar load")
-    }
+    // port88：登录态回填（setAccount＋占位字挂/摘）随工具
+    // 条头像摘除整组退役；账户态展示归设置页账户组与侧栏
+    // 账户区，宿主不再向本条回填。
 
     // MARK: - 动作
 
@@ -806,7 +698,6 @@ final class SeamToolbarView: UIView {
         onSegmentChanged?(selected)
     }
 
-    @objc private func avatarTapped() { noteToolbarInteraction(); onAvatarTapped?() }
     @objc private func searchTapped() { noteToolbarInteraction(); onSearchTapped?() }
     @objc private func settingsTapped() { noteToolbarInteraction(); onSettingsTapped?() }
     @objc private func guideTapped() {
@@ -884,23 +775,23 @@ enum SeamToolbarForwarding {
 
     // MARK: - (75) 第 7 项：全局面就地展开
 
-    /// 全局面动作集：设置/账户（扫码登录在账户卡内）/搜索/
-    /// 导播台——这些面与主页墙状态无关，任何页面点开都须
-    /// 在本页就地呈现，不许先关本页弹回主页（Miller 20:42
-    /// 点名：歌单页点设置被弹回主页再开是错的）。只有主页
-    /// 墙状态动作（segment-*/lattice/layout/fullscreen/
-    /// more）才许走 forward 关页转发。
+    /// 全局面动作集：设置/搜索/导播台——这些面与主页墙状
+    /// 态无关，任何页面点开都须在本页就地呈现，不许先关
+    /// 本页弹回主页（Miller 20:42 点名：歌单页点设置被弹
+    /// 回主页再开是错的）。只有主页墙状态动作（segment-*/
+    /// lattice/layout/fullscreen/more）才许走 forward 关页
+    /// 转发。port88：「avatar」（账户卡）随工具条头像摘除
+    /// 退役——账户卡入口只剩设置页账户组。
     static func isGlobalAction(_ action: String) -> Bool {
-        ["settings", "avatar", "search", "guide"].contains(action)
+        ["settings", "search", "guide"].contains(action)
     }
 
     /// 就地呈现全局面（调用方先以 isGlobalAction 把关）。
     /// 返回 true = 已就地处理；false = 非全局面、调用方应
     /// 走 forward。呈现参数与主页 perform 同款（设置＝
-    /// SettingsViewController overFullScreen；账户卡＝
-    /// popover 锚本面工具条头像位、卡内登录走卡自有弹层；
-    /// 搜索/导播台＝各自呈现器从本面发出）。关掉后回到本
-    /// 面原位（呈现栈原样压在本面之上、dismiss 即回）。
+    /// SettingsViewController overFullScreen；搜索/导播台＝
+    /// 各自呈现器从本面发出）。关掉后回到本面原位（呈现
+    /// 栈原样压在本面之上、dismiss 即回）。
     @discardableResult
     static func performInPlace(_ action: String,
                                from vc: UIViewController,
@@ -912,23 +803,6 @@ enum SeamToolbarForwarding {
             let settings = SettingsViewController()
             settings.modalPresentationStyle = .overFullScreen
             vc.present(settings, animated: false)
-        case "avatar":
-            Breadcrumbs.log("seam.inplace75 action=avatar"
-                + " host=\(String(describing: type(of: vc)))")
-            let card = AccountCard62ViewController()
-            card.modalPresentationStyle = .popover
-            card.onLoginSuccess = { [weak toolbar] in
-                if let toolbar { applyAccountState(to: toolbar) }
-            }
-            card.onSessionChanged = { [weak toolbar] in
-                if let toolbar { applyAccountState(to: toolbar) }
-            }
-            if let pop = card.popoverPresentationController {
-                pop.sourceView = toolbar ?? vc.view
-                pop.sourceRect = CGRect(x: 6, y: 6, width: 32, height: 32)
-                pop.permittedArrowDirections = [.up]
-            }
-            vc.present(card, animated: true)
         case "search":
             Breadcrumbs.log("seam.inplace75 action=search"
                 + " host=\(String(describing: type(of: vc)))")
@@ -980,7 +854,6 @@ enum SeamToolbarForwarding {
         case "segment-songs": home.seamSegmentSelected(.songs)
         case "segment-recommend": home.seamSegmentSelected(.recommend)
         case "segment-explore": home.seamSegmentSelected(.explore)
-        case "avatar": home.seamAvatarTapped()
         case "search":
             Breadcrumbs.log("wall.seam.search")
             SearchHostPresenter.presentSearch(from: home)
@@ -1005,30 +878,6 @@ enum SeamToolbarForwarding {
         }
     }
 
-    /// 工具条账户态（与主页 seamRefreshAccount 的同步缓存段
-    /// 同源同口径：ProviderSessionStatusQuery 第一家已登录且
-    /// 有头像者优先）；网络刷新归主页，本面只读缓存。
-    static func applyAccountState(to bar: SeamToolbarView) {
-        let statuses = ProviderSessionStatusQuery.allStatuses()
-        let loggedIn = statuses.filter(\.isLoggedIn)
-        let avatarStatus = loggedIn.first { $0.avatarURL != nil }
-            ?? statuses.first { $0.avatarURL != nil }
-        bar.setAccount(
-            nickname: loggedIn.first?.displayName,
-            loggedIn: !loggedIn.isEmpty,
-            avatarURLString: avatarStatus?.avatarURL?.absoluteString)
-    }
-
-    /// (86) 第 3 条：歌单缝头像同源回填（与工具条同一数
-    /// 据口径、同一全局查询，不另开数据源）。
-    static func applyAccountState(toSeam seam: PlaylistSeam85View) {
-        let statuses = ProviderSessionStatusQuery.allStatuses()
-        let loggedIn = statuses.filter(\.isLoggedIn)
-        let avatarStatus = loggedIn.first { $0.avatarURL != nil }
-            ?? statuses.first { $0.avatarURL != nil }
-        seam.setAccount85(
-            nickname: loggedIn.first?.displayName,
-            loggedIn: !loggedIn.isEmpty,
-            avatarURLString: avatarStatus?.avatarURL?.absoluteString)
-    }
+    // port88：工具条/歌单缝账户态回填（applyAccountState
+    // 两支）随头像摘除整组退役——两面均已无头像位可回填。
 }

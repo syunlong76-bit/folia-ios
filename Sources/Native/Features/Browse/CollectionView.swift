@@ -11,9 +11,8 @@ struct SeamToolbarBridge: UIViewRepresentable {
         bar.onSegmentChanged = { segment in
             SeamToolbarForwarding.activate("segment-\(segment.crumbName)", from: bar)
         }
-        bar.onAvatarTapped = {
-            SeamToolbarForwarding.activateGlobal("avatar", from: bar)
-        }
+        // port88：工具条头像绑定随头像摘除退役（转发链
+        // "avatar" 动作已同包摘除）。
         bar.onSearchTapped = {
             SeamToolbarForwarding.activateGlobal("search", from: bar)
         }
@@ -32,7 +31,7 @@ struct SeamToolbarBridge: UIViewRepresentable {
         bar.onFullscreenTapped = {
             SeamToolbarForwarding.activate("fullscreen", from: bar)
         }
-        SeamToolbarForwarding.applyAccountState(to: bar)
+        // port88：工具条账户态回填随头像摘除退役。
         return bar
     }
 
