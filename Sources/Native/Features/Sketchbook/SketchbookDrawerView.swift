@@ -109,6 +109,19 @@ final class SketchbookDrawerView: UIView {
     }
     private var notesMode: NotesMode = .list
 
+    // (89)B b-notebook-tabs：内容三页签（速记/队列/历史，网页
+    // ScratchpadHost 三页同名）——与 NotesMode（视图形态）正
+    // 交：页签决定 sections 构成，modeControl 只在速记页显示。
+    private enum ContentTab89: Int {
+        case notes = 0
+        case queue = 1
+        case history = 2
+    }
+    private var contentTab89: ContentTab89 = .notes
+    private let tabRow89 = UIStackView()
+    private var tabButtons89: [UIButton] = []
+    private var tabUnderlines89: [UIView] = []
+
     /// 抽屉段落模型（refresh 时按 Store 现状重建）。
     private enum DrawerSection {
         case overview
@@ -118,6 +131,8 @@ final class SketchbookDrawerView: UIView {
         case group(id: String?)
         case draft
         case queue
+        /// (89)B 历史页：PlayHistoryStore 播放历史（每条一首）。
+        case playHistory89
         case historyDay(start: TimeInterval)
         /// 还没有任何历史事件时的空态段（如实说明从现在起记）。
         case historyEmpty
@@ -266,6 +281,38 @@ final class SketchbookDrawerView: UIView {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         drawerView.addSubview(closeButton)
 
+        // (89)B b-notebook-tabs：内容三页签行（13pt、行高 32、
+        // 选中下划 2pt），置于 modeControl 之上。
+        tabRow89.axis = .horizontal
+        tabRow89.distribution = .fillEqually
+        tabRow89.translatesAutoresizingMaskIntoConstraints = false
+        drawerView.addSubview(tabRow89)
+        for (index, title) in ["速记", "队列", "历史"].enumerated() {
+            let button = UIButton(type: .system)
+            button.setTitle(title, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 13)
+            button.tag = index
+            button.addTarget(
+                self, action: #selector(contentTabTapped89(_:)),
+                for: .touchUpInside)
+            let underline = UIView()
+            underline.backgroundColor = Self.markColor
+            underline.isUserInteractionEnabled = false
+            underline.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(underline)
+            NSLayoutConstraint.activate([
+                underline.leadingAnchor.constraint(equalTo: button.leadingAnchor, constant: 10),
+                underline.trailingAnchor.constraint(equalTo: button.trailingAnchor, constant: -10),
+                underline.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+                underline.heightAnchor.constraint(equalToConstant: 2),
+            ])
+            tabButtons89.append(button)
+            tabUnderlines89.append(underline)
+            tabRow89.addArrangedSubview(button)
+        }
+        applyContentTabStyle89()
+        Breadcrumbs.log("port89 sketchbook tabs=3")
+
         // 工具栏：形态切换 + 新建组。
         modeControl.selectedSegmentIndex = 0
         modeControl.backgroundColor = Self.inkColor.withAlphaComponent(0.06)
@@ -337,8 +384,17 @@ final class SketchbookDrawerView: UIView {
             clearButton.trailingAnchor.constraint(
                 equalTo: closeButton.leadingAnchor, constant: -4),
 
+            // (89)B：页签行钉标题行之下，modeControl 随其下移。
+            tabRow89.topAnchor.constraint(
+                equalTo: titleLabel.bottomAnchor, constant: 8),
+            tabRow89.leadingAnchor.constraint(
+                equalTo: drawerView.leadingAnchor, constant: 16),
+            tabRow89.trailingAnchor.constraint(
+                equalTo: drawerView.trailingAnchor, constant: -16),
+            tabRow89.heightAnchor.constraint(equalToConstant: 32),
+
             modeControl.topAnchor.constraint(
-                equalTo: titleLabel.bottomAnchor, constant: 10),
+                equalTo: tabRow89.bottomAnchor, constant: 8),
             modeControl.leadingAnchor.constraint(
                 equalTo: drawerView.leadingAnchor, constant: 16),
             modeControl.widthAnchor.constraint(equalToConstant: 168),
@@ -426,7 +482,8 @@ final class SketchbookDrawerView: UIView {
         // (65) B 组：空态猫改面板左下角固定（cornerCatView65），
         // 不再作列表背景居中压行；显示时给列表底部补 98pt
         // 内边距（猫 84 + 上下各 7），最后一行可滚到猫之上。
-        cornerCatView65.isHidden = count != 0
+        // (89)B：左下猫只属速记页（队列/历史页 refresh 不许复显）。
+        cornerCatView65.isHidden = count != 0 || contentTab89 != .notes
         tableView.contentInset.bottom = count == 0 ? 98 : 0
         expandedCountBadge.isHidden = count == 0
         expandedCountLabel.text = "\(count)"
@@ -442,21 +499,25 @@ final class SketchbookDrawerView: UIView {
     }
 
     private func rebuildSections() {
-        historyDays = store.historyByDay()
-        var next: [DrawerSection] = [.overview, .group(id: nil)]
-        // (62) 自动来源组段（非空才出现）。
-        for auto in store.autoGroups62 { next.append(.autoGroup(key: auto.key)) }
-        for group in store.groups { next.append(.group(id: group.id)) }
-        next.append(.draft)
-        next.append(.queue)
-        if historyDays.isEmpty {
-            next.append(.historyEmpty)
-        } else {
-            for day in historyDays {
-                next.append(.historyDay(start: day.dayStart))
-            }
+        // (89)B：sections 按当前内容页签组装——速记页＝原全部
+        // 速记内容（总览/分组/自动组/草稿；原同表内的队列段与
+        // 速记事件历史段随页签拆出，不再混排）；队列页＝仅
+        // .queue 段（既有只读镜像＋playAtIndex 通路）；历史页
+        // ＝.playHistory89 段（PlayHistoryStore 播放历史）。
+        switch contentTab89 {
+        case .queue:
+            sections = [.queue]
+        case .history:
+            sections = [.playHistory89]
+        case .notes:
+            historyDays = store.historyByDay()
+            var next: [DrawerSection] = [.overview, .group(id: nil)]
+            // (62) 自动来源组段（非空才出现）。
+            for auto in store.autoGroups62 { next.append(.autoGroup(key: auto.key)) }
+            for group in store.groups { next.append(.group(id: group.id)) }
+            next.append(.draft)
+            sections = next
         }
-        sections = next
     }
 
     /// 当前形态下亮着的那份常驻记号（脉冲动画用）。
@@ -760,6 +821,42 @@ final class SketchbookDrawerView: UIView {
 
     // MARK: - 形态切换 / 新建组
 
+    // MARK: (89)B 内容三页签
+
+    @objc private func contentTabTapped89(_ sender: UIButton) {
+        guard let tab = ContentTab89(rawValue: sender.tag),
+              tab != contentTab89 else { return }
+        contentTab89 = tab
+        applyContentTabStyle89()
+        // modeControl／新建组／清空只在速记页显示；画布只属速记页。
+        let isNotes = tab == .notes
+        modeControl.isHidden = !isNotes
+        newGroupButton.isHidden = !isNotes
+        clearButton.isHidden = !isNotes
+        canvasView.isHidden = !(isNotes && notesMode == .canvas)
+        tableView.isHidden = isNotes && notesMode == .canvas
+        if !isNotes { cornerCatView65.isHidden = true }
+        else { cornerCatView65.isHidden = store.entries.count != 0 }
+        rebuildSections()
+        tableView.reloadData()
+        Breadcrumbs.log("port89 sketchbook tabs=3 active=\(sender.tag)")
+    }
+
+    /// (89)B 页签样式：选中 ink 实字＋2pt 下划，未选 ink 0.55 无划。
+    private func applyContentTabStyle89() {
+        for (index, button) in tabButtons89.enumerated() {
+            let selected = index == contentTab89.rawValue
+            button.setTitleColor(
+                selected ? Self.inkColor
+                    : Self.inkColor.withAlphaComponent(0.55), for: .normal)
+            button.titleLabel?.font = .systemFont(
+                ofSize: 13, weight: selected ? .semibold : .regular)
+            if tabUnderlines89.indices.contains(index) {
+                tabUnderlines89[index].isHidden = !selected
+            }
+        }
+    }
+
     @objc private func modeChanged() {
         guard let mode = NotesMode(rawValue: modeControl.selectedSegmentIndex)
         else { return }
@@ -929,6 +1026,9 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
             return store.draft.count
         case .queue:
             return queueManager.queue.count
+        case .playHistory89:
+            // PlayHistoryStore.records：每首一条、最后播放倒序。
+            return PlayHistoryStore.shared.records.count
         case .historyDay(let start):
             return historyDays.first { $0.dayStart == start }?.events.count ?? 0
         case .historyEmpty:
@@ -943,6 +1043,9 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
         case .queue:
             return queueManager.queue.isEmpty
                 ? "当前队列（空）" : "当前队列 · \(queueManager.queue.count)"
+        case .playHistory89:
+            let count = PlayHistoryStore.shared.records.count
+            return count == 0 ? "播放历史（空）" : "播放历史 · \(count)"
         case .historyDay(let start):
             return "历史 · \(Self.historyDayTitle(start: start))"
         case .historyEmpty:
@@ -1109,6 +1212,17 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
                 Breadcrumbs.log("sketchbook.queueRemove at=\(at)")
             }
             return cell
+        case .playHistory89:
+            // (89)B 历史页行：与队列页同口径 SketchbookRowCell
+            // （封面＋歌名/歌手），只读镜像——removeLocked 隐藏
+            // 移除钮、onRemove 清空防复用残留。
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: SketchbookRowCell.reuseId,
+                for: indexPath) as! SketchbookRowCell
+            let track = PlayHistoryStore.shared.records[indexPath.row].track
+            cell.configure(track: track, isCurrent: false, removeLocked: true)
+            cell.onRemove = nil
+            return cell
         case .historyDay(let start):
             let cell = tableView.dequeueReusableCell(
                 withIdentifier: SketchbookTextCell.reuseId,
@@ -1152,6 +1266,14 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
         case .queue:
             queueManager.playAtIndex(indexPath.row)
             Breadcrumbs.log("sketchbook.play source=queue at=\(indexPath.row)")
+        case .playHistory89:
+            // (89)B：历史行点播走既有 insertAndPlay 通路（与速记
+            // 行单条播放同语义：入队并播放、不换队列）。
+            let records = PlayHistoryStore.shared.records
+            guard records.indices.contains(indexPath.row) else { return }
+            let track = records[indexPath.row].track
+            queueManager.insertAndPlay(track)
+            Breadcrumbs.log("sketchbook.play source=playhistory id=\(track.id)")
         default:
             break
         }

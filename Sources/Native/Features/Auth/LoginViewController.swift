@@ -76,6 +76,21 @@ final class LoginViewController: UIViewController {
     private var qrViews: [UIView] = []
     private var backgroundObserver: NSObjectProtocol?
 
+    // (89)B b-login-form：平台列按手机纵排转译——顶部三行平台
+    // 行组取代段控的呈出（providerSegment 本体保留作状态持有，
+    // 不入视图层级；点行写回其 selectedSegmentIndex 并直调
+    // providerChanged，与原 valueChanged 同一处理函数）。
+    private var providerRows89: [UIButton] = []
+    private var providerRowStatusLabels89: [UILabel] = []
+    private static let providerRowProviders89: [NativeSessionStore.Provider] =
+        [.netease, .qq, .kugou]
+    private static let providerRowNames89 = ["网易云", "QQ", "酷狗"]
+    private static let providerRowColors89: [UIColor] = [
+        UIColor(red: 0.91, green: 0.10, blue: 0.05, alpha: 1),   // 网易云红
+        UIColor(red: 0.19, green: 0.76, blue: 0.49, alpha: 1),   // QQ 音乐绿
+        UIColor(red: 0.16, green: 0.47, blue: 1.0, alpha: 1),    // 酷狗蓝
+    ]
+
     override func viewDidLoad() {
         super.viewDidLoad()
         overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
@@ -155,7 +170,10 @@ final class LoginViewController: UIViewController {
         avatarView.contentMode = .scaleAspectFill
         avatarView.translatesAutoresizingMaskIntoConstraints = false
 
-        nameLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        // (89)B b-login-form：主区说明标题对齐网页 20 semibold
+        // （nameLabel 即现标题 label，只改字号、文案不动）；说明
+        // 行 accountStatusLabel 现 13pt 与网页说明 13 一致、不动。
+        nameLabel.font = .systemFont(ofSize: 20, weight: .semibold)
         nameLabel.textColor = .white
         nameLabel.textAlignment = .center
 
@@ -244,8 +262,63 @@ final class LoginViewController: UIViewController {
         kugouMethodSegment.isHidden = true
         kugouFieldStack.isHidden = true
 
+        // (89)B b-login-form：平台行组（三行纵排，每行平台色点
+        // 10＋平台名 15＋右侧状态字 11.5 白 0.55，行高 44，选中
+        // 行白 0.08 底圆角 10）。providerSegment 不再入层级。
+        providerSegment.isHidden = true
+        let providerRowsStack89 = UIStackView()
+        providerRowsStack89.axis = .vertical
+        providerRowsStack89.spacing = 6
+        providerRows89 = []
+        providerRowStatusLabels89 = []
+        for index in Self.providerRowProviders89.indices {
+            let row = UIButton(type: .system)
+            row.tag = index
+            row.layer.cornerRadius = 10
+            row.clipsToBounds = true
+            row.addTarget(self, action: #selector(providerRowTapped89(_:)),
+                          for: .touchUpInside)
+            row.translatesAutoresizingMaskIntoConstraints = false
+            let dot = UIView()
+            dot.backgroundColor = Self.providerRowColors89[index]
+            dot.layer.cornerRadius = 5
+            dot.isUserInteractionEnabled = false
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(dot)
+            let name = UILabel()
+            name.text = Self.providerRowNames89[index]
+            name.font = .systemFont(ofSize: 15)
+            name.textColor = .white
+            name.isUserInteractionEnabled = false
+            name.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(name)
+            let status = UILabel()
+            status.font = .systemFont(ofSize: 11.5)
+            status.textColor = UIColor.white.withAlphaComponent(0.55)
+            status.isUserInteractionEnabled = false
+            status.translatesAutoresizingMaskIntoConstraints = false
+            row.addSubview(status)
+            NSLayoutConstraint.activate([
+                row.heightAnchor.constraint(equalToConstant: 44),
+                dot.leadingAnchor.constraint(equalTo: row.leadingAnchor, constant: 12),
+                dot.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                dot.widthAnchor.constraint(equalToConstant: 10),
+                dot.heightAnchor.constraint(equalToConstant: 10),
+                name.leadingAnchor.constraint(equalTo: dot.trailingAnchor, constant: 10),
+                name.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+                status.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -12),
+                status.centerYAnchor.constraint(equalTo: row.centerYAnchor),
+            ])
+            providerRows89.append(row)
+            providerRowStatusLabels89.append(status)
+            providerRowsStack89.addArrangedSubview(row)
+        }
+        providerRowsStack89.widthAnchor.constraint(equalToConstant: 272).isActive = true
+        refreshProviderRows89()
+        Breadcrumbs.log("port89 login=rows")
+
         let stack = UIStackView(arrangedSubviews: [
-            providerSegment, channelSegment, kugouMethodSegment,
+            providerRowsStack89, channelSegment, kugouMethodSegment,
             kugouFieldStack, avatarView, nameLabel,
             accountStatusLabel, actionButton, syncButton, syncStatusLabel,
             qrImageView, qrStatusLabel,
@@ -288,6 +361,30 @@ final class LoginViewController: UIViewController {
     }
 
     // MARK: - 分段与账号区
+
+    /// (89)B b-login-form 接线点：点平台行 → 写回 providerSegment
+    /// 的 selectedSegmentIndex（与 viewDidLoad 预选平台同一映射）
+    /// → 直调 providerChanged（即段控 valueChanged 的原处理函
+    /// 数）；登录/轮询/通道探测逻辑一字不动。
+    @objc private func providerRowTapped89(_ sender: UIButton) {
+        providerSegment.selectedSegmentIndex = sender.tag
+        providerChanged()
+    }
+
+    /// (89)B 平台行选中态与状态字刷新（选中行白 0.08 底；状态
+    /// 字走 ProviderSessionStatusQuery 同步缓存，与账号区同源）。
+    private func refreshProviderRows89() {
+        for (index, row) in providerRows89.enumerated() {
+            let provider = Self.providerRowProviders89[index]
+            row.backgroundColor = provider == selectedProvider
+                ? UIColor.white.withAlphaComponent(0.08) : .clear
+            if providerRowStatusLabels89.indices.contains(index) {
+                let status = ProviderSessionStatusQuery.status(for: provider)
+                providerRowStatusLabels89[index].text =
+                    status.isLoggedIn ? "已登录" : "未登录"
+            }
+        }
+    }
 
     @objc private func providerChanged() {
         if flowActive {
@@ -338,6 +435,7 @@ final class LoginViewController: UIViewController {
     private func refreshAccountUI() {
         let provider = selectedProvider
         let status = ProviderSessionStatusQuery.status(for: provider)
+        refreshProviderRows89() // (89)B：平台行选中态/状态字随账号区同拍刷新
         nameLabel.text = Self.displayName(for: provider)
         if status.isLoggedIn {
             // (62) §2：已登录态补用户 ID 显示（accountId 走

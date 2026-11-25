@@ -10,6 +10,15 @@ enum SeamState85 {
         set { UserDefaults.standard.set(newValue, forKey: "folia.seam85.hidden") }
     }
 
+    /// (89)B b-seam-narrow：首页窄缝 120 档开关（网页
+    /// BRAVAIS_SEAM_HOME_WIDTH=120）。true 时主页缝开口
+    /// 宽走 120 宽档排版，false 回书脊 64；点缝上「书库」
+    /// 标题切换（见 HomeSeam85View.onToggleWide89）。
+    static var narrow120: Bool {
+        get { UserDefaults.standard.bool(forKey: "folia.seam89.narrow120") }
+        set { UserDefaults.standard.set(newValue, forKey: "folia.seam89.narrow120") }
+    }
+
     /// 网页 contentOpacityFor 同式：开口窄于排版宽时内容
     /// 随之淡出（开到 35% 以下不可见）。
     static func contentOpacity(rendered: CGFloat, content: CGFloat) -> CGFloat {
@@ -149,8 +158,14 @@ final class HomeSeam85View: UIView {
     var onFold: (() -> Void)?
     var onPlaylists: (() -> Void)?
     var onRadio: (() -> Void)?
+    /// (89)B b-seam-tabs：补探索/Navidrome 两页签（网页
+    /// resolveHomeTabs 原序），tag 2/5。
+    var onExplore: (() -> Void)?
     var onAlbums: (() -> Void)?
     var onLocal: (() -> Void)?
+    var onNavidrome: (() -> Void)?
+    /// (89)B b-seam-narrow：点「书库」标题切换 64/120 档。
+    var onToggleWide89: (() -> Void)?
     var onLiked: (() -> Void)?
     /// (86) 第 1 条：直达入口补云盘列（网页双列同式）。
     var onCloud: (() -> Void)?
@@ -165,6 +180,26 @@ final class HomeSeam85View: UIView {
     /// 内容淡出（宿主按渲染开口逐帧喂，见 SeamState85）。
     var contentOpacity: CGFloat = 1 {
         didSet { contentView.alpha = contentOpacity }
+    }
+
+    /// (89)B b-seam-tabs：一级页签标题（网页 resolveHome-
+    /// Tabs 原序），tag 与下标同序 0-5。横/竖两种标题形态
+    /// 都由此表生成（竖排走 Seam85Text.vertical）。
+    private let tabTitles89 = ["歌单", "电台", "探索", "专辑", "本地", "Navidrome"]
+
+    /// (89)B b-seam-tabs：当前选中页签下标（默认 0＝歌单，
+    /// 主页墙本体即歌单集）；宿主点哪个页签选哪个，不再
+    /// 恒 0。赋值即刷新选中态。
+    var selectedTabIndex: Int = 0 {
+        didSet { refreshTabSelection() }
+    }
+
+    /// (89)B b-seam-narrow：宽档（120）排版开关。true 时
+    /// layoutSubviews 走宽档：内容宽＝bounds.width、页签
+    /// 横排整行、直达两整行、工具格底部一排；标题形态随
+    /// 档切换（横排原文/竖排逐字）。
+    var displayWide89: Bool = false {
+        didSet { applyDisplayMode89() }
     }
 
     private let backdrop86 = SeamBackdrop86()
@@ -204,6 +239,12 @@ final class HomeSeam85View: UIView {
                 .kern: 3.6,
             ])
         libraryLabel.textAlignment = .center
+        // (89)B b-seam-narrow：「书库」标题即 64/120 档切换
+        // 钮（点按翻档，宿主经 onToggleWide89 走既有补间
+        // 重排）。命中纪律随之放行标题本体（见 hitTest）。
+        libraryLabel.isUserInteractionEnabled = true
+        libraryLabel.addGestureRecognizer(UITapGestureRecognizer(
+            target: self, action: #selector(libraryTapped89)))
         contentView.addSubview(libraryLabel)
 
         // 折叠钮（网页：裸 chevron、white/55、无底衬）。
@@ -219,7 +260,9 @@ final class HomeSeam85View: UIView {
         // 一级页签（竖排）：歌单默认选中（主页墙当前面即
         // 歌单集，与 (84) 侧栏去向表一致）。字重改网页
         // bold；圆角在布局时按帧高取半成全圆 pill。
-        for (index, title) in ["歌单", "电台", "专辑", "本地"].enumerated() {
+        // (89)B b-seam-tabs：4 → 6（补探索 tag2、Navidrome
+        // tag5，网页 resolveHomeTabs 原序，见 tabTitles89）。
+        for (index, title) in tabTitles89.enumerated() {
             let button = UIButton(type: .system)
             button.setTitle(Seam85Text.vertical(title), for: .normal)
             button.titleLabel?.numberOfLines = 0
@@ -277,7 +320,9 @@ final class HomeSeam85View: UIView {
 
     private func refreshTabSelection() {
         for (index, button) in tabButtons.enumerated() {
-            let selected = index == 0
+            // (89)B b-seam-tabs：选中下标改读 selectedTab-
+            // Index（宿主同步），不再恒 0。
+            let selected = index == selectedTabIndex
             // (86) 第 1 条：网页选中态——白 0.9 全圆 pill＋
             // 深色字；未选透明底＋white/62。（(85) 做反：
             // 白 0.13 方块底＋白字，审计三⑤定案走样。）
@@ -290,10 +335,37 @@ final class HomeSeam85View: UIView {
         }
     }
 
+    /// (89)B b-seam-narrow：档位形态切换——页签与直达钮
+    /// 同时备横/竖两种标题，displayWide89 翻转时换标题、
+    /// 对齐与字号，再走 layoutSubviews 的对应排版分支。
+    private func applyDisplayMode89() {
+        for (index, button) in tabButtons.enumerated() {
+            let title = tabTitles89[index]
+            button.setTitle(displayWide89 ? title : Seam85Text.vertical(title),
+                            for: .normal)
+            button.contentHorizontalAlignment = displayWide89 ? .left : .center
+            button.contentEdgeInsets = displayWide89
+                ? UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 0) : .zero
+        }
+        likedButton.setTitle(displayWide89
+            ? "我喜欢的音乐" : Seam85Text.vertical("我喜欢的音乐"), for: .normal)
+        cloudButton.setTitle(displayWide89
+            ? "云盘" : Seam85Text.vertical("云盘"), for: .normal)
+        for button in [likedButton, cloudButton] {
+            button.titleLabel?.font = .systemFont(ofSize: displayWide89 ? 12 : 11)
+            button.contentHorizontalAlignment = displayWide89 ? .left : .center
+            button.contentVerticalAlignment = displayWide89 ? .center : .top
+        }
+        libraryLabel.textAlignment = displayWide89 ? .left : .center
+        setNeedsLayout()
+    }
+
     override func layoutSubviews() {
         super.layoutSubviews()
         backdrop86.frame = bounds
-        let contentW: CGFloat = 64
+        // (89)B b-seam-narrow：宽档内容宽＝bounds.width
+        // （宿主给 120）；窄档维持 64 居中。
+        let contentW: CGFloat = displayWide89 ? bounds.width : 64
         let top = contentTopInset
         let bottom = bounds.height - contentBottomInset
         let contentH = max(0, bottom - top)
@@ -304,10 +376,41 @@ final class HomeSeam85View: UIView {
         // (86) 第 1 条：全改网页相对比例（BRAVAIS_HOME_
         // SEAM_GEOMETRY／WallParts 渲染同数，基准＝内容
         // 高 H；(85) 的固定 pt 排版整组退役）。
+        // (89)B b-seam-narrow：宽档书库标题左对齐、折叠钮靠右。
         libraryLabel.frame = CGRect(
-            x: 0, y: 0.028 * H, width: contentW, height: max(16, 0.022 * H))
+            x: displayWide89 ? 10 : 0, y: 0.028 * H,
+            width: displayWide89 ? contentW - 20 : contentW,
+            height: max(16, 0.022 * H))
         // (89) §5-7：折叠钮 28 → 36（网页缝图标钮 36×36）。
-        foldButton.frame = CGRect(x: cx - 18, y: 0.066 * H, width: 36, height: 36)
+        foldButton.frame = displayWide89
+            ? CGRect(x: contentW - 46, y: 0.066 * H, width: 36, height: 36)
+            : CGRect(x: cx - 18, y: 0.066 * H, width: 36, height: 36)
+        if displayWide89 {
+            // (89)B b-seam-narrow 宽档排版：页签横排整行
+            // （行高 36、宽＝内容宽−20、步距 40、起位仍
+            // 0.118H；选中态仍白 pill、圆角取半行高）；直
+            // 达改两整行横排（0.64H 起、行高 30、步距 34）；
+            // 工具格改底部一排 4 图标（区位同窄档）。
+            for (index, button) in tabButtons.enumerated() {
+                button.frame = CGRect(
+                    x: 10, y: 0.118 * H + CGFloat(index) * 40,
+                    width: contentW - 20, height: 36)
+                button.layer.cornerRadius = 18
+            }
+            likedButton.frame = CGRect(
+                x: 10, y: 0.64 * H, width: contentW - 20, height: 30)
+            cloudButton.frame = CGRect(
+                x: 10, y: 0.64 * H + 34, width: contentW - 20, height: 30)
+            let toolsH = 0.08 * H
+            let toolsTop = H - 0.025 * H - toolsH
+            let toolStep = (contentW - 20) / 4
+            for (index, button) in toolButtons.enumerated() {
+                button.frame = CGRect(
+                    x: 10 + toolStep * CGFloat(index) + (toolStep - 28) / 2,
+                    y: toolsTop + (toolsH - 28) / 2, width: 28, height: 28)
+            }
+            return
+        }
         // 页签：top 0.118H 起、步距 0.07H、高 0.062H、宽
         // 0.40×缝宽＝26 居中；圆角取帧高一半成全圆 pill。
         for (index, button) in tabButtons.enumerated() {
@@ -347,7 +450,10 @@ final class HomeSeam85View: UIView {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         var node: UIView? = hit
         while let view = node {
-            if view is UIControl { return hit }
+            // (89)B b-seam-narrow：书库标题是 64/120 档切换
+            // 钮（手势挂标签本体），与控件同格放行；其余
+            // 背景穿透纪律不变。
+            if view is UIControl || view === libraryLabel { return hit }
             if view === self { break }
             node = view.superview
         }
@@ -373,6 +479,8 @@ final class HomeSeam85View: UIView {
     }
 
     @objc private func tabTapped(_ sender: UIButton) {
+        // (89)B b-seam-tabs：tag 与 tabTitles89 同序 0-5
+        // （探索 2、Navidrome 5 为本包新增分发）。
         switch sender.tag {
         case 0:
             Breadcrumbs.log("sidebar85 tap dest=playlists")
@@ -381,12 +489,25 @@ final class HomeSeam85View: UIView {
             Breadcrumbs.log("sidebar85 tap dest=radio")
             onRadio?()
         case 2:
+            Breadcrumbs.log("sidebar85 tap dest=explore")
+            onExplore?()
+        case 3:
             Breadcrumbs.log("sidebar85 tap dest=albums")
             onAlbums?()
-        default:
+        case 4:
             Breadcrumbs.log("sidebar85 tap dest=local")
             onLocal?()
+        default:
+            Breadcrumbs.log("sidebar85 tap dest=navidrome")
+            onNavidrome?()
         }
+    }
+
+    /// (89)B b-seam-narrow：点「书库」标题切换 64/120 档
+    /// （翻档与补间重排在宿主侧）。
+    @objc private func libraryTapped89() {
+        Breadcrumbs.log("sidebar85 tap dest=librarywide")
+        onToggleWide89?()
     }
 
     @objc private func likedTapped() {
@@ -443,6 +564,11 @@ final class PlaylistSeam85View: UIView {
     }
 
     private(set) var expanded = false
+    /// (89)B b-seam-tilt：倾斜 −4° 容器（网页 BRAVAIS_
+    /// TILT_DEG collection=−4；主页缝 0° 不动）。缝内全
+    /// 部层（缝纸/书脊/展开档）挂此容器整体倾斜，本视图
+    /// 不裁剪、命中由 UIKit 按 transform 自动换算。
+    private let tiltContainer89 = UIView()
     private let backdrop86 = SeamBackdrop86()
     private let spineContent = UIView()
     private let fullContent = UIView()
@@ -471,14 +597,18 @@ final class PlaylistSeam85View: UIView {
         // (86) 第 1/2 条：缝纸＋油画底同主页缝（SeamBack-
         // drop86）；长按切主题同挂本体。
         backgroundColor = .clear
-        addSubview(backdrop86)
+        // (89)B b-seam-tilt：三层改挂倾斜容器（层序不变：
+        // 缝纸→书脊→展开档）。
+        addSubview(tiltContainer89)
+        tiltContainer89.addSubview(backdrop86)
         let seamPress = UILongPressGestureRecognizer(
             target: self, action: #selector(seamLongPressed86))
         seamPress.minimumPressDuration = 0.55
         addGestureRecognizer(seamPress)
-        addSubview(spineContent)
-        addSubview(fullContent)
+        tiltContainer89.addSubview(spineContent)
+        tiltContainer89.addSubview(fullContent)
         fullContent.isHidden = true
+        Breadcrumbs.log("port89 seamtilt=-4")
 
         backButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         backButton.tintColor = .white
@@ -583,12 +713,23 @@ final class PlaylistSeam85View: UIView {
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        backdrop86.frame = bounds
-        let top = contentTopInset
+        // (89)B b-seam-tilt：容器在 bounds 上下各扩 40 后
+        // 旋转 −4°（倾斜后上下缘不露缺口）；容器内排版坐
+        // 标随之多 40 的纵偏移，top 补偿后内容在缝视图内
+        // 的落位与倾斜前一致。下文宽度基准改容器宽。落
+        // 位走 bounds＋center（带 transform 时 frame 未定义）。
+        tiltContainer89.bounds = CGRect(
+            x: 0, y: 0, width: bounds.width, height: bounds.height + 80)
+        tiltContainer89.center = CGPoint(x: bounds.midX, y: bounds.midY)
+        tiltContainer89.transform = CGAffineTransform(
+            rotationAngle: -4 * .pi / 180)
+        let areaW = tiltContainer89.bounds.width
+        backdrop86.frame = tiltContainer89.bounds
+        let top = contentTopInset + 40
         let contentH = max(0, bounds.height - contentTopInset - contentBottomInset)
         // 书脊内容（64 宽居中）。
         spineContent.frame = CGRect(
-            x: (bounds.width - 64) / 2, y: top, width: 64, height: contentH)
+            x: (areaW - 64) / 2, y: top, width: 64, height: contentH)
         let cx: CGFloat = 32
         let H = contentH
         // (86) 第 1 条：书脊改网页相对比例（BRAVAIS_SPINE_
@@ -612,7 +753,7 @@ final class PlaylistSeam85View: UIView {
         expandButton.frame = CGRect(x: cx - 18, y: 0.905 * H, width: 36, height: 36)
         // 展开档内容（300 宽居中、左对齐排版）。
         fullContent.frame = CGRect(
-            x: (bounds.width - 300) / 2, y: top, width: 300, height: contentH)
+            x: (areaW - 300) / 2, y: top, width: 300, height: contentH)
         // (89) §5-7：展开档返回钮 28 → 32（网页返回钮 32×32）。
         fullBackButton.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
         fullTitleLabel.frame = CGRect(x: 36, y: 2, width: 264, height: 44)

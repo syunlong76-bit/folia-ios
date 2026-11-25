@@ -15,6 +15,17 @@ import Combine
 /// 在网格下方；表格多选批量条随文字行退役（长按菜单承
 /// 接移除/移到末尾/下一首，报告注明取舍）；管理卡加功
 /// 能三件入口（评论/歌曲资料/听歌统计，对象＝当前曲）。
+///
+/// (89)B b-queue-form（Miller 工坊裁决按网页形态）：呈出由
+/// .pageSheet 改浮动面板——.overFullScreen＋根 view 压暗层
+/// （点卡外关闭）、全部内容收进 card89 毛玻璃卡（与
+/// ConsolePanel82 同语言）；队列主体由封面网格改回网页
+/// QueueTab 文字行（行高 48、无封面、当前行左侧 3pt 强调
+/// 条、右侧时长），grid87 封面网格自本页撤除（CoverModule87
+/// 在控制台的条带/网格装配不受影响）；行尾动作由长按菜单
+/// （UIContextMenu）承接、拖拽排序与编辑多选（批量条）随
+/// 文字行一并恢复（(87) 退役的两件就此回归）；本机歌单表
+/// 保留为第二段；管理卡功能全保留、只压缩间距。
 final class QueuePanelViewController: UIViewController {
 
     /// 面板关闭回调（两台用它重置无操作计时）。
@@ -24,13 +35,11 @@ final class QueuePanelViewController: UIViewController {
                         onDismiss: (() -> Void)? = nil) {
         let panel = QueuePanelViewController()
         panel.onDismiss = onDismiss
-        panel.modalPresentationStyle = .pageSheet
-        if let sheet = panel.sheetPresentationController {
-            sheet.detents = [.medium(), .large()]
-            sheet.prefersGrabberVisible = true
-            sheet.preferredCornerRadius = 20
-        }
+        // (89)B ①：浮动面板呈出（.pageSheet 退役）。
+        panel.modalPresentationStyle = .overFullScreen
+        panel.modalTransitionStyle = .crossDissolve
         Breadcrumbs.log("queue.panel.open")
+        Breadcrumbs.log("port89 queueform=panel/rows48")
         presenter.present(panel, animated: true)
     }
 
@@ -72,10 +81,13 @@ final class QueuePanelViewController: UIViewController {
     private var sleepChips: [UIButton] = []
     private let tableView = UITableView(frame: .zero, style: .plain)
     private let emptyLabel = UILabel()
-    /// (87) 队列封面网格＋歌单表高度约束（无歌单时收 0、
-    /// 网格吃满剩余高度）。
-    private var grid87: UICollectionView!
-    private var tableHeight87: NSLayoutConstraint?
+    /// (89)B 浮动卡容器：全部内容收进本卡（毛玻璃＋黑 tint＋
+    /// 描边、圆角 20），宽/高约束在布局时按屏收口（viewDid-
+    /// LayoutSubviews：宽 min(360, 屏宽−32)、高 = 顶线
+    /// （安全区顶＋56）到卡底（安全区底−16）的可用高）。
+    private let card89 = UIView()
+    private var cardWidth89: NSLayoutConstraint?
+    private var cardHeight89: NSLayoutConstraint?
 
     private static let modes: [(mode: QueueManager.PlayMode, label: String)] = [
         (.off, "顺序"), (.loopAll, "循环"), (.repeatOne, "单曲"), (.shuffle, "随机"),
@@ -89,14 +101,40 @@ final class QueuePanelViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (89)B 入场：卡弹簧缩放 0.96→1＋淡入（ConsolePanel82
+        // 同语言：0.5s、damping 0.82、velocity 0.4）。
+        UIView.animate(withDuration: 0.5, delay: 0,
+                       usingSpringWithDamping: 0.82,
+                       initialSpringVelocity: 0.4,
+                       options: [.allowUserInteraction]) {
+            self.card89.alpha = 1
+            self.card89.transform = .identity
+        }
         if !didScrollToCurrent, !tracks.isEmpty {
             didScrollToCurrent = true
             let row = min(max(currentIndex, 0), tracks.count - 1)
-            // (87) 定位当前曲改走封面网格。
-            grid87?.scrollToItem(at: IndexPath(item: row, section: 0),
-                                 at: .centeredVertically, animated: false)
+            // (89)B 定位当前曲改走文字行表（section 0）。
+            tableView.scrollToRow(at: IndexPath(row: row, section: 0),
+                                  at: .middle, animated: false)
         }
         startCountdown()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        // (89)B 卡宽/高收口：宽 min(360, 屏宽−32)；高 = 顶线
+        //（安全区顶＋56）至卡底（安全区底−16）的可用高。
+        cardWidth89?.constant = min(360, max(0, view.bounds.width - 32))
+        let available = view.bounds.height - view.safeAreaInsets.top - 56
+            - view.safeAreaInsets.bottom - 16
+        cardHeight89?.constant = max(200, available)
+    }
+
+    /// (89)B 点卡外（压暗层）关闭：复用既有 closeTapped。
+    @objc private func dimTapped89(_ recognizer: UITapGestureRecognizer) {
+        guard !card89.frame.contains(recognizer.location(in: view)) else { return }
+        Breadcrumbs.log("port89 queueform dimtap")
+        closeTapped()
     }
 
     override func viewDidDisappear(_ animated: Bool) {
@@ -111,16 +149,54 @@ final class QueuePanelViewController: UIViewController {
     // MARK: - 搭建
 
     private func buildViews() {
-        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(blur)
+        // (89)B ① 根 view = 压暗层（点卡外关闭，dimTapped89
+        // 复用 closeTapped）；全部内容收进 card89 浮动卡
+        //（.systemUltraThinMaterialDark 毛玻璃＋黑 0.25 tint
+        // ＋白 0.16 描边、圆角 20，与 ConsolePanel82 同语言；
+        // 右对齐 trailing −16、底 = 安全区底 −16、顶 ≥ 安全
+        // 区顶＋56，宽/高约束在 viewDidLayoutSubviews 收口）。
+        view.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        let dimTap89 = UITapGestureRecognizer(
+            target: self, action: #selector(dimTapped89(_:)))
+        view.addGestureRecognizer(dimTap89)
+        card89.layer.cornerRadius = 20
+        card89.layer.borderWidth = 1
+        card89.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        card89.clipsToBounds = true
+        card89.alpha = 0
+        card89.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
+        card89.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(card89)
+        let cardBlur89 = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        cardBlur89.translatesAutoresizingMaskIntoConstraints = false
+        card89.addSubview(cardBlur89)
+        let cardTint89 = UIView()
+        cardTint89.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        cardTint89.translatesAutoresizingMaskIntoConstraints = false
+        card89.addSubview(cardTint89)
+        cardWidth89 = card89.widthAnchor.constraint(equalToConstant: 360)
+        cardHeight89 = card89.heightAnchor.constraint(equalToConstant: 480)
         NSLayoutConstraint.activate([
-            blur.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            blur.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            blur.topAnchor.constraint(equalTo: view.topAnchor),
-            blur.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            card89.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            card89.bottomAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -16),
+            card89.topAnchor.constraint(
+                greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 56),
+            card89.leadingAnchor.constraint(
+                greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            cardWidth89!,
+            cardHeight89!,
+            cardBlur89.leadingAnchor.constraint(equalTo: card89.leadingAnchor),
+            cardBlur89.trailingAnchor.constraint(equalTo: card89.trailingAnchor),
+            cardBlur89.topAnchor.constraint(equalTo: card89.topAnchor),
+            cardBlur89.bottomAnchor.constraint(equalTo: card89.bottomAnchor),
+            cardTint89.leadingAnchor.constraint(equalTo: card89.leadingAnchor),
+            cardTint89.trailingAnchor.constraint(equalTo: card89.trailingAnchor),
+            cardTint89.topAnchor.constraint(equalTo: card89.topAnchor),
+            cardTint89.bottomAnchor.constraint(equalTo: card89.bottomAnchor),
         ])
-        view.backgroundColor = UIColor.black.withAlphaComponent(0.35)
 
         // 标题行
         titleLabel.text = "播放列表"
@@ -129,30 +205,30 @@ final class QueuePanelViewController: UIViewController {
         titleLabel.font = .systemFont(ofSize: 13, weight: .semibold)
         titleLabel.textColor = .white
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(titleLabel)
+        card89.addSubview(titleLabel)
         countLabel.font = .systemFont(ofSize: 13)
         countLabel.textColor = UIColor.white.withAlphaComponent(0.5)
         countLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(countLabel)
+        card89.addSubview(countLabel)
         let closeButton = UIButton(type: .system)
         closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
         closeButton.tintColor = UIColor.white.withAlphaComponent(0.8)
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
-        view.addSubview(closeButton)
+        card89.addSubview(closeButton)
         // 编辑（多选）入口（3.7 (50)）：标题行、关闭键左侧。
         editButton.setTitle("编辑", for: .normal)
         editButton.titleLabel?.font = .systemFont(ofSize: 15)
         editButton.tintColor = UIColor.white.withAlphaComponent(0.85)
         editButton.translatesAutoresizingMaskIntoConstraints = false
         editButton.addTarget(self, action: #selector(editTapped), for: .touchUpInside)
-        view.addSubview(editButton)
+        card89.addSubview(editButton)
 
         // 头部睡眠定时状态行（3.7 (55) 工作流 D/DS 修正3）
         sleepHeaderRow.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         sleepHeaderRow.layer.cornerRadius = 10
         sleepHeaderRow.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(sleepHeaderRow)
+        card89.addSubview(sleepHeaderRow)
         let sleepHeaderIcon = UIImageView(
             image: UIImage(systemName: "moon.zzz"))
         sleepHeaderIcon.tintColor = UIColor.white.withAlphaComponent(0.75)
@@ -173,8 +249,8 @@ final class QueuePanelViewController: UIViewController {
             target: self, action: #selector(sleepHeaderRowTapped))
         sleepHeaderRow.addGestureRecognizer(sleepHeaderTap)
         NSLayoutConstraint.activate([
-            sleepHeaderRow.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            sleepHeaderRow.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            sleepHeaderRow.leadingAnchor.constraint(equalTo: card89.leadingAnchor, constant: 16),
+            sleepHeaderRow.trailingAnchor.constraint(equalTo: card89.trailingAnchor, constant: -16),
             sleepHeaderRow.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 10),
             sleepHeaderRow.heightAnchor.constraint(equalToConstant: 36),
             sleepHeaderIcon.leadingAnchor.constraint(equalTo: sleepHeaderRow.leadingAnchor, constant: 12),
@@ -190,12 +266,13 @@ final class QueuePanelViewController: UIViewController {
             sleepHeaderLabel.trailingAnchor.constraint(lessThanOrEqualTo: sleepHeaderCancelButton.leadingAnchor, constant: -8),
         ])
 
-        // 管理卡
+        // 管理卡（(89)B ③：功能全保留，只压缩为头区下的紧凑
+        // 行组——间距收紧、行高 42→38、圆角与 card89 同语言）
         let card = UIView()
         card.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        card.layer.cornerRadius = 14
+        card.layer.cornerRadius = 12
         card.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(card)
+        card89.addSubview(card)
 
         let modeTitle = sectionLabel("播放模式")
         card.addSubview(modeTitle)
@@ -265,12 +342,15 @@ final class QueuePanelViewController: UIViewController {
                                    color: .white, action: #selector(statsTapped87))
         card.addSubview(statsRow87)
 
+        // (89)B：锚点自 view.safeAreaLayoutGuide 改挂 card89；
+        // 管理卡内部间距按紧凑行组收紧（段距 12→8、chips
+        // 30→28、动作/功能行 42→38）。
         NSLayoutConstraint.activate([
-            titleLabel.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
-            titleLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 18),
+            titleLabel.leadingAnchor.constraint(equalTo: card89.leadingAnchor, constant: 20),
+            titleLabel.topAnchor.constraint(equalTo: card89.topAnchor, constant: 18),
             countLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 8),
             countLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            closeButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -14),
+            closeButton.trailingAnchor.constraint(equalTo: card89.trailingAnchor, constant: -14),
             closeButton.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
             closeButton.widthAnchor.constraint(equalToConstant: 36),
             closeButton.heightAnchor.constraint(equalToConstant: 36),
@@ -279,132 +359,118 @@ final class QueuePanelViewController: UIViewController {
             editButton.widthAnchor.constraint(equalToConstant: 48),
             editButton.heightAnchor.constraint(equalToConstant: 36),
 
-            card.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            card.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            card.leadingAnchor.constraint(equalTo: card89.leadingAnchor, constant: 16),
+            card.trailingAnchor.constraint(equalTo: card89.trailingAnchor, constant: -16),
             card.topAnchor.constraint(equalTo: sleepHeaderRow.bottomAnchor, constant: 10),
 
             modeTitle.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
-            modeTitle.topAnchor.constraint(equalTo: card.topAnchor, constant: 12),
+            modeTitle.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
             modeChipsStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
             modeChipsStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-            modeChipsStack.topAnchor.constraint(equalTo: modeTitle.bottomAnchor, constant: 8),
-            modeChipsStack.heightAnchor.constraint(equalToConstant: 30),
+            modeChipsStack.topAnchor.constraint(equalTo: modeTitle.bottomAnchor, constant: 6),
+            modeChipsStack.heightAnchor.constraint(equalToConstant: 28),
 
             divider1.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
             divider1.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-            divider1.topAnchor.constraint(equalTo: modeChipsStack.bottomAnchor, constant: 12),
+            divider1.topAnchor.constraint(equalTo: modeChipsStack.bottomAnchor, constant: 8),
             divider1.heightAnchor.constraint(equalToConstant: 0.5),
 
             sleepTitle.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
-            sleepTitle.topAnchor.constraint(equalTo: divider1.bottomAnchor, constant: 12),
+            sleepTitle.topAnchor.constraint(equalTo: divider1.bottomAnchor, constant: 8),
             sleepStateLabel.leadingAnchor.constraint(equalTo: sleepTitle.trailingAnchor, constant: 8),
             sleepStateLabel.centerYAnchor.constraint(equalTo: sleepTitle.centerYAnchor),
             sleepChipsStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
             sleepChipsStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-            sleepChipsStack.topAnchor.constraint(equalTo: sleepTitle.bottomAnchor, constant: 8),
-            sleepChipsStack.heightAnchor.constraint(equalToConstant: 30),
+            sleepChipsStack.topAnchor.constraint(equalTo: sleepTitle.bottomAnchor, constant: 6),
+            sleepChipsStack.heightAnchor.constraint(equalToConstant: 28),
 
             divider2.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
             divider2.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-            divider2.topAnchor.constraint(equalTo: sleepChipsStack.bottomAnchor, constant: 12),
+            divider2.topAnchor.constraint(equalTo: sleepChipsStack.bottomAnchor, constant: 8),
             divider2.heightAnchor.constraint(equalToConstant: 0.5),
 
             shuffleRow.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             shuffleRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            shuffleRow.topAnchor.constraint(equalTo: divider2.bottomAnchor, constant: 4),
-            shuffleRow.heightAnchor.constraint(equalToConstant: 42),
+            shuffleRow.topAnchor.constraint(equalTo: divider2.bottomAnchor, constant: 2),
+            shuffleRow.heightAnchor.constraint(equalToConstant: 38),
             clearRow.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             clearRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             clearRow.topAnchor.constraint(equalTo: shuffleRow.bottomAnchor),
-            clearRow.heightAnchor.constraint(equalToConstant: 42),
+            clearRow.heightAnchor.constraint(equalToConstant: 38),
             saveRow.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             saveRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             saveRow.topAnchor.constraint(equalTo: clearRow.bottomAnchor),
-            saveRow.heightAnchor.constraint(equalToConstant: 42),
+            saveRow.heightAnchor.constraint(equalToConstant: 38),
 
             // (87) 功能三件行（卡底由此收口）。
             divider3.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 14),
             divider3.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -14),
-            divider3.topAnchor.constraint(equalTo: saveRow.bottomAnchor, constant: 4),
+            divider3.topAnchor.constraint(equalTo: saveRow.bottomAnchor, constant: 2),
             divider3.heightAnchor.constraint(equalToConstant: 0.5),
             commentsRow87.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             commentsRow87.trailingAnchor.constraint(equalTo: card.trailingAnchor),
-            commentsRow87.topAnchor.constraint(equalTo: divider3.bottomAnchor, constant: 4),
-            commentsRow87.heightAnchor.constraint(equalToConstant: 42),
+            commentsRow87.topAnchor.constraint(equalTo: divider3.bottomAnchor, constant: 2),
+            commentsRow87.heightAnchor.constraint(equalToConstant: 38),
             infoRow87.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             infoRow87.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             infoRow87.topAnchor.constraint(equalTo: commentsRow87.bottomAnchor),
-            infoRow87.heightAnchor.constraint(equalToConstant: 42),
+            infoRow87.heightAnchor.constraint(equalToConstant: 38),
             statsRow87.leadingAnchor.constraint(equalTo: card.leadingAnchor),
             statsRow87.trailingAnchor.constraint(equalTo: card.trailingAnchor),
             statsRow87.topAnchor.constraint(equalTo: infoRow87.bottomAnchor),
-            statsRow87.heightAnchor.constraint(equalToConstant: 42),
-            statsRow87.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -4),
+            statsRow87.heightAnchor.constraint(equalToConstant: 38),
+            statsRow87.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -2),
         ])
 
-        // (87) 编辑（多选）入口退役：队列改封面网格后批
-        // 量多选无落点，移除/移到末尾/下一首由网格长按菜
-        // 单承接（报告注明取舍）；钮对象保留、恒隐藏。
-        editButton.isHidden = true
+        // (89)B ② 编辑（多选）入口随文字行恢复：(87) 退役的
+        // 批量多选重新落回队列行（section 0）＋底部批量条，
+        // editButton 不再恒隐藏（显隐/文案由 setEditing 管）。
 
-        // (87) 队列封面网格（点格切歌、金环＋律动、长按
-        // 菜单、拖拽排序）。
-        let gridLayout87 = UICollectionViewFlowLayout()
-        gridLayout87.scrollDirection = .vertical
-        gridLayout87.minimumInteritemSpacing = 10
-        gridLayout87.minimumLineSpacing = 12
-        grid87 = UICollectionView(frame: .zero, collectionViewLayout: gridLayout87)
-        grid87.backgroundColor = .clear
-        grid87.showsVerticalScrollIndicator = false
-        grid87.dataSource = self
-        grid87.delegate = self
-        grid87.dragDelegate = self
-        grid87.dropDelegate = self
-        grid87.dragInteractionEnabled = true
-        grid87.register(CoverGridCell87.self, forCellWithReuseIdentifier: "qgrid87")
-        grid87.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(grid87)
-        let gridLongPress87 = UILongPressGestureRecognizer(
-            target: self, action: #selector(gridLongPressed87(_:)))
-        grid87.addGestureRecognizer(gridLongPress87)
-
-        // 歌单表（(87) 起只承本机歌单 section；队列文字
-        // 行退役——QueueTrackCell 类保留但不再注册使用）。
+        // (89)B ② 队列表改两段文字行：section 0 = 队列曲目
+        //（QueueTrackCell 网页 QueueTab 行规格：行高 48、无
+        // 封面、左 3pt 强调条、右侧时长；点行切歌、长按菜单
+        // 承接单曲动作、拖拽排序走 moveQueueItem、编辑多选
+        // 走批量条）；section 1 = 本机歌单（QueuePlaylistCell
+        // 行高 60、既有整队载入/追加/删除不变）。(87) 的
+        // grid87 封面网格自本页撤除——CoverModule87 本体不
+        // 动，控制台条带/网格的装配在 ConsolePanel82 侧。
         tableView.backgroundColor = .clear
         tableView.separatorStyle = .none
-        tableView.rowHeight = 60
+        tableView.estimatedRowHeight = 48
+        tableView.allowsMultipleSelectionDuringEditing = true
         tableView.dataSource = self
         tableView.delegate = self
+        tableView.dragDelegate = self
+        tableView.dropDelegate = self
+        tableView.dragInteractionEnabled = true
+        tableView.register(QueueTrackCell.self,
+                           forCellReuseIdentifier: QueueTrackCell.reuseId)
         tableView.register(QueuePlaylistCell.self,
                            forCellReuseIdentifier: QueuePlaylistCell.reuseId)
         tableView.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(tableView)
-        tableHeight87 = tableView.heightAnchor.constraint(equalToConstant: 0)
+        card89.addSubview(tableView)
 
         emptyLabel.text = "队列是空的"
         emptyLabel.font = .systemFont(ofSize: 14)
         emptyLabel.textColor = UIColor.white.withAlphaComponent(0.45)
         emptyLabel.textAlignment = .center
         emptyLabel.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(emptyLabel)
+        card89.addSubview(emptyLabel)
 
         NSLayoutConstraint.activate([
-            grid87.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            grid87.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            grid87.topAnchor.constraint(equalTo: card.bottomAnchor, constant: 10),
-            grid87.bottomAnchor.constraint(equalTo: tableView.topAnchor, constant: -6),
-            tableView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            tableView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            tableView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            tableHeight87!,
-            emptyLabel.centerXAnchor.constraint(equalTo: grid87.centerXAnchor),
-            emptyLabel.centerYAnchor.constraint(equalTo: grid87.centerYAnchor),
+            tableView.leadingAnchor.constraint(equalTo: card89.leadingAnchor),
+            tableView.trailingAnchor.constraint(equalTo: card89.trailingAnchor),
+            tableView.topAnchor.constraint(equalTo: card.bottomAnchor, constant: 10),
+            tableView.bottomAnchor.constraint(equalTo: card89.bottomAnchor),
+            emptyLabel.centerXAnchor.constraint(equalTo: tableView.centerXAnchor),
+            emptyLabel.centerYAnchor.constraint(equalTo: tableView.centerYAnchor),
         ])
 
         // 批量操作条（3.7 (50)）：编辑态浮显于底部；非编辑态隐藏。
+        // (89)B：批量条改锚 card89 底（原锚根 view 底）。
         batchBar.isHidden = true
         batchBar.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(batchBar)
+        card89.addSubview(batchBar)
         batchCountLabel.font = .systemFont(ofSize: 13.5)
         batchCountLabel.textColor = UIColor.white.withAlphaComponent(0.65)
         batchCountLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -425,9 +491,9 @@ final class QueuePanelViewController: UIViewController {
                                      for: .touchUpInside)
         batchBar.contentView.addSubview(batchMoveEndButton)
         NSLayoutConstraint.activate([
-            batchBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            batchBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            batchBar.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            batchBar.leadingAnchor.constraint(equalTo: card89.leadingAnchor),
+            batchBar.trailingAnchor.constraint(equalTo: card89.trailingAnchor),
+            batchBar.bottomAnchor.constraint(equalTo: card89.bottomAnchor),
             batchBar.heightAnchor.constraint(equalToConstant: 78),
             batchCountLabel.leadingAnchor.constraint(
                 equalTo: batchBar.contentView.leadingAnchor, constant: 20),
@@ -465,7 +531,8 @@ final class QueuePanelViewController: UIViewController {
         let chip = UIButton(type: .system)
         chip.setTitle(title, for: .normal)
         chip.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
-        chip.layer.cornerRadius = 15
+        // (89)B：chips 高 28 后圆角 14 成全胶囊（原 15/高 30）。
+        chip.layer.cornerRadius = 14
         chip.clipsToBounds = true
         return chip
     }
@@ -529,8 +596,8 @@ final class QueuePanelViewController: UIViewController {
                 if queue.isEmpty, self.isEditing {
                     self.setEditing(false, animated: false)
                 }
-                // (87) 队列回刷改走封面网格。
-                if !self.dragInFlight { self.grid87?.reloadData() }
+                // (89)B 队列回刷走文字行表（section 0）。
+                if !self.dragInFlight { self.tableView.reloadData() }
             }
             .store(in: &cancellables)
         LocalPlaylistStore.shared.$playlists
@@ -538,10 +605,10 @@ final class QueuePanelViewController: UIViewController {
             .sink { [weak self] playlists in
                 guard let self else { return }
                 self.localPlaylists = playlists
+                // (89)B 歌单段与队列段同表（section 1），整表
+                // 回刷即可；(87) 的歌单表高度收口随网格撤除作废
+                //（表高由 card89 内顶/底锚决定）。
                 if !self.dragInFlight { self.tableView.reloadData() }
-                // (87) 歌单表高随条数收口（0 时网格吃满）。
-                self.tableHeight87?.constant = playlists.isEmpty
-                    ? 0 : min(CGFloat(playlists.count) * 60 + 38, 200)
             }
             .store(in: &cancellables)
         queueManager.$playMode
@@ -678,11 +745,12 @@ final class QueuePanelViewController: UIViewController {
         setEditing(!isEditing, animated: true)
     }
 
-    /// 当前多选集合（只认队列 section 的行号）。
+    /// 当前多选集合（只认队列 section 的行号；(89)B 队列段
+    /// 回到 section 0——(87) 网格期此判据指向歌单段的旧值作废）。
     private func selectedQueueIndices() -> IndexSet {
         var set = IndexSet()
         for path in tableView.indexPathsForSelectedRows ?? []
-        where path.section == 1 {
+        where path.section == 0 {
             set.insert(path.row)
         }
         return set
@@ -772,16 +840,19 @@ final class QueuePanelViewController: UIViewController {
 
 extension QueuePanelViewController: UITableViewDataSource, UITableViewDelegate {
 
-    // (87) 表格只剩本机歌单一段（队列已迁封面网格）。
-    func numberOfSections(in tableView: UITableView) -> Int { 1 }
+    // (89)B 两段：section 0 = 队列文字行（tracks），
+    // section 1 = 本机歌单（localPlaylists）——数据源以
+    // section 区分，两段各自的行高/点按/侧滑互不串。
+    func numberOfSections(in tableView: UITableView) -> Int { 2 }
 
     func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        localPlaylists.count
+        section == 0 ? tracks.count : localPlaylists.count
     }
 
     func tableView(_ tableView: UITableView,
                    titleForHeaderInSection section: Int) -> String? {
-        localPlaylists.isEmpty ? nil : "我的歌单"
+        if section == 0 { return tracks.isEmpty ? nil : "播放队列" }
+        return localPlaylists.isEmpty ? nil : "我的歌单"
     }
 
     func tableView(_ tableView: UITableView,
@@ -793,7 +864,22 @@ extension QueuePanelViewController: UITableViewDataSource, UITableViewDelegate {
     }
 
     func tableView(_ tableView: UITableView,
+                   heightForRowAt indexPath: IndexPath) -> CGFloat {
+        // (89)B：队列行 48（网页 QueueTab ROW_PX）；歌单行沿用 60。
+        indexPath.section == 0 ? 48 : 60
+    }
+
+    func tableView(_ tableView: UITableView,
                    cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        if indexPath.section == 0 {
+            let cell = tableView.dequeueReusableCell(
+                withIdentifier: QueueTrackCell.reuseId,
+                for: indexPath) as! QueueTrackCell
+            cell.configure(track: tracks[indexPath.row],
+                           index: indexPath.row,
+                           isCurrent: indexPath.row == currentIndex)
+            return cell
+        }
         let cell = tableView.dequeueReusableCell(
             withIdentifier: QueuePlaylistCell.reuseId,
             for: indexPath) as! QueuePlaylistCell
@@ -802,8 +888,20 @@ extension QueuePanelViewController: UITableViewDataSource, UITableViewDelegate {
     }
 
     func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
+        if tableView.isEditing {
+            // 编辑多选态：点按只改选中集、批量条计数跟随。
+            if indexPath.section == 0 { updateBatchBar() }
+            return
+        }
         tableView.deselectRow(at: indexPath, animated: true)
-        presentPlaylistActions(at: indexPath.row)
+        if indexPath.section == 0 {
+            // 点行切歌（当前行不重复触发，与旧网格口径同）。
+            guard indexPath.row != currentIndex else { return }
+            Breadcrumbs.log("port89 queue row play idx=\(indexPath.row)")
+            queueManager.playAtIndex(indexPath.row)
+        } else {
+            presentPlaylistActions(at: indexPath.row)
+        }
     }
 
     func tableView(_ tableView: UITableView, didDeselectRowAt indexPath: IndexPath) {
@@ -813,8 +911,9 @@ extension QueuePanelViewController: UITableViewDataSource, UITableViewDelegate {
     func tableView(_ tableView: UITableView,
                    trailingSwipeActionsConfigurationForRowAt indexPath: IndexPath)
         -> UISwipeActionsConfiguration? {
-        // (87) 表格只剩歌单：仅删除歌单（队列行操作已迁
-        // 网格长按菜单）。
+        // 侧滑只对歌单段：删除歌单。队列行动作走长按菜单/
+        // 编辑多选，不在此重复。
+        guard indexPath.section == 1 else { return nil }
         let playlist = localPlaylists[indexPath.row]
         let delete = UIContextualAction(style: .destructive, title: "删除") {
             _, _, done in
@@ -826,6 +925,48 @@ extension QueuePanelViewController: UITableViewDataSource, UITableViewDelegate {
         config.performsFirstActionWithFullSwipe = false
         return config
     }
+
+    /// (89)B 队列行长按菜单：承接 (87) 网格长按菜单的单曲
+    /// 动作全集（播放/下一首播放/移到末尾/从队列移除），
+    /// 系统 UIContextMenu 呈出；歌单段不挂（其动作在点按
+    /// 的 actionSheet 里）。编辑多选态不挂菜单（点按即多选）。
+    func tableView(_ tableView: UITableView,
+                   contextMenuConfigurationForRowAt indexPath: IndexPath,
+                   point: CGPoint) -> UIContextMenuConfiguration? {
+        guard indexPath.section == 0, !tableView.isEditing,
+              tracks.indices.contains(indexPath.row) else { return nil }
+        let row = indexPath.row
+        let track = tracks[row]
+        return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) {
+            [weak self] _ in
+            guard let self else { return nil }
+            var actions: [UIAction] = []
+            if row != self.currentIndex {
+                actions.append(UIAction(title: "播放",
+                                        image: UIImage(systemName: "play.fill")) { _ in
+                    self.queueManager.playAtIndex(row)
+                })
+                if row != self.currentIndex + 1 {
+                    actions.append(UIAction(
+                        title: "下一首播放",
+                        image: UIImage(systemName: "text.line.first.and.arrowtriangle.forward")) { _ in
+                        self.queueManager.moveToNext(at: row)
+                    })
+                }
+                actions.append(UIAction(title: "移到末尾",
+                                        image: UIImage(systemName: "arrow.down.to.line")) { _ in
+                    self.queueManager.moveToEnd(at: row)
+                })
+            }
+            actions.append(UIAction(title: "从队列移除",
+                                    image: UIImage(systemName: "trash"),
+                                    attributes: .destructive) { _ in
+                self.queueManager.removeFromQueue(at: row)
+            })
+            Breadcrumbs.log("port89 queue menu idx=\(row)")
+            return UIMenu(title: track.title, children: actions)
+        }
+    }
 }
 
 // MARK: - 拖拽排序
@@ -836,7 +977,8 @@ extension QueuePanelViewController: UITableViewDragDelegate, UITableViewDropDele
                    itemsForBeginning session: UIDragSession,
                    at indexPath: IndexPath) -> [UIDragItem] {
         // 拖拽排序只对队列 section 开放（歌单 section 不可拖）。
-        guard indexPath.section == 1 else { return [] }
+        // (89)B：队列段为 section 0（(87) 网格期的旧段位作废）。
+        guard indexPath.section == 0 else { return [] }
         let item = UIDragItem(itemProvider: NSItemProvider())
         item.localObject = indexPath.row
         return [item]
@@ -868,114 +1010,8 @@ extension QueuePanelViewController: UITableViewDragDelegate, UITableViewDropDele
         guard let item = coordinator.items.first,
               let source = item.dragItem.localObject as? Int,
               let destinationPath = coordinator.destinationIndexPath,
-              destinationPath.section == 1 else { return }
+              destinationPath.section == 0 else { return }
         queueManager.moveQueueItem(from: source, to: destinationPath.row)
-    }
-}
-
-// MARK: - (87) 队列封面网格
-
-extension QueuePanelViewController: UICollectionViewDataSource,
-                                    UICollectionViewDelegateFlowLayout,
-                                    UICollectionViewDragDelegate,
-                                    UICollectionViewDropDelegate {
-
-    func collectionView(_ collectionView: UICollectionView,
-                        numberOfItemsInSection section: Int) -> Int {
-        tracks.count
-    }
-
-    func collectionView(_ collectionView: UICollectionView,
-                        cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(
-            withReuseIdentifier: "qgrid87", for: indexPath) as! CoverGridCell87
-        cell.configure(track: tracks[indexPath.item],
-                       index: indexPath.item,
-                       isCurrent: indexPath.item == currentIndex,
-                       isPlaying: PlaybackEngine.shared.isPlaying)
-        return cell
-    }
-
-    func collectionView(_ collectionView: UICollectionView,
-                        didSelectItemAt indexPath: IndexPath) {
-        guard indexPath.item != currentIndex else { return }
-        Breadcrumbs.log("queue87 grid play idx=\(indexPath.item)")
-        queueManager.playAtIndex(indexPath.item)
-    }
-
-    func collectionView(_ collectionView: UICollectionView,
-                        layout collectionViewLayout: UICollectionViewLayout,
-                        sizeForItemAt indexPath: IndexPath) -> CGSize {
-        let width = collectionView.bounds.width
-        let columns: CGFloat = width > 500 ? 6 : 4
-        let side = floor((width - (columns - 1) * 10) / columns)
-        return CGSize(width: side, height: side + 30)
-    }
-
-    // 拖拽排序（与旧表格同源 moveQueueItem）。
-    func collectionView(_ collectionView: UICollectionView,
-                        itemsForBeginning session: UIDragSession,
-                        at indexPath: IndexPath) -> [UIDragItem] {
-        let item = UIDragItem(itemProvider: NSItemProvider())
-        item.localObject = indexPath.item
-        return [item]
-    }
-
-    func collectionView(_ collectionView: UICollectionView,
-                        dropSessionDidUpdate session: UIDropSession,
-                        withDestinationIndexPath destinationIndexPath: IndexPath?)
-        -> UICollectionViewDropProposal {
-        UICollectionViewDropProposal(operation: .move, intent: .insertAtDestinationIndexPath)
-    }
-
-    func collectionView(_ collectionView: UICollectionView,
-                        performDropWith coordinator: UICollectionViewDropCoordinator) {
-        guard let item = coordinator.items.first,
-              let source = item.dragItem.localObject as? Int,
-              let destination = coordinator.destinationIndexPath else { return }
-        dragInFlight = true
-        queueManager.moveQueueItem(from: source, to: destination.item)
-        dragInFlight = false
-        grid87?.reloadData()
-        Breadcrumbs.log("queue87 grid move \(source)->\(destination.item)")
-    }
-
-    /// 长按封面：动作菜单承接旧行操作（下一首/移到末
-    /// 尾/移除——批量多选的单曲等价物）。
-    @objc func gridLongPressed87(_ recognizer: UILongPressGestureRecognizer) {
-        guard recognizer.state == .began else { return }
-        let point = recognizer.location(in: grid87)
-        guard let indexPath = grid87.indexPathForItem(at: point),
-              tracks.indices.contains(indexPath.item) else { return }
-        let row = indexPath.item
-        let track = tracks[row]
-        let sheet = UIAlertController(title: track.title, message: track.artist,
-                                      preferredStyle: .actionSheet)
-        if row != currentIndex {
-            sheet.addAction(UIAlertAction(title: "播放", style: .default) {
-                [weak self] _ in self?.queueManager.playAtIndex(row)
-            })
-            if row != currentIndex + 1 {
-                sheet.addAction(UIAlertAction(title: "下一首播放", style: .default) {
-                    [weak self] _ in self?.queueManager.moveToNext(at: row)
-                })
-            }
-            sheet.addAction(UIAlertAction(title: "移到末尾", style: .default) {
-                [weak self] _ in self?.queueManager.moveToEnd(at: row)
-            })
-        }
-        sheet.addAction(UIAlertAction(title: "从队列移除", style: .destructive) {
-            [weak self] _ in self?.queueManager.removeFromQueue(at: row)
-        })
-        sheet.addAction(UIAlertAction(title: "取消", style: .cancel))
-        if let popover = sheet.popoverPresentationController,
-           let cell = grid87.cellForItem(at: indexPath) {
-            popover.sourceView = cell
-            popover.sourceRect = cell.bounds
-        }
-        UIImpactFeedbackGenerator(style: .light).impactOccurred()
-        Breadcrumbs.log("queue87 grid menu idx=\(row)")
-        present(sheet, animated: true)
     }
 }
 
@@ -1015,68 +1051,61 @@ extension QueuePanelViewController {
 
 // MARK: - 队列行
 
+/// (89)B 队列文字行（网页 QueueTab 行规格）：行高 48（由
+/// VC heightForRowAt 给）、无封面；歌名 13pt（当前行
+/// semibold）、歌手 12pt、当前行左侧 3pt 强调竖条（上下
+/// 各缩 12）、右侧时长（12pt 等宽数字）。(87) 前的封面/
+/// 序号/声浪图标三件就此退役——当前行只靠竖条＋字重区分。
 final class QueueTrackCell: UITableViewCell {
 
     static let reuseId = "QueueTrackCell"
 
-    private let stateIcon = UIImageView()
-    private let indexLabel = UILabel()
-    private let coverView = UIImageView()
+    /// 当前行左侧 3pt 强调竖条（网页 QueueTab 同款）。
+    private let accentBar89 = UIView()
     private let titleLabel = UILabel()
     private let artistLabel = UILabel()
-    private var coverTask: Task<Void, Never>?
-    private var trackId: String?
+    private let durationLabel = UILabel()
 
     override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
         super.init(style: style, reuseIdentifier: reuseIdentifier)
         backgroundColor = .clear
         selectionStyle = .none
 
-        stateIcon.tintColor = UIColor(red: 0.45, green: 0.75, blue: 1, alpha: 1)
-        stateIcon.contentMode = .scaleAspectFit
-        stateIcon.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(stateIcon)
-        indexLabel.font = .monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
-        indexLabel.textColor = UIColor.white.withAlphaComponent(0.4)
-        indexLabel.textAlignment = .center
-        indexLabel.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(indexLabel)
+        accentBar89.backgroundColor = ThemeSystem62.currentAccent
+        accentBar89.isHidden = true
+        accentBar89.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(accentBar89)
 
-        coverView.contentMode = .scaleAspectFill
-        coverView.clipsToBounds = true
-        coverView.layer.cornerRadius = 6
-        coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
-        coverView.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(coverView)
-
-        titleLabel.font = .systemFont(ofSize: 15, weight: .medium)
+        titleLabel.font = .systemFont(ofSize: 13)
         titleLabel.textColor = UIColor.white.withAlphaComponent(0.92)
         titleLabel.lineBreakMode = .byTruncatingTail
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(titleLabel)
-        artistLabel.font = .systemFont(ofSize: 12.5)
+        artistLabel.font = .systemFont(ofSize: 12)
         artistLabel.textColor = UIColor.white.withAlphaComponent(0.45)
         artistLabel.lineBreakMode = .byTruncatingTail
         artistLabel.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(artistLabel)
+        durationLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        durationLabel.textColor = UIColor.white.withAlphaComponent(0.45)
+        durationLabel.textAlignment = .right
+        durationLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(durationLabel)
 
         NSLayoutConstraint.activate([
-            stateIcon.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            stateIcon.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            stateIcon.widthAnchor.constraint(equalToConstant: 20),
-            stateIcon.heightAnchor.constraint(equalToConstant: 20),
-            indexLabel.centerXAnchor.constraint(equalTo: stateIcon.centerXAnchor),
-            indexLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            coverView.leadingAnchor.constraint(equalTo: stateIcon.trailingAnchor, constant: 12),
-            coverView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            coverView.widthAnchor.constraint(equalToConstant: 40),
-            coverView.heightAnchor.constraint(equalToConstant: 40),
-            titleLabel.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 12),
-            titleLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
-            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 11),
+            accentBar89.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            accentBar89.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            accentBar89.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12),
+            accentBar89.widthAnchor.constraint(equalToConstant: 3),
+            titleLabel.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: durationLabel.leadingAnchor, constant: -8),
+            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
             artistLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             artistLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
-            artistLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            artistLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
+            durationLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -10),
+            durationLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            durationLabel.widthAnchor.constraint(equalToConstant: 46),
         ])
     }
 
@@ -1084,36 +1113,29 @@ final class QueueTrackCell: UITableViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
-        coverTask?.cancel()
-        coverTask = nil
-        trackId = nil
-        coverView.image = nil
+        titleLabel.text = nil
+        artistLabel.text = nil
+        durationLabel.text = nil
+        accentBar89.isHidden = true
     }
 
     func configure(track: FoliaTrack, index: Int, isCurrent: Bool) {
-        trackId = track.id
         titleLabel.text = track.title
         artistLabel.text = track.artist
-        titleLabel.font = .systemFont(ofSize: 15, weight: isCurrent ? .semibold : .medium)
-        stateIcon.image = isCurrent ? UIImage(systemName: "speaker.wave.2.fill") : nil
-        stateIcon.isHidden = !isCurrent
-        indexLabel.text = isCurrent ? "" : "\(index + 1)"
-        indexLabel.isHidden = isCurrent
+        // 网页当前行歌名加粗；其余行常规字重。
+        titleLabel.font = .systemFont(ofSize: 13, weight: isCurrent ? .semibold : .regular)
+        accentBar89.isHidden = !isCurrent
+        if isCurrent {
+            accentBar89.backgroundColor = ThemeSystem62.currentAccent
+        }
+        durationLabel.text = Self.durationText89(track.duration)
+    }
 
-        coverView.image = nil
-        guard let raw = track.artworkURL?.absoluteString else { return }
-        let loader = NativeCoverLoader.shared
-        if let cached = loader.cachedImage(for: raw)
-            ?? loader.cachedImageAnyTier(raw: raw, excludingTier: -1) {
-            coverView.image = cached
-            return
-        }
-        let id = track.id
-        coverTask = Task { [weak self] in
-            let image = await loader.image(for: raw, tier: 256)
-            guard let self, self.trackId == id, let image else { return }
-            self.coverView.image = image
-        }
+    /// 时长 m:ss（无有效时长留空，不造数）。
+    private static func durationText89(_ seconds: TimeInterval) -> String {
+        guard seconds > 0, seconds.isFinite else { return "" }
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }
 

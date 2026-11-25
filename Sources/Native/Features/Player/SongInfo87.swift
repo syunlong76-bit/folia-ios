@@ -33,15 +33,18 @@ final class SongInfoPanel87ViewController: UIViewController {
         dimTap.delegate = self
         view.addGestureRecognizer(dimTap)
 
+        // (89)B b-info-form：居中独立卡 → 顶部锚定面板（锚安全
+        // 区顶＋12、左右 16、圆角 20），入场改自上微滑＋淡入。
         card.backgroundColor = .clear
-        card.layer.cornerRadius = 28
+        card.layer.cornerRadius = 20
         card.layer.borderWidth = 1
         card.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
         card.clipsToBounds = true
         card.translatesAutoresizingMaskIntoConstraints = false
         card.alpha = 0
-        card.transform = CGAffineTransform(scaleX: 0.96, y: 0.96).translatedBy(x: 0, y: 12)
+        card.transform = CGAffineTransform(translationX: 0, y: -18)
         view.addSubview(card)
+        Breadcrumbs.log("port89 info=header")
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.translatesAutoresizingMaskIntoConstraints = false
@@ -60,6 +63,87 @@ final class SongInfoPanel87ViewController: UIViewController {
                                             showHairline: index > 0))
         }
 
+        // (89)B b-info-form：资料头（网页 SongCredits 构成）——
+        // 封面 48×48 圆角 8＋右侧纵排歌名 18 semibold（行高约
+        // 26、最多 2 行）/歌手 13/专辑 12，其下接既有资料行。
+        let headerRow = UIStackView()
+        headerRow.axis = .horizontal
+        headerRow.alignment = .center
+        headerRow.spacing = 12
+        headerRow.translatesAutoresizingMaskIntoConstraints = false
+        let coverView = UIImageView()
+        coverView.contentMode = .scaleAspectFill
+        coverView.clipsToBounds = true
+        coverView.layer.cornerRadius = 8
+        coverView.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        coverView.translatesAutoresizingMaskIntoConstraints = false
+        let coverGlyph = UILabel()
+        coverGlyph.text = "♪"
+        coverGlyph.font = .systemFont(ofSize: 20)
+        coverGlyph.textColor = UIColor.white.withAlphaComponent(0.55)
+        coverGlyph.textAlignment = .center
+        coverGlyph.translatesAutoresizingMaskIntoConstraints = false
+        coverView.addSubview(coverGlyph)
+        NSLayoutConstraint.activate([
+            coverView.widthAnchor.constraint(equalToConstant: 48),
+            coverView.heightAnchor.constraint(equalToConstant: 48),
+            coverGlyph.centerXAnchor.constraint(equalTo: coverView.centerXAnchor),
+            coverGlyph.centerYAnchor.constraint(equalTo: coverView.centerYAnchor),
+        ])
+        if let raw = track.artworkURL?.absoluteString {
+            // 封面走既有加载器口径（先内存缓存、未命中异步取图）。
+            let loader = NativeCoverLoader.shared
+            if let cached = loader.cachedImage(for: raw)
+                ?? loader.cachedImageAnyTier(raw: raw, excludingTier: -1) {
+                coverView.image = cached
+                coverGlyph.isHidden = true
+            } else {
+                Task { [weak coverView, weak coverGlyph] in
+                    let image = await loader.image(for: raw, tier: 256)
+                    guard let image else { return }
+                    await MainActor.run {
+                        coverView?.image = image
+                        coverGlyph?.isHidden = true
+                    }
+                }
+            }
+        }
+        let headerTitle = UILabel()
+        headerTitle.text = track.title.isEmpty ? "—" : track.title
+        headerTitle.font = .systemFont(ofSize: 18, weight: .semibold)
+        headerTitle.textColor = .white
+        headerTitle.numberOfLines = 2
+        // 行高约 26（18pt 字对应网页 leading-[26px]）。
+        let headerTitleStyle = NSMutableParagraphStyle()
+        headerTitleStyle.minimumLineHeight = 26
+        headerTitleStyle.maximumLineHeight = 26
+        headerTitle.attributedText = NSAttributedString(
+            string: headerTitle.text ?? "",
+            attributes: [.paragraphStyle: headerTitleStyle,
+                         .font: UIFont.systemFont(ofSize: 18, weight: .semibold),
+                         .foregroundColor: UIColor.white])
+        let headerArtist = UILabel()
+        headerArtist.text = track.artist.isEmpty ? "—" : track.artist
+        headerArtist.font = .systemFont(ofSize: 13)
+        headerArtist.textColor = UIColor.white.withAlphaComponent(0.75)
+        headerArtist.numberOfLines = 1
+        let headerAlbum = UILabel()
+        headerAlbum.text = track.album.isEmpty ? "—" : track.album
+        headerAlbum.font = .systemFont(ofSize: 12)
+        headerAlbum.textColor = UIColor.white.withAlphaComponent(0.55)
+        headerAlbum.numberOfLines = 1
+        let headerTexts = UIStackView(arrangedSubviews: [headerTitle, headerArtist, headerAlbum])
+        headerTexts.axis = .vertical
+        headerTexts.spacing = 1
+        headerRow.addArrangedSubview(coverView)
+        headerRow.addArrangedSubview(headerTexts)
+
+        // 内容纵栈：资料头＋既有资料行（rows 数据一行不改）。
+        let contentStack = UIStackView(arrangedSubviews: [headerRow, rows])
+        contentStack.axis = .vertical
+        contentStack.spacing = 12
+        contentStack.translatesAutoresizingMaskIntoConstraints = false
+
         let closeButton = UIButton(type: .system)
         closeButton.setImage(UIImage(systemName: "xmark.circle.fill"), for: .normal)
         closeButton.tintColor = UIColor.white.withAlphaComponent(0.7)
@@ -67,17 +151,14 @@ final class SongInfoPanel87ViewController: UIViewController {
         closeButton.translatesAutoresizingMaskIntoConstraints = false
         closeButton.addTarget(self, action: #selector(closeTapped), for: .touchUpInside)
 
-        card.addSubview(rows)
+        card.addSubview(contentStack)
         card.addSubview(closeButton)
-        let cardWidth = card.widthAnchor.constraint(equalToConstant: 380)
-        cardWidth.priority = .defaultHigh
+        // (89)B b-info-form：卡锚安全区顶＋12、左右 16（撤旧
+        // 380 定宽＋居中），高随内容、底部不越安全区。
         NSLayoutConstraint.activate([
-            cardWidth,
-            card.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            card.centerYAnchor.constraint(equalTo: view.centerYAnchor),
-            card.leadingAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 20),
-            card.trailingAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -20),
-            card.topAnchor.constraint(greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 24),
+            card.leadingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            card.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            card.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 12),
             card.bottomAnchor.constraint(lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -24),
 
             blur.leadingAnchor.constraint(equalTo: card.leadingAnchor),
@@ -89,10 +170,10 @@ final class SongInfoPanel87ViewController: UIViewController {
             tint.topAnchor.constraint(equalTo: card.topAnchor),
             tint.bottomAnchor.constraint(equalTo: card.bottomAnchor),
 
-            rows.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
-            rows.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
-            rows.topAnchor.constraint(equalTo: card.topAnchor, constant: 18),
-            rows.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18),
+            contentStack.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 20),
+            contentStack.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -20),
+            contentStack.topAnchor.constraint(equalTo: card.topAnchor, constant: 18),
+            contentStack.bottomAnchor.constraint(equalTo: card.bottomAnchor, constant: -18),
             closeButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -10),
             closeButton.topAnchor.constraint(equalTo: card.topAnchor, constant: 10),
             closeButton.widthAnchor.constraint(equalToConstant: 30),

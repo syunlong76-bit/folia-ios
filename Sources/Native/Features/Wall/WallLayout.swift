@@ -151,13 +151,18 @@ final class WallLayout: UICollectionViewLayout {
     }
 
     /// 有限队列模式（3.7 (71) Lattice 队列拼贴，port-spec 第一节）：
-    /// true 时实例集走有限有序网格——内容 i → 行主序第 i 格
-    /// （128 方块、pitch 136），一曲一实例、无周期拷贝，窗口集
-    /// 是内容↔窗口槽位映射（枚举按格索引裁剪、支持 >400 首）。
-    /// 仅 QueueLatticeViewController 置 true；主页墙/曲目墙恒
-    /// false，其指纹（dataVersion/计数/缩放/尺寸类别/展开态、
-    /// 不含 worldOrigin）与 rebase 纪律一字不变。播放头
-    /// currentIndex 严禁入本类：VC 只对受影响 tile 定向刷牌。
+    /// true 时实例集走有限有序场——一曲一实例、无周期拷贝，窗口
+    /// 集是内容↔窗口槽位映射（枚举按落位矩形与可见域求交裁剪、
+    /// 支持 >400 首）。仅 QueueLatticeViewController 置 true；
+    /// 主页墙/曲目墙恒 false，其指纹（dataVersion/计数/缩放/尺寸
+    /// 类别/展开态、不含 worldOrigin）与 rebase 纪律一字不变。
+    /// 播放头 currentIndex 严禁入本类：VC 只对受影响 tile 定向刷牌。
+    /// (89)B b-wall-mosaic：每砖尺寸由均匀 1 格方砖改拼贴模板
+    /// 跨度（finitePlacements：WallTables.templates[0] 的跨度序
+    /// 循环分配＋行流式排布，宽/高 = n×pitch−gap 与主页墙同
+    /// 源）；span 决定点就在本类的有限求解三函数（finitePlace-
+    /// ments / finiteRect / computeFiniteInstanceSet），周期墙
+    /// 求解（layoutLattice）一字未动。
     var finiteQueueMode = false
     /// 有限网格最近一次计算的列数/场矩形（VC 定位与相机钳制用）。
     private(set) var finiteColumns = 0
@@ -210,7 +215,7 @@ final class WallLayout: UICollectionViewLayout {
     /// 一个单元的视图尺寸（断点/scale 变化时 VC 据此重对齐 offset）。
     var cellViewSize: CGSize {
         if finiteQueueMode, let collectionView {
-            let field = finiteGrid(viewSize: collectionView.bounds.size).field
+            let field = finitePlacements(viewSize: collectionView.bounds.size).field
             // 短队列场小于视口时单元按视口兜底：contentSize 恒
             // ≥bounds，折叠中心不被滚动视图的偏移钳制顶偏（场
             // 本身的居中由 VC 相机钳制负责，与单元尺寸无关）。
@@ -222,51 +227,95 @@ final class WallLayout: UICollectionViewLayout {
         return CGSize(width: geometry.cellWidth * cameraScale, height: geometry.cellHeight * cameraScale)
     }
 
-    // MARK: - 有限队列网格（(71)，纯函数：计数×视口比 → 列/行/场）
+    // MARK: - 有限队列场（(71)；(89)B 改拼贴模板跨度落位）
 
-    /// 列数按场目标宽高比（视口世界宽高比、钳 0.45–2.4）取
-    /// ceil(sqrt(计数×比))；场 = cols×rows 格的外缘（尾格不带
-    /// gap）。旋转时尺寸类别变化触发重算、网格随新比再排。
-    private func finiteGrid(viewSize: CGSize) -> (cols: Int, rows: Int, field: WallRectD) {
+    /// (89)B b-wall-mosaic：有限模式的拼贴落位表（纯函数）——
+    /// 内容下标 → 世界矩形。跨度序列复用主页墙同源模板表
+    /// WallTables.templates[0]（网页 blockTemplates 变体 0 的
+    /// 12 槽跨度序：3×2/6×4/3×2/3×2/3×4/4×4/2×2/3×2/2×2/
+    /// 2×2/2×2/2×2，跨度只有 2/3/4/6 格组合），按内容下标
+    /// 循环分配；排布为行流式（shelf）：行内自左向右放、放不
+    /// 下换行、行高取行内最大 rows。砖宽 = cols×pitch−gap、
+    /// 砖高 = rows×pitch−gap（与主页墙 buildInstance 同公式）。
+    /// 行宽（格数）按场目标宽高比（视口世界宽高比、钳
+    /// 0.45–2.4）由跨度总面积开方取整、下限 6（最大跨度）；
+    /// 场 = 实际占用格的外缘（尾格不带 gap）。旋转时尺寸类别
+    /// 变化触发重算、落位随新比重排。落位只依赖（计数, 视口
+    /// 比）——finiteRect / finiteField / computeFinite-
+    /// InstanceSet 三处共用同一张表，定位与相机钳制口径不变；
+    /// 每次调用 O(计数)，队列量级下可忽略。
+    private func finitePlacements(viewSize: CGSize)
+        -> (rects: [WallRectD], field: WallRectD, rowCells: Int) {
         let count = max(0, totalEntries)
-        guard count > 0 else { return (0, 0, WallRectD(x: 0, y: 0, width: 0, height: 0)) }
+        let emptyField = WallRectD(x: 0, y: 0, width: 0, height: 0)
+        guard count > 0 else { return ([], emptyField, 0) }
+        let spans = WallTables.templates[0]
         var aspect = 1.0
         if viewSize.width > 0, viewSize.height > 0 {
             aspect = min(max(Double(viewSize.width / viewSize.height), 0.45), 2.4)
         }
-        var cols = max(1, Int((Double(count) * aspect).squareRoot().rounded(.up)))
-        cols = min(cols, count)
-        let rows = Int(ceil(Double(count) / Double(cols)))
+        var totalArea = 0
+        for i in 0..<count {
+            let slot = spans[i % spans.count]
+            totalArea += slot.cols * slot.rows
+        }
+        var rowCells = max(6, Int((Double(totalArea) * aspect).squareRoot().rounded(.up)))
+        rowCells = min(rowCells, max(6, totalArea))
+        let pitch = metrics.pitch
+        var rects: [WallRectD] = []
+        rects.reserveCapacity(count)
+        var cursorX = 0
+        var cursorY = 0
+        var shelfRows = 0
+        var fieldCellsW = 0
+        for i in 0..<count {
+            let slot = spans[i % spans.count]
+            if cursorX > 0, cursorX + slot.cols > rowCells {
+                cursorX = 0
+                cursorY += shelfRows
+                shelfRows = 0
+            }
+            rects.append(WallRectD(
+                x: Double(cursorX) * pitch, y: Double(cursorY) * pitch,
+                width: Double(slot.cols) * pitch - metrics.gap,
+                height: Double(slot.rows) * pitch - metrics.gap))
+            cursorX += slot.cols
+            shelfRows = max(shelfRows, slot.rows)
+            fieldCellsW = max(fieldCellsW, cursorX)
+        }
         let field = WallRectD(
             x: 0, y: 0,
-            width: Double(cols) * metrics.pitch - metrics.gap,
-            height: Double(rows) * metrics.pitch - metrics.gap)
-        return (cols, rows, field)
+            width: Double(fieldCellsW) * pitch - metrics.gap,
+            height: Double(cursorY + shelfRows) * pitch - metrics.gap)
+        return (rects, field, rowCells)
     }
 
     /// 有限模式：给定视口尺寸下的场矩形（VC 相机钳制/首帧定心用，
     /// 不依赖实例集是否已算）。
     func finiteField(viewSize: CGSize) -> WallRectD {
-        finiteGrid(viewSize: viewSize).field
+        finitePlacements(viewSize: viewSize).field
     }
 
     /// 有限模式：内容下标 → 世界矩形（未入窗也算得出，供定位
-    /// 当前曲换算目标原点）。
+    /// 当前曲换算目标原点）。(89)B 起矩形为该曲的拼贴落位
+    /// （跨度随下标循环模板序），不再是均匀 1 格。
     func finiteRect(forIndex index: Int, viewSize: CGSize) -> WallRectD? {
         guard finiteQueueMode, index >= 0, index < totalEntries else { return nil }
-        let grid = finiteGrid(viewSize: viewSize)
-        guard grid.cols > 0 else { return nil }
-        let col = index % grid.cols, row = index / grid.cols
-        return WallRectD(x: Double(col) * metrics.pitch, y: Double(row) * metrics.pitch,
-                         width: metrics.cellSize, height: metrics.cellSize)
+        let placed = finitePlacements(viewSize: viewSize)
+        guard index < placed.rects.count else { return nil }
+        return placed.rects[index]
     }
 
     /// 有限模式展开块：原格中心放大为 2 pitch − gap 的方块、
     /// 钳进场内（场更小时居中溢出）。网页 Lattice 展开是原位
     /// 放大＋大阴影（port-spec 第一节），不做邻块让位重排。
+    /// (89)B：拼贴砖最小跨度 2×2 本就 = 264²、其余更大——原
+    /// 砖两维都已 ≥ 展开边时展开矩形即原砖（防 6×4 等大砖被
+    /// 「展开」反缩到 264²）；展开通路/chrome 行为不变。
     static func finiteGrownRect(active: WallRectD, field: WallRectD,
                                 metrics: WallMetrics) -> WallRectD {
         let side = 2 * metrics.pitch - metrics.gap
+        if active.width >= side, active.height >= side { return active }
         var x = active.x + active.width / 2 - side / 2
         var y = active.y + active.height / 2 - side / 2
         if field.width >= side {
@@ -458,8 +507,10 @@ final class WallLayout: UICollectionViewLayout {
 
     /// 有限队列模式的实例集（(71)）：窗口 = 锚点可见域 ±overscan
     /// （port-spec OVERSCAN 500；枚举触顶 400 时降档 300/150）。
-    /// 枚举按格索引行列裁剪——内容↔窗口映射是索引算术，不随
-    /// 队列长度线性变贵（千首队列同价）。展开块走原位放大矩形。
+    /// (89)B：砖尺寸不一后枚举不再是格索引算术——改为遍历
+    /// finitePlacements 落位表、按矩形与可见域求交裁剪（落位
+    /// 表本身 O(计数)，枚举同阶；千首队列仍同价量级）。展开
+    /// 块走原位放大矩形。
     private func computeFiniteInstanceSet(anchor: CGPoint)
         -> (list: [QueueInstance], rects: [String: WallRectD], overscan: Double) {
         guard let collectionView, totalEntries > 0 else {
@@ -468,9 +519,9 @@ final class WallLayout: UICollectionViewLayout {
             return ([], [:], 500)
         }
         let viewSize = collectionView.bounds.size
-        let grid = finiteGrid(viewSize: viewSize)
-        finiteColumns = grid.cols
-        finiteFieldRect = grid.field
+        let placed = finitePlacements(viewSize: viewSize)
+        finiteColumns = placed.rowCells
+        finiteFieldRect = placed.field
         let viewWorld = WallRectD(
             x: Double(anchor.x), y: Double(anchor.y),
             width: Double(viewSize.width) / cameraScale,
@@ -484,25 +535,14 @@ final class WallLayout: UICollectionViewLayout {
                 height: viewWorld.height + overscan * 2)
             let pitch = metrics.pitch
             var list: [QueueInstance] = []
-            let fromCol = max(0, Int((view.left / pitch).rounded(.down)))
-            let toCol = min(grid.cols - 1, Int((view.right / pitch).rounded(.down)))
-            let fromRow = max(0, Int((view.top / pitch).rounded(.down)))
-            let toRow = min(grid.rows - 1, Int((view.bottom / pitch).rounded(.down)))
-            if grid.cols > 0, fromCol <= toCol, fromRow <= toRow {
-                outer: for row in fromRow...toRow {
-                    for col in fromCol...toCol {
-                        let index = row * grid.cols + col
-                        guard index < totalEntries else { continue }
-                        let rect = WallRectD(
-                            x: Double(col) * pitch, y: Double(row) * pitch,
-                            width: metrics.cellSize, height: metrics.cellSize)
-                        guard rect.overlaps(view) else { continue }
-                        list.append(QueueInstance(
-                            instanceId: "q\(index)", queueIndex: index,
-                            cellSlot: index, repeatX: col, repeatY: row, rect: rect))
-                        if list.count >= WallGeometry.maxRenderedInstances { break outer }
-                    }
-                }
+            for (index, rect) in placed.rects.enumerated() {
+                guard rect.overlaps(view) else { continue }
+                list.append(QueueInstance(
+                    instanceId: "q\(index)", queueIndex: index,
+                    cellSlot: index,
+                    repeatX: Int(rect.x / pitch), repeatY: Int(rect.y / pitch),
+                    rect: rect))
+                if list.count >= WallGeometry.maxRenderedInstances { break }
             }
             if list.count >= WallGeometry.maxRenderedInstances, overscan > 150 {
                 overscan = overscan == 500 ? 300 : 150
@@ -512,7 +552,7 @@ final class WallLayout: UICollectionViewLayout {
             if let expandedId = expandedInstanceId,
                let active = list.first(where: { $0.instanceId == expandedId }) {
                 rects[expandedId] = Self.finiteGrownRect(
-                    active: active.rect, field: grid.field, metrics: metrics)
+                    active: active.rect, field: placed.field, metrics: metrics)
             }
             return (list, rects, overscan)
         }

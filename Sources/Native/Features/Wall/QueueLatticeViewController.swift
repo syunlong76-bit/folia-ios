@@ -3,8 +3,9 @@ import Combine
 
 /// 3.7 (71) Lattice 队列拼贴（原生新写 MVP，路线评估
 /// lattice-route-eval-2026-11-21 第九节 C2 交付范围）：整条播放
-/// 队列铺成海报墙——有限有序网格（WallLayout.finiteQueueMode，
-/// 128 方块/pitch 136/overscan 500，port-spec-lattice 第一节）、
+/// 队列铺成海报墙——有限有序场（WallLayout.finiteQueueMode，
+/// pitch 136/overscan 500，port-spec-lattice 第一节；(89)B 起
+/// 砖尺寸为拼贴模板跨度、非均匀方砖，见 WallLayout.finitePlacements）、
 /// 左上序号牌（当前曲 accent）、底部歌名/歌手、按播放头分段
 /// （played 压暗/now accent/upcoming 原样）。
 ///
@@ -80,6 +81,10 @@ final class QueueLatticeViewController: UIViewController,
 
         wallLayout.finiteQueueMode = true
         wallLayout.totalEntries = 0
+        // (89)B b-wall-mosaic：有限场砖尺寸改拼贴模板跨度
+        //（落位在 WallLayout.finitePlacements，本页相机/平移/
+        // 展开通路不动）。
+        Breadcrumbs.log("port89 wall=mosaic")
 
         collectionView = UICollectionView(frame: view.bounds, collectionViewLayout: wallLayout)
         collectionView.backgroundColor = .clear
@@ -952,11 +957,16 @@ final class QueueLatticeCell: UICollectionViewCell {
         // 底部文案：规格距边 17px（÷128≈0.133）、行距 gap 5px。
         let side = max(7, w * 0.125)
         let bottomInset = expanded ? bounds.height * 0.10 : max(6, w * 0.11)
+        // (89)B：拼贴砖屏宽恒 ≥137pt（2 格起）全员进 expanded
+        // 档——原展开档比值是按 264 世界方砖（≈137pt 屏宽）定
+        // 的，套到 6 格宽砖（≈420pt）标题会胀满整砖；展开档
+        // 标题比 0.24→0.16、上限 44→36，歌手比加上限 18，
+        // 其余排版口径不动。
         let titleFont = expanded
-            ? min(max(w * 0.24, 20), 44)
+            ? min(max(w * 0.16, 20), 36)
             : min(max(w * 0.21, 11), 19)
         titleLabel.font = .systemFont(ofSize: titleFont, weight: .semibold)
-        let artistFont = expanded ? max(12, w * 0.07) : max(10, w * 0.10)
+        let artistFont = expanded ? min(max(12, w * 0.07), 18) : max(10, w * 0.10)
         artistLabel.font = .systemFont(ofSize: artistFont, weight: .semibold)
         let textWidth = w - side * 2
         let artistH = artistFont + 4

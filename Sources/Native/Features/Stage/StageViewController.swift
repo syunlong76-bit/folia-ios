@@ -456,15 +456,26 @@ final class StageViewController: UIViewController {
             !(SettingsStore.alwaysShowBackButton && $0 === closeButton)
         }
         for v in targets { v.isUserInteractionEnabled = false }
+        // (89)B b-stage-topbar：顶栏模糊带 headerBlur62 此前不在
+        // 隐藏组、隐藏后整条带还留在屏上——本轮一并淡出。blur 不
+        // 进 targets：它受 SettingsStore.headerBlurEnabled 独立
+        // 管辖，completion 里单独分支收口（见下）。
+        let blur62 = headerBlur62
         UIView.animate(withDuration: 0.3, delay: 0,
                        options: [.curveEaseInOut, .beginFromCurrentState]) {
             for v in targets { v.alpha = 0 }
+            blur62?.alpha = 0
         } completion: { _ in
             if self.headerChromeHidden {
                 for v in targets { v.isHidden = true }
+                // blur 单独分支：只藏不恢复 alpha（恢复口径在
+                // showStageHeader / refresh62Settings，以
+                // headerBlurEnabled 为准）。
+                blur62?.isHidden = true
             }
         }
         Breadcrumbs.log("stage header auto-hide")
+        Breadcrumbs.log("port89 stage=blurhide")
     }
 
     private func showStageHeader(source: String) {
@@ -474,14 +485,26 @@ final class StageViewController: UIViewController {
             v.isHidden = false
             v.isUserInteractionEnabled = true
         }
+        // (89)B b-stage-topbar：模糊带恢复以 headerBlurEnabled
+        // 为准——enabled 才解藏并随顶栏一并淡回 alpha 1；
+        // disabled 时保持隐藏（alpha 留待下次 enabled 恢复时
+        // 在此或 refresh62Settings 回 1）。
+        let blurEnabled89 = SettingsStore.headerBlurEnabled
+        if blurEnabled89 {
+            headerBlur62?.isHidden = false
+        } else {
+            headerBlur62?.isHidden = true
+        }
         if wasHidden {
             UIView.animate(withDuration: 0.35, delay: 0,
                            usingSpringWithDamping: 0.9,
                            initialSpringVelocity: 0,
                            options: [.beginFromCurrentState]) {
                 for v in self.stageHeaderViews { v.alpha = 1 }
+                if blurEnabled89 { self.headerBlur62?.alpha = 1 }
             }
             Breadcrumbs.log("stage header restore src=\(source)")
+            Breadcrumbs.log("port89 stage=blurshow")
         }
         scheduleStageHeaderHide()
     }
@@ -1358,7 +1381,16 @@ final class StageViewController: UIViewController {
         }
 
         stageBar.isHidden = SettingsStore.hideBottomBar
-        headerBlur62?.isHidden = !SettingsStore.headerBlurEnabled
+        // (89)B b-stage-topbar：模糊带刷新以 headerBlurEnabled
+        // 为准且不越过顶栏自动隐藏态——enabled 且顶栏在场才
+        // 解藏并把 alpha 回 1（hide 淡出后靠此/ showStageHeader
+        // 恢复）；顶栏已隐时保持隐藏，等 show 时一并恢复。
+        if SettingsStore.headerBlurEnabled {
+            headerBlur62?.isHidden = headerChromeHidden
+            if !headerChromeHidden { headerBlur62?.alpha = 1 }
+        } else {
+            headerBlur62?.isHidden = true
+        }
         alwaysPrev62.isHidden = !SettingsStore.alwaysShowSkipButtons
         alwaysNext62.isHidden = !SettingsStore.alwaysShowSkipButtons
         soundTracing62.isHidden = !SettingsStore.soundTracingEnabled

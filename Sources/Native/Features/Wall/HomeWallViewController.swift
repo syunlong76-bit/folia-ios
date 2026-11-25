@@ -229,6 +229,15 @@ final class HomeWallViewController: UIViewController,
     private var seamTweenFromWidth85: CGFloat = 0
     private var seamTweenToWidth85: CGFloat = 0
     private var seamTweenOrigin85 = false
+    /// (89)B b-seam-present：缝侧展开面板（点页签＝缝右缘
+    /// 展开 300 信息条＋列表面板、不离墙）＋其内嵌分区页
+    /// （子 VC containment）与头条件。开时建、关时整组拆。
+    private var seamPanel89: UIView?
+    private var seamPanelTitle89: UILabel?
+    private var seamPanelMeta89: UILabel?
+    private var seamPanelContent89: UIView?
+    private var seamPanelChild89: WorkbenchSectionViewController?
+    private var seamPanelTab89: Int = -1
     /// (62) WD §1：墙后层（WallSurfaces62）。墙缝信息条
     /// StripSurface62 已于 (63) 第 4 条按 Miller 令整条摘除。
     private var wallBackdrop62: WallBackdrop62?
@@ -4051,18 +4060,51 @@ extension HomeWallViewController {
             view.addSubview(seam)
         }
         seam.onFold = { [weak self] in self?.foldHomeSeam85() }
+        // (89)B b-seam-present：四页签改走缝侧展开面板（分
+        // 区 VC 以子 VC 嵌入面板内容区，不再全屏 present；
+        // presentSidebarSection84 全屏路径保留给其他调用方）。
         seam.onPlaylists = { [weak self] in
-            self?.presentSidebarSection84(WorkbenchPlaylistListViewController())
+            self?.presentSeamPanel89(
+                tab: 0, title: "歌单", WorkbenchPlaylistListViewController())
         }
         seam.onRadio = { [weak self] in
-            self?.presentSidebarSection84(WorkbenchRadioViewController())
+            self?.presentSeamPanel89(
+                tab: 1, title: "电台", WorkbenchRadioViewController())
         }
         seam.onAlbums = { [weak self] in
-            self?.presentSidebarSection84(WorkbenchAlbumListViewController())
+            self?.presentSeamPanel89(
+                tab: 3, title: "专辑", WorkbenchAlbumListViewController())
         }
         seam.onLocal = { [weak self] in
-            self?.presentSidebarSection84(WorkbenchLocalViewController())
+            self?.presentSeamPanel89(
+                tab: 4, title: "本地", WorkbenchLocalViewController())
         }
+        // (89)B b-seam-tabs：探索复用工具条段控的现行入口
+        // （seamSegmentSelected(.explore)，与 SeamToolbar-
+        // View 的 segment-explore 同一通路，不新造数据路）。
+        seam.onExplore = { [weak self] in
+            guard let self else { return }
+            self.closeSeamPanel89()
+            self.homeSeam85?.selectedTabIndex = 2
+            Breadcrumbs.log("port89 seamtab=explore")
+            self.seamSegmentSelected(.explore)
+        }
+        // (89)B b-seam-tabs：Navidrome 只呈空态页（未接入
+        // 本地库的 Navidrome 浏览在本地分区内另有入口；本
+        // 页签不接 NavidromeClient62、不造假数据）。
+        seam.onNavidrome = { [weak self] in
+            guard let self else { return }
+            self.closeSeamPanel89()
+            self.homeSeam85?.selectedTabIndex = 5
+            Breadcrumbs.log("port89 seamtab=navidrome-empty")
+            let empty = SeamNavidromeEmpty89ViewController()
+            empty.modalPresentationStyle = .fullScreen
+            self.present(empty, animated: true)
+        }
+        // (89)B b-seam-narrow：书库标题切换 64/120 档。
+        seam.onToggleWide89 = { [weak self] in self?.toggleHomeSeamWide89() }
+        // (89)B b-seam-narrow：宽档初值与持久化档同步。
+        seam.displayWide89 = SeamState85.narrow120
         seam.onLiked = { [weak self] in self?.openLikedPlaylist85() }
         // (86) 第 1 条：直达双列补云盘（呈现与命令面板
         // nav.cloud 同款：fullScreen）。
@@ -4108,18 +4150,28 @@ extension HomeWallViewController {
             updateSeam85Frame()
             return
         }
-        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        // (89)B b-seam-narrow：开口宽读当前档（64/120）。
+        let openW = seamOpenWidth89()
+        let plan = wallLayout.seamPlan85(openWidth: openW, preferX: nil)
         wallLayout.seamAnchorX85 = plan.anchor
         wallLayout.worldOrigin.x = plan.originX
-        wallLayout.seamOpenWidth85 = 64
+        wallLayout.seamOpenWidth85 = openW
         _ = wallLayout.refreshInstances()
         collectionView.reloadData()
         updateSeam85Frame()
         Breadcrumbs.log("seam85 plan host=home anchor=\(Int(plan.anchor))")
     }
 
+    /// (89)B b-seam-narrow：当前档开口宽（书脊 64／窄缝
+    /// 120，SeamState85.narrow120 单源）。
+    private func seamOpenWidth89() -> CGFloat {
+        SeamState85.narrow120 ? 120 : 64
+    }
+
     /// 折叠：开口补间收 0（0.36s），等级落盘（跨面沿用）。
     private func foldHomeSeam85() {
+        // (89)B b-seam-present：折叠缝连带收缝侧面板。
+        closeSeamPanel89()
         SeamState85.levelHidden = true
         startSeamTween85(toWidth: 0, toOriginX: nil)
         Breadcrumbs.log("seam85 fold host=home")
@@ -4129,11 +4181,28 @@ extension HomeWallViewController {
     /// 界），相机让位＋开口补间同程（0.42s）。
     private func reopenHomeSeam85() {
         SeamState85.levelHidden = false
-        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        // (89)B b-seam-narrow：重开回当前档宽（64/120）。
+        let openW = seamOpenWidth89()
+        let plan = wallLayout.seamPlan85(openWidth: openW, preferX: nil)
         wallLayout.seamAnchorX85 = plan.anchor
         seamPlanned85 = true
-        startSeamTween85(toWidth: 64, toOriginX: plan.originX)
+        startSeamTween85(toWidth: openW, toOriginX: plan.originX)
         Breadcrumbs.log("seam85 reopen host=home anchor=\(Int(plan.anchor))")
+    }
+
+    /// (89)B b-seam-narrow：点「书库」标题翻档——持久化
+    /// 翻转、缝排版切档、按新宽重新选界并走既有补间重排
+    /// （与 reopenHomeSeam85 同路）。
+    private func toggleHomeSeamWide89() {
+        let wide = !SeamState85.narrow120
+        SeamState85.narrow120 = wide
+        homeSeam85?.displayWide89 = wide
+        let target = seamOpenWidth89()
+        let plan = wallLayout.seamPlan85(openWidth: target, preferX: nil)
+        wallLayout.seamAnchorX85 = plan.anchor
+        seamPlanned85 = true
+        startSeamTween85(toWidth: target, toOriginX: plan.originX)
+        Breadcrumbs.log("port89 seamwide=\(wide ? 120 : 64)")
     }
 
     /// 缝开合补间（CADisplayLink 驱动：开口 0.36s、相机
@@ -4179,6 +4248,9 @@ extension HomeWallViewController {
         if seamGridMode || seamImmersive {
             seam.isHidden = true
             seamEdgeTab85?.isHidden = true
+            // (89)B b-seam-present：网格/沉浸形态下缝不存在，
+            // 缝侧面板随之隐藏（内容不拆、回墙形态恢复再显）。
+            seamPanel89?.isHidden = true
             return
         }
         planHomeSeam85IfNeeded()
@@ -4193,9 +4265,12 @@ extension HomeWallViewController {
                 width: geo.width, height: view.bounds.height)
             seam.contentTopInset = view.safeAreaInsets.top + 56
             seam.contentBottomInset = view.safeAreaInsets.bottom + 116
+            // (89)B b-seam-narrow：淡出基准宽按当前档（64/120）。
             seam.contentOpacity = SeamState85.contentOpacity(
-                rendered: geo.width, content: 64)
+                rendered: geo.width, content: seamOpenWidth89())
         }
+        // (89)B b-seam-present：面板锚缝右缘、随缝帧逐帧跟位。
+        layoutSeamPanel89()
         // 侧边标签：折叠态恒显；开着但被平移挤出视口
         // （collapsed）时显在缝离开的那侧。首规划未成
         // （数据未到）前不显，免加载期边缘闪现。
@@ -4282,12 +4357,207 @@ extension HomeWallViewController {
 
     /// 分区页呈现（与 WorkbenchOverlayHostView.present-
     /// SectionVC 同式：fullScreen＋dismissToWall 回墙）。
+    /// (89)B 起缝页签改走缝侧面板（presentSeamPanel89），
+    /// 本全屏路径保留给其他调用方、原样不动。
     private func presentSidebarSection84(_ vc: WorkbenchSectionViewController) {
         vc.dismissToWall = { [weak self] in
             self?.dismiss(animated: true)
         }
         vc.modalPresentationStyle = .fullScreen
         present(vc, animated: true)
+    }
+
+    // MARK: (89)B b-seam-present 缝侧展开面板
+    //
+    // 网页口径：点集合＝缝变 300 信息条＋列表面板、不离
+    // 墙。原生落点：面板锚在缝右缘（宽 min(300, 屏宽−
+    // 缝右缘−12)、上下与缝内容 insets 同域），毛玻璃底；
+    // 头条＝返回钮＋分区标题＋计数；内容区内嵌分区 VC
+    // （presentSidebarSection84 的同一批目标 VC、无导航
+    // 包装——原实现即裸 VC fullScreen 呈出，故照原样以
+    // 子 VC containment 嵌入，不加包装）。
+
+    /// 开面板/切内容：已有子 VC 先全套摘除再嵌新的；页
+    /// 签选中态同步（selectedTabIndex）。
+    private func presentSeamPanel89(
+        tab: Int, title: String, _ vc: WorkbenchSectionViewController) {
+        let panel = seamPanel89 ?? buildSeamPanel89()
+        removeSeamPanelChild89()
+        // 点播回墙收口改指面板：先关分区页自己再呈出的面
+        // （曲目列表等由分区页 present），再收面板。
+        vc.dismissToWall = { [weak self, weak vc] in
+            vc?.dismiss(animated: true)
+            self?.closeSeamPanel89()
+        }
+        guard let content = seamPanelContent89 else { return }
+        addChild(vc)
+        content.addSubview(vc.view)
+        seamPanelChild89 = vc
+        vc.view.frame = content.bounds
+        vc.view.layoutIfNeeded()
+        layoutSeamPanelContent89()
+        vc.didMove(toParent: self)
+        seamPanelTab89 = tab
+        seamPanelTitle89?.text = title
+        seamPanelMeta89?.text = nil
+        homeSeam85?.selectedTabIndex = tab
+        panel.isHidden = false
+        layoutSeamPanel89()
+        refreshSeamPanelMeta89()
+        // 分区数据多为异步回填：1s 后按表中实数再刷一次计数。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self, weak vc] in
+            guard let self, self.seamPanelChild89 === vc else { return }
+            self.refreshSeamPanelMeta89()
+        }
+        Breadcrumbs.log("port89 seampanel=open tab=\(tab)")
+    }
+
+    /// 面板本体（懒建）：毛玻璃（UIVisualEffectView＋黑
+    /// 0.25 tint）＋头条（返回 32×32 chevron.left／标题
+    /// 16 semibold／计数 12pt 白 0.6）＋内容区（裁剪，子
+    /// VC 视图嵌入）。z 序与缝同格：点播台/工具条之下。
+    private func buildSeamPanel89() -> UIView {
+        let panel = UIView()
+        panel.layer.cornerRadius = 16
+        panel.clipsToBounds = true
+        let blur = UIVisualEffectView(effect: UIBlurEffect(style: .dark))
+        blur.frame = panel.bounds
+        blur.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        panel.addSubview(blur)
+        let tint = UIView()
+        tint.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        tint.frame = panel.bounds
+        tint.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        panel.addSubview(tint)
+        let back = UIButton(type: .system)
+        back.setImage(UIImage(
+            systemName: "chevron.left",
+            withConfiguration: UIImage.SymbolConfiguration(
+                pointSize: 14, weight: .semibold)), for: .normal)
+        back.tintColor = .white
+        back.accessibilityLabel = "返回"
+        back.addTarget(self, action: #selector(seamPanelBackTapped89),
+                       for: .touchUpInside)
+        back.tag = 8901
+        panel.addSubview(back)
+        let titleLabel = UILabel()
+        titleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
+        titleLabel.textColor = .white
+        panel.addSubview(titleLabel)
+        seamPanelTitle89 = titleLabel
+        let metaLabel = UILabel()
+        metaLabel.font = .systemFont(ofSize: 12)
+        metaLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        panel.addSubview(metaLabel)
+        seamPanelMeta89 = metaLabel
+        let content = UIView()
+        content.clipsToBounds = true
+        panel.addSubview(content)
+        seamPanelContent89 = content
+        if let bar = miniBar {
+            view.insertSubview(panel, belowSubview: bar)
+        } else if let toolbar = seamToolbar {
+            view.insertSubview(panel, belowSubview: toolbar)
+        } else {
+            view.addSubview(panel)
+        }
+        seamPanel89 = panel
+        return panel
+    }
+
+    /// 面板逐帧定位（updateSeam85Frame 尾调）：锚缝右缘，
+    /// 上下＝缝内容 insets 同域；缝隐藏/面板未开时只隐藏
+    /// 不拆（折叠缝的拆除走 closeSeamPanel89）。
+    private func layoutSeamPanel89() {
+        guard let panel = seamPanel89 else { return }
+        guard let seam = homeSeam85, !seam.isHidden else {
+            panel.isHidden = true
+            return
+        }
+        let x = seam.frame.maxX
+        let w = min(300, view.bounds.width - x - 12)
+        let top = seam.contentTopInset
+        let bottom = view.bounds.height - seam.contentBottomInset
+        panel.frame = CGRect(
+            x: x, y: top, width: max(0, w), height: max(0, bottom - top))
+        panel.isHidden = w < 40
+        // 头条排版：返回钮 32×32 左 10；标题/计数两行在其右。
+        if let back = panel.viewWithTag(8901) {
+            back.frame = CGRect(x: 10, y: 10, width: 32, height: 32)
+        }
+        seamPanelTitle89?.frame = CGRect(
+            x: 52, y: 8, width: max(0, w - 62), height: 20)
+        seamPanelMeta89?.frame = CGRect(
+            x: 52, y: 29, width: max(0, w - 62), height: 14)
+        seamPanelContent89?.frame = CGRect(
+            x: 0, y: 52, width: max(0, w), height: max(0, bottom - top - 52))
+        layoutSeamPanelContent89()
+    }
+
+    /// 子 VC 视图落位：分区页自带顶栏（关闭钮＋标题）由
+    /// 面板头条代行——把子视图上移其 contentView 起点，
+    /// 内容区裁剪正好藏起子顶栏，列表本体自内容区顶起。
+    private func layoutSeamPanelContent89() {
+        guard let content = seamPanelContent89,
+              let vc = seamPanelChild89, vc.view.superview === content
+        else { return }
+        vc.view.frame = content.bounds
+        vc.view.layoutIfNeeded()
+        let shift = vc.contentView.frame.minY
+        vc.view.frame = CGRect(
+            x: 0, y: -shift, width: content.bounds.width,
+            height: content.bounds.height + shift)
+    }
+
+    /// 子 VC 全套摘除（willMove/removeFromParent 成套）。
+    private func removeSeamPanelChild89() {
+        guard let vc = seamPanelChild89 else { return }
+        vc.willMove(toParent: nil)
+        vc.view.removeFromSuperview()
+        vc.removeFromParent()
+        seamPanelChild89 = nil
+    }
+
+    /// 收面板：摘子 VC、拆面板本体、页签选中态回歌单
+    /// （主页墙本体即歌单集）。未开时静默。
+    private func closeSeamPanel89() {
+        guard seamPanel89 != nil else { return }
+        removeSeamPanelChild89()
+        seamPanel89?.removeFromSuperview()
+        seamPanel89 = nil
+        seamPanelTitle89 = nil
+        seamPanelMeta89 = nil
+        seamPanelContent89 = nil
+        seamPanelTab89 = -1
+        if let seam = homeSeam85, seam.selectedTabIndex != 0 {
+            seam.selectedTabIndex = 0
+        }
+        Breadcrumbs.log("port89 seampanel=close")
+    }
+
+    @objc private func seamPanelBackTapped89() {
+        closeSeamPanel89()
+    }
+
+    /// 头条计数：分区 VC 的条数在其私有数组内（本包文件
+    /// 范围外不可直读），改读内嵌列表的实时行数——显示
+    /// 的就是计数的，不造数；无表/无行时留空。
+    private func refreshSeamPanelMeta89() {
+        guard let vc = seamPanelChild89, let meta = seamPanelMeta89,
+              let table = findSeamPanelTable89(in: vc.view) else { return }
+        var count = 0
+        for section in 0..<table.numberOfSections {
+            count += table.numberOfRows(inSection: section)
+        }
+        meta.text = count > 0 ? "\(count) 项" : nil
+    }
+
+    private func findSeamPanelTable89(in root: UIView) -> UITableView? {
+        if let table = root as? UITableView { return table }
+        for sub in root.subviews {
+            if let table = findSeamPanelTable89(in: sub) { return table }
+        }
+        return nil
     }
 
     /// port88 瘦身：原「缝账户回显」的两路 UI 回填（工具条
@@ -4367,3 +4637,60 @@ extension HomeWallViewController {
 // (84) 第 3 条：(82) 的 UIGestureRecognizerDelegate 祖先链
 // 豁免扩展整套删除——台身识别器已改挂背景手势层（按钮的
 // 兄弟层、非祖先），豁免失去存在前提（DS 定案）。
+
+/// (89)B b-seam-tabs：Navidrome 页签空态页——只呈标题与
+/// 「暂未接入」文案，不接 NavidromeClient62、不造假数据
+/// （真浏览入口在本地分区内，本页签待后续包接通）。
+final class SeamNavidromeEmpty89ViewController: UIViewController {
+
+    override func viewDidLoad() {
+        super.viewDidLoad()
+        view.backgroundColor = UIColor(
+            red: 22.0 / 255, green: 22.0 / 255, blue: 27.0 / 255, alpha: 1)
+        let titleLabel = UILabel()
+        titleLabel.text = "Navidrome"
+        titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)
+        titleLabel.textColor = .white
+        titleLabel.textAlignment = .center
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(titleLabel)
+        let noteLabel = UILabel()
+        noteLabel.text = "暂未接入"
+        noteLabel.font = .systemFont(ofSize: 14)
+        noteLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        noteLabel.textAlignment = .center
+        noteLabel.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(noteLabel)
+        let closeButton = UIButton(type: .system)
+        closeButton.setImage(UIImage(
+            systemName: "chevron.down",
+            withConfiguration: UIImage.SymbolConfiguration(
+                pointSize: 15, weight: .semibold)), for: .normal)
+        closeButton.tintColor = .white
+        closeButton.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        closeButton.layer.cornerRadius = 16
+        closeButton.accessibilityLabel = "关闭"
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.addTarget(self, action: #selector(closeTapped89),
+                              for: .touchUpInside)
+        view.addSubview(closeButton)
+        NSLayoutConstraint.activate([
+            titleLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            titleLabel.centerYAnchor.constraint(
+                equalTo: view.centerYAnchor, constant: -16),
+            noteLabel.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            noteLabel.topAnchor.constraint(
+                equalTo: titleLabel.bottomAnchor, constant: 8),
+            closeButton.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
+            closeButton.leadingAnchor.constraint(
+                equalTo: view.leadingAnchor, constant: 16),
+            closeButton.widthAnchor.constraint(equalToConstant: 32),
+            closeButton.heightAnchor.constraint(equalToConstant: 32),
+        ])
+    }
+
+    @objc private func closeTapped89() {
+        dismiss(animated: true)
+    }
+}

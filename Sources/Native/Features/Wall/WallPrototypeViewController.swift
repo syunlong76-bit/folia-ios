@@ -112,6 +112,7 @@ final class WallPrototypeViewController: UIViewController,
     private var lyricAnchorHidden = false
     /// 展开卡打点去重：组串未变时跳过重复 log。
     private var lastExpandedCellCrumb: String?
+    private var lastDetailCrumb89: String?
     private let wallLayout = WallLayout()
     /// hero 飞行在途引用（(67) 独立审查修复）：飞行未完又触
     /// 发展开/收起时先把旧飞行瞬时收尾（复原真卡 alpha），防
@@ -3225,6 +3226,38 @@ final class WallPrototypeViewController: UIViewController,
         let queueIndex = instance.queueIndex
         cell.onPlayTap = { [weak self] in self?.playTapped(queueIndex: queueIndex) }
         cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
+        // (89)B b-detail-card：展开卡文字块文案＋加入队列动作。
+        cell.configureDetail89(
+            title: entry.title,
+            artist: nativeTracks.first { $0.id == entry.id }?.artists
+                ?? entry.subtitle ?? "")
+        cell.onQueueTap89 = { [weak self] in self?.queueTapped89(queueIndex: queueIndex) }
+        if wallLayout.expandedInstanceId == instance.instanceId {
+            let crumb = "detail89|\(entry.id)"
+            if crumb != lastDetailCrumb89 {
+                lastDetailCrumb89 = crumb
+                Breadcrumbs.log("port89 detailcard=text")
+            }
+        }
+    }
+
+    /// (89)B：展开卡「加入队列」——走 QueueManager.appendToQueue
+    /// 既有通路（去重/默认位置门控都在其内），曲目构造与点播
+    /// 队列同源（nativeTracks → foliaTrack(for:)）。
+    private func queueTapped89(queueIndex: Int) {
+        guard queueIndex < entries.count else { return }
+        let entry = entries[queueIndex]
+        let track: FoliaTrack
+        if let native = nativeTracks.first(where: { $0.id == entry.id }) {
+            track = foliaTrack(for: native)
+        } else {
+            track = FoliaTrack(id: entry.id, sourceType: .netease,
+                               title: entry.title,
+                               artist: entry.subtitle ?? "", duration: 0)
+        }
+        QueueManager.shared.appendToQueue([track])
+        Breadcrumbs.log("port89 detailcard queue-add id=\(entry.id)")
+        refreshVisiblePlaybackUI()
     }
 
     /// 原生舞台入口（3.7 (14)，M2'）：迷你台台身与双击卡片改走
@@ -3508,6 +3541,7 @@ final class WallPrototypeViewController: UIViewController,
         } else {
             guard !overlay.isHidden else { return }
             overlay.isHidden = true
+            overlay.clipTopOverride89 = nil // (89)B：隐藏时撤 clip 覆盖
             overlay.clear()
             lastLyricIndex = nil
         }
@@ -3664,6 +3698,17 @@ final class WallPrototypeViewController: UIViewController,
             overlay.transform = .identity
             if overlay.frame != frame { overlay.frame = frame }
             lyricOverlayBaseFrame = frame
+        }
+        // (89)B：歌词 clip 起点下移至展开卡动作排下方——从展开
+        // cell 读动作排底缘＋8 下发；cell 不在场时撤覆盖回 0.40。
+        if let expandedId = wallLayout.expandedInstanceId,
+           let item = wallLayout.instances.firstIndex(where: { $0.instanceId == expandedId }),
+           let cell = collectionView.cellForItem(
+               at: IndexPath(item: item, section: 0)) as? WallPosterCell,
+           cell.detailActionsBottom89 > 0 {
+            overlay.clipTopOverride89 = cell.detailActionsBottom89 + 8
+        } else {
+            overlay.clipTopOverride89 = nil
         }
         setLyricAnchorHidden(false, reason: restoreReason)
         let crumb = "\(targetId)|\(Int(frame.minX / 40))|\(Int(frame.minY / 40))"
@@ -4243,6 +4288,19 @@ final class WallPosterCell: UICollectionViewCell {
     // （主页墙歌单卡）永不配置、恒隐藏。
     var onPlayTap: (() -> Void)?
     var onLikeTap: (() -> Void)?
+    // (89)B b-detail-card：展开卡文字块（左上标题/歌手）＋动作
+    // 排（喜欢 44×44／播放／加入队列），只在展开态显示。
+    var onQueueTap89: (() -> Void)?
+    private let detailTitle89 = UILabel()
+    private let detailArtist89 = UILabel()
+    private let detailLike89 = UIButton(type: .system)
+    private let detailPlay89 = UIButton(type: .system)
+    private let detailQueue89 = UIButton(type: .system)
+    private var detailTitleText89 = ""
+    private var detailArtistText89 = ""
+    private var detailLayoutKey89 = ""
+    /// 动作排底缘（卡坐标），VC 据此下发歌词 clip 起点覆盖。
+    private(set) var detailActionsBottom89: CGFloat = 0
     private let playButton = UIButton(type: .system)
     private let likeButton = UIButton(type: .system)
     /// 「已在队列」角标（3.7 (69) P9，社区版借鉴 N4）：展开
@@ -4376,10 +4434,66 @@ final class WallPosterCell: UICollectionViewCell {
             UITapGestureRecognizer(target: self, action: #selector(playButtonTapped)))
         shadowView.addSubview(errorLabel)
 
+        // (89)B b-detail-card：展开卡文字块与动作排（初始隐藏，
+        // configurePlayback 按展开态显隐；排版在 layoutSubviews）。
+        detailTitle89.textColor = .white
+        detailTitle89.numberOfLines = 2
+        detailTitle89.lineBreakMode = .byTruncatingTail
+        detailTitle89.layer.shadowColor = UIColor.black.cgColor
+        detailTitle89.layer.shadowOpacity = 0.85
+        detailTitle89.layer.shadowRadius = 3
+        detailTitle89.layer.shadowOffset = .zero
+        detailTitle89.isHidden = true
+        shadowView.addSubview(detailTitle89)
+        detailArtist89.font = .systemFont(ofSize: 17)
+        detailArtist89.textColor = UIColor.white.withAlphaComponent(0.85)
+        detailArtist89.numberOfLines = 1
+        detailArtist89.lineBreakMode = .byTruncatingTail
+        detailArtist89.layer.shadowColor = UIColor.black.cgColor
+        detailArtist89.layer.shadowOpacity = 0.85
+        detailArtist89.layer.shadowRadius = 2
+        detailArtist89.layer.shadowOffset = .zero
+        detailArtist89.isHidden = true
+        shadowView.addSubview(detailArtist89)
+        detailLike89.tintColor = .white
+        detailLike89.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        detailLike89.layer.cornerRadius = 22
+        detailLike89.setImage(UIImage(systemName: "heart"), for: .normal)
+        detailLike89.accessibilityLabel = "喜欢"
+        detailLike89.addTarget(self, action: #selector(likeButtonTapped), for: .touchUpInside)
+        detailLike89.isHidden = true
+        shadowView.addSubview(detailLike89)
+        detailPlay89.setTitle("播放", for: .normal)
+        detailPlay89.setTitleColor(.white, for: .normal)
+        detailPlay89.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        detailPlay89.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        detailPlay89.layer.cornerRadius = 22
+        detailPlay89.addTarget(self, action: #selector(playButtonTapped), for: .touchUpInside)
+        detailPlay89.isHidden = true
+        shadowView.addSubview(detailPlay89)
+        detailQueue89.setTitle("加入队列", for: .normal)
+        detailQueue89.setTitleColor(.white, for: .normal)
+        detailQueue89.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
+        detailQueue89.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        detailQueue89.layer.cornerRadius = 22
+        detailQueue89.addTarget(self, action: #selector(queueButtonTapped89), for: .touchUpInside)
+        detailQueue89.isHidden = true
+        shadowView.addSubview(detailQueue89)
+
     }
 
     @objc private func playButtonTapped() { onPlayTap?() }
     @objc private func likeButtonTapped() { onLikeTap?() }
+    @objc private func queueButtonTapped89() { onQueueTap89?() }
+
+    /// (89)B：展开卡文字块文案（VC 在 applyPlaybackState 时按
+    /// 条目下发：标题＝歌名、歌手＝nativeTracks.artists）。
+    func configureDetail89(title: String, artist: String) {
+        detailTitleText89 = title
+        detailArtistText89 = artist
+        detailArtist89.text = artist
+        setNeedsLayout()
+    }
 
     /// 播放态配置（VC 在 cellForItem 与播放状态变化时调用）：展开卡
     /// 显示控件行 + 进度，当前曲目显示角标，播放/暂停与红心按实况；
@@ -4391,6 +4505,14 @@ final class WallPosterCell: UICollectionViewCell {
         controlsVisible = expanded
         playButton.isHidden = !expanded
         likeButton.isHidden = !expanded
+        // (89)B：文字块/动作排只在展开态显示、收起即隐（随 cell
+        // 展开/收起同拍，无独立动画）。
+        detailTitle89.isHidden = !expanded
+        detailArtist89.isHidden = !expanded
+        detailLike89.isHidden = !expanded
+        detailPlay89.isHidden = !expanded
+        detailQueue89.isHidden = !expanded
+        detailPlay89.setTitle(isCurrent && isPlaying ? "暂停" : "播放", for: .normal)
         progressTrack.isHidden = !expanded
         playingBadge.isHidden = !isCurrent
         // (69) P9：角标只在展开卡出（未展开卡面维持现行），
@@ -4560,6 +4682,13 @@ final class WallPosterCell: UICollectionViewCell {
         likeButton.backgroundColor = liked
             ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 0.95)
             : UIColor.black.withAlphaComponent(0.45)
+        // (89)B：动作排喜欢钮与既有红心钮同状态（LikesStore 驱动）。
+        detailLike89.setImage(
+            UIImage(systemName: liked ? "heart.fill" : "heart"), for: .normal)
+        detailLike89.tintColor = .white
+        detailLike89.backgroundColor = liked
+            ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 0.95)
+            : UIColor.black.withAlphaComponent(0.45)
     }
 
     /// 进度条热更新（VC 的 0.3 秒计时器只打这一处，不整表刷新）。
@@ -4615,6 +4744,45 @@ final class WallPosterCell: UICollectionViewCell {
             width: bounds.width - 12, height: 12)
         subtitleLabel.isHidden = imageOnly || !hasSubtitle
         if controlsVisible {
+            // (89)B b-detail-card：左上文字块＋其下动作排——标题
+            // bold、字号 clamp(30, 卡宽×0.11, 46)、行高 0.95 倍、
+            // 最大宽 76% 卡宽、最多 2 行；歌手 17；动作排喜欢
+            // 44×44／播放／加入队列（高 44、字 15）。
+            let detailMargin: CGFloat = 16
+            let detailTextWidth = bounds.width * 0.76
+            let detailFontSize = min(max(bounds.width * 0.11, 30), 46)
+            let detailKey = "\(Int(detailFontSize))|\(detailTitleText89)"
+            if detailKey != detailLayoutKey89 {
+                detailLayoutKey89 = detailKey
+                let style = NSMutableParagraphStyle()
+                style.minimumLineHeight = detailFontSize * 0.95
+                style.maximumLineHeight = detailFontSize * 0.95
+                style.lineBreakMode = .byTruncatingTail
+                detailTitle89.attributedText = NSAttributedString(
+                    string: detailTitleText89,
+                    attributes: [.paragraphStyle: style,
+                                 .font: UIFont.systemFont(ofSize: detailFontSize, weight: .bold),
+                                 .foregroundColor: UIColor.white])
+            }
+            let detailTitleHeight = min(
+                detailTitle89.sizeThatFits(CGSize(
+                    width: detailTextWidth,
+                    height: .greatestFiniteMagnitude)).height,
+                detailFontSize * 0.95 * 2 + 2)
+            detailTitle89.frame = CGRect(
+                x: detailMargin, y: 14,
+                width: detailTextWidth, height: detailTitleHeight)
+            detailArtist89.frame = CGRect(
+                x: detailMargin, y: 14 + detailTitleHeight + 6,
+                width: detailTextWidth, height: 22)
+            let detailActionsY = 14 + detailTitleHeight + 6 + 22 + 12
+            detailLike89.frame = CGRect(
+                x: detailMargin, y: detailActionsY, width: 44, height: 44)
+            detailPlay89.frame = CGRect(
+                x: detailMargin + 54, y: detailActionsY, width: 88, height: 44)
+            detailQueue89.frame = CGRect(
+                x: detailMargin + 152, y: detailActionsY, width: 104, height: 44)
+            detailActionsBottom89 = detailActionsY + 44
             let barTop = bounds.height - 37
             playButton.frame = CGRect(x: 8, y: barTop + 2, width: 30, height: 30)
             likeButton.frame = CGRect(x: bounds.width - 38, y: barTop + 2, width: 30, height: 30)
@@ -4644,6 +4812,8 @@ final class WallPosterCell: UICollectionViewCell {
                 x: bounds.width - 38 - 17,
                 y: max(8, titleY - 4 - 64),
                 width: 64, height: 64)
+        } else {
+            detailActionsBottom89 = 0 // (89)B：收起态无动作排占位
         }
         playingBadge.frame = CGRect(x: bounds.width - 30, y: 4, width: 24, height: 24)
     }

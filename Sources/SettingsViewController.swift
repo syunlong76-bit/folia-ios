@@ -124,6 +124,11 @@ final class SettingsViewController: UIViewController {
     private var didRunEntrance = false
     private var isDismissing = false
 
+    // (89)B b-settings-form：左导航列页头标题（当前签标题，
+    // selectTab 时同步）；导航钮复用 tabButtons（点选走
+    // tabButtonTapped → selectTab 同一通路）。
+    private let navTitleLabel89 = UILabel()
+
     override func viewDidLoad() {
         super.viewDidLoad()
         // 让 UIAlertController 等系统子界面跟随深色，避免弹出白框跳戏
@@ -133,11 +138,12 @@ final class SettingsViewController: UIViewController {
         buildLayout()
         refresh()
 
-        // 入场初始态：遮罩透明、面板自工具条下缘轻沉待发，
-        // viewDidAppear 里弹簧落下（(74) 就地展开面板形态）。
+        // 入场初始态：遮罩透明、卡片缩放待发，viewDidAppear
+        // 里弹簧缩放淡入（(89)B 模态卡形态；(74) 下拉面板的
+        // 下沉入场随形态一并退役）。
         backdropView.alpha = 0
         cardView.alpha = 0
-        cardView.transform = CGAffineTransform(translationX: 0, y: -16)
+        cardView.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -322,129 +328,150 @@ final class SettingsViewController: UIViewController {
     // MARK: - 布局
 
     private func buildLayout() {
-        // 遮罩：半透明黑，点按关闭；底下页面透出
-        backdropView.backgroundColor = UIColor.black.withAlphaComponent(0.55)
+        // (89)B b-settings-form：全屏页＋页签组卡切换 → 压暗层
+        // ＋居中模态卡（网页 SettingsModal 形态的手机转译）。
+        // 遮罩：黑 0.45，点卡外关闭（既有 backdrop 点按 → close
+        // 通路不变；呈现口径由宿主决定、本 VC 不改）。
+        backdropView.backgroundColor = UIColor.black.withAlphaComponent(0.45)
         backdropView.translatesAutoresizingMaskIntoConstraints = false
         backdropView.addGestureRecognizer(
             UITapGestureRecognizer(target: self, action: #selector(close)))
         view.addSubview(backdropView)
 
-        // (74) 就地展开面板：独立「设置页面」形态撤掉——齿轮
-        // 点开的设置改成自顶部工具条下缘展开的下拉面板（参
-        // 照网页版齿轮打开设置的方式）：顶锚 = 安全区顶 +56
-        // （工具条 44 高 + 4 顶距 + 8 间隔，与三页工具条落位
-        // 对齐），左右 12 边距，高度贴合内容、封顶见下方
-        // maxHeight；内容与页签体系一字不动。
-        cardView.backgroundColor = FoliaUI.card
+        // 居中卡：圆角 24、毛玻璃同控制台口径（systemUltraThin
+        // MaterialDark＋黑 0.25 衬色，与 SongInfo87/Console
+        // Panel82 同式）、横向边距 16、上下距安全区各 ≥20、
+        // 高约 86% 可用高；内容构建器与每签内容视图原样复用。
+        cardView.backgroundColor = .clear
         cardView.layer.cornerRadius = 24
+        cardView.layer.borderWidth = 1
+        cardView.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
         cardView.clipsToBounds = true
         cardView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(cardView)
+        let cardBlur89 = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        cardBlur89.translatesAutoresizingMaskIntoConstraints = false
+        cardView.addSubview(cardBlur89)
+        let cardTint89 = UIView()
+        cardTint89.backgroundColor = UIColor.black.withAlphaComponent(0.25)
+        cardTint89.translatesAutoresizingMaskIntoConstraints = false
+        cardView.addSubview(cardTint89)
         NSLayoutConstraint.activate([
             backdropView.topAnchor.constraint(equalTo: view.topAnchor),
             backdropView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
             backdropView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             backdropView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            cardView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 12),
-            cardView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
+            cardView.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 16),
+            cardView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -16),
+            cardView.centerYAnchor.constraint(equalTo: view.safeAreaLayoutGuide.centerYAnchor),
             cardView.topAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 56),
+                greaterThanOrEqualTo: view.safeAreaLayoutGuide.topAnchor, constant: 20),
             cardView.bottomAnchor.constraint(
-                lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -12)
+                lessThanOrEqualTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -20),
+            cardView.heightAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.heightAnchor, multiplier: 0.86),
+            cardBlur89.leadingAnchor.constraint(equalTo: cardView.leadingAnchor),
+            cardBlur89.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
+            cardBlur89.topAnchor.constraint(equalTo: cardView.topAnchor),
+            cardBlur89.bottomAnchor.constraint(equalTo: cardView.bottomAnchor),
+            cardTint89.leadingAnchor.constraint(equalTo: cardView.leadingAnchor),
+            cardTint89.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
+            cardTint89.topAnchor.constraint(equalTo: cardView.topAnchor),
+            cardTint89.bottomAnchor.constraint(equalTo: cardView.bottomAnchor)
         ])
 
-        // 卡内整体走一个 ScrollView：卡片高度默认贴合内容（下方 height 约束），
-        // 内容超高（小屏/横屏）时卡片封顶 88% 屏高、内部滚动。
+        // 右列内容滚动区：既有 ScrollView＋cardStack 结构原样
+        // （各签组视图仍逐个 addArrangedSubview 进 cardStack、
+        // reg/selectTab 显隐通路不变），只是宿主从卡本体改到
+        // 下方 bodyRow 的右列。
         let scroll = UIScrollView()
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.showsVerticalScrollIndicator = false
-        cardView.addSubview(scroll)
         let cardStack = UIStackView()
         cardStack.axis = .vertical
         cardStack.spacing = 12
         cardStack.isLayoutMarginsRelativeArrangement = true
-        cardStack.layoutMargins = UIEdgeInsets(top: 10, left: 20, bottom: 20, right: 20)
+        cardStack.layoutMargins = UIEdgeInsets(top: 4, left: 16, bottom: 20, right: 16)
         cardStack.translatesAutoresizingMaskIntoConstraints = false
         scroll.addSubview(cardStack)
         NSLayoutConstraint.activate([
-            scroll.topAnchor.constraint(equalTo: cardView.topAnchor),
-            scroll.bottomAnchor.constraint(equalTo: cardView.bottomAnchor),
-            scroll.leadingAnchor.constraint(equalTo: cardView.leadingAnchor),
-            scroll.trailingAnchor.constraint(equalTo: cardView.trailingAnchor),
             cardStack.topAnchor.constraint(equalTo: scroll.contentLayoutGuide.topAnchor),
             cardStack.bottomAnchor.constraint(equalTo: scroll.contentLayoutGuide.bottomAnchor),
             cardStack.leadingAnchor.constraint(equalTo: scroll.frameLayoutGuide.leadingAnchor),
             cardStack.trailingAnchor.constraint(equalTo: scroll.frameLayoutGuide.trailingAnchor)
         ])
-        // (63) 第 1 条根治：旧 hug 钉 cardStack.height 与 required
-        // 的 0.88 上限构成回路——内容超上限时求解器可以不打破
-        // 任何约束、直接把 cardStack 本体压进上限（裸标签/分段
-        // 行先塌成细线，见 (62) 反馈取证）。改钉 scroll 的
-        // contentLayoutGuide 高：卡高想贴合的是「滚动内容高」
-        // 本身，超上限时只能断这条 defaultHigh 的 hug、靠滚动
-        // 看全，内容永远不许被压。
-        let hugHeight = cardView.heightAnchor.constraint(
-            equalTo: scroll.contentLayoutGuide.heightAnchor)
-        hugHeight.priority = .defaultHigh
-        // (74) 面板封顶：屏高 72%（下拉面板不吞整屏，下方墙
-        // 面仍露一带；超高内容内部滚动，同 (63) 口径）。
-        let maxHeight = cardView.heightAnchor.constraint(
-            lessThanOrEqualTo: view.heightAnchor, multiplier: 0.72)
-        NSLayoutConstraint.activate([hugHeight, maxHeight])
+        cardStackRef = cardStack
 
-        // (86) 第 4 条：顶部 36×4 sheet 抓手横线撤除（与工
-        // 具条 grabber 同款小白线，全仓核查清单第二处）——
-        // 本面板无拖动关闭手势（关闭走页眉「完成」），抓手
-        // 纯装饰、随本条一并退役。
-
-        // 页眉：标题 + 「完成」文字按钮
+        // 右列页头：当前签标题 17 semibold＋关闭钮（既有「完成」
+        // → close 通路）。标题随 selectTab 同步（见 selectTab）。
         let header = UIStackView()
         header.axis = .horizontal
         header.alignment = .center
-        let titleLabel = UILabel()
-        titleLabel.text = "设置"
-        titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
-        titleLabel.textColor = FoliaUI.primary
+        navTitleLabel89.text = Self.tabTitles[selectedTab]
+        navTitleLabel89.font = .systemFont(ofSize: 17, weight: .semibold)
+        navTitleLabel89.textColor = FoliaUI.primary
         let doneButton = UIButton(type: .system)
         doneButton.setTitle("完成", for: .normal)
         doneButton.setTitleColor(FoliaUI.accent, for: .normal)
         doneButton.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
         doneButton.addTarget(self, action: #selector(close), for: .touchUpInside)
-        header.addArrangedSubview(titleLabel)
+        header.addArrangedSubview(navTitleLabel89)
         header.addArrangedSubview(UIView())
         header.addArrangedSubview(doneButton)
-        cardStack.addArrangedSubview(header)
-        cardStackRef = cardStack
 
-        // 页签栏（(55)）：横向可滚动的页签丸，选中态 accent
-        // 填充；下方各组按页签注册显隐（见 reg/selectTab）。
-        let tabScroll = UIScrollView()
-        tabScroll.showsHorizontalScrollIndicator = false
-        tabScroll.translatesAutoresizingMaskIntoConstraints = false
-        let tabRow = UIStackView()
-        tabRow.axis = .horizontal
-        tabRow.spacing = 8
-        tabRow.translatesAutoresizingMaskIntoConstraints = false
-        tabScroll.addSubview(tabRow)
+        // 左导航列（手机转译宽 104）：12 签竖排列表，钮在下方
+        // 循环里逐个建（复用 tabButtons／tabButtonTapped 通路）。
+        let navScroll89 = UIScrollView()
+        navScroll89.showsVerticalScrollIndicator = false
+        navScroll89.translatesAutoresizingMaskIntoConstraints = false
+        let navColumn89 = UIStackView()
+        navColumn89.axis = .vertical
+        navColumn89.spacing = 2
+        navColumn89.translatesAutoresizingMaskIntoConstraints = false
+        navScroll89.addSubview(navColumn89)
+        NSLayoutConstraint.activate([
+            navColumn89.topAnchor.constraint(equalTo: navScroll89.contentLayoutGuide.topAnchor),
+            navColumn89.bottomAnchor.constraint(equalTo: navScroll89.contentLayoutGuide.bottomAnchor),
+            navColumn89.leadingAnchor.constraint(equalTo: navScroll89.frameLayoutGuide.leadingAnchor),
+            navColumn89.trailingAnchor.constraint(equalTo: navScroll89.frameLayoutGuide.trailingAnchor)
+        ])
+
+        // 卡内骨架：左导航列＋右列（页头＋内容滚动区）。
+        let rightColumn89 = UIStackView(arrangedSubviews: [header, scroll])
+        rightColumn89.axis = .vertical
+        rightColumn89.spacing = 8
+        let bodyRow89 = UIStackView(arrangedSubviews: [navScroll89, rightColumn89])
+        bodyRow89.axis = .horizontal
+        bodyRow89.spacing = 10
+        bodyRow89.translatesAutoresizingMaskIntoConstraints = false
+        cardView.addSubview(bodyRow89)
+        NSLayoutConstraint.activate([
+            bodyRow89.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 14),
+            bodyRow89.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -14),
+            bodyRow89.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
+            bodyRow89.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -12),
+            navScroll89.widthAnchor.constraint(equalToConstant: 104)
+        ])
+        Breadcrumbs.log("port89 settings=modal/nav")
+
+        // 左导航钮（(89)B）：13pt、行高 40、左对齐；选中态白
+        // 0.12 底＋白字、未选白 0.55（样式在 applyTabVisibility
+        // 落）。点选走既有 tabButtonTapped → selectTab 通路。
+        let tabRow = navColumn89
         for (index, title) in Self.tabTitles.enumerated() {
             let button = UIButton(type: .system)
             button.setTitle(title, for: .normal)
-            button.titleLabel?.font = .systemFont(ofSize: 13, weight: .medium)
-            button.contentEdgeInsets = UIEdgeInsets(top: 7, left: 12, bottom: 7, right: 12)
-            button.layer.cornerRadius = 16
+            button.titleLabel?.font = .systemFont(ofSize: 13)
+            button.contentHorizontalAlignment = .leading
+            button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 8)
+            button.layer.cornerRadius = 10
             button.tag = index
             button.addTarget(self, action: #selector(tabButtonTapped(_:)), for: .touchUpInside)
+            button.heightAnchor.constraint(equalToConstant: 40).isActive = true
             tabButtons.append(button)
             tabRow.addArrangedSubview(button)
         }
-        NSLayoutConstraint.activate([
-            tabRow.topAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.topAnchor),
-            tabRow.bottomAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.bottomAnchor),
-            tabRow.leadingAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.leadingAnchor),
-            tabRow.trailingAnchor.constraint(equalTo: tabScroll.contentLayoutGuide.trailingAnchor),
-            tabScroll.heightAnchor.constraint(equalToConstant: 34)
-        ])
-        cardStack.addArrangedSubview(tabScroll)
 
         // ===== 一、界面组（网页：外观 / 播放器 / 主页 / 图形）=====
         beginCheckGroup("外观")
@@ -930,8 +957,9 @@ final class SettingsViewController: UIViewController {
         }
         UIView.animate(withDuration: 0.3, delay: 0, options: [.curveEaseIn], animations: {
             self.backdropView.alpha = 0
-            // (74) 关闭回向工具条：上收 16 + 淡出（与入场镜像）。
-            self.cardView.transform = CGAffineTransform(translationX: 0, y: -16)
+            // (89)B：关闭与入场镜像——缩放 0.96＋淡出（(74) 上收
+            // 16 随下拉面板形态退役）。
+            self.cardView.transform = CGAffineTransform(scaleX: 0.96, y: 0.96)
             self.cardView.alpha = 0
         }, completion: { _ in
             self.dismiss(animated: false)
@@ -1087,9 +1115,12 @@ extension SettingsViewController {
             views.forEach { $0.isHidden = index != selectedTab }
         }
         for (index, button) in tabButtons.enumerated() {
+            // (89)B 左导航样式：选中白 0.12 底＋白字、未选透底＋白 0.55。
             let selected = index == selectedTab
-            button.backgroundColor = selected ? FoliaUI.accent : FoliaUI.buttonFill
-            button.setTitleColor(selected ? UIColor.white : FoliaUI.primary,
+            button.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.12) : .clear
+            button.setTitleColor(selected ? UIColor.white
+                                 : UIColor.white.withAlphaComponent(0.55),
                                  for: .normal)
         }
     }
@@ -1101,6 +1132,7 @@ extension SettingsViewController {
     private func selectTab(_ index: Int) {
         guard Self.tabTitles.indices.contains(index) else { return }
         selectedTab = index
+        navTitleLabel89.text = Self.tabTitles[index] // (89)B：右列页头标题随签同步
         applyTabVisibility()
         Breadcrumbs.log("settings.tab index=\(index) name=\(Self.tabTitles[index])")
         if index == 3 {

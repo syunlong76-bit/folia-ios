@@ -43,6 +43,13 @@ final class ConsolePanel82: UIViewController,
 
     private var onEffects: (() -> Void)?
     private var onSketchbook: (() -> Void)?
+    /// (89)B 功能行改网页 WallTools 快捷格构成后的新回调：
+    /// 去处（宿主间表面切换）与进播放页（舞台），由
+    /// present(from:) 按宿主类型装配；为 nil 时该格隐藏
+    /// （网页快捷格「缺的格跳过」同式）。
+    private var onDestination89: (() -> Void)?
+    private var onPlayer89: (() -> Void)?
+    private var onSettings89: (() -> Void)?
 
     private var queueTracks: [FoliaTrack] = []
     private var queueCurrent = -1
@@ -61,7 +68,15 @@ final class ConsolePanel82: UIViewController,
     private let volumeValue89 = UILabel()
     private let segTranslucent = UIButton(type: .system)
     private let segSolid = UIButton(type: .system)
-    private let focusSwitch = UISwitch()
+    /// (89)B 聚焦行：系统 UISwitch 退役，改网页同款
+    /// 30×18 胶囊开关（钮点 12、开时右移 12）。
+    private let focusToggle89 = CapsuleToggle89()
+    /// (89)B 功能行新格：主题/去处/播放器/设置（网页
+    /// WallTools 快捷格 6 格构成的后四格之新面孔）。
+    private let themeButton89 = UIButton(type: .system)
+    private let destButton89 = UIButton(type: .system)
+    private let playerButton89 = UIButton(type: .system)
+    private let settingsButton89 = UIButton(type: .system)
     private let lightSwitch = LightSwitch82()
     private var fxButtons87: [UIButton] = []
 
@@ -94,9 +109,46 @@ final class ConsolePanel82: UIViewController,
         let panel = ConsolePanel82()
         if let stage = host as? StageViewController {
             panel.onEffects = { [weak stage] in stage?.openStylePicker82() }
+            // (89)B 去处（舞台宿主）＝回浏览（关台回墙）；
+            // 播放器格已在播放页内、不装配（该格隐藏）。
+            panel.onDestination89 = { [weak stage] in
+                stage?.dismiss(animated: true)
+            }
         }
         if let home = host as? HomeWallViewController {
             panel.onSketchbook = { [weak home] in home?.toggleSketchbook82() }
+            // (89)B 去处（主页墙宿主）＝去歌单拼贴墙（网页
+            // Bravais 去处→Lattice 同义，走统一落点）。
+            panel.onDestination89 = { [weak home] in
+                guard let home else { return }
+                QueueLatticeViewController.present(from: home)
+            }
+            // (89)B 播放器格：开原生舞台（与主页墙既有开台
+            // 同式：fullScreen present StageViewController）。
+            panel.onPlayer89 = { [weak home] in
+                let stage = StageViewController()
+                stage.modalPresentationStyle = .fullScreen
+                home?.present(stage, animated: true)
+            }
+        }
+        if let proto = host as? WallPrototypeViewController {
+            // (89)B 去处（原型墙宿主）＝回主页墙（关本面）；
+            // 播放器格同主页墙式开台。
+            panel.onDestination89 = { [weak proto] in
+                proto?.dismiss(animated: true)
+            }
+            panel.onPlayer89 = { [weak proto] in
+                let stage = StageViewController()
+                stage.modalPresentationStyle = .fullScreen
+                proto?.present(stage, animated: true)
+            }
+        }
+        // (89)B 设置格：全宿主通用（与主页缝设置入口同
+        // 呈现口径 overFullScreen＋不动画）。
+        panel.onSettings89 = { [weak host] in
+            let settings = SettingsViewController()
+            settings.modalPresentationStyle = .overFullScreen
+            host?.present(settings, animated: false)
         }
         // (85) 第 7 条：全屏覆盖＋交叉淡入，卡本体再走自
         // 有弹簧缩放入场（viewDidAppear）；盖过 (82) 的
@@ -225,22 +277,40 @@ final class ConsolePanel82: UIViewController,
         transRow87.translatesAutoresizingMaskIntoConstraints = false
         mainView87.addSubview(transRow87)
 
-        // (87) 功能行（纯图标、无文字标签）：模式合并钮/
-        // 歌曲列表/特效/宠物/喜欢/速记簿。
-        let fxButton = makeIconButton(.sparkles, action: #selector(effectsTapped), label: "特效")
-        let sketchButton = makeIconButton(.pencil, action: #selector(sketchbookTapped), label: "速记簿")
+        // (89)B 功能行改网页 WallTools 快捷格构成（纯图
+        // 标、无文字标签）：洗牌（播放模式合并钮承接）/
+        // 生成主题/队列/去处/播放器/设置——6 格等分网格
+        // （gap 4、格高 40、图标 18，网页 .lattice-tools-
+        // quick 同账）。(87) 的特效/宠物/喜欢/速记簿四格
+        // 撤出本行：特效归舞台样式选择器、宠物归设置、
+        // 喜欢归舞台顶栏与播放台、速记簿归主页墙左缘抽
+        // 屉把手，入口不灭、只迁位（paw/like 两钮对象与
+        // 回刷逻辑保留、不再入行）。
         configureIconButton(modeButton, glyph: .modeRepeat, label: "播放模式")
         modeButton.addTarget(self, action: #selector(modeTapped87), for: .touchUpInside)
+        configureIconButtonSF89(themeButton89, systemName: "paintpalette", label: "主题")
+        themeButton89.addTarget(self, action: #selector(themeTapped89), for: .touchUpInside)
         configureIconButton(listButton87, glyph: .list, label: "歌曲列表")
         listButton87.addTarget(self, action: #selector(listTapped87), for: .touchUpInside)
+        configureIconButtonSF89(destButton89, systemName: "square.grid.2x2", label: "去处")
+        destButton89.addTarget(self, action: #selector(destTapped89), for: .touchUpInside)
+        configureIconButtonSF89(playerButton89, systemName: "play.circle", label: "播放器")
+        playerButton89.addTarget(self, action: #selector(playerTapped89), for: .touchUpInside)
+        configureIconButtonSF89(settingsButton89, systemName: "gearshape", label: "设置")
+        settingsButton89.addTarget(self, action: #selector(settingsTapped89), for: .touchUpInside)
         configureIconButton(pawButton, glyph: .paw, label: "宠物")
         pawButton.addTarget(self, action: #selector(pawTapped), for: .touchUpInside)
         configureIconButton(likeButton, glyph: .heart, label: "喜欢")
         likeButton.addTarget(self, action: #selector(likeTapped), for: .touchUpInside)
+        // 缺格隐藏（网页快捷格同式）：回调未装配的格不占位。
+        destButton89.isHidden = onDestination89 == nil
+        playerButton89.isHidden = onPlayer89 == nil
         let functionRow = UIStackView(arrangedSubviews: [
-            modeButton, listButton87, fxButton, pawButton, likeButton, sketchButton])
+            modeButton, themeButton89, listButton87,
+            destButton89, playerButton89, settingsButton89])
         functionRow.axis = .horizontal
-        functionRow.distribution = .equalSpacing
+        functionRow.distribution = .fillEqually
+        functionRow.spacing = 4
         functionRow.translatesAutoresizingMaskIntoConstraints = false
         mainView87.addSubview(functionRow)
 
@@ -323,12 +393,15 @@ final class ConsolePanel82: UIViewController,
         focusIcon.contentMode = .center
         focusIcon.translatesAutoresizingMaskIntoConstraints = false
         mainView87.addSubview(focusIcon)
-        focusSwitch.isOn = WallLight82.focusEnabled82
-        focusSwitch.onTintColor = UIColor(red: 0.96, green: 0.72, blue: 0.25, alpha: 1)
-        focusSwitch.translatesAutoresizingMaskIntoConstraints = false
-        focusSwitch.accessibilityLabel = "海报聚焦叠色"
-        focusSwitch.addTarget(self, action: #selector(focusSwitchChanged), for: .valueChanged)
-        mainView87.addSubview(focusSwitch)
+        // (89)B 聚焦开关改网页胶囊形态（30×18、钮点 12、
+        // 开态金底——沿原 UISwitch 的 onTint 金不走样）。
+        focusToggle89.isOn = WallLight82.focusEnabled82
+        focusToggle89.translatesAutoresizingMaskIntoConstraints = false
+        focusToggle89.accessibilityLabel = "海报聚焦叠色"
+        focusToggle89.onToggle = { [weak self] on in
+            self?.focusToggled89(on)
+        }
+        mainView87.addSubview(focusToggle89)
 
         // 底部行：灯钮＋帮助钮。
         lightSwitch.translatesAutoresizingMaskIntoConstraints = false
@@ -400,6 +473,9 @@ final class ConsolePanel82: UIViewController,
             helpButton.heightAnchor.constraint(equalToConstant: 32),
             // (89) §4：音量行高对齐网页 38（滑杆命中高）。
             volumeSlider.heightAnchor.constraint(equalToConstant: 38),
+            // (89)B：聚焦胶囊开关定尺寸（网页 toggle 30×18）。
+            focusToggle89.widthAnchor.constraint(equalToConstant: 30),
+            focusToggle89.heightAnchor.constraint(equalToConstant: 18),
         ])
         // (87) 竖屏单列链（自上而下：条带/钮排/功能行/
         // 音量/图层/聚焦/灯行；(89) 后总高 390 ≤ 400 卡高）。
@@ -449,8 +525,8 @@ final class ConsolePanel82: UIViewController,
             focusIcon.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
             focusIcon.widthAnchor.constraint(equalToConstant: 24),
             focusIcon.heightAnchor.constraint(equalToConstant: 24),
-            focusSwitch.centerYAnchor.constraint(equalTo: focusIcon.centerYAnchor),
-            focusSwitch.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            focusToggle89.centerYAnchor.constraint(equalTo: focusIcon.centerYAnchor),
+            focusToggle89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
 
             lightSwitch.topAnchor.constraint(equalTo: focusIcon.bottomAnchor, constant: 14),
             lightSwitch.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
@@ -503,8 +579,8 @@ final class ConsolePanel82: UIViewController,
             focusIcon.leadingAnchor.constraint(equalTo: speaker.leadingAnchor),
             focusIcon.widthAnchor.constraint(equalToConstant: 24),
             focusIcon.heightAnchor.constraint(equalToConstant: 24),
-            focusSwitch.centerYAnchor.constraint(equalTo: focusIcon.centerYAnchor),
-            focusSwitch.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            focusToggle89.centerYAnchor.constraint(equalTo: focusIcon.centerYAnchor),
+            focusToggle89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
 
             lightSwitch.topAnchor.constraint(equalTo: focusIcon.bottomAnchor, constant: 14),
             lightSwitch.leadingAnchor.constraint(equalTo: speaker.leadingAnchor),
@@ -525,6 +601,8 @@ final class ConsolePanel82: UIViewController,
         }
         bindState()
         Breadcrumbs.log("port89 console=right/w296/r24/fn42x40/vol30+val")
+        // (89)B 见证：功能行网页 6 格构成＋高生长＋聚焦胶囊。
+        Breadcrumbs.log("port89 consoleB row=web6/hgrow/focuscap")
     }
 
     override func viewDidLayoutSubviews() {
@@ -549,19 +627,16 @@ final class ConsolePanel82: UIViewController,
         if let cardWidth85, abs(cardWidth85.constant - cardW) > 0.5 {
             cardWidth85.constant = cardW
         }
-        // 卡高：竖屏 (89) §4 改内容链高口径 min(400, 62%
-        // 屏高)——链账：顶 12＋条带 86＋10＋钮排 54＋12＋
-        // 功能 40＋12＋音量 30＋14＋图层 24＋12＋聚焦 24
-        // ＋14＋灯 46＝390，底留 10；横屏按双列内容高
-        // 232 与贴底可用高（屏高−安全底−90 锚距−顶距 8）
-        // 取小——贴底锚下不超屏。
-        let cardH: CGFloat
-        if landscape {
-            let avail = bounds.height - view.safeAreaInsets.bottom - 90 - 8
-            cardH = min(232, avail)
-        } else {
-            cardH = min(400, bounds.height * 0.62)
-        }
+        // 卡高：(89)B 改网页 PanelShell 内容生长口径——高
+        // ＝内容链实高，上限＝屏高−底锚 90−顶距 56（网页
+        // max-height: 100dvh−底距−56 同式）。竖屏链账：
+        // 顶 12＋条带 86＋10＋钮排 54＋12＋功能 40＋12＋
+        // 音量 30＋14＋图层 24＋12＋聚焦 24＋14＋灯 46＝
+        // 390、底留 10 → 内容高 400；横屏双列内容高＝左
+        // 列链（顶 12＋条带 82＋8＋钮排 54＋8＋功能 40＝
+        // 204）＋底留 12＝216（右列 194 更矮、不主导）。
+        let cap89 = bounds.height - view.safeAreaInsets.bottom - 90 - 56
+        let cardH = landscape ? min(216, cap89) : min(400, cap89)
         if let cardHeight85, abs(cardHeight85.constant - cardH) > 0.5 {
             cardHeight85.constant = cardH
         }
@@ -746,7 +821,9 @@ final class ConsolePanel82: UIViewController,
 
     private func configureIconButton(_ button: UIButton,
                                      glyph: DeckGlyph82.Kind, label: String) {
-        // (89) §4：功能格对齐网页快捷格——图标 18、格 42×40。
+        // (89) §4＋B：功能格对齐网页快捷格——图标 18、格
+        // 高 40；宽度由行内 6 列等分网格（fillEqually＋
+        // gap 4）分配、不再钉死 42。
         button.setImage(DeckGlyph82.image(glyph, pointSize: 18), for: .normal)
         button.tintColor = .white
         button.backgroundColor = UIColor.white.withAlphaComponent(0.10)
@@ -754,7 +831,24 @@ final class ConsolePanel82: UIViewController,
         button.accessibilityLabel = label
         button.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            button.widthAnchor.constraint(equalToConstant: 42),
+            button.heightAnchor.constraint(equalToConstant: 40),
+        ])
+    }
+
+    /// (89)B 功能行 SF 字形格（主题/去处/播放器/设置）：
+    /// 与 DeckGlyph82 格同底同角同高，字形走 SF Symbols
+    /// 18pt（DeckGlyph82 表内无此四格字形，不扩表）。
+    private func configureIconButtonSF89(_ button: UIButton,
+                                         systemName: String, label: String) {
+        button.setImage(UIImage(systemName: systemName,
+                                withConfiguration: UIImage.SymbolConfiguration(
+                                    pointSize: 18, weight: .regular)), for: .normal)
+        button.tintColor = .white
+        button.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        button.layer.cornerRadius = 12
+        button.accessibilityLabel = label
+        button.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([
             button.heightAnchor.constraint(equalToConstant: 40),
         ])
     }
@@ -1021,11 +1115,51 @@ final class ConsolePanel82: UIViewController,
         Breadcrumbs.log("console82 seg=\(translucent ? "translucent" : "solid")")
     }
 
-    @objc private func focusSwitchChanged(_ sender: UISwitch) {
-        DeckTap82.log(host: "console", zone: "focus", view: sender)
-        ConsoleFX85.tap(sender, el: "focus")
-        WallLight82.focusEnabled82 = sender.isOn
-        Breadcrumbs.log("console82 focus=\(sender.isOn ? 1 : 0)")
+    /// (89)B 聚焦胶囊开关回调（行为与原 UISwitch 通路
+    /// 一致：写 WallLight82.focusEnabled82 单源）。
+    private func focusToggled89(_ on: Bool) {
+        DeckTap82.log(host: "console", zone: "focus", view: focusToggle89)
+        ConsoleFX85.tap(focusToggle89, el: "focus")
+        WallLight82.focusEnabled82 = on
+        Breadcrumbs.log("port89 focus=capsule on=\(on ? 1 : 0)")
+    }
+
+    /// (89)B 主题格：生成主题——与缝/点播台长按同通路
+    /// （SeamThemeCycle86.cycle：写 MiniPlayerTheme.
+    /// stored.next＋发同一通知，特效总开关关时停用）。
+    @objc private func themeTapped89(_ sender: UIButton) {
+        DeckTap82.log(host: "console", zone: "theme89", view: sender)
+        ConsoleFX85.tap(sender, el: "theme")
+        SeamThemeCycle86.cycle()
+        Breadcrumbs.log("port89 console theme=\(MiniPlayerTheme.stored.rawValue)")
+    }
+
+    /// (89)B 去处格：宿主表面切换（present(from:) 装配：
+    /// 主页墙→歌单拼贴墙、舞台→回墙、原型墙→回主页墙）。
+    @objc private func destTapped89(_ sender: UIButton) {
+        DeckTap82.log(host: "console", zone: "dest89", view: sender)
+        ConsoleFX85.tap(sender, el: "dest")
+        guard let onDestination89 else { return }
+        Breadcrumbs.log("port89 console dest")
+        dismiss(animated: true) { onDestination89() }
+    }
+
+    /// (89)B 播放器格：进播放页（原生舞台）。
+    @objc private func playerTapped89(_ sender: UIButton) {
+        DeckTap82.log(host: "console", zone: "player89", view: sender)
+        ConsoleFX85.tap(sender, el: "player")
+        guard let onPlayer89 else { return }
+        Breadcrumbs.log("port89 console player")
+        dismiss(animated: true) { onPlayer89() }
+    }
+
+    /// (89)B 设置格：打开设置页（全宿主通用装配）。
+    @objc private func settingsTapped89(_ sender: UIButton) {
+        DeckTap82.log(host: "console", zone: "settings89", view: sender)
+        ConsoleFX85.tap(sender, el: "settings")
+        guard let onSettings89 else { return }
+        Breadcrumbs.log("port89 console settings")
+        dismiss(animated: true) { onSettings89() }
     }
 
     @objc private func helpTapped(_ sender: UIButton) {
@@ -1035,13 +1169,79 @@ final class ConsolePanel82: UIViewController,
             title: "控制台",
             message: "队列：顶部封面条左右滑，点封面立即播放；列表钮打开封面网格，右上垃圾桶清空队列。\n"
                 + "顶部圆钮：上一曲、播放/暂停、下一曲。\n"
-                + "功能行：播放模式（点一下换一种：随机→顺序→循环→单曲）、歌曲列表、特效、宠物开关、喜欢、速记簿。\n"
+                + "功能行：播放模式（点一下换一种：随机→顺序→循环→单曲）、主题（换油画主题）、歌曲列表、去处（换墙面）、播放器（进播放页）、设置。特效在播放页选样式，宠物开关在设置里，速记簿在主页墙左缘。\n"
                 + "图层行：透光/实色切换墙面卡片质感；旁边四钮是全屏特效（烟花、孔明灯、下雪、刮风）；聚焦叠色开时，关灯后只有点中的封面亮起。\n"
                 + "灯钮：开灯＝全部封面亮起；关灯＝整墙暗下、点哪张亮哪张。\n"
                 + "播放台 5 秒无操作自动收成细条，点细条恢复。",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "好", style: .default))
         present(alert, animated: true)
+    }
+}
+
+/// (89)B 聚焦行胶囊开关（网页 .lattice-tools-toggle 同
+/// 规格：30×18 胶囊、钮点 12×12、开时钮点右移 12；开
+/// 态金底＝原 UISwitch onTint 金（0.96/0.72/0.25）、关
+/// 态白 0.25 底）。点按切换、系统弹簧动画（禁线性）。
+final class CapsuleToggle89: UIView {
+
+    var onToggle: ((Bool) -> Void)?
+
+    var isOn: Bool = false {
+        didSet { applyState89(animated: false) }
+    }
+
+    private let knob89 = UIView()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        layer.cornerRadius = 9
+        knob89.backgroundColor = .white
+        knob89.layer.cornerRadius = 6
+        knob89.isUserInteractionEnabled = false
+        addSubview(knob89)
+        isAccessibilityElement = true
+        accessibilityTraits = .button
+        addGestureRecognizer(UITapGestureRecognizer(
+            target: self, action: #selector(tapped89)))
+        applyState89(animated: false)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        positionKnob89()
+    }
+
+    @objc private func tapped89() {
+        isOn.toggle()
+        applyState89(animated: true)
+        onToggle?(isOn)
+    }
+
+    private func positionKnob89() {
+        let x: CGFloat = isOn ? bounds.width - 12 - 3 : 3
+        knob89.frame = CGRect(x: x, y: 3, width: 12, height: 12)
+    }
+
+    private func applyState89(animated: Bool) {
+        let apply = { [self] in
+            backgroundColor = isOn
+                ? UIColor(red: 0.96, green: 0.72, blue: 0.25, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.25)
+            positionKnob89()
+            accessibilityValue = isOn ? "开" : "关"
+        }
+        if animated {
+            UIView.animate(withDuration: 0.35, delay: 0,
+                           usingSpringWithDamping: 0.7,
+                           initialSpringVelocity: 0.6,
+                           options: [.allowUserInteraction,
+                                     .beginFromCurrentState], animations: apply)
+        } else {
+            apply()
+        }
     }
 }
 
