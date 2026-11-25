@@ -5,7 +5,10 @@ import UIKit
 /// 内部、台体圆角裁切、零溢出、无额外动物，只留点名的进度
 /// 动画；进度圆点尽量小且与背景融为一体。长按台身循环切换
 /// 无→花海→雪景→星空→海洋→无，UserDefaults 持久化（两台
-/// 共用一份），缺省花海。
+/// 共用一份），缺省海洋（浮世绘·海浪）。
+/// (88) 缺省改定：Miller 2026-11-25 工坊定案油画主题默认
+/// 浮世绘·海浪（port88 theme=ukiyoe）——只改无存量值时的缺
+/// 省落点，用户已存的主题选择不覆盖。
 enum MiniPlayerTheme: Int, CaseIterable {
     case none, meadow, snow, star, ocean
 
@@ -15,8 +18,8 @@ enum MiniPlayerTheme: Int, CaseIterable {
 
     static var stored: MiniPlayerTheme {
         get {
-            guard UserDefaults.standard.object(forKey: key) != nil else { return .meadow }
-            return MiniPlayerTheme(rawValue: UserDefaults.standard.integer(forKey: key)) ?? .meadow
+            guard UserDefaults.standard.object(forKey: key) != nil else { return .ocean }
+            return MiniPlayerTheme(rawValue: UserDefaults.standard.integer(forKey: key)) ?? .ocean
         }
         set { UserDefaults.standard.set(newValue.rawValue, forKey: key) }
     }

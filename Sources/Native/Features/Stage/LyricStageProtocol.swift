@@ -358,6 +358,10 @@ enum LyricStageRegistry {
         info(for: styleId)?.isStagePresentable ?? false
     }
 
-    /// 协议默认样式（与网页侧 DEFAULT_VISUALIZER_MODE 对齐）。
-    static let defaultStyleId = "classic"
+    /// 协议默认样式。(88) 改定：Miller 2026-11-25 工坊定案
+    /// 歌词样式默认深廊（工坊存值 shenlang＝原生 id corridor，
+    /// port88）——只改默认落点，与网页侧 DEFAULT_VISUALIZER_
+    /// MODE 的对齐就此让位；用户已存的 currentStyleId 与逐
+    /// 歌记忆不覆盖，洗牌袋/三击切换逻辑不动。
+    static let defaultStyleId = "corridor"
 }

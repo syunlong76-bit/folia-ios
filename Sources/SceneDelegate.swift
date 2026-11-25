@@ -17,6 +17,8 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 1500），覆盖全屏全场景、不绑控制台开合；渲染层
         // 每帧只清自己、绝不压暗/染色照片墙背景。
         GlobalFx87.shared.install(in: windowScene)
+        // (88) 工坊定案：下雪默认开（port88，引擎侧落值）。
+        GlobalFx87.shared.applyDefaultSnow88()
         GlobalFx87.shared.recommendationProvider = {
             // 今日推荐：队列里挑当前曲之外的一首（优先下
             // 一首），封面走缓存同步取、取不到传 nil。

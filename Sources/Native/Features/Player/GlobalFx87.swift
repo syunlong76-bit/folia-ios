@@ -138,6 +138,28 @@ private let FW_CRISP = FwPreset(n: 92, sp: 5.2, drag: 0.955, decay: 0.0032, rain
                                 pals: FX_GOLD,
                                 amp: 1.2, size: 0.9, crisp: true)
 
+/// (88) 工坊定案默认（Miller 2026-11-25 在页面工坊亲试存值，
+/// port88）：工坊 fx 存值是样片基线之上的倍率/定值，换算口径
+/// 如下——烟花：大小×0.85＝爆点速度 sp 与星粒 size 同乘；密
+/// 度×1.1＝壳星数 n 乘后取整（内壳/花心/金雨由 n 派生同涨）；
+/// 辉光×1.7＝光晕 amp 乘子；颜色金＝默认调色板 FX_GOLD 覆盖
+/// 演出脚本的逐发轮换色、晕色回预设默认金晕 (255,186,92)。
+/// 孔明灯：密度×1.25＝三层配额 [2,7,6]→[3,9,7]、初始盏数
+/// 13→16、在场上限 15→19；颜色暖红＝纸面竖直渐变与热核向红
+/// 橙移（见 drawLantern）。下雪：颜色淡蓝＝雪色改
+/// (198,226,255)；默认开＝装机后由 SceneDelegate 调
+/// applyDefaultSnow88（12 秒自融仍为样片既定行为）。
+private enum FxTuning88 {
+    static let fwSizeMul: Double = 0.85
+    static let fwDensityMul: Double = 1.1
+    static let fwGlowMul: Double = 1.7
+    static let fwGoldDefault = true
+    static let lnCap = 19
+    static let lnInitial = 16
+    static let lnQuota = [3, 9, 7]
+    static let snowTint: (Double, Double, Double) = (198, 226, 255)
+}
+
 // MARK: - 粒子（类实例，逐帧原地改值）
 
 private final class FxRocket {
@@ -398,6 +420,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         }
         win.isHidden = true
 
+        // (88) 工坊 fx 定案落值见证（FxTuning88）。
+        Breadcrumbs.log("port88 fx=fw.85/1.1/1.7g ln1.25r snPale")
+
         // 主 window 上的被动识别器：不取消他人触摸、可与他人并行。
         let main = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
         mainWindow = main
@@ -446,6 +471,15 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     public func toggleWind() -> Bool {
         if isWind { stopWind() } else { startWind() }
         return isWind
+    }
+
+    /// (88) 工坊定案：下雪默认开。装机（install）后由
+    /// SceneDelegate 调用一次，雪未开即起雪（12 秒自融为样
+    /// 片既定行为、不改）；已开则空转。
+    public func applyDefaultSnow88() {
+        guard !isSnow else { return }
+        startSnow()
+        Breadcrumbs.log("port88 snow=default-on")
     }
 
     // MARK: 状态切换（互斥规则照样片 start/stop 函数）
@@ -504,7 +538,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         stopFw(); stopSnow(hard: true)
         lnStopping = false
         lnLastSpawn = 0
-        for _ in 0..<13 { spawnLantern(init: true) }
+        for _ in 0..<FxTuning88.lnInitial { spawnLantern(init: true) }
         setLantern(true)
         ensureLoop()
     }
@@ -639,9 +673,16 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private func burstStar(x: Double, y: Double, o: FwPreset) {
         var K = min(W, H) / 380
         K = max(0.7, min(1.6, K))
-        let sp0 = o.sp * K
+        // (88) 工坊倍率落值：大小×0.85 入 sp、密度×1.1 入星数、
+        // 辉光×1.7 入 amp、颜色金覆盖轮换调色板（FxTuning88）。
+        let sp0 = o.sp * K * FxTuning88.fwSizeMul
+        let nEff = Int((Double(o.n) * FxTuning88.fwDensityMul).rounded())
+        let outerPals = FxTuning88.fwGoldDefault ? FX_GOLD : o.pals
+        let innerPals = FxTuning88.fwGoldDefault ? FX_GOLD : (o.shellPals ?? o.pals)
+        let haloCol = FxTuning88.fwGoldDefault ? (255.0, 186.0, 92.0) : o.halo
         if halos.count < 12 {
-            halos.append(FxHalo(x: x, y: y, vr: 1.1 + sp0 * 0.26, col: o.halo, amp: o.amp))
+            halos.append(FxHalo(x: x, y: y, vr: 1.1 + sp0 * 0.26, col: haloCol,
+                                amp: o.amp * FxTuning88.fwGlowMul))
         }
         if o.flash { flashWall() }
 
@@ -654,7 +695,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 let s = FxSpark(x: x, y: y, vx: cos(ang) * sp, vy: sin(ang) * sp,
                                 decay: o.decay + fxRand(0, 0.0016),
                                 pal: pals[i % pals.count],
-                                size: o.size + fxRand(0, 0.45),
+                                size: o.size * FxTuning88.fwSizeMul + fxRand(0, 0.45),
                                 willow: true, tw: fxRand(0, 6.3),
                                 cr: !o.crisp && !inner && i % 3 == 0,
                                 noStrobe: i % 3 != 0)
@@ -664,12 +705,12 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 pushSpark(s)
             }
         }
-        shell(o.n, sp0, o.pals, false)
+        shell(nEff, sp0, outerPals, false)
         if let shellK = o.shell {
-            shell(Int((Double(o.n) * 0.45).rounded()), sp0 * shellK, o.shellPals ?? o.pals, true)
+            shell(Int((Double(nEff) * 0.45).rounded()), sp0 * shellK, innerPals, true)
         }
         // 花心：白金 HSL(45,100,86)，速散
-        let heart = max(7, Int((Double(o.n) / 9).rounded()))
+        let heart = max(7, Int((Double(nEff) / 9).rounded()))
         for _ in 0..<heart {
             let ca = fxRand(0, Double.pi * 2), cs = fxRand(0, 0.5)
             let s = FxSpark(x: x, y: y, vx: cos(ca) * cs, vy: sin(ca) * cs - 0.1,
@@ -678,7 +719,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                             cr: false, noStrobe: true)
             pushSpark(s)
         }
-        for _ in 0..<o.rain {
+        for _ in 0..<Int((Double(o.rain) * FxTuning88.fwDensityMul).rounded()) {
             spawnRain(x: x + fxRand(-0.5, 0.5) * sp0 * 13, y: y + fxRand(-4, 4))
         }
     }
@@ -918,15 +959,16 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     // MARK: - 孔明灯
 
     private func spawnLantern(init initial: Bool, wish: String? = nil) {
-        guard lanterns.count < 15, W > 0, H > 0 else { return }
+        guard lanterns.count < FxTuning88.lnCap, W > 0, H > 0 else { return }
         var tier: Int
         var s: Double
         if let wish = wish {
             _ = wish
             tier = 0; s = H * 0.088
         } else {
-            // 三层配额 [2,7,6]：取剩余配额最大的一层
-            let quota = [2, 7, 6]
+            // 三层配额（(88) 密度×1.25：[2,7,6]→[3,9,7]）：取
+            // 剩余配额最大的一层
+            let quota = FxTuning88.lnQuota
             var counts = [0, 0, 0]
             for o in lanterns { counts[o.tier] += 1 }
             tier = 2
@@ -953,7 +995,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     }
 
     private func stepLanterns(_ ctx: CGContext, f: Double) {
-        if isLanterns && nowMs - lnLastSpawn > 1600 && lanterns.count < 15 {
+        if isLanterns && nowMs - lnLastSpawn > 1600 && lanterns.count < FxTuning88.lnCap {
             lnLastSpawn = nowMs
             spawnLantern(init: false)
         }
@@ -1002,12 +1044,13 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         ctx.setAlpha(CGFloat(alpha))
 
         // 光晕：additive 径向，半径 s*1.9，中心 h*0.26
+        // （(88) 暖红：晕色随纸面同向红移）
         ctx.saveGState()
         ctx.setBlendMode(.plusLighter)
         fxFillRadial(ctx, center: CGPoint(x: 0, y: h * 0.26), r0: 1, r1: CGFloat(s * 1.9),
-                     stops: [(0, fxRGB(255, 160, 70, 0.20)),
-                             (0.5, fxRGB(255, 135, 55, 0.06)),
-                             (1, fxRGB(255, 120, 40, 0))],
+                     stops: [(0, fxRGB(255, 146, 74, 0.20)),
+                             (0.5, fxRGB(255, 124, 60, 0.06)),
+                             (1, fxRGB(255, 110, 48, 0))],
                      rect: CGRect(x: -s * 2.1, y: -s * 2.0, width: s * 4.2, height: s * 4.2))
         ctx.restoreGState()
 
@@ -1028,15 +1071,16 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         }
         let bodyRect = CGRect(x: -w, y: -h, width: w * 2, height: h * 2)
 
-        // 纸面竖直渐变
+        // 纸面竖直渐变（(88) 工坊定案暖红：自蜜金向红橙移，
+        // 亮度骨架不变、只移色相）
         ctx.saveGState()
         ctx.addPath(bodyPath())
         ctx.clip()
         fxFillLinearV(ctx, top: CGPoint(x: 0, y: -h / 2), bottom: CGPoint(x: 0, y: h / 2),
-                      stops: [(0, fxRGB(255, 208, 142, 0.96)),
-                              (0.38, fxRGB(255, 182, 100, 0.97)),
-                              (0.75, fxRGB(255, 160, 76, 0.98)),
-                              (1, fxRGB(255, 190, 106, 0.99))],
+                      stops: [(0, fxRGB(255, 190, 132, 0.96)),
+                              (0.38, fxRGB(255, 150, 94, 0.97)),
+                              (0.75, fxRGB(248, 116, 74, 0.98)),
+                              (1, fxRGB(255, 164, 102, 0.99))],
                       rect: bodyRect)
         // 横向 limb 暗角
         let limbColors: [(CGFloat, CGColor)] = [
@@ -1057,11 +1101,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                               (0.8, fxRGB(255, 200, 110, 0.10)),
                               (1, fxRGB(120, 50, 10, 0.07))],
                       rect: bodyRect)
-        // 低位热核径向
+        // 低位热核径向（(88) 暖红同移）
         fxFillRadial(ctx, center: CGPoint(x: 0, y: h * 0.30), r0: 1, r1: CGFloat(s * 0.95),
-                     stops: [(0, fxRGB(255, 236, 170, 0.50)),
-                             (0.5, fxRGB(255, 190, 90, 0.15)),
-                             (1, fxRGB(255, 170, 80, 0))],
+                     stops: [(0, fxRGB(255, 232, 170, 0.50)),
+                             (0.5, fxRGB(255, 186, 94, 0.15)),
+                             (1, fxRGB(255, 156, 84, 0))],
                      rect: bodyRect)
         // 灯纸上的字（wish 灯）：深棕、每行 6 字最多 2 行
         if let wish = L.wish {
@@ -1136,9 +1180,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         ctx.saveGState()
         ctx.setBlendMode(.plusLighter)
         fxFillRadial(ctx, center: .zero, r0: 0.5, r1: CGFloat(s * 1.6),
-                     stops: [(0, fxRGB(255, 190, 100, 0.8)),
-                             (0.35, fxRGB(255, 150, 60, 0.30)),
-                             (1, fxRGB(255, 130, 50, 0))],
+                     stops: [(0, fxRGB(255, 182, 100, 0.8)),
+                             (0.35, fxRGB(255, 140, 62, 0.30)),
+                             (1, fxRGB(255, 120, 52, 0))],
                      rect: CGRect(x: -s * 1.6, y: -s * 1.6, width: s * 3.2, height: s * 3.2))
         ctx.restoreGState()
         let bodyRect = CGRect(x: -s * 0.30, y: -s * 0.42, width: s * 0.60, height: s * 0.84)
@@ -1146,7 +1190,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         ctx.addEllipse(in: bodyRect)
         ctx.clip()
         fxFillLinearV(ctx, top: CGPoint(x: 0, y: -s * 0.42), bottom: CGPoint(x: 0, y: s * 0.42),
-                      stops: [(0, fxRGB(216, 110, 44, 0.95)), (1, fxRGB(255, 198, 98, 0.98))],
+                      stops: [(0, fxRGB(214, 96, 46, 0.95)), (1, fxRGB(255, 186, 100, 0.98))],
                       rect: bodyRect)
         ctx.restoreGState()
         ctx.restoreGState()
@@ -1191,12 +1235,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             if fl.near {
                 drawCrystal(ctx, fl)
             } else {
-                // mid/far：失焦圆（径向渐变近似模糊）
+                // mid/far：失焦圆（径向渐变近似模糊）；(88) 雪色
+                // 淡蓝 FxTuning88.snowTint（原纯白）
+                let st = FxTuning88.snowTint
                 fxFillRadial(ctx, center: CGPoint(x: fl.x, y: fl.y), r0: 0,
                              r1: CGFloat(fl.r * 1.6),
-                             stops: [(0, fxRGB(255, 255, 255, fl.o * snMelt)),
-                                     (0.62, fxRGB(255, 255, 255, fl.o * snMelt)),
-                                     (1, fxRGB(255, 255, 255, 0))],
+                             stops: [(0, fxRGB(st.0, st.1, st.2, fl.o * snMelt)),
+                                     (0.62, fxRGB(st.0, st.1, st.2, fl.o * snMelt)),
+                                     (1, fxRGB(st.0, st.1, st.2, 0))],
                              rect: CGRect(x: fl.x - fl.r * 1.6, y: fl.y - fl.r * 1.6,
                                           width: fl.r * 3.2, height: fl.r * 3.2))
             }
@@ -1210,7 +1256,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         ctx.translateBy(x: CGFloat(fl.x), y: CGFloat(fl.y))
         ctx.rotate(by: CGFloat(fl.rot))
         ctx.scaleBy(x: 1, y: CGFloat(0.35 + 0.65 * abs(cos(fl.tumble))))
-        ctx.setStrokeColor(fxRGB(255, 255, 255, fl.o * snMelt))
+        let st = FxTuning88.snowTint   // (88) 雪色淡蓝
+        ctx.setStrokeColor(fxRGB(st.0, st.1, st.2, fl.o * snMelt))
         ctx.setLineWidth(0.9)
         ctx.setLineCap(.round)
         let r = fl.r

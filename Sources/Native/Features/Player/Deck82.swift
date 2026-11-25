@@ -6,10 +6,15 @@ import UIKit
 /// 图标另做 J/K/L/M 四套样板待挑——本工厂即替换位：台面与
 /// 控制台的全部字形只经此处取图，布局代码不焊字形；定版后
 /// 只改本文件的核心四字形绘制（prev/next/play/pause＋list），
-/// 其余调用点零改动。本版核心四字形为手绘路径（朝向逐个
-/// 核对：prev＝左竖条＋左指三角、next＝右指三角＋右竖条，
-/// 盖过 (81) DeckIconSet81 三角画反的定案），次级字形走 SF
-/// Symbols（苹果风、与控制台极简口径一致）。
+/// 其余调用点零改动。次级字形走 SF Symbols（苹果风、与控
+/// 制台极简口径一致）。
+/// (88) 图标集定版 M（几何融合）：Miller 2026-11-25 在页面
+/// 工坊亲试定案（port88 icon=M），核心五字形按样板
+/// design-samples-82/icons2 的 M 定义（build_icons2.py M()
+/// 的 SVG 路径，24×24 画布）逐字形移植：prev/next＝三角与
+/// 竖条共边熔成的旗形剪影（prev 尖朝左、next 镜像朝右）、
+/// play＝实心圆负空间切三角、pause＝圆角方负空间切双槽、
+/// list＝半圆点头＋圆角行块三行。J/K/L 三套就此退役。
 enum DeckGlyph82 {
 
     enum Kind {
@@ -24,7 +29,7 @@ enum DeckGlyph82 {
 
     static func image(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
         switch kind {
-        case .prev, .next, .play, .pause:
+        case .prev, .next, .play, .pause, .list:
             return coreGlyph(kind, pointSize: pointSize)
         case .fxFirework, .fxLantern:
             return fxGlyph(kind, pointSize: pointSize)
@@ -39,7 +44,6 @@ enum DeckGlyph82 {
         default:
             let name: String
             switch kind {
-            case .list: name = "list.bullet"
             case .console: name = "slider.horizontal.3"
             case .modeRepeat: name = "repeat"
             case .modeRepeatOne: name = "repeat.1"
@@ -66,23 +70,28 @@ enum DeckGlyph82 {
         }
     }
 
-    /// 核心四字形手绘（24×24 画布，模板图、白色由 tint 决定）。
-    /// 朝向定版：prev 三角尖朝左、竖条在左；next 三角尖朝
-    /// 右、竖条在右。出包前已逐字形回读核对（见交付报告）。
+    /// 核心五字形手绘（24×24 画布，模板图、白色由 tint 决定）。
+    /// (88) M 几何融合定版：路径逐条照样板 build_icons2.py 的
+    /// M() SVG（数值即 24 画布坐标）。prev/next 的 SVG 带
+    /// stroke-width 1 同色描边柔边，这里以 1pt 同色描边＋圆
+    /// 角接合等价还原；play/pause 的负空间用 evenOdd 填充规
+    /// 则切形。朝向：prev 尖朝左、next 尖朝右（逐字形回读
+    /// 核对，见 (88) 交付报告）。
+    private static var loggedIconM88 = false
+
     private static func coreGlyph(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
+        if !loggedIconM88 {
+            loggedIconM88 = true
+            Breadcrumbs.log("port88 icon=M")
+        }
         let canvas: CGFloat = 24
         let scale = pointSize / canvas
         let size = CGSize(width: pointSize, height: pointSize)
         let renderer = UIGraphicsImageRenderer(size: size)
         let image = renderer.image { _ in
             UIColor.white.setFill()
-            func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, r: CGFloat = 0) {
-                let path = UIBezierPath(roundedRect: CGRect(
-                    x: x * scale, y: y * scale, width: w * scale, height: h * scale),
-                    cornerRadius: r * scale)
-                path.fill()
-            }
-            func tri(_ points: [(CGFloat, CGFloat)]) {
+            UIColor.white.setStroke()
+            func poly(_ points: [(CGFloat, CGFloat)], softEdge: Bool = false) {
                 let path = UIBezierPath()
                 path.move(to: CGPoint(x: points[0].0 * scale, y: points[0].1 * scale))
                 for p in points.dropFirst() {
@@ -90,19 +99,67 @@ enum DeckGlyph82 {
                 }
                 path.close()
                 path.fill()
+                if softEdge {
+                    path.lineWidth = 1 * scale
+                    path.lineJoinStyle = .round
+                    path.stroke()
+                }
+            }
+            func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, r: CGFloat = 0) {
+                let path = UIBezierPath(roundedRect: CGRect(
+                    x: x * scale, y: y * scale, width: w * scale, height: h * scale),
+                    cornerRadius: r * scale)
+                path.fill()
             }
             switch kind {
             case .prev:
-                rect(3, 6, 3, 12, r: 1.5)
-                tri([(8, 12), (19.5, 6.3), (19.5, 17.7)])
+                // M prev：M5 5 H8.4 V7 L19 12 L8.4 17 V19 H5Z
+                poly([(5, 5), (8.4, 5), (8.4, 7), (19, 12),
+                      (8.4, 17), (8.4, 19), (5, 19)], softEdge: true)
             case .next:
-                tri([(4.5, 6.3), (16, 12), (4.5, 17.7)])
-                rect(18, 6, 3, 12, r: 1.5)
+                // M next：M19 5 H15.6 V7 L5 12 L15.6 17 V19 H19Z
+                poly([(19, 5), (15.6, 5), (15.6, 7), (5, 12),
+                      (15.6, 17), (15.6, 19), (19, 19)], softEdge: true)
             case .play:
-                tri([(7.5, 5.3), (18.5, 12), (7.5, 18.7)])
+                // M play：圆 (12,12) r8.6 负空间切三角
+                // (10.4,8.8) (15.6,12) (10.4,15.2)。
+                let path = UIBezierPath(arcCenter: CGPoint(x: 12 * scale, y: 12 * scale),
+                                        radius: 8.6 * scale,
+                                        startAngle: 0, endAngle: .pi * 2, clockwise: true)
+                let tri = UIBezierPath()
+                tri.move(to: CGPoint(x: 10.4 * scale, y: 8.8 * scale))
+                tri.addLine(to: CGPoint(x: 15.6 * scale, y: 12 * scale))
+                tri.addLine(to: CGPoint(x: 10.4 * scale, y: 15.2 * scale))
+                tri.close()
+                path.append(tri)
+                path.usesEvenOddFillRule = true
+                path.fill()
             case .pause:
-                rect(6.5, 5.5, 4, 13, r: 2)
-                rect(13.5, 5.5, 4, 13, r: 2)
+                // M pause：圆角方 (4.6,4.6,14.8×14.8) r2.5 负空
+                // 间切双槽 (9.1,8.6,1.9×6.8) 与 (13,8.6,1.9×6.8)。
+                let path = UIBezierPath(roundedRect: CGRect(
+                    x: 4.6 * scale, y: 4.6 * scale,
+                    width: 14.8 * scale, height: 14.8 * scale),
+                    cornerRadius: 2.5 * scale)
+                path.append(UIBezierPath(rect: CGRect(
+                    x: 9.1 * scale, y: 8.6 * scale, width: 1.9 * scale, height: 6.8 * scale)))
+                path.append(UIBezierPath(rect: CGRect(
+                    x: 13 * scale, y: 8.6 * scale, width: 1.9 * scale, height: 6.8 * scale)))
+                path.usesEvenOddFillRule = true
+                path.fill()
+            case .list:
+                // M list：三行半圆点头（圆心 (7.1, y+1.95)、
+                // r1.95 的右半圆）＋圆角行块 rx0.7；行 y＝
+                // 5.3/10.05/14.8，第三行行块短（宽 6.8）。
+                for (i, row) in [(5.3, 5.5), (10.05, 10.3), (14.8, 15.1)].enumerated() {
+                    let head = UIBezierPath(arcCenter: CGPoint(x: 7.1 * scale, y: (row.0 + 1.95) * scale),
+                                            radius: 1.95 * scale,
+                                            startAngle: -.pi / 2, endAngle: .pi / 2,
+                                            clockwise: true)
+                    head.close()
+                    head.fill()
+                    rect(9.8, row.1, i == 2 ? 6.8 : 9.8, 3.4, r: 0.7)
+                }
             default:
                 break
             }
