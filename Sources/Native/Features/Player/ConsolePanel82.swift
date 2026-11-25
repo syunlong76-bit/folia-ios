@@ -861,14 +861,14 @@ final class ConsolePanel82: UIViewController,
     @objc private func transPrevTapped87(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "prev87", view: sender)
         ConsoleFX85.tap(sender, el: "prev")
-        QueueManager.shared.previous()
+        QueueManager.shared.playPrevious()
         Breadcrumbs.log("console87 trans=prev")
     }
 
     @objc private func transNextTapped87(_ sender: UIButton) {
         DeckTap82.log(host: "console", zone: "next87", view: sender)
         ConsoleFX85.tap(sender, el: "next")
-        QueueManager.shared.next()
+        QueueManager.shared.playNext(manual: true)
         Breadcrumbs.log("console87 trans=next")
     }
 
