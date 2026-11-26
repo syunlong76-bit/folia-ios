@@ -4556,6 +4556,8 @@ final class WallPosterCell: UICollectionViewCell {
         likeButton.backgroundColor = liked
             ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 0.95)
             : UIColor.black.withAlphaComponent(0.45)
+    }
+
     /// 进度条热更新（VC 的 0.3 秒计时器只打这一处，不整表刷新）。
     func updateProgress(_ progress: Double) {
         progressValue = progress
