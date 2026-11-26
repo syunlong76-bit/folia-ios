@@ -7,7 +7,7 @@ import Foundation
 //   PUT  <base>/folia-sync.json   （整体写入 JSON）
 //   GET  <base>/folia-sync.json   （读回同一 JSON）
 // 鉴权：Authorization: Bearer <令牌>（令牌存 Keychain）。
-// 同步对象：设置域（SettingsConfigTransfer 白名单导出）＋速记簿
+// 同步对象：设置域（SettingsConfigTransfer 白名单导出）＋日记本
 // 数据（Documents/folia-sketchbook.json 原文）。不含登录态/队列。
 // 服务端形态未定（R2/S3/自建皆可，只要满足上面两条 REST 约定），
 // 无服务端可测时以请求真发＋状态诚实回显为准。
@@ -20,7 +20,7 @@ enum SyncService62 {
         /// 设置域：SettingsConfigTransfer 配置码原文（Base64），
         /// 拉回时原样走 importCode（白名单＋类型护栏不另写一套）。
         var settingsCode: String? = nil
-        /// 速记簿文件原文（Base64），避免嵌套 JSON 转义歧义。
+        /// 日记本文件原文（Base64），避免嵌套 JSON 转义歧义。
         var sketchbookBase64: String? = nil
     }
 
@@ -94,7 +94,7 @@ enum SyncService62 {
         }
     }
 
-    /// 拉取（GET 读回并应用：设置经配置码通路导入，速记簿文件
+    /// 拉取（GET 读回并应用：设置经配置码通路导入，日记本文件
     /// 覆盖前先备份为 .bak62）。返回人类可读结果。
     @discardableResult
     static func pull() async -> String {

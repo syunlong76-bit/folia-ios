@@ -3,7 +3,7 @@ import Combine
 
 // SketchbookDrawerView.swift
 //
-// 速记簿抽屉（(53) 工作流 D、(54) 工作流 N 把手照抄网页版、
+// 日记本抽屉（(53) 工作流 D、(54) 工作流 N 把手照抄网页版、
 // (55) 工作流 H 补全六大块；对应 folia-major 的 ScratchpadHost /
 // ScratchpadEdge / ScratchpadPanel / ScratchpadQueue）：
 // 把手照 ScratchpadEdge + scratchpad.css：常驻只露左缘一条小记号
@@ -169,7 +169,7 @@ final class SketchbookDrawerView: UIView {
         // 左缘把手（照网页版）：热区透明、只承接点按；常驻记号
         // 三档（线=米白小条/点=圆点/图形=三颗记号）按设置显隐。
         edgeHotButton.backgroundColor = .clear
-        edgeHotButton.accessibilityLabel = "速记簿"
+        edgeHotButton.accessibilityLabel = "日记本"
         edgeHotButton.addTarget(
             self, action: #selector(edgeHotTapped), for: .touchUpInside)
         addSubview(edgeHotButton)
@@ -204,10 +204,10 @@ final class SketchbookDrawerView: UIView {
         restShapes.addSubview(restShapeChevron)
         addSubview(restShapes)
 
-        // 完整标签：米白纸、4pt 红顶边、圆形记号、竖排「速记簿」、
+        // 完整标签：米白纸、4pt 红顶边、圆形记号、竖排「日记本」、
         // 红色计数斜块、底部线框圆（ScratchpadEdge 的 handle-body）。
         expandedHandle.backgroundColor = Self.paperColor
-        expandedHandle.accessibilityLabel = "打开速记簿"
+        expandedHandle.accessibilityLabel = "打开日记本"
         expandedHandle.addTarget(
             self, action: #selector(expandedHandleTapped),
             for: .touchUpInside)
@@ -257,7 +257,7 @@ final class SketchbookDrawerView: UIView {
         drawerView.isHidden = true
         addSubview(drawerView)
 
-        titleLabel.text = "速记簿"
+        titleLabel.text = "日记本"
         titleLabel.font = .systemFont(ofSize: 17, weight: .semibold)
         titleLabel.textColor = Self.inkColor
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -275,7 +275,7 @@ final class SketchbookDrawerView: UIView {
         closeButton.setImage(
             UIImage(systemName: "chevron.left"), for: .normal)
         closeButton.tintColor = Self.inkColor.withAlphaComponent(0.8)
-        closeButton.accessibilityLabel = "收起速记簿"
+        closeButton.accessibilityLabel = "收起日记本"
         closeButton.addTarget(
             self, action: #selector(closeTapped), for: .touchUpInside)
         closeButton.translatesAutoresizingMaskIntoConstraints = false
@@ -487,7 +487,7 @@ final class SketchbookDrawerView: UIView {
         tableView.contentInset.bottom = count == 0 ? 98 : 0
         expandedCountBadge.isHidden = count == 0
         expandedCountLabel.text = "\(count)"
-        titleLabel.text = count > 0 ? "速记簿 · \(count)" : "速记簿"
+        titleLabel.text = count > 0 ? "日记本 · \(count)" : "日记本"
         // 新收进一批时常驻记号闪一下（网页版 addNonce → is-pulsing
         // 0.9s：亮到不透明、放大 1.5 倍再回去，Host.tsx/css）。
         if let last = lastEntryCount, count > last { pulseRestMark() }
@@ -1370,7 +1370,7 @@ extension SketchbookDrawerView: UITableViewDataSource, UITableViewDelegate {
         let historyCount = store.history.count
         if store.entries.isEmpty {
             // 空态文案（贴纸小图在面板左下角，见 cornerCatView65）。
-            return "\(Self.greeting62())\n这里还空着——在搜索、歌单、队列里点速记簿钮，歌就会收进这张纸。"
+            return "\(Self.greeting62())\n这里还空着——在搜索、歌单、队列里点日记本钮，歌就会收进这张纸。"
         }
         return "\(Self.greeting62())\n"
             + "暂存 \(store.entries.count) 首 · 分组 \(groupCount) 个"

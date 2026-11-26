@@ -40,9 +40,9 @@ enum SettingsStore {
             "settings.graphics.reduceMotionFollowSystem"
     }
 
-    /// 速记簿把手三键（(55) 工作流 G 任务点名定死键名，写
+    /// 日记本把手三键（(55) 工作流 G 任务点名定死键名，写
     /// UserDefaults.standard 原键、不进 settings.* 命名空间）：
-    /// 消费方为速记簿把手（工作流 H 接线），本文件只负责键、
+    /// 消费方为日记本把手（工作流 H 接线），本文件只负责键、
     /// 默认与类型化访问。默认值对网页 useScratchpadSettings
     /// Store：show=true、position=SCRATCHPAD_HANDLE_POSITION
     /// _DEFAULT=0（0=最上）；style 网页默认 'strip'（米白小
@@ -287,9 +287,9 @@ enum SettingsStore {
         set { ensureRegistered(); UserDefaults.standard.set(newValue, forKey: Key.reduceMotionFollowSystem) }
     }
 
-    // MARK: - (55) 速记簿把手组（键名任务定死，见 SketchbookHandleKey）
+    // MARK: - (55) 日记本把手组（键名任务定死，见 SketchbookHandleKey）
 
-    /// 显示速记簿把手（网页 scratchpadShowHandle 对应物）。
+    /// 显示日记本把手（网页 scratchpadShowHandle 对应物）。
     static var sketchbookHandleShow: Bool {
         get { ensureRegistered(); return UserDefaults.standard.bool(forKey: SketchbookHandleKey.show) }
         set { ensureRegistered(); UserDefaults.standard.set(newValue, forKey: SketchbookHandleKey.show) }

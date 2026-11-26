@@ -31,6 +31,8 @@ final class AccountCard62ViewController: UIViewController {
     private var avatarKeys: [NativeSessionStore.Provider: String] = [:]
     private var ringViews: [NativeSessionStore.Provider: UIView] = [:]
     private var selectedProvider: NativeSessionStore.Provider = .netease
+    /// port90（任务 11）：资料自愈每家每次呈现只试一次（防 rebuild 循环）。
+    private var enrichAttempted90: Set<NativeSessionStore.Provider> = []
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -100,6 +102,63 @@ final class AccountCard62ViewController: UIViewController {
         hint.textColor = .secondaryLabel
         hint.numberOfLines = 0
         stack.addArrangedSubview(hint)
+
+        // port90（任务 11）：已登录但资料缓存缺头像/昵称的家当场回填。
+        // 根因：enrich 此前只存在于 LoginViewController（打开登录页且选中
+        // 该家才触发），账户卡只读缓存、从不回填；网易云另有墙面主流常刷、
+        // QQ/酷狗无此路，存量会话缺头像即恒占位、无自愈。
+        for status in statuses
+        where status.isLoggedIn
+            && (status.avatarURL == nil || status.displayName == nil)
+            && !enrichAttempted90.contains(status.provider) {
+            enrichAttempted90.insert(status.provider)
+            enrichProfile90(for: status.provider)
+        }
+    }
+
+    /// 补资料（与 LoginViewController.enrichProfile 同源同路）：只写
+    /// 资料缓存、不动会话；成功后主线程重排；失败静默（下次呈现再试）。
+    private func enrichProfile90(for provider: NativeSessionStore.Provider) {
+        Task { [weak self] in
+            switch provider {
+            case .netease:
+                guard let status = try? await NativeDataClient.shared.fetchLoginStatus(),
+                      status.loggedIn else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .netease, accountId: status.userId,
+                    displayName: status.nickname, avatarURLString: status.avatarURL)
+            case .qq:
+                guard let cookie = NativeSessionStore.shared.qqCookieString(),
+                      let profile = try? await QQLoginClient().fetchLoginStatus(cookie: cookie)
+                else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .qq, accountId: profile.accountId,
+                    displayName: profile.nickname,
+                    avatarURLString: profile.avatarURLString)
+            case .kugou:
+                guard let cookie = NativeSessionStore.shared.kugouCookieString(),
+                      let profile = try? await KugouLoginClient().fetchUserDetail(
+                        cookie: cookie, userId: Self.kugouUserId90(in: cookie))
+                else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .kugou, accountId: profile.accountId,
+                    displayName: profile.nickname,
+                    avatarURLString: profile.avatarURLString)
+            }
+            Breadcrumbs.log("port90 account enrich provider=\(provider.rawValue)")
+            await MainActor.run { self?.rebuild() }
+        }
+    }
+
+    private static func kugouUserId90(in cookie: String) -> String? {
+        for entry in cookie.split(separator: ";") {
+            let parts = entry.split(separator: "=", maxSplits: 1)
+            if parts.count == 2,
+               parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "userid" {
+                return parts[1].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
     }
 
     /// 单家头像格：圆盘（真头像/默认占位）+ 登录态点 + 盘下

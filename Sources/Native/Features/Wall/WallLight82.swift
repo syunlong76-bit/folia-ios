@@ -30,8 +30,12 @@ enum WallLight82 {
         focusByWall[wall]
     }
 
-    /// (82) 第 8 条：海报聚焦叠色开关（控制台外观行）——
-    /// 关时关灯态也不压暗不聚焦（灯钮仅记状态），默认开。
+    /// (82) 第 8 条：海报聚焦叠色开关（控制台外观行），默认开。
+    /// port90（任务 19）：本开关只门控「点砖聚焦」的消费仲裁
+    /// 与焦点放大，不再门控压暗本身——旧口径下开关关时
+    /// dimAlpha 恒 0，长条两向切换墙面零变化，与 Miller
+    /// 20:35 实测吻合；定版定义（2026-11-24）关灯必整墙暗下，
+    /// 与聚焦开关状态无关。
     private static let focusEnabledKey = "wallLight82.focusEnabled"
     static var focusEnabled82: Bool {
         get {
@@ -46,8 +50,11 @@ enum WallLight82 {
     }
 
     /// 砖应有的压暗强度：开灯恒 0；关灯时焦点砖 0、其余 0.78。
+    /// port90（任务 19）：压暗不再受 focusEnabled82 门控（见
+    /// 上方口径修订）——关灯必暗是定版行为，聚焦开关只决定
+    /// 点砖是否被聚焦消费（consumeTapIfNeeded）与焦点放大。
     static func dimAlpha(wall: String, entryId: String) -> CGFloat {
-        if isOn || !focusEnabled82 { return 0 }
+        if isOn { return 0 }
         return focusByWall[wall] == entryId ? 0 : 0.78
     }
 
@@ -58,6 +65,8 @@ enum WallLight82 {
         if on { focusByWall.removeAll() }
         Breadcrumbs.log("light82 on=\(on ? 1 : 0) src=\(source)"
             + " was=\(was ? 1 : 0)")
+        // port90（任务 19）运行时自证：切换链第 3 环（状态落写）。
+        Breadcrumbs.log("port90 light setOn on=\(on ? 1 : 0) src=\(source)")
         NotificationCenter.default.post(name: .foliaWallLight82Changed, object: nil)
     }
 
@@ -111,6 +120,10 @@ enum WallLight82 {
     static func applyToVisibleCells(in collectionView: UICollectionView, wave: Bool) {
         let cells = collectionView.indexPathsForVisibleItems
             .compactMap { collectionView.cellForItem(at: $0) as? WallPosterCell }
+        // port90（任务 19）运行时自证：切换链第 4 环（宿主收到
+        // 广播并落到可见砖）——含砖数与当前态，真机一轮可定位。
+        Breadcrumbs.log("port90 light apply cells=\(cells.count)"
+            + " on=\(isOn ? 1 : 0) wave=\(wave ? 1 : 0)")
         guard wave else {
             cells.forEach { $0.applyLight82(animated: true) }
             return

@@ -457,13 +457,16 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     @discardableResult
     public func toggleLanterns() -> Bool {
-        if isLanterns { stopLantern(hard: false) } else { startLantern() }
+        // port90: 用户点关须当帧清场。旧 soft-stop 淡出 2–4 秒，按钮已灭、
+        // 画面还在，用户确认性再点把状态翻回开，表象「关不掉」。
+        if isLanterns { stopLantern(hard: true); Breadcrumbs.log("port90 fx ln off hard") } else { startLantern() }
         return isLanterns
     }
 
     @discardableResult
     public func toggleSnow() -> Bool {
-        if isSnow { stopSnow(hard: false) } else { startSnow() }
+        // port90: 同 toggleLanterns，点关硬清（自融只留给 12 秒自动停）。
+        if isSnow { stopSnow(hard: true); Breadcrumbs.log("port90 fx sn off hard") } else { startSnow() }
         return isSnow
     }
 
@@ -531,6 +534,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private func stopFw() {
         rockets = []; sparks = []; crackles = []; halos = []; rains = []; splitQueue = []
         setFw(false)
+        settleAfterStop90()
     }
 
     private func startLantern() {
@@ -547,6 +551,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if hard { lanterns = []; lnStopping = false } else { lnStopping = true }
         setLantern(false)
         if hard || lanterns.isEmpty { hideBless() }
+        if hard { settleAfterStop90() }
     }
 
     private func startSnow() {
@@ -562,6 +567,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private func stopSnow(hard: Bool) {
         if hard { flakes = []; snMelt = 1 }
         setSnow(false)
+        if hard { settleAfterStop90() }
     }
 
     private func startWind() {
@@ -572,7 +578,17 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     private func stopWind() {
         windPow = 0
+        // port90: 旧实现只归零风力，streaks/leaves 残留继续渲染、anyFx 恒真、窗不隐。
+        streaks = []; leaves = []
         setWind(false)
+        settleAfterStop90()
+    }
+
+    /// port90: 硬停后收口——重绘清末帧；无任何特效存活时停链并隐藏 Fx 窗，
+    /// 杜绝关后隐形窗继续吞触摸。start* 互斥路径调用后随即 ensureLoop 重新亮窗，次序安全。
+    private func settleAfterStop90() {
+        rootView?.setNeedsDisplay()
+        stopLoopIfIdle()
     }
 
     private func nowMsNow() -> Double { CACurrentMediaTime() * 1000 }

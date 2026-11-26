@@ -77,7 +77,7 @@ struct SearchWorkspaceView: View {
         var id: String { track.id }
     }
 
-    /// 速记簿（(53) 工作流 D）：行尾按钮的已收/未收视觉态随它刷新。
+    /// 日记本（(53) 工作流 D）：行尾按钮的已收/未收视觉态随它刷新。
     @ObservedObject private var sketchbookStore = SketchbookStore.shared
     @State private var query = ""
     @State private var submittedQuery = ""
@@ -137,7 +137,7 @@ struct SearchWorkspaceView: View {
                     .padding(.top, 12)
             }
 
-            // (62) §7 多选底栏：收进速记簿（addBatch）/ 加入
+            // (62) §7 多选底栏：收进日记本（addBatch）/ 加入
             // 队列 / 取消。收进后退出多选态并 toast 回执。
             if selecting62 {
                 VStack {
@@ -147,13 +147,13 @@ struct SearchWorkspaceView: View {
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(ink)
                         Spacer()
-                        Button("收进速记簿") {
+                        Button("收进日记本") {
                             let picked = songs.map(\.track)
                                 .filter { selectedIds62.contains($0.id) }
                             let added = sketchbookStore.addBatch(picked, source: "search")
                             Breadcrumbs.log("search62.batch sketchbook added=\(added)")
                             NativePlaybackFailureToast.show(
-                                message: "已收进速记簿 \(added) 首")
+                                message: "已收进日记本 \(added) 首")
                             selecting62 = false
                             selectedIds62 = []
                         }
@@ -498,7 +498,7 @@ struct SearchWorkspaceView: View {
                 .font(.system(size: 12).monospacedDigit())
                 .foregroundColor(FoliaTheme.secondary)
 
-            // 行尾动作（命中区 40×40）：速记簿已接通（(53) 工作流 D，点按收进/移出，
+            // 行尾动作（命中区 40×40）：日记本已接通（(53) 工作流 D，点按收进/移出，
             // 视觉态随已收切换，本轮只放大命中框、语义不动）；星标 (55) 工作流 F
             // 接 StarStore 本地真源（显态随 FoliaStarChanged 刷新）；加号 (55) F
             // 改义对齐网页版——点按开「收藏到歌单」弹层，原「追加队列」降为长按。
@@ -571,7 +571,7 @@ struct SearchWorkspaceView: View {
             guard !item.isUnavailable else { return }
             onPlaySong(track, songs.map(\.track))
         }
-        // (62) §7：行长按进多选态（批量收进速记簿/加入队列，
+        // (62) §7：行长按进多选态（批量收进日记本/加入队列，
         // 底栏承接；加号钮自身的长按加队列语义不动）。
         .onLongPressGesture(minimumDuration: 0.5) {
             if !selecting62 {

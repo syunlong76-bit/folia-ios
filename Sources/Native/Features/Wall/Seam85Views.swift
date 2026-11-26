@@ -34,59 +34,38 @@ enum Seam85Text {
     }
 }
 
-/// (86) 第 1/2 条：缝底（两缝共用）——缝纸改网页原值
-/// rgba(22,22,27,0.8)＋0 0 18px 黑投影（(85) 的黑 0.34
-/// 平涂＋白发丝线整组退役）；油画底与点播台同源 4 套
-/// （MiniPlayerTheme.stored 单源、.foliaMiniPlayerTheme-
-/// Changed 通知跟随），层序＝缝纸→油画→scrim→内容。
-/// 油画 alpha 0.6＋scrim 黑 0.30（点播台 scrim 为 0.18，
-/// 缝内全是竖排小字、按可读性加深，取值见 (86) 报告）；
-/// 主题 none 时油画/scrim 同隐、只剩缝纸。本层不接手
-/// 势（缝命中纪律不变：只认控件本体）。
+/// (86) 第 1/2 条：缝底（两缝共用）。
+/// port90（Miller 2026-11-26 20:19/20:27 定）：油画背景图整组退役，
+/// 改系统毛玻璃——UIVisualEffectView(systemUltraThinMaterialDark，
+/// 与控制台卡同材质）＋轻 tint 黑 0.18 保竖排小字可读；透出墙面。
+/// 0 0 18px 黑投影保留。本层不接手势（缝命中纪律不变：只认控件本体）。
 final class SeamBackdrop86: UIView {
 
-    private let imageView = UIImageView()
-    private let scrimView = UIView()
+    private let blurView = UIVisualEffectView(
+        effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+    private let tintView = UIView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        backgroundColor = UIColor(red: 22.0 / 255, green: 22.0 / 255,
-                                  blue: 27.0 / 255, alpha: 0.8)
+        backgroundColor = .clear
         layer.shadowColor = UIColor.black.cgColor
         layer.shadowOpacity = 0.55
         layer.shadowRadius = 9
         layer.shadowOffset = .zero
         isUserInteractionEnabled = false
-        imageView.contentMode = .scaleAspectFill
-        imageView.clipsToBounds = true
-        imageView.alpha = 0.6
-        imageView.isUserInteractionEnabled = false
-        addSubview(imageView)
-        scrimView.backgroundColor = UIColor.black.withAlphaComponent(0.30)
-        scrimView.isUserInteractionEnabled = false
-        addSubview(scrimView)
-        refreshTheme86()
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(themeChanged86),
-            name: .foliaMiniPlayerThemeChanged, object: nil)
+        blurView.isUserInteractionEnabled = false
+        addSubview(blurView)
+        tintView.backgroundColor = UIColor.black.withAlphaComponent(0.18)
+        tintView.isUserInteractionEnabled = false
+        addSubview(tintView)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        imageView.frame = bounds
-        scrimView.frame = bounds
-    }
-
-    @objc private func themeChanged86() { refreshTheme86() }
-
-    private func refreshTheme86() {
-        let image = MiniPlayerThemeLayer.backgroundImage(
-            for: MiniPlayerTheme.effective)
-        imageView.image = image
-        imageView.isHidden = image == nil
-        scrimView.isHidden = image == nil
+        blurView.frame = bounds
+        tintView.frame = bounds
     }
 }
 
@@ -219,14 +198,10 @@ final class HomeSeam85View: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     private func build() {
-        // (86) 第 1/2 条：缝纸＋油画底由 SeamBackdrop86 承
-        // 担（本视图底色清零）；长按 0.55s 切主题挂本体。
+        // port90：缝底改系统毛玻璃（SeamBackdrop86）；缝背景长按
+        // 循环油画随油画退役（点播台长按切主题通路不动）。
         backgroundColor = .clear
         addSubview(backdrop86)
-        let seamPress = UILongPressGestureRecognizer(
-            target: self, action: #selector(seamLongPressed86))
-        seamPress.minimumPressDuration = 0.55
-        addGestureRecognizer(seamPress)
         contentView.isUserInteractionEnabled = true
         addSubview(contentView)
 
@@ -264,8 +239,10 @@ final class HomeSeam85View: UIView {
         // tag5，网页 resolveHomeTabs 原序，见 tabTitles89）。
         for (index, title) in tabTitles89.enumerated() {
             let button = UIButton(type: .system)
-            button.setTitle(Seam85Text.vertical(title), for: .normal)
-            button.titleLabel?.numberOfLines = 0
+            // port90：Navidrome（index 5）窄档横排单行，不走竖拆。
+            button.setTitle(index == 5 ? title : Seam85Text.vertical(title),
+                            for: .normal)
+            button.titleLabel?.numberOfLines = index == 5 ? 1 : 0
             // (89) §5-8：缝页签字号对齐网页 14。
             button.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
             button.titleLabel?.textAlignment = .center
@@ -341,8 +318,10 @@ final class HomeSeam85View: UIView {
     private func applyDisplayMode89() {
         for (index, button) in tabButtons.enumerated() {
             let title = tabTitles89[index]
-            button.setTitle(displayWide89 ? title : Seam85Text.vertical(title),
-                            for: .normal)
+            // port90：Navidrome 窄档不竖拆单字母——横排单行小字呈现。
+            button.setTitle(displayWide89 || index == 5
+                ? title : Seam85Text.vertical(title), for: .normal)
+            button.titleLabel?.numberOfLines = (index == 5 && !displayWide89) ? 1 : 0
             button.contentHorizontalAlignment = displayWide89 ? .left : .center
             button.contentEdgeInsets = displayWide89
                 ? UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 0) : .zero
@@ -396,6 +375,7 @@ final class HomeSeam85View: UIView {
                     x: 10, y: 0.118 * H + CGFloat(index) * 40,
                     width: contentW - 20, height: 36)
                 button.layer.cornerRadius = 18
+                button.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
             }
             likedButton.frame = CGRect(
                 x: 10, y: 0.64 * H, width: contentW - 20, height: 30)
@@ -411,25 +391,39 @@ final class HomeSeam85View: UIView {
             }
             return
         }
-        // 页签：top 0.118H 起、步距 0.07H、高 0.062H、宽
-        // 0.40×缝宽＝26 居中；圆角取帧高一半成全圆 pill。
+        // port90 页签自适应排版：旧固定步距 0.07H/高 0.062H 下
+        // Navidrome 竖拆 9 行必然瀑布压住「本地」。改：页签区
+        // [max(0.118H, 折叠钮底+8), 0.615H] 六等分，签在步内
+        // 居中、间距均匀、选中胶囊随签居中；普通签宽 30；
+        // Navidrome 横排单行（字 9 bold、宽 56 横胶囊）。
+        let tabsTop = max(0.118 * H, 0.066 * H + 36 + 8)
+        let zoneBottom = 0.615 * H
+        let step = max(0, (zoneBottom - tabsTop) / 6)
+        let tabH = min(40, max(20, step - 5))
         for (index, button) in tabButtons.enumerated() {
-            let tabH = 0.062 * H
-            button.frame = CGRect(
-                x: cx - 13, y: (0.118 + CGFloat(index) * 0.07) * H,
-                width: 26, height: tabH)
-            button.layer.cornerRadius = tabH / 2
+            let y = tabsTop + CGFloat(index) * step + (step - tabH) / 2
+            if index == 5 {
+                button.frame = CGRect(x: cx - 28, y: y, width: 56, height: tabH)
+                button.layer.cornerRadius = tabH / 2
+                button.titleLabel?.font = .systemFont(ofSize: 9, weight: .bold)
+            } else {
+                button.frame = CGRect(x: cx - 15, y: y, width: 30, height: tabH)
+                button.layer.cornerRadius = min(30, tabH) / 2
+                button.titleLabel?.font = .systemFont(
+                    ofSize: tabH >= 36 ? 14 : 12, weight: .bold)
+            }
         }
         // 中段直达：双列、top 0.64H（网页同位）；列宽 28、
         // 两列内沿距中线 4（列间隙 ≈ 网页 12% 口径）。列
         // 高 84＝6 字竖排实需（11pt 行高 ≈13.4×6＋inset），
         // 止于 0.64H＋84 < 工具格区，下方原账户区（0.782H）
         // 已随 port88 头像摘除留空。
+        // port90：两列左沿与下方工具格两列（cx−30 起、列宽 32）同沿对齐。
         let shortcutH: CGFloat = 84
         likedButton.frame = CGRect(
-            x: cx - 32, y: 0.64 * H, width: 28, height: shortcutH)
+            x: cx - 30, y: 0.64 * H, width: 28, height: shortcutH)
         cloudButton.frame = CGRect(
-            x: cx + 4, y: 0.64 * H, width: 28, height: shortcutH)
+            x: cx + 2, y: 0.64 * H, width: 28, height: shortcutH)
         // 工具格：贴底（底距 0.025H）、区高 0.08H、两行
         // 两列裸图标（28×28 在格内居中、无底衬）。
         let toolsH = 0.08 * H
@@ -463,13 +457,7 @@ final class HomeSeam85View: UIView {
     // port88：账户回显（setAccount85）随头像摘除整组退役；
     // 账户态展示归设置页账户组与侧栏账户区，本缝不再回填。
 
-    /// (86) 第 2 条：缝上长按 0.55s 切主题（通路见
-    /// SeamThemeCycle86）。
-    @objc private func seamLongPressed86(
-        _ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-        SeamThemeCycle86.cycle()
-    }
+    // port90：缝长按切主题已随油画背景退役（handler 删除）。
 
     // MARK: 点按（逐项落痕 sidebar85）
 
@@ -564,11 +552,8 @@ final class PlaylistSeam85View: UIView {
     }
 
     private(set) var expanded = false
-    /// (89)B b-seam-tilt：倾斜 −4° 容器（网页 BRAVAIS_
-    /// TILT_DEG collection=−4；主页缝 0° 不动）。缝内全
-    /// 部层（缝纸/书脊/展开档）挂此容器整体倾斜，本视图
-    /// 不裁剪、命中由 UIKit 按 transform 自动换算。
-    private let tiltContainer89 = UIView()
+    // port90（Miller 2026-11-26 20:27「都是歪的」）：(89)B 的 −4°
+    // 倾斜容器整件取消、缝身摆正，覆盖 b-seam-tilt 裁定。
     private let backdrop86 = SeamBackdrop86()
     private let spineContent = UIView()
     private let fullContent = UIView()
@@ -594,29 +579,23 @@ final class PlaylistSeam85View: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     private func build() {
-        // (86) 第 1/2 条：缝纸＋油画底同主页缝（SeamBack-
-        // drop86）；长按切主题同挂本体。
+        // port90：缝底改系统毛玻璃（SeamBackdrop86，两缝同口径）；
+        // 缝身摆正、三层直挂本体；缝长按切主题随油画退役。
         backgroundColor = .clear
-        // (89)B b-seam-tilt：三层改挂倾斜容器（层序不变：
-        // 缝纸→书脊→展开档）。
-        addSubview(tiltContainer89)
-        tiltContainer89.addSubview(backdrop86)
-        let seamPress = UILongPressGestureRecognizer(
-            target: self, action: #selector(seamLongPressed86))
-        seamPress.minimumPressDuration = 0.55
-        addGestureRecognizer(seamPress)
-        tiltContainer89.addSubview(spineContent)
-        tiltContainer89.addSubview(fullContent)
+        addSubview(backdrop86)
+        addSubview(spineContent)
+        addSubview(fullContent)
         fullContent.isHidden = true
-        Breadcrumbs.log("port89 seamtilt=-4")
+        Breadcrumbs.log("port90 seamtilt=0 glass=1")
 
         backButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         backButton.tintColor = .white
         backButton.accessibilityLabel = "返回"
         backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
         spineContent.addSubview(backButton)
-        // 折叠钮去芯片底（网页裸钮，同主页缝）。
-        foldButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
+        // port90：折叠钮与返回钮同为 chevron.left 相邻成「双箭头」，
+        // 折叠改 xmark（语义＝折叠收起、无障碍标签不变）。
+        foldButton.setImage(UIImage(systemName: "xmark"), for: .normal)
         foldButton.tintColor = UIColor.white.withAlphaComponent(0.85)
         foldButton.accessibilityLabel = "折叠"
         foldButton.addTarget(self, action: #selector(foldTapped), for: .touchUpInside)
@@ -628,7 +607,8 @@ final class PlaylistSeam85View: UIView {
         titleButton.accessibilityLabel = "展开信息条"
         titleButton.addTarget(self, action: #selector(expandTapped), for: .touchUpInside)
         spineContent.addSubview(titleButton)
-        countLabel.numberOfLines = 0
+        // port90：计数横排单行（旧竖排在 0.06H 帧高内溢出断行重叠）。
+        countLabel.numberOfLines = 1
         countLabel.font = .systemFont(ofSize: 11)
         countLabel.textColor = UIColor.white.withAlphaComponent(0.55)
         countLabel.textAlignment = .center
@@ -690,7 +670,7 @@ final class PlaylistSeam85View: UIView {
     /// 数据回填（标题/计数）：宿主在种子落地与条目变化时调。
     func setPlaylist85(title: String, count: Int) {
         titleButton.setTitle(Seam85Text.vertical(title), for: .normal)
-        countLabel.text = Seam85Text.vertical("\(count) 首")
+        countLabel.text = "\(count) 首"
         fullTitleLabel.text = title
         fullMetaLabel.text = "\(count) 首"
     }
@@ -704,28 +684,14 @@ final class PlaylistSeam85View: UIView {
 
     // port88：书脊头像回填（setAccount85）随头像摘除整组退役。
 
-    /// (86) 第 2 条：缝上长按 0.55s 切主题（同主页缝）。
-    @objc private func seamLongPressed86(
-        _ gesture: UILongPressGestureRecognizer) {
-        guard gesture.state == .began else { return }
-        SeamThemeCycle86.cycle()
-    }
+    // port90：缝长按切主题已随油画背景退役（handler 删除）。
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        // (89)B b-seam-tilt：容器在 bounds 上下各扩 40 后
-        // 旋转 −4°（倾斜后上下缘不露缺口）；容器内排版坐
-        // 标随之多 40 的纵偏移，top 补偿后内容在缝视图内
-        // 的落位与倾斜前一致。下文宽度基准改容器宽。落
-        // 位走 bounds＋center（带 transform 时 frame 未定义）。
-        tiltContainer89.bounds = CGRect(
-            x: 0, y: 0, width: bounds.width, height: bounds.height + 80)
-        tiltContainer89.center = CGPoint(x: bounds.midX, y: bounds.midY)
-        tiltContainer89.transform = CGAffineTransform(
-            rotationAngle: -4 * .pi / 180)
-        let areaW = tiltContainer89.bounds.width
-        backdrop86.frame = tiltContainer89.bounds
-        let top = contentTopInset + 40
+        // port90：无倾斜容器，排版坐标即本视图坐标。
+        let areaW = bounds.width
+        backdrop86.frame = bounds
+        let top = contentTopInset
         let contentH = max(0, bounds.height - contentTopInset - contentBottomInset)
         // 书脊内容（64 宽居中）。
         spineContent.frame = CGRect(
@@ -744,8 +710,9 @@ final class PlaylistSeam85View: UIView {
         foldButton.frame = CGRect(x: cx - 18, y: 0.088 * H, width: 36, height: 36)
         titleButton.frame = CGRect(
             x: 12, y: 0.16 * H, width: 40, height: 0.38 * H)
+        // port90：计数横排单行，帧高 18、整缝宽居中（旧 0.06H 高装不下竖排 5 行）。
         countLabel.frame = CGRect(
-            x: 8, y: 0.56 * H, width: 48, height: 0.06 * H)
+            x: 4, y: 0.56 * H, width: 56, height: 18)
         // 计数（止 0.62H）与播放（起 0.84H）之间空段：
         // port88 前为头像位（0.70H 起 32 圆），已摘除留空。
         playButton.frame = CGRect(x: cx - 18, y: 0.84 * H, width: 36, height: 36)

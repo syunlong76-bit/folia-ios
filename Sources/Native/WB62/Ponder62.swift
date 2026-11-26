@@ -2,7 +2,7 @@ import UIKit
 
 /// (62) WB §4.7：思索（Ponder）教程提示系统。
 ///
-/// - 教程提示：功能面首访时一次性气泡（队列面板 / 速记簿 /
+/// - 教程提示：功能面首访时一次性气泡（队列面板 / 日记本 /
 ///   命令面板 / 舞台样式等已落地面），已读态落盘
 ///   （SettingsStore.ponderSeenIDs），读过不再弹；总开关
 ///   ponderTipsEnabled 关时全停。
@@ -41,8 +41,8 @@ enum Ponder62 {
             body: "主页照片墙单指拖动平移浏览，点按任意封面卡展开——展开卡上直接出歌词与播放控制；歌词始终钉在正在播放歌曲自己的封面卡上，随卡一起移动。"),
         Tip(id: "lattice", chapter: "wall", title: "Lattice 拼贴墙",
             body: "拼贴墙把当前队列铺成拼贴格：正在播放的格子带呼吸光环、已经播过的会压暗。从墙面布局切换进入，点任意格子即从那首开始播。"),
-        Tip(id: "sketchbook", chapter: "wall", title: "速记簿",
-            body: "屏幕左缘的小把手是速记簿：搜索结果行尾第一个钮把歌暂存进来，抽屉里可分组、看历史、把草稿队列一键替换当前队列。"),
+        Tip(id: "sketchbook", chapter: "wall", title: "日记本",
+            body: "屏幕左缘的小把手是日记本：搜索结果行尾第一个钮把歌暂存进来，抽屉里可分组、看历史、把草稿队列一键替换当前队列。"),
         Tip(id: "seam", chapter: "wall", title: "缝合工具条",
             body: "墙顶工具条可切换歌 / 推 / 探三段、切换网格与墙面布局；「…」菜单里有喜欢的音乐、云盘、过滤与隐藏管理。"),
         Tip(id: "queue", chapter: "player", title: "队列面板",
@@ -91,7 +91,7 @@ enum Ponder62 {
     /// 首访提示：未读过且总开关开时，在宿主顶部弹一条一次
     /// 性气泡（系统弹簧入场、4.5 秒后自动收起，点按立即收起
     /// 并标已读）。功能面在自己首次呈现时调本函数（队列面 /
-    /// 速记簿 / 命令面板的宿主可一行接入；设置页「思索教程
+    /// 日记本 / 命令面板的宿主可一行接入；设置页「思索教程
     /// 提示」行即本系统的开关面）。
     static func showTipIfNeeded(id: String, in host: UIViewController) {
         guard SettingsStore.ponderTipsEnabled,

@@ -103,16 +103,17 @@ final class LightSwitch82: UIControl {
         trackView.layer.cornerRadius = Self.switchSize.height / 2
         trackView.layer.borderWidth = 1
         trackView.layer.borderColor =
-            UIColor.white.withAlphaComponent(0.07).cgColor
+            UIColor.white.withAlphaComponent(0.14).cgColor
         trackView.clipsToBounds = true
         trackView.isUserInteractionEnabled = false
+        // port90: 定版样板轨道是全高炭灰渐变；旧色标把光泽压在顶部 25% 内，
+        // 在窄卡上读作纯黑空条。改全高光泽：顶部微亮→中段过渡→底部沉底。
         trackGradient.colors = [
-            UIColor.white.withAlphaComponent(0.10).cgColor,
-            UIColor.black.withAlphaComponent(0.0).cgColor,
-            UIColor.black.withAlphaComponent(0.35).cgColor,
-            UIColor.white.withAlphaComponent(0.05).cgColor,
+            UIColor.white.withAlphaComponent(0.08).cgColor,
+            UIColor.white.withAlphaComponent(0.02).cgColor,
+            UIColor.black.withAlphaComponent(0.22).cgColor,
         ]
-        trackGradient.locations = [0, 0.25, 0.8, 1]
+        trackGradient.locations = [0, 0.45, 1]
         trackView.layer.addSublayer(trackGradient)
         addSubview(trackView)
 
@@ -240,6 +241,8 @@ final class LightSwitch82: UIControl {
         setOn(!isOn, animated: true)
         onToggle?(isOn)
         sendActions(for: .valueChanged)
+        // port90（任务 19）运行时自证：切换链第 1 环（点按到达钮身）。
+        Breadcrumbs.log("port90 light tap on=\(isOn ? 1 : 0)")
     }
 
     /// 状态落位总口：钮/光晕位置、光晕与 shadow 颜色、两图

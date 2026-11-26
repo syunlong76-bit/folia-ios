@@ -106,8 +106,7 @@ final class StageViewController: UIViewController {
     private let playButton = UIButton(type: .system)
     private let nextButton = UIButton(type: .system)
     /// (87) 主题四圆点（台面右上，与两面墙同件同位）。
-    private var stageThemeDots87: UIStackView?
-    private var stageThemeDotButtons87: [UIButton] = []
+    // port90（任务 13）：主题四圆点已撤除（长按台面循环主题手势保留）。
     /// (82) 第 7/8 条：E 极简台补件——台内封面/歌名/歌手
     /// （与两面墙同位同尺寸）＋控制台入口圆钮。旧模式钮/
     /// 爪印/槽位钮保留对象但不再上台（职能进控制台），
@@ -3170,12 +3169,27 @@ final class StageViewController: UIViewController {
         // (87) 样片台：播放钮改 42 圆玻璃底（白 0.13，与
         // 两面墙同式——居中三键版式退役、改右端簇）。
         playButton.tintColor = .white
-        playButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
+        playButton.backgroundColor = .clear
         playButton.layer.cornerRadius = 21
         playButton.translatesAutoresizingMaskIntoConstraints = false
         playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
         playButton.addTarget(self, action: #selector(stagePlayDown84), for: .touchDown)
         bar.addSubview(playButton)
+        // port90（任务 14）：播放钮改圆形毛玻璃（系统材质、透出台面底色），
+        // 尺寸/位置/字形不变；blur 子视图不接手势、置字形之下。
+        let stagePlayBlur90 = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        stagePlayBlur90.isUserInteractionEnabled = false
+        stagePlayBlur90.clipsToBounds = true
+        stagePlayBlur90.layer.cornerRadius = 21
+        stagePlayBlur90.translatesAutoresizingMaskIntoConstraints = false
+        playButton.insertSubview(stagePlayBlur90, at: 0)
+        NSLayoutConstraint.activate([
+            stagePlayBlur90.leadingAnchor.constraint(equalTo: playButton.leadingAnchor),
+            stagePlayBlur90.trailingAnchor.constraint(equalTo: playButton.trailingAnchor),
+            stagePlayBlur90.topAnchor.constraint(equalTo: playButton.topAnchor),
+            stagePlayBlur90.bottomAnchor.constraint(equalTo: playButton.bottomAnchor),
+        ])
         // (82) 第 7 条：字形走 DeckGlyph82 独立绘制函数。
         prevButton.setImage(DeckGlyph82.image(.prev, pointSize: 19), for: .normal)
         nextButton.setImage(DeckGlyph82.image(.next, pointSize: 19), for: .normal)
@@ -3247,7 +3261,7 @@ final class StageViewController: UIViewController {
         // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
         stageConsoleButton82.backgroundColor = UIColor.white.withAlphaComponent(0.13)
         stageConsoleButton82.layer.cornerRadius = 21
-        stageConsoleButton82.setImage(DeckGlyph82.image(.console, pointSize: 20), for: .normal)
+        stageConsoleButton82.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 20), for: .normal)
         stageConsoleButton82.tintColor = .white
         stageConsoleButton82.accessibilityLabel = "控制台"
         stageConsoleButton82.translatesAutoresizingMaskIntoConstraints = false
@@ -3255,55 +3269,7 @@ final class StageViewController: UIViewController {
         stageConsoleButton82.addTarget(self, action: #selector(stageConsoleDown84), for: .touchDown)
         bar.addSubview(stageConsoleButton82)
 
-        // (87) 主题四圆点（样片 .tdots，与两面墙同件同位）。
-        let stageDots87 = UIStackView()
-        stageDots87.axis = .horizontal
-        stageDots87.spacing = 5
-        stageDots87.alignment = .center
-        stageDots87.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(stageDots87)
-        stageThemeDots87 = stageDots87
-        stageThemeDotButtons87 = []
-        for (index, color) in Deck87.dotColors.enumerated() {
-            let button = UIButton(type: .custom)
-            button.tag = index
-            button.accessibilityLabel = "播放台主题"
-            button.translatesAutoresizingMaskIntoConstraints = false
-            let ring = UIView()
-            ring.layer.cornerRadius = 6.5
-            ring.layer.borderWidth = 2
-            ring.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
-            ring.isUserInteractionEnabled = false
-            ring.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(ring)
-            let circle = UIView()
-            circle.backgroundColor = color
-            circle.layer.cornerRadius = 4.5
-            circle.layer.borderWidth = 1
-            circle.layer.borderColor = UIColor.white.withAlphaComponent(0.55).cgColor
-            circle.isUserInteractionEnabled = false
-            circle.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(circle)
-            NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 20),
-                button.heightAnchor.constraint(equalToConstant: 20),
-                ring.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                ring.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                ring.widthAnchor.constraint(equalToConstant: 13),
-                ring.heightAnchor.constraint(equalToConstant: 13),
-                circle.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                circle.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                circle.widthAnchor.constraint(equalToConstant: 9),
-                circle.heightAnchor.constraint(equalToConstant: 9),
-            ])
-            button.addTarget(self, action: #selector(stageThemeDotTapped87(_:)), for: .touchUpInside)
-            stageDots87.addArrangedSubview(button)
-            stageThemeDotButtons87.append(button)
-        }
-        NSLayoutConstraint.activate([
-            stageDots87.topAnchor.constraint(equalTo: bar.topAnchor, constant: 2),
-            stageDots87.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-        ])
+        // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
         // 播放列表入口已于 (60) 第 10 条整钮删除（原 (48) 落台面、
         // (53) H 迁顶栏隐藏排）；队列面板本体保留，经面板页签进入。
@@ -3603,26 +3569,6 @@ final class StageViewController: UIViewController {
         refreshStageProgressChrome()
         // (82) 第 7 条：字形与主题解耦（DeckGlyph82 单套）。
         refreshDeckIcons82()
-        // (87) 主题四圆点选中环随主题回刷。
-        refreshStageThemeDots87()
-    }
-
-    /// (87) 主题四圆点点选（与两面墙同通路）。
-    @objc private func stageThemeDotTapped87(_ sender: UIButton) {
-        guard sender.tag < Deck87.dotThemes.count else { return }
-        let theme = Deck87.dotThemes[sender.tag]
-        MiniPlayerTheme.stored = theme
-        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
-        Breadcrumbs.log("deck87 dot host=stage t=\(theme.rawValue)")
-        refreshStageThemeDots87()
-    }
-
-    private func refreshStageThemeDots87() {
-        let current = MiniPlayerTheme.stored
-        for (index, button) in stageThemeDotButtons87.enumerated() {
-            let selected = Deck87.dotThemes[index] == current
-            button.subviews.first?.isHidden = !selected
-        }
     }
 
     /// 填充/圆点配色的形态收口（与墙 refreshMiniProgress-
@@ -4081,8 +4027,6 @@ final class StageViewController: UIViewController {
                      stageTitle82, stageArtist82] as [UIView] {
             view.alpha = alpha
         }
-        // (87) 主题四圆点随内容组同淡。
-        stageThemeDots87?.alpha = alpha
     }
 
     private func setStageBarContentsInteractive(_ interactive: Bool) {
@@ -4091,8 +4035,6 @@ final class StageViewController: UIViewController {
                        stageConsoleButton82] {
             button.isUserInteractionEnabled = interactive
         }
-        // (87) 主题四圆点随内容组同启停。
-        stageThemeDots87?.isUserInteractionEnabled = interactive
     }
 
     // MARK: 附加功能浮层（3.7 (60) 第 7 条，舞台宿主）

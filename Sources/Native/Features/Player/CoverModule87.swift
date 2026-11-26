@@ -70,6 +70,9 @@ final class CoverTile87: UIControl {
     private let eq = EqBars87View()
     private var coverTask: Task<Void, Never>?
     private(set) var trackId: String?
+    /// port90（任务 23）：封面右上 ➕（贴进日记本），全封面统一件。
+    private let diaryButton90 = DiaryAddButton90.make()
+    private var track90: FoliaTrack?
 
     var isCurrent = false {
         didSet { applyCurrent() }
@@ -97,6 +100,12 @@ final class CoverTile87: UIControl {
         eq.isHidden = true
         addSubview(eq)
 
+        diaryButton90.translatesAutoresizingMaskIntoConstraints = false
+        diaryButton90.addTarget(self, action: #selector(diaryTapped90), for: .touchUpInside)
+        addSubview(diaryButton90)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(diaryChanged90), name: .foliaDiary90Changed, object: nil)
+
         NSLayoutConstraint.activate([
             coverView.leadingAnchor.constraint(equalTo: leadingAnchor),
             coverView.trailingAnchor.constraint(equalTo: trailingAnchor),
@@ -110,6 +119,10 @@ final class CoverTile87: UIControl {
             eq.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -6),
             eq.widthAnchor.constraint(equalToConstant: 12),
             eq.heightAnchor.constraint(equalToConstant: 11),
+            diaryButton90.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -5),
+            diaryButton90.topAnchor.constraint(equalTo: topAnchor, constant: 5),
+            diaryButton90.widthAnchor.constraint(equalToConstant: 24),
+            diaryButton90.heightAnchor.constraint(equalToConstant: 24),
         ])
         layer.shadowColor = UIColor.black.cgColor
         layer.shadowOpacity = 0.35
@@ -121,10 +134,22 @@ final class CoverTile87: UIControl {
 
     func configure(track: FoliaTrack, index: Int, isCurrent: Bool, isPlaying: Bool) {
         trackId = track.id
+        track90 = track
         indexLabel.text = "\(index + 1)"
         self.isCurrent = isCurrent
         eq.setAnimating(isCurrent && isPlaying)
+        DiaryAddButton90.refresh(diaryButton90, songId: track.id)
         loadCover(track: track)
+    }
+
+    @objc private func diaryTapped90() {
+        guard let track90 else { return }
+        DiaryStore90.toggle(DiarySong90(track: track90))
+        DiaryAddButton90.refresh(diaryButton90, songId: track90.id)
+    }
+
+    @objc private func diaryChanged90() {
+        DiaryAddButton90.refresh(diaryButton90, songId: trackId)
     }
 
     private func applyCurrent() {
@@ -139,14 +164,20 @@ final class CoverTile87: UIControl {
         coverView.image = nil
         guard let raw = track.artworkURL?.absoluteString else { return }
         let loader = NativeCoverLoader.shared
-        if let cached = loader.cachedImage(for: raw)
-            ?? loader.cachedImageAnyTier(raw: raw, excludingTier: -1) {
+        // port90: 缓存键与网络通路都以 proxiedURLString 规范化地址为准，
+        // 与墙面 cell 同路；此前直接拿 raw 相对串查缓存/建 URL 恒不命中、恒失败。
+        let proxy = loader.proxiedURLString(raw, tier: 256)
+        if let key = proxy, let cached = loader.cachedImage(for: key) {
+            coverView.image = cached
+            return
+        }
+        if let cached = loader.cachedImageAnyTier(raw: raw, excludingTier: 256) {
             coverView.image = cached
             return
         }
         let id = track.id
         coverTask = Task { [weak self] in
-            let image = await loader.image(for: raw, tier: 256)
+            let image = await loader.image(for: proxy ?? raw, tier: 256)
             guard let self, self.trackId == id, let image else { return }
             self.coverView.image = image
         }

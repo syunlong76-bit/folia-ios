@@ -23,8 +23,8 @@ import Combine
 ///    .focusEnabled82 门控）；
 /// 5. 图形灯钮 LightSwitch82（开灯/关灯）＋帮助钮。
 /// 逐钮落 tap82（host=console）。呈现入口 present(from:)
-/// 按宿主接特效/速记簿钩子：舞台走其自有选择器通路、主
-/// 页墙走速记簿抽屉；其余宿主特效走通用选择器（写
+/// 按宿主接特效/日记本钩子：舞台走其自有选择器通路、主
+/// 页墙走日记本抽屉；其余宿主特效走通用选择器（写
 /// StageStyleStore，舞台下次打开/在场时读同源）。
 ///
 /// (87) 控制台改版（样片定版移植）：①顶部队列文字表撤
@@ -38,8 +38,8 @@ import Combine
 /// 璃、点亮才上系统色，接 GlobalFx87 全局叠加层）；⑤
 /// 卡几何沿 (86)：贴底 −90、竖单列/横双列紧凑卡。
 final class ConsolePanel82: UIViewController,
-                            UICollectionViewDataSource,
-                            UICollectionViewDelegateFlowLayout {
+                            UITableViewDataSource,
+                            UITableViewDelegate {
 
     private var onEffects: (() -> Void)?
     private var onSketchbook: (() -> Void)?
@@ -82,12 +82,19 @@ final class ConsolePanel82: UIViewController,
 
     /// (87) 主视图（条带＋钮排＋功能行＋音量＋图层＋灯）
     /// 与队列网格视图（卡内切换、弹簧交叉）。
-    private let mainView87 = UIView()
+    /// port90（任务 21/24）：主视图改纵向滚动容器——拍立得区
+    /// 加在上方后内容总高超卡高上限时区内滚动，下方各行原
+    /// 尺寸原间距零改动；内容锚点走 contentLayoutGuide（纵向）
+    /// ＋frameLayoutGuide（横向恒等于卡宽）。
+    private let mainView87 = UIScrollView()
+    /// port90（任务 21）：拍立得照片墙区（控制台上方新增）。
+    private let polaroidZone90 = PolaroidZone90View()
     private let queueView87 = UIView()
     private let stripScroll87 = UIScrollView()
     private let stripStack87 = UIStackView()
     private var stripTiles87: [CoverTile87] = []
-    private var grid87: UICollectionView!
+    /// port90：卡内队列视图由封面网格改文字行 48 表（任务 1 定版形态）。
+    private var table87: UITableView!
     private var showingGrid87 = false
 
     /// (85) 第 7 条：悬浮卡本体与高度约束（高度在布局时
@@ -179,7 +186,7 @@ final class ConsolePanel82: UIViewController,
         card85.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
             .translatedBy(x: 0, y: 10)
         view.addSubview(card85)
-        cardHeight85 = card85.heightAnchor.constraint(equalToConstant: 400)
+        cardHeight85 = card85.heightAnchor.constraint(equalToConstant: 658)
         cardWidth85 = card85.widthAnchor.constraint(equalToConstant: 322)
         // (86) 第 7 条：底部锚定——卡底＝安全区底 −90（账：
         // 点播台展开态顶边＝安全区底 −80＝台底锚 −10＋台
@@ -218,6 +225,8 @@ final class ConsolePanel82: UIViewController,
         ])
 
         mainView87.translatesAutoresizingMaskIntoConstraints = false
+        mainView87.showsVerticalScrollIndicator = false
+        mainView87.showsHorizontalScrollIndicator = false
         card85.addSubview(mainView87)
         queueView87.translatesAutoresizingMaskIntoConstraints = false
         queueView87.alpha = 0
@@ -244,6 +253,30 @@ final class ConsolePanel82: UIViewController,
         clearButton.addTarget(self, action: #selector(clearQueueTapped), for: .touchUpInside)
         mainView87.addSubview(clearButton)
 
+        // port90（任务 21）：拍立得区装入主视图顶部（条带之上，
+        // 既有各行零改动——任务 24）；点照片切歌＝在播池内定位
+        // 起播后收控制台；日记本以全屏页盖在控制台上打开。
+        polaroidZone90.translatesAutoresizingMaskIntoConstraints = false
+        polaroidZone90.onPlay = { [weak self] track in
+            guard let self else { return }
+            if let index = QueueManager.shared.queue.firstIndex(where: { $0.id == track.id }) {
+                QueueManager.shared.playAtIndex(index)
+            } else {
+                // 推荐池里的历史歌曲：插到队首起播，不清用户队列。
+                QueueManager.shared.setQueue(
+                    [track] + QueueManager.shared.queue, startingAt: 0, source: "polaroid90")
+            }
+            Breadcrumbs.log("port90 polaroid play id=\(track.id)")
+            self.dismiss(animated: true)
+        }
+        polaroidZone90.onOpenDiary = { [weak self] track in
+            guard let self else { return }
+            let diary = DiaryViewController90(tagged: track)
+            diary.modalPresentationStyle = .fullScreen
+            self.present(diary, animated: true)
+        }
+        mainView87.addSubview(polaroidZone90)
+
         stripScroll87.showsHorizontalScrollIndicator = false
         stripScroll87.translatesAutoresizingMaskIntoConstraints = false
         mainView87.addSubview(stripScroll87)
@@ -265,8 +298,17 @@ final class ConsolePanel82: UIViewController,
         configureTransButton87(transPrev87, glyph: .prev, size: 46, label: "上一曲")
         transPrev87.addTarget(self, action: #selector(transPrevTapped87), for: .touchUpInside)
         configureTransButton87(transPlay87, glyph: .play, size: 54, label: "播放")
-        transPlay87.backgroundColor = UIColor(red: 1, green: 0.83, blue: 0.47, alpha: 0.22)
-        transPlay87.tintColor = UIColor(red: 1, green: 0.83, blue: 0.47, alpha: 1)
+        // port90（任务 14）：播放钮去金色实心、改圆形毛玻璃透出卡面底色；
+        // 字形 tint 回白、尺寸/位置不变。blur 子视图不接手势、置字形之下。
+        transPlay87.backgroundColor = .clear
+        transPlay87.tintColor = .white
+        let playBlur90 = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        playBlur90.isUserInteractionEnabled = false
+        playBlur90.frame = CGRect(x: 0, y: 0, width: 54, height: 54)
+        playBlur90.layer.cornerRadius = 27
+        playBlur90.clipsToBounds = true
+        transPlay87.insertSubview(playBlur90, at: 0)
         transPlay87.addTarget(self, action: #selector(transPlayTapped87), for: .touchUpInside)
         configureTransButton87(transNext87, glyph: .next, size: 46, label: "下一曲")
         transNext87.addTarget(self, action: #selector(transNextTapped87), for: .touchUpInside)
@@ -281,9 +323,9 @@ final class ConsolePanel82: UIViewController,
         // 标、无文字标签）：洗牌（播放模式合并钮承接）/
         // 生成主题/队列/去处/播放器/设置——6 格等分网格
         // （gap 4、格高 40、图标 18，网页 .lattice-tools-
-        // quick 同账）。(87) 的特效/宠物/喜欢/速记簿四格
+        // quick 同账）。(87) 的特效/宠物/喜欢/日记本四格
         // 撤出本行：特效归舞台样式选择器、宠物归设置、
-        // 喜欢归舞台顶栏与播放台、速记簿归主页墙左缘抽
+        // 喜欢归舞台顶栏与播放台、日记本归主页墙左缘抽
         // 屉把手，入口不灭、只迁位（paw/like 两钮对象与
         // 回刷逻辑保留、不再入行）。
         configureIconButton(modeButton, glyph: .modeRepeat, label: "播放模式")
@@ -339,20 +381,22 @@ final class ConsolePanel82: UIViewController,
         volumeValue89.translatesAutoresizingMaskIntoConstraints = false
         mainView87.addSubview(volumeValue89)
 
-        // 图层行：layers 图标＋透光/实色图形分段＋四特效钮。
+        // port90（任务 3＋追加 11）：图层行与聚焦行合并回一行——
+        // (87) 引入 focusIcon 第二图层图标、(89)B 又拆行，竖屏 296 卡宽下
+        // 分段胶囊压住烟花钮、聚焦开关独占空行。现单行 stack：
+        // layers 20＋分段 62×26＋四特效钮 30×30（间距 4）＋聚焦胶囊 30×18，
+        // equalSpacing 均分间隙（合计 244 ≤ 竖屏可用 272）。
         let layers = UIImageView(image: DeckGlyph82.image(.layers, pointSize: 17))
         layers.tintColor = UIColor.white.withAlphaComponent(0.8)
         layers.contentMode = .center
         layers.translatesAutoresizingMaskIntoConstraints = false
-        mainView87.addSubview(layers)
         let segContainer = UIView()
         segContainer.backgroundColor = UIColor.white.withAlphaComponent(0.12)
-        segContainer.layer.cornerRadius = 14
+        segContainer.layer.cornerRadius = 13
         segContainer.translatesAutoresizingMaskIntoConstraints = false
-        mainView87.addSubview(segContainer)
         for (button, translucent) in [(segTranslucent, true), (segSolid, false)] {
             button.translatesAutoresizingMaskIntoConstraints = false
-            button.layer.cornerRadius = 11
+            button.layer.cornerRadius = 10
             button.accessibilityLabel = translucent ? "透光" : "实色"
             button.addTarget(self, action: #selector(segTapped(_:)), for: .touchUpInside)
             segContainer.addSubview(button)
@@ -361,18 +405,17 @@ final class ConsolePanel82: UIViewController,
         segSolid.tag = 1
         let fxGroup87 = UIStackView()
         fxGroup87.axis = .horizontal
-        fxGroup87.spacing = 6
+        fxGroup87.spacing = 4
         fxGroup87.translatesAutoresizingMaskIntoConstraints = false
-        mainView87.addSubview(fxGroup87)
         let fxKinds: [DeckGlyph82.Kind] = [.fxFirework, .fxLantern, .fxSnow, .fxWind]
         let fxLabels = ["烟花", "孔明灯", "下雪", "刮风"]
         fxButtons87 = []
         for (index, kind) in fxKinds.enumerated() {
             let button = UIButton(type: .system)
-            button.setImage(DeckGlyph82.image(kind, pointSize: 19), for: .normal)
+            button.setImage(DeckGlyph82.image(kind, pointSize: 16), for: .normal)
             button.tintColor = .white
             button.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-            button.layer.cornerRadius = 18
+            button.layer.cornerRadius = 15
             button.layer.borderWidth = 0.5
             button.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
             button.accessibilityLabel = fxLabels[index]
@@ -380,28 +423,26 @@ final class ConsolePanel82: UIViewController,
             button.translatesAutoresizingMaskIntoConstraints = false
             button.addTarget(self, action: #selector(fxKindTapped87(_:)), for: .touchUpInside)
             NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 36),
-                button.heightAnchor.constraint(equalToConstant: 36),
+                button.widthAnchor.constraint(equalToConstant: 30),
+                button.heightAnchor.constraint(equalToConstant: 30),
             ])
             fxGroup87.addArrangedSubview(button)
             fxButtons87.append(button)
         }
-
-        // 聚焦行：layers 图标＋海报聚焦叠色开关。
-        let focusIcon = UIImageView(image: DeckGlyph82.image(.layers, pointSize: 17))
-        focusIcon.tintColor = UIColor.white.withAlphaComponent(0.8)
-        focusIcon.contentMode = .center
-        focusIcon.translatesAutoresizingMaskIntoConstraints = false
-        mainView87.addSubview(focusIcon)
-        // (89)B 聚焦开关改网页胶囊形态（30×18、钮点 12、
-        // 开态金底——沿原 UISwitch 的 onTint 金不走样）。
+        // 聚焦开关（30×18 胶囊、开态金底）并入同一行行尾。
         focusToggle89.isOn = WallLight82.focusEnabled82
         focusToggle89.translatesAutoresizingMaskIntoConstraints = false
         focusToggle89.accessibilityLabel = "海报聚焦叠色"
         focusToggle89.onToggle = { [weak self] on in
             self?.focusToggled89(on)
         }
-        mainView87.addSubview(focusToggle89)
+        let fxRow90 = UIStackView(arrangedSubviews: [
+            layers, segContainer, fxGroup87, focusToggle89])
+        fxRow90.axis = .horizontal
+        fxRow90.alignment = .center
+        fxRow90.distribution = .equalSpacing
+        fxRow90.translatesAutoresizingMaskIntoConstraints = false
+        mainView87.addSubview(fxRow90)
 
         // 底部行：灯钮＋帮助钮。
         lightSwitch.translatesAutoresizingMaskIntoConstraints = false
@@ -409,6 +450,8 @@ final class ConsolePanel82: UIViewController,
         lightSwitch.onToggle = { on in
             DeckTap82.log(host: "console", zone: "light", view: self.lightSwitch)
             ConsoleFX85.tap(self.lightSwitch, el: "light")
+            // port90（任务 19）运行时自证：切换链第 2 环（控制台回调）。
+            Breadcrumbs.log("port90 light toggle on=\(on ? 1 : 0)")
             WallLight82.setOn(on, source: "console")
         }
         mainView87.addSubview(lightSwitch)
@@ -423,7 +466,7 @@ final class ConsolePanel82: UIViewController,
         helpButton.addTarget(self, action: #selector(helpTapped), for: .touchUpInside)
         mainView87.addSubview(helpButton)
 
-        // (87) 队列网格视图：返回钮＋封面网格。
+        // port90 队列列表视图：返回钮＋文字行 48 表（封面网格退役）。
         let backButton87 = UIButton(type: .system)
         backButton87.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         backButton87.tintColor = .white
@@ -433,27 +476,26 @@ final class ConsolePanel82: UIViewController,
         backButton87.translatesAutoresizingMaskIntoConstraints = false
         backButton87.addTarget(self, action: #selector(backTapped87), for: .touchUpInside)
         queueView87.addSubview(backButton87)
-        let gridLayout = UICollectionViewFlowLayout()
-        gridLayout.scrollDirection = .vertical
-        gridLayout.minimumInteritemSpacing = 10
-        gridLayout.minimumLineSpacing = 12
-        grid87 = UICollectionView(frame: .zero, collectionViewLayout: gridLayout)
-        grid87.backgroundColor = .clear
-        grid87.showsVerticalScrollIndicator = false
-        grid87.dataSource = self
-        grid87.delegate = self
-        grid87.register(CoverGridCell87.self, forCellWithReuseIdentifier: "grid87")
-        grid87.translatesAutoresizingMaskIntoConstraints = false
-        queueView87.addSubview(grid87)
+        table87 = UITableView(frame: .zero, style: .plain)
+        table87.backgroundColor = .clear
+        table87.separatorStyle = .none
+        table87.showsVerticalScrollIndicator = false
+        table87.dataSource = self
+        table87.delegate = self
+        table87.rowHeight = 48
+        table87.register(ConsoleQueueRowCell90.self,
+                         forCellReuseIdentifier: ConsoleQueueRowCell90.reuseId)
+        table87.translatesAutoresizingMaskIntoConstraints = false
+        queueView87.addSubview(table87)
         NSLayoutConstraint.activate([
             backButton87.topAnchor.constraint(equalTo: queueView87.topAnchor, constant: 12),
             backButton87.leadingAnchor.constraint(equalTo: queueView87.leadingAnchor, constant: 16),
             backButton87.widthAnchor.constraint(equalToConstant: 36),
             backButton87.heightAnchor.constraint(equalToConstant: 36),
-            grid87.topAnchor.constraint(equalTo: backButton87.bottomAnchor, constant: 8),
-            grid87.leadingAnchor.constraint(equalTo: queueView87.leadingAnchor, constant: 12),
-            grid87.trailingAnchor.constraint(equalTo: queueView87.trailingAnchor, constant: -12),
-            grid87.bottomAnchor.constraint(equalTo: queueView87.bottomAnchor, constant: -12),
+            table87.topAnchor.constraint(equalTo: backButton87.bottomAnchor, constant: 8),
+            table87.leadingAnchor.constraint(equalTo: queueView87.leadingAnchor, constant: 12),
+            table87.trailingAnchor.constraint(equalTo: queueView87.trailingAnchor, constant: -12),
+            table87.bottomAnchor.constraint(equalTo: queueView87.bottomAnchor, constant: -12),
         ])
 
         // 朝向无关的内层约束（分段两钮恒在 segContainer
@@ -461,14 +503,19 @@ final class ConsolePanel82: UIViewController,
         NSLayoutConstraint.activate([
             clearButton.widthAnchor.constraint(equalToConstant: 32),
             clearButton.heightAnchor.constraint(equalToConstant: 28),
+            // port90：合并行内件定尺寸（stack 只管分布、尺寸在此恒钉）。
+            layers.widthAnchor.constraint(equalToConstant: 20),
+            layers.heightAnchor.constraint(equalToConstant: 20),
+            segContainer.widthAnchor.constraint(equalToConstant: 62),
+            segContainer.heightAnchor.constraint(equalToConstant: 26),
             segTranslucent.leadingAnchor.constraint(equalTo: segContainer.leadingAnchor, constant: 3),
             segTranslucent.centerYAnchor.constraint(equalTo: segContainer.centerYAnchor),
-            segTranslucent.widthAnchor.constraint(equalToConstant: 34),
-            segTranslucent.heightAnchor.constraint(equalToConstant: 22),
+            segTranslucent.widthAnchor.constraint(equalToConstant: 27),
+            segTranslucent.heightAnchor.constraint(equalToConstant: 20),
             segSolid.trailingAnchor.constraint(equalTo: segContainer.trailingAnchor, constant: -3),
             segSolid.centerYAnchor.constraint(equalTo: segContainer.centerYAnchor),
-            segSolid.widthAnchor.constraint(equalToConstant: 34),
-            segSolid.heightAnchor.constraint(equalToConstant: 22),
+            segSolid.widthAnchor.constraint(equalToConstant: 27),
+            segSolid.heightAnchor.constraint(equalToConstant: 20),
             helpButton.widthAnchor.constraint(equalToConstant: 32),
             helpButton.heightAnchor.constraint(equalToConstant: 32),
             // (89) §4：音量行高对齐网页 38（滑杆命中高）。
@@ -476,72 +523,81 @@ final class ConsolePanel82: UIViewController,
             // (89)B：聚焦胶囊开关定尺寸（网页 toggle 30×18）。
             focusToggle89.widthAnchor.constraint(equalToConstant: 30),
             focusToggle89.heightAnchor.constraint(equalToConstant: 18),
+            // port90：开灯长条定版尺寸 200×46 代码可证（旧靠 intrinsicContentSize）。
+            lightSwitch.widthAnchor.constraint(equalToConstant: 200),
+            lightSwitch.heightAnchor.constraint(equalToConstant: 46),
         ])
         // (87) 竖屏单列链（自上而下：条带/钮排/功能行/
         // 音量/图层/聚焦/灯行；(89) 后总高 390 ≤ 400 卡高）。
         portraitConstraints85 = [
-            clearButton.topAnchor.constraint(equalTo: mainView87.topAnchor, constant: 12),
-            clearButton.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -16),
+            // port90（任务 21/24）：拍立得区钉在滚动内容顶部
+            // （头行 40＋舞台 232）；下方条带起整链相对锚点与
+            // 间距与加区前逐项相同，仅首锚改挂区底。
+            polaroidZone90.topAnchor.constraint(equalTo: mainView87.contentLayoutGuide.topAnchor, constant: 10),
+            polaroidZone90.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 16),
+            polaroidZone90.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -16),
+            polaroidZone90.heightAnchor.constraint(equalToConstant: 272),
 
-            stripScroll87.topAnchor.constraint(equalTo: mainView87.topAnchor, constant: 12),
-            stripScroll87.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 16),
+            clearButton.topAnchor.constraint(equalTo: stripScroll87.topAnchor),
+            clearButton.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -16),
+
+            stripScroll87.topAnchor.constraint(equalTo: polaroidZone90.bottomAnchor, constant: 10),
+            stripScroll87.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 16),
             stripScroll87.trailingAnchor.constraint(equalTo: clearButton.leadingAnchor, constant: -8),
             stripScroll87.heightAnchor.constraint(equalToConstant: 86),
 
             transRow87.topAnchor.constraint(equalTo: stripScroll87.bottomAnchor, constant: 10),
-            transRow87.centerXAnchor.constraint(equalTo: mainView87.centerXAnchor),
+            transRow87.centerXAnchor.constraint(equalTo: mainView87.frameLayoutGuide.centerXAnchor),
             transRow87.heightAnchor.constraint(equalToConstant: 54),
 
             // (89) §4：功能行边距 24 → 12（296 卡宽下六格
             // 42 宽＋间隙 4 的网页账）、行高 44 → 40。
             functionRow.topAnchor.constraint(equalTo: transRow87.bottomAnchor, constant: 12),
-            functionRow.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 12),
-            functionRow.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -12),
+            functionRow.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 12),
+            functionRow.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -12),
             functionRow.heightAnchor.constraint(equalToConstant: 40),
 
             speaker.topAnchor.constraint(equalTo: functionRow.bottomAnchor, constant: 12),
-            speaker.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
+            speaker.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 24),
             speaker.widthAnchor.constraint(equalToConstant: 30),
             speaker.heightAnchor.constraint(equalToConstant: 30),
             volumeSlider.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
             volumeSlider.leadingAnchor.constraint(equalTo: speaker.trailingAnchor, constant: 10),
             volumeSlider.trailingAnchor.constraint(equalTo: volumeValue89.leadingAnchor, constant: -8),
             volumeValue89.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
-            volumeValue89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            volumeValue89.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -24),
             volumeValue89.widthAnchor.constraint(equalToConstant: 38),
 
-            layers.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 14),
-            layers.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
-            layers.widthAnchor.constraint(equalToConstant: 24),
-            layers.heightAnchor.constraint(equalToConstant: 24),
-            segContainer.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
-            segContainer.leadingAnchor.constraint(equalTo: layers.trailingAnchor, constant: 10),
-            segContainer.widthAnchor.constraint(equalToConstant: 76),
-            segContainer.heightAnchor.constraint(equalToConstant: 28),
-            fxGroup87.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
-            fxGroup87.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -16),
+            // port90 合并行：图层/分段/特效/聚焦同行，行高 30。
+            fxRow90.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 14),
+            fxRow90.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 12),
+            fxRow90.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -12),
+            fxRow90.heightAnchor.constraint(equalToConstant: 30),
 
-            focusIcon.topAnchor.constraint(equalTo: layers.bottomAnchor, constant: 12),
-            focusIcon.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
-            focusIcon.widthAnchor.constraint(equalToConstant: 24),
-            focusIcon.heightAnchor.constraint(equalToConstant: 24),
-            focusToggle89.centerYAnchor.constraint(equalTo: focusIcon.centerYAnchor),
-            focusToggle89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
-
-            lightSwitch.topAnchor.constraint(equalTo: focusIcon.bottomAnchor, constant: 14),
-            lightSwitch.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 24),
+            lightSwitch.topAnchor.constraint(equalTo: fxRow90.bottomAnchor, constant: 14),
+            lightSwitch.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 24),
+            // port90：滚动内容底锚（内容高由链尾定义）。
+            lightSwitch.bottomAnchor.constraint(equalTo: mainView87.contentLayoutGuide.bottomAnchor, constant: -10),
             helpButton.centerYAnchor.constraint(equalTo: lightSwitch.centerYAnchor),
-            helpButton.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            helpButton.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -24),
         ]
         // (87) 横屏双列链：左列＝条带＋钮排＋功能行；右
         // 列＝音量/图层/聚焦/灯光四行（卡高 232 内成立）。
         landscapeConstraints85 = [
-            clearButton.topAnchor.constraint(equalTo: mainView87.topAnchor, constant: 12),
+            // port90（任务 21/24）：拍立得区横屏同构置顶（头行
+            // 40＋舞台 146）；双列链整体下移、列内相对锚点与
+            // 间距不变，卡高不足时整视图纵向滚动（任务 24 口径）。
+            polaroidZone90.topAnchor.constraint(equalTo: mainView87.contentLayoutGuide.topAnchor, constant: 10),
+            polaroidZone90.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 16),
+            polaroidZone90.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -16),
+            polaroidZone90.heightAnchor.constraint(equalToConstant: 186),
+
+            clearButton.topAnchor.constraint(equalTo: stripScroll87.topAnchor),
             clearButton.trailingAnchor.constraint(equalTo: stripScroll87.trailingAnchor),
 
-            stripScroll87.topAnchor.constraint(equalTo: mainView87.topAnchor, constant: 12),
-            stripScroll87.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 16),
-            stripScroll87.widthAnchor.constraint(equalTo: mainView87.widthAnchor, multiplier: 0.44),
+            stripScroll87.topAnchor.constraint(equalTo: polaroidZone90.bottomAnchor, constant: 8),
+            stripScroll87.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 16),
+            stripScroll87.widthAnchor.constraint(equalTo: mainView87.frameLayoutGuide.widthAnchor, multiplier: 0.44),
             stripScroll87.heightAnchor.constraint(equalToConstant: 82),
 
             transRow87.topAnchor.constraint(equalTo: stripScroll87.bottomAnchor, constant: 8),
@@ -549,11 +605,13 @@ final class ConsolePanel82: UIViewController,
             transRow87.heightAnchor.constraint(equalToConstant: 54),
 
             functionRow.topAnchor.constraint(equalTo: transRow87.bottomAnchor, constant: 8),
-            functionRow.leadingAnchor.constraint(equalTo: mainView87.leadingAnchor, constant: 16),
+            functionRow.leadingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.leadingAnchor, constant: 16),
             functionRow.trailingAnchor.constraint(equalTo: stripScroll87.trailingAnchor),
             functionRow.heightAnchor.constraint(equalToConstant: 40),
+            // port90：左列底不越内容底（内容高取双列较高者）。
+            functionRow.bottomAnchor.constraint(lessThanOrEqualTo: mainView87.contentLayoutGuide.bottomAnchor, constant: -12),
 
-            speaker.topAnchor.constraint(equalTo: mainView87.topAnchor, constant: 16),
+            speaker.topAnchor.constraint(equalTo: polaroidZone90.bottomAnchor, constant: 8),
             speaker.leadingAnchor.constraint(equalTo: stripScroll87.trailingAnchor, constant: 28),
             speaker.widthAnchor.constraint(equalToConstant: 30),
             speaker.heightAnchor.constraint(equalToConstant: 30),
@@ -561,31 +619,21 @@ final class ConsolePanel82: UIViewController,
             volumeSlider.leadingAnchor.constraint(equalTo: speaker.trailingAnchor, constant: 10),
             volumeSlider.trailingAnchor.constraint(equalTo: volumeValue89.leadingAnchor, constant: -8),
             volumeValue89.centerYAnchor.constraint(equalTo: speaker.centerYAnchor),
-            volumeValue89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            volumeValue89.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -24),
             volumeValue89.widthAnchor.constraint(equalToConstant: 38),
 
-            layers.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 14),
-            layers.leadingAnchor.constraint(equalTo: speaker.leadingAnchor),
-            layers.widthAnchor.constraint(equalToConstant: 24),
-            layers.heightAnchor.constraint(equalToConstant: 24),
-            segContainer.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
-            segContainer.leadingAnchor.constraint(equalTo: layers.trailingAnchor, constant: 10),
-            segContainer.widthAnchor.constraint(equalToConstant: 76),
-            segContainer.heightAnchor.constraint(equalToConstant: 28),
-            fxGroup87.centerYAnchor.constraint(equalTo: layers.centerYAnchor),
-            fxGroup87.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -16),
+            // port90 合并行（横屏右列同式单行）。
+            fxRow90.topAnchor.constraint(equalTo: speaker.bottomAnchor, constant: 14),
+            fxRow90.leadingAnchor.constraint(equalTo: speaker.leadingAnchor),
+            fxRow90.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -12),
+            fxRow90.heightAnchor.constraint(equalToConstant: 30),
 
-            focusIcon.topAnchor.constraint(equalTo: layers.bottomAnchor, constant: 14),
-            focusIcon.leadingAnchor.constraint(equalTo: speaker.leadingAnchor),
-            focusIcon.widthAnchor.constraint(equalToConstant: 24),
-            focusIcon.heightAnchor.constraint(equalToConstant: 24),
-            focusToggle89.centerYAnchor.constraint(equalTo: focusIcon.centerYAnchor),
-            focusToggle89.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
-
-            lightSwitch.topAnchor.constraint(equalTo: focusIcon.bottomAnchor, constant: 14),
+            lightSwitch.topAnchor.constraint(equalTo: fxRow90.bottomAnchor, constant: 14),
             lightSwitch.leadingAnchor.constraint(equalTo: speaker.leadingAnchor),
+            // port90：滚动内容底锚（右列链尾定义内容高）。
+            lightSwitch.bottomAnchor.constraint(equalTo: mainView87.contentLayoutGuide.bottomAnchor, constant: -12),
             helpButton.centerYAnchor.constraint(equalTo: lightSwitch.centerYAnchor),
-            helpButton.trailingAnchor.constraint(equalTo: mainView87.trailingAnchor, constant: -24),
+            helpButton.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -24),
         ]
         // 初始按竖屏集落位；首个布局回调按真实朝向校正。
         NSLayoutConstraint.activate(portraitConstraints85)
@@ -603,6 +651,8 @@ final class ConsolePanel82: UIViewController,
         Breadcrumbs.log("port89 console=right/w296/r24/fn42x40/vol30+val")
         // (89)B 见证：功能行网页 6 格构成＋高生长＋聚焦胶囊。
         Breadcrumbs.log("port89 consoleB row=web6/hgrow/focuscap")
+        // port90 见证：队列文字行 48＋图层聚焦合并一行＋灯条 200×46 恒约束＋拍立得区置顶。
+        Breadcrumbs.log("port90 console queue=rows48/fxrow=merged/light=200x46/polaroid=top")
     }
 
     override func viewDidLayoutSubviews() {
@@ -617,7 +667,6 @@ final class ConsolePanel82: UIViewController,
                 landscape ? portraitConstraints85 : landscapeConstraints85)
             NSLayoutConstraint.activate(
                 landscape ? landscapeConstraints85 : portraitConstraints85)
-            grid87?.collectionViewLayout.invalidateLayout()
             Breadcrumbs.log("console86 land=\(landscape ? 1 : 0)")
         }
         // (89) §4：竖屏卡宽对齐网页面板 min(296, 屏宽−32)；
@@ -629,14 +678,15 @@ final class ConsolePanel82: UIViewController,
         }
         // 卡高：(89)B 改网页 PanelShell 内容生长口径——高
         // ＝内容链实高，上限＝屏高−底锚 90−顶距 56（网页
-        // max-height: 100dvh−底距−56 同式）。竖屏链账：
-        // 顶 12＋条带 86＋10＋钮排 54＋12＋功能 40＋12＋
-        // 音量 30＋14＋图层 24＋12＋聚焦 24＋14＋灯 46＝
-        // 390、底留 10 → 内容高 400；横屏双列内容高＝左
-        // 列链（顶 12＋条带 82＋8＋钮排 54＋8＋功能 40＝
-        // 204）＋底留 12＝216（右列 194 更矮、不主导）。
+        // max-height: 100dvh−底距−56 同式）。port90 竖屏链账
+        // （拍立得区＋合并行后）：顶 10＋拍立得 272＋10＋条带
+        // 86＋10＋钮排 54＋12＋功能 40＋12＋音量行 38＋14＋合
+        // 并行 30＋14＋灯 46＋底留 10 → 内容高 658；横屏＝顶
+        // 10＋拍立得 186＋8＋左列链 192＋底留 12 → 396（右列
+        // 更矮、不主导）。超上限时主视图纵向滚动（任务 24），
+        // 各行尺寸不缩。
         let cap89 = bounds.height - view.safeAreaInsets.bottom - 90 - 56
-        let cardH = landscape ? min(216, cap89) : min(400, cap89)
+        let cardH = landscape ? min(396, cap89) : min(658, cap89)
         if let cardHeight85, abs(cardHeight85.constant - cardH) > 0.5 {
             cardHeight85.constant = cardH
         }
@@ -654,6 +704,8 @@ final class ConsolePanel82: UIViewController,
             self.card85.transform = .identity
         }
         refreshTrans87()
+        // port90（任务 21）：控制台落位后备池并启动逐张打印。
+        polaroidZone90.beginIfNeeded()
     }
 
     /// (85) 第 7 条：点卡外（压暗区）关闭。
@@ -729,7 +781,7 @@ final class ConsolePanel82: UIViewController,
                 stripTiles87.append(tile)
             }
         }
-        grid87?.reloadData()
+        table87?.reloadData()
     }
 
     @objc private func stripTileTapped87(_ sender: CoverTile87) {
@@ -756,7 +808,7 @@ final class ConsolePanel82: UIViewController,
         showingGrid87 = show
         Breadcrumbs.log("console87 view=\(show ? "grid" : "main")")
         if show {
-            grid87.reloadData()
+            table87.reloadData()
             queueView87.isHidden = false
             queueView87.transform = CGAffineTransform(scaleX: 0.97, y: 0.97)
         } else {
@@ -777,36 +829,28 @@ final class ConsolePanel82: UIViewController,
         }
     }
 
-    func collectionView(_ collectionView: UICollectionView,
-                        numberOfItemsInSection section: Int) -> Int {
+    // port90：卡内队列表数据（文字行 48，规格镜像 QueueTrackCell＋34 封面缩略）。
+    func tableView(_ tableView: UITableView,
+                   numberOfRowsInSection section: Int) -> Int {
         queueTracks.count
     }
 
-    func collectionView(_ collectionView: UICollectionView,
-                        cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
-        let cell = collectionView.dequeueReusableCell(
-            withReuseIdentifier: "grid87", for: indexPath) as! CoverGridCell87
-        cell.configure(track: queueTracks[indexPath.item],
-                       index: indexPath.item,
-                       isCurrent: indexPath.item == queueCurrent,
-                       isPlaying: PlaybackEngine.shared.isPlaying)
+    func tableView(_ tableView: UITableView,
+                   cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(
+            withIdentifier: ConsoleQueueRowCell90.reuseId,
+            for: indexPath) as! ConsoleQueueRowCell90
+        cell.configure90(track: queueTracks[indexPath.row],
+                         isCurrent: indexPath.row == queueCurrent)
         return cell
     }
 
-    func collectionView(_ collectionView: UICollectionView,
-                        didSelectItemAt indexPath: IndexPath) {
-        Breadcrumbs.log("console87 grid play idx=\(indexPath.item)")
-        QueueManager.shared.playAtIndex(indexPath.item)
+    func tableView(_ tableView: UITableView,
+                   didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        Breadcrumbs.log("port90 console row play idx=\(indexPath.row)")
+        QueueManager.shared.playAtIndex(indexPath.row)
         dismiss(animated: true)
-    }
-
-    func collectionView(_ collectionView: UICollectionView,
-                        layout collectionViewLayout: UICollectionViewLayout,
-                        sizeForItemAt indexPath: IndexPath) -> CGSize {
-        let width = collectionView.bounds.width
-        let columns: CGFloat = width > 500 ? 6 : 4
-        let side = floor((width - (columns - 1) * 10) / columns)
-        return CGSize(width: side, height: side + 30)
     }
 
     // MARK: 功能行装配
@@ -857,7 +901,9 @@ final class ConsolePanel82: UIViewController,
     private func configureTransButton87(_ button: UIButton,
                                         glyph: DeckGlyph82.Kind,
                                         size: CGFloat, label: String) {
-        button.setImage(DeckGlyph82.image(glyph, pointSize: size >= 54 ? 22 : 19), for: .normal)
+        // port90（任务 20）：字号与播放台严格对齐（播放/暂停 21、上下曲 19），
+        // 字形同走 DeckGlyph82 核心 M 字形单一工厂、无第二套绘制。
+        button.setImage(DeckGlyph82.image(glyph, pointSize: size >= 54 ? 21 : 19), for: .normal)
         button.tintColor = .white
         button.backgroundColor = UIColor.white.withAlphaComponent(0.12)
         button.layer.cornerRadius = size / 2
@@ -874,7 +920,7 @@ final class ConsolePanel82: UIViewController,
     private func refreshTrans87() {
         let playing = PlaybackEngine.shared.isPlaying
         transPlay87.setImage(
-            DeckGlyph82.image(playing ? .pause : .play, pointSize: 22), for: .normal)
+            DeckGlyph82.image(playing ? .pause : .play, pointSize: 21), for: .normal)
         transPlay87.accessibilityLabel = playing ? "暂停" : "播放"
     }
 
@@ -1090,7 +1136,7 @@ final class ConsolePanel82: UIViewController,
         if let onSketchbook {
             dismiss(animated: true) { onSketchbook() }
         } else {
-            NativePlaybackFailureToast.show(message: "速记簿在主页墙左缘打开")
+            NativePlaybackFailureToast.show(message: "日记本在主页墙左缘打开")
             Breadcrumbs.log("console82 sketch host=unsupported")
         }
     }
@@ -1169,7 +1215,7 @@ final class ConsolePanel82: UIViewController,
             title: "控制台",
             message: "队列：顶部封面条左右滑，点封面立即播放；列表钮打开封面网格，右上垃圾桶清空队列。\n"
                 + "顶部圆钮：上一曲、播放/暂停、下一曲。\n"
-                + "功能行：播放模式（点一下换一种：随机→顺序→循环→单曲）、主题（换油画主题）、歌曲列表、去处（换墙面）、播放器（进播放页）、设置。特效在播放页选样式，宠物开关在设置里，速记簿在主页墙左缘。\n"
+                + "功能行：播放模式（点一下换一种：随机→顺序→循环→单曲）、主题（换油画主题）、歌曲列表、去处（换墙面）、播放器（进播放页）、设置。特效在播放页选样式，宠物开关在设置里，日记本在主页墙左缘。\n"
                 + "图层行：透光/实色切换墙面卡片质感；旁边四钮是全屏特效（烟花、孔明灯、下雪、刮风）；聚焦叠色开时，关灯后只有点中的封面亮起。\n"
                 + "灯钮：开灯＝全部封面亮起；关灯＝整墙暗下、点哪张亮哪张。\n"
                 + "播放台 5 秒无操作自动收成细条，点细条恢复。",
@@ -1295,5 +1341,131 @@ enum ConsoleFX85 {
             ring.removeFromSuperview()
             squares.forEach { $0.removeFromSuperview() }
         }
+    }
+}
+
+/// port90 控制台卡内队列行（文字行 48）：规格镜像独立队列页
+/// QueueTrackCell（当前行左侧 3pt 强调条 ThemeSystem62.currentAccent、
+/// 标题 13（当前行 semibold）/歌手 12/时长 12 等宽右对齐宽 46），
+/// 另加 34×34 封面缩略（走 proxiedURLString 规范化通路，与墙面同路）。
+final class ConsoleQueueRowCell90: UITableViewCell {
+
+    static let reuseId = "ConsoleQueueRowCell90"
+
+    private let accentBar = UIView()
+    private let coverView = UIImageView()
+    private let titleLabel = UILabel()
+    private let artistLabel = UILabel()
+    private let durationLabel = UILabel()
+    private var coverTask: Task<Void, Never>?
+    private var trackId: String?
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = .clear
+        selectionStyle = .none
+
+        accentBar.backgroundColor = ThemeSystem62.currentAccent
+        accentBar.isHidden = true
+        accentBar.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(accentBar)
+
+        coverView.contentMode = .scaleAspectFill
+        coverView.clipsToBounds = true
+        coverView.layer.cornerRadius = 6
+        coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        coverView.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(coverView)
+
+        titleLabel.font = .systemFont(ofSize: 13)
+        titleLabel.textColor = UIColor.white.withAlphaComponent(0.92)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(titleLabel)
+        artistLabel.font = .systemFont(ofSize: 12)
+        artistLabel.textColor = UIColor.white.withAlphaComponent(0.45)
+        artistLabel.lineBreakMode = .byTruncatingTail
+        artistLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(artistLabel)
+        durationLabel.font = .monospacedDigitSystemFont(ofSize: 12, weight: .regular)
+        durationLabel.textColor = UIColor.white.withAlphaComponent(0.45)
+        durationLabel.textAlignment = .right
+        durationLabel.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(durationLabel)
+
+        NSLayoutConstraint.activate([
+            accentBar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
+            accentBar.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            accentBar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -12),
+            accentBar.widthAnchor.constraint(equalToConstant: 3),
+            coverView.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 12),
+            coverView.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            coverView.widthAnchor.constraint(equalToConstant: 34),
+            coverView.heightAnchor.constraint(equalToConstant: 34),
+            titleLabel.leadingAnchor.constraint(equalTo: coverView.trailingAnchor, constant: 10),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: durationLabel.leadingAnchor, constant: -8),
+            titleLabel.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 6),
+            artistLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            artistLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            artistLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
+            durationLabel.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -10),
+            durationLabel.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            durationLabel.widthAnchor.constraint(equalToConstant: 46),
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        coverTask?.cancel()
+        coverView.image = nil
+        trackId = nil
+        titleLabel.text = nil
+        artistLabel.text = nil
+        durationLabel.text = nil
+        accentBar.isHidden = true
+    }
+
+    func configure90(track: FoliaTrack, isCurrent: Bool) {
+        trackId = track.id
+        titleLabel.text = track.title
+        artistLabel.text = track.artist
+        titleLabel.font = .systemFont(ofSize: 13, weight: isCurrent ? .semibold : .regular)
+        accentBar.isHidden = !isCurrent
+        if isCurrent {
+            accentBar.backgroundColor = ThemeSystem62.currentAccent
+        }
+        durationLabel.text = Self.durationText90(track.duration)
+        loadCover90(track: track)
+    }
+
+    private func loadCover90(track: FoliaTrack) {
+        coverTask?.cancel()
+        coverView.image = nil
+        guard let raw = track.artworkURL?.absoluteString else { return }
+        let loader = NativeCoverLoader.shared
+        let proxy = loader.proxiedURLString(raw, tier: 256)
+        if let key = proxy, let cached = loader.cachedImage(for: key) {
+            coverView.image = cached
+            return
+        }
+        if let cached = loader.cachedImageAnyTier(raw: raw, excludingTier: 256) {
+            coverView.image = cached
+            return
+        }
+        let id = track.id
+        coverTask = Task { [weak self] in
+            let image = await loader.image(for: proxy ?? raw, tier: 256)
+            guard let self, self.trackId == id, let image else { return }
+            self.coverView.image = image
+        }
+    }
+
+    /// 时长 m:ss（无有效时长留空，不造数；与 QueueTrackCell 同式）。
+    private static func durationText90(_ seconds: TimeInterval) -> String {
+        guard seconds > 0, seconds.isFinite else { return "" }
+        let total = Int(seconds.rounded())
+        return String(format: "%d:%02d", total / 60, total % 60)
     }
 }

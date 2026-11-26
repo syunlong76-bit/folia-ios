@@ -580,7 +580,7 @@ enum Settings62ClusterA {
     // MARK: - 页签 2 主页与歌单
     //
     // (66) 对齐网页版 HomePage：资料库 → 主页（胶囊入口）→
-    // 网格 → 墙面（BravaisWallGroup）；速记簿组为宿主老面卡，
+    // 网格 → 墙面（BravaisWallGroup）；日记本组为宿主老面卡，
     // 归整后随老面卡在本签末尾（网页同为末组）。
 
     private static func buildHome(host: SettingsViewController, into stack: UIStackView,

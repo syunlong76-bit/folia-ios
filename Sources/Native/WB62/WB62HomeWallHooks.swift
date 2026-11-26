@@ -104,7 +104,7 @@ final class WB62HomeWallHooks: NSObject, UIGestureRecognizerDelegate {
     // MARK: 手势分发
 
     // (75) handleSwipeLeft 已整段摘除（见文件头）：连同其
-    // 独占的 findDrawer 递归查找一并删除，速记簿改走搜索
+    // 独占的 findDrawer 递归查找一并删除，日记本改走搜索
     // 行尾按钮等既有明确入口，不再占墙面滑动。
 
     @objc private func handleToolbarLongPress(_ recognizer: UILongPressGestureRecognizer) {

@@ -2,7 +2,7 @@ import UIKit
 
 // SketchbookHandleSettings.swift
 //
-// 速记簿把手三项设置的消费端（(55) 工作流 H；设置行本体在工作流
+// 日记本把手三项设置的消费端（(55) 工作流 H；设置行本体在工作流
 // G 的设置页，这里只读 UserDefaults 键，键名两边定死）：
 // - sketchbook.handle.show（Bool，缺省 true）：把手显不显示。
 //   藏起来后抽屉本体不受影响——别的入口（宿主编程式 setOpen）

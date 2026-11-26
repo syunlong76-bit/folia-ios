@@ -268,7 +268,7 @@ final class CommandPaletteViewController: UIViewController {
         return sections
     }
 
-    // MARK: - (62) WC 簇命令全集（导航/面板/歌词/速记簿/目录/大肥鱼/场景/主题）
+    // MARK: - (62) WC 簇命令全集（导航/面板/歌词/日记本/目录/大肥鱼/场景/主题）
 
     private func buildRegistry62(track: FoliaTrack?, hasTrack: Bool) -> [Section] {
         [
@@ -286,7 +286,7 @@ final class CommandPaletteViewController: UIViewController {
                         MiniPlayerPanelPresenter.presentSettings()
                     })
                 }),
-                Command(id: "nav.sketchbook", title: "打开速记簿", subtitle: "主页墙左缘抽屉",
+                Command(id: "nav.sketchbook", title: "打开日记本", subtitle: "主页墙左缘抽屉",
                         icon: "note.text", isEnabled: true, action: { host in
                     host.openSketchbook62()
                 }),
@@ -403,21 +403,21 @@ final class CommandPaletteViewController: UIViewController {
                     }
                 }),
             ]),
-            Section(title: "速记簿", commands: [
-                Command(id: "sketch.open", title: "打开速记簿", subtitle: nil,
+            Section(title: "日记本", commands: [
+                Command(id: "sketch.open", title: "打开日记本", subtitle: nil,
                         icon: "note.text", isEnabled: true, action: { host in
                     host.openSketchbook62()
                 }),
-                Command(id: "sketch.addCurrent", title: "收当前歌进速记簿",
+                Command(id: "sketch.addCurrent", title: "收当前歌进日记本",
                         subtitle: track?.title ?? "暂无播放",
                         icon: "plus.rectangle.on.folder", isEnabled: hasTrack, action: { host in
                     guard let current = host.engine.currentTrack else { return }
                     let added = SketchbookStore.shared.add(
                         current, source: "command62", originLabel: "命令面板")
                     host.finish(id: "sketch.addCurrent",
-                                toast: added ? "已收进速记簿" : "已在速记簿里")
+                                toast: added ? "已收进日记本" : "已在日记本里")
                 }),
-                Command(id: "sketch.clear", title: "清空速记簿", subtitle: "需二次确认",
+                Command(id: "sketch.clear", title: "清空日记本", subtitle: "需二次确认",
                         icon: "trash", isEnabled: !SketchbookStore.shared.entries.isEmpty,
                         action: { host in
                     host.confirmClearSketchbook62()
@@ -509,7 +509,7 @@ final class CommandPaletteViewController: UIViewController {
         })
     }
 
-    /// 打开速记簿：在窗口视图树里找已装配的 SketchbookDrawerView
+    /// 打开日记本：在窗口视图树里找已装配的 SketchbookDrawerView
     /// 真调 setOpen；不在场（不在主页墙）时诚实 toast。
     private func openSketchbook62() {
         Breadcrumbs.log("stage.palette.exec id=sketch.open62")
@@ -518,7 +518,7 @@ final class CommandPaletteViewController: UIViewController {
             if let drawer = self.findSketchbookDrawer62() {
                 drawer.setOpen(true, source: "command62")
             } else {
-                NativePlaybackFailureToast.show(message: "速记簿在主页墙左缘，请先回到主页墙")
+                NativePlaybackFailureToast.show(message: "日记本在主页墙左缘，请先回到主页墙")
             }
         }
     }
@@ -545,12 +545,12 @@ final class CommandPaletteViewController: UIViewController {
 
     private func confirmClearSketchbook62() {
         let alert = UIAlertController(
-            title: "清空速记簿", message: "将移除全部暂存歌曲（历史保留）。",
+            title: "清空日记本", message: "将移除全部暂存歌曲（历史保留）。",
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "取消", style: .cancel))
         alert.addAction(UIAlertAction(title: "清空", style: .destructive) { [weak self] _ in
             SketchbookStore.shared.clear(source: "command62")
-            self?.finish(id: "sketch.clear", toast: "速记簿已清空")
+            self?.finish(id: "sketch.clear", toast: "日记本已清空")
         })
         present(alert, animated: true)
     }

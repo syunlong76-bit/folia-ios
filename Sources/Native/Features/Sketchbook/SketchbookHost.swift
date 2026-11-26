@@ -2,10 +2,10 @@ import UIKit
 
 // SketchbookHost.swift
 //
-// 速记簿抽屉的自包含安装点（(53) 工作流 D）：把手 + 抽屉整套
+// 日记本抽屉的自包含安装点（(53) 工作流 D）：把手 + 抽屉整套
 // 只依赖宿主的一个 UIView，内部自管命中穿透、旁观点按关闭与
 // 数据订阅，宿主不需要任何额外接线。删掉这一处安装调用，
-// 速记簿即整体摘除（照 folia-major「一个功能的代码放在一起」
+// 日记本即整体摘除（照 folia-major「一个功能的代码放在一起」
 // 的收口口径）。
 //
 // 层级建议（协调者合流时）：装进 HomeWallViewController.view，
@@ -28,7 +28,7 @@ import UIKit
 
 enum SketchbookHost {
 
-    /// 把速记簿（左缘把手 + 滑出抽屉）装进宿主视图，返回抽屉
+    /// 把日记本（左缘把手 + 滑出抽屉）装进宿主视图，返回抽屉
     /// 视图供调用方按需持有（如需编程式开合时调 setOpen）。
     @discardableResult
     static func install(into host: UIView) -> SketchbookDrawerView {

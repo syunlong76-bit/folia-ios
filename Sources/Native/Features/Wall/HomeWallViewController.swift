@@ -122,13 +122,12 @@ final class HomeWallViewController: UIViewController,
     /// (87) 主题四圆点（台面右上，样片 .tdots）：四套油画
     /// 主题点选切换；收起态随内容组淡出（见
     /// setMiniBarContentsAlpha）。
-    private var miniThemeDots87: UIStackView?
-    private var miniThemeDotButtons87: [UIButton] = []
+    // port90（任务 13）：主题四圆点已撤除（长按台面循环主题手势保留）。
     /// (82) 第 7/8 条：控制台入口圆钮（纯图标）＋双时间标
     /// 签。(84) 第 1 条：台面改回 (80) 版为底——台面只留
     /// 播放/上一曲/下一曲/控制台入口四钮；(83) 回台的模
     /// 式钮/列表钮再撤，职能由控制台承接（模式/随机/特
-    /// 效/宠物/喜欢/速记簿六钮与队列均在 ConsolePanel82）。
+    /// 效/宠物/喜欢/日记本六钮与队列均在 ConsolePanel82）。
     private var miniConsoleButton: UIButton!
     private var miniTimeElapsed: UILabel!
     private var miniTimeDuration: UILabel!
@@ -202,7 +201,7 @@ final class HomeWallViewController: UIViewController,
     /// 分区可见性映射（原侧栏行显隐的设置消费点）改存本表，
     /// 由「…」菜单建菜单时消费（applyHomeTabs62Visibility）。
     private var seamSectionVisibility62: [String: Bool] = [:]
-    /// 速记簿抽屉宿主（(53) D 组装、(54) N 组起持有）：侧栏
+    /// 日记本抽屉宿主（(53) D 组装、(54) N 组起持有）：侧栏
     /// 打开时经 setExternallyCovered 整层隐藏（照网页版
     /// is-covered），关栏恢复。
     private var sketchbookDrawer: SketchbookDrawerView?
@@ -270,8 +269,8 @@ final class HomeWallViewController: UIViewController,
     /// cancelsTouchesInView=false（点外穿透不吞触摸）。
     private var seamImmersiveExitRecognizer: UITapGestureRecognizer?
     /// 沉浸期被中和的覆盖层原状态（3.7 (61) 第 1.5 条）：进入沉浸
-    /// 时存速记簿 covered 态/工作台宿主/宠物层的交互开关，退出
-    /// 时逐项恢复（原本就被侧栏 covered 的速记簿不代为解除）。
+    /// 时存日记本 covered 态/工作台宿主/宠物层的交互开关，退出
+    /// 时逐项恢复（原本就被侧栏 covered 的日记本不代为解除）。
     private var seamImmersiveSavedSketchbookCovered: Bool?
     private var seamImmersiveSavedPetEnabled: Bool?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
@@ -483,25 +482,25 @@ final class HomeWallViewController: UIViewController,
         // 「…」/全屏），账户/分区/设置/导览入口全部由工具条
         // 承接（分区歌单/电台/专辑/本地收进「…」菜单，见
         // seamMoreTapped）。原 onSidebarVisibilityChanged 的
-        // 墙交互锁与速记簿 covered 联动随侧栏形态一并退役。
+        // 墙交互锁与日记本 covered 联动随侧栏形态一并退役。
         Breadcrumbs.log("workbench74 desk=removed carrier=seam")
-        // (53) D 组速记簿：左缘把手＋抽屉宿主
+        // (53) D 组日记本：左缘把手＋抽屉宿主
         // 成为墙面最上层子视图（其 hitTest 只认把手/抽屉、其余穿透，
         // 非模态不挡墙操作；宠物岛走 window.layer 独立层级、互不影响）。
         // (54) N 组起持有引用：侧栏开关经 onSidebarVisibilityChanged
         // 调 setExternallyCovered 整层隐藏/恢复（见上闭包）。
         sketchbookDrawer = SketchbookHost.install(into: view)
-        // (85) 第 1 条：左上角小白线（速记簿静息把手）撤
+        // (85) 第 1 条：左上角小白线（日记本静息把手）撤
         // 除在装配点即落旗（(84) 只在侧栏装配处补设、依赖
-        // 装配顺序；抽屉本体保留，控制台速记簿钮仍可开）。
+        // 装配顺序；抽屉本体保留，控制台日记本钮仍可开）。
         sketchbookDrawer?.edgeHandleSuppressed84 = true
         // (53) L 组 chrome 收口留痕：提示条删除 + ✕ 关闭键 +
         // 齿轮/搜索并入侧栏，真机对账以此行确认新包在跑。
         Breadcrumbs.log("wall.chrome home hintBar=removed gearSearch=sidebar close=glass-x")
 
         // 缝合工具条安装（3.7 (55) 工作流 E、(60) 第 2 条改 z
-        // 序）：装在工作台宿主与速记簿之后，工具条本体插到速
-        // 记簿宿主之上（见 installSeamChrome），速记簿把手热
+        // 序）：装在工作台宿主与日记本之后，工具条本体插到速
+        // 记簿宿主之上（见 installSeamChrome），日记本把手热
         // 区下移 ≥115 与本条纵向错位。接线见文件尾。
         installSeamChrome()
         // (62) WB 钩子总装（动态背景门控/左滑/长按工具条/思索钮）。
@@ -831,7 +830,7 @@ final class HomeWallViewController: UIViewController,
             //    本体同收尾点；网格隐藏时无可见代价）。
             self.gridCollectionView?.collectionViewLayout.invalidateLayout()
             // 其余宿主元素审计结论（不需手动重排）：工作台浮
-            // 层/缝合工具条/速记簿/✕ 关闭键均为 AutoLayout 钉
+            // 层/缝合工具条/日记本/✕ 关闭键均为 AutoLayout 钉
             // 边或安全区锚定，系统布局传递随新 bounds 自动落
             // 位、无自有重算；相机 contentOffset 恒钉中心单元、
             // contentSize 不随 bounds 变（cellViewSize 只由几
@@ -1367,7 +1366,7 @@ final class HomeWallViewController: UIViewController,
         seamOpenEntry(at: instance.queueIndex)
     }
 
-    /// (82) 第 8 条：控制台速记簿钮——切换本墙速记簿抽屉
+    /// (82) 第 8 条：控制台日记本钮——切换本墙日记本抽屉
     /// （抽屉本体只装在本墙，控制台经此钩子调用）。
     func toggleSketchbook82() {
         guard let drawer = sketchbookDrawer else { return }
@@ -1673,13 +1672,28 @@ final class HomeWallViewController: UIViewController,
         // DeckGlyph82 现行临时套（J/K/L/M 未定版）。
         // (87) 样片台：播放钮改 42 圆玻璃底（白 0.13）。
         miniPlayButton.tintColor = .white
-        miniPlayButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
+        miniPlayButton.backgroundColor = .clear
         miniPlayButton.layer.cornerRadius = 21
         miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 20), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
         miniPlayButton.addTarget(self, action: #selector(miniPlayDown84), for: .touchDown)
         bar.addSubview(miniPlayButton)
+        // port90（任务 14）：播放钮改圆形毛玻璃（系统材质、透出台面底色），
+        // 尺寸/位置/字形不变；blur 子视图不接手势、置字形之下。
+        let miniPlayBlur90 = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        miniPlayBlur90.isUserInteractionEnabled = false
+        miniPlayBlur90.clipsToBounds = true
+        miniPlayBlur90.layer.cornerRadius = 21
+        miniPlayBlur90.translatesAutoresizingMaskIntoConstraints = false
+        miniPlayButton.insertSubview(miniPlayBlur90, at: 0)
+        NSLayoutConstraint.activate([
+            miniPlayBlur90.leadingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor),
+            miniPlayBlur90.trailingAnchor.constraint(equalTo: miniPlayButton.trailingAnchor),
+            miniPlayBlur90.topAnchor.constraint(equalTo: miniPlayButton.topAnchor),
+            miniPlayBlur90.bottomAnchor.constraint(equalTo: miniPlayButton.bottomAnchor),
+        ])
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
@@ -1708,7 +1722,7 @@ final class HomeWallViewController: UIViewController,
         // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
         miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
         miniConsoleButton.layer.cornerRadius = 21
-        miniConsoleButton.setImage(DeckGlyph82.image(.console, pointSize: 20), for: .normal)
+        miniConsoleButton.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 20), for: .normal)
         miniConsoleButton.tintColor = .white
         miniConsoleButton.accessibilityLabel = "控制台"
         miniConsoleButton.translatesAutoresizingMaskIntoConstraints = false
@@ -1716,58 +1730,7 @@ final class HomeWallViewController: UIViewController,
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleDown84), for: .touchDown)
         bar.addSubview(miniConsoleButton)
 
-        // (87) 主题四圆点（样片 .tdots：top 7 / right 10、
-        // 9pt 圆、白 0.55 描边、选中白环）：点选即写
-        // MiniPlayerTheme.stored 并发既有主题通知（与长按
-        // 循环同一通路）；命中区放大到 20pt。
-        let dotsStack = UIStackView()
-        dotsStack.axis = .horizontal
-        dotsStack.spacing = 5
-        dotsStack.alignment = .center
-        dotsStack.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(dotsStack)
-        miniThemeDots87 = dotsStack
-        miniThemeDotButtons87 = []
-        for (index, color) in Deck87.dotColors.enumerated() {
-            let button = UIButton(type: .custom)
-            button.tag = index
-            button.accessibilityLabel = "播放台主题"
-            button.translatesAutoresizingMaskIntoConstraints = false
-            let ring = UIView()
-            ring.layer.cornerRadius = 6.5
-            ring.layer.borderWidth = 2
-            ring.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
-            ring.isUserInteractionEnabled = false
-            ring.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(ring)
-            let circle = UIView()
-            circle.backgroundColor = color
-            circle.layer.cornerRadius = 4.5
-            circle.layer.borderWidth = 1
-            circle.layer.borderColor = UIColor.white.withAlphaComponent(0.55).cgColor
-            circle.isUserInteractionEnabled = false
-            circle.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(circle)
-            NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 20),
-                button.heightAnchor.constraint(equalToConstant: 20),
-                ring.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                ring.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                ring.widthAnchor.constraint(equalToConstant: 13),
-                ring.heightAnchor.constraint(equalToConstant: 13),
-                circle.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                circle.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                circle.widthAnchor.constraint(equalToConstant: 9),
-                circle.heightAnchor.constraint(equalToConstant: 9),
-            ])
-            button.addTarget(self, action: #selector(miniThemeDotTapped87(_:)), for: .touchUpInside)
-            dotsStack.addArrangedSubview(button)
-            miniThemeDotButtons87.append(button)
-        }
-        NSLayoutConstraint.activate([
-            dotsStack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 2),
-            dotsStack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-        ])
+        // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
         miniTimeElapsed = UILabel()
         // (89) §3-6 对齐网页 ProgressBar：时间标签 10px 等宽。
@@ -2024,27 +1987,6 @@ final class HomeWallViewController: UIViewController,
         applySlot(next, visible: false, width: 34)
     }
 
-    /// (87) 主题四圆点点选：写 stored＋发既有主题通知（与
-    /// 长按循环、缝长按同一通路），圆点选中环随 applyMini
-    /// Theme 回刷。
-    @objc private func miniThemeDotTapped87(_ sender: UIButton) {
-        guard sender.tag < Deck87.dotThemes.count else { return }
-        let theme = Deck87.dotThemes[sender.tag]
-        MiniPlayerTheme.stored = theme
-        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
-        Breadcrumbs.log("deck87 dot host=homewall t=\(theme.rawValue)")
-        refreshThemeDots87()
-    }
-
-    private func refreshThemeDots87() {
-        let current = MiniPlayerTheme.stored
-        for (index, button) in miniThemeDotButtons87.enumerated() {
-            let selected = Deck87.dotThemes[index] == current
-            // ring 是第一个子视图（装配序：ring 先于 circle）。
-            button.subviews.first?.isHidden = !selected
-        }
-    }
-
     private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
         button.isHidden = !visible
         if let constraint = button.constraints.first(where: {
@@ -2093,8 +2035,6 @@ final class HomeWallViewController: UIViewController,
         // (82) 第 7 条：字形与主题解耦（DeckGlyph82 单套），
         // 主题切换只剩播/停态回刷。
         refreshDeckIcons82()
-        // (87) 主题四圆点选中环随主题回刷。
-        refreshThemeDots87()
     }
 
     /// (82) 第 7 条：台面字形回刷——仅播/停态（上下曲字形
@@ -2869,7 +2809,7 @@ final class HomeWallViewController: UIViewController,
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
                                 miniPrevButton, miniNextButton, miniConsoleButton,
-                                miniTimeElapsed, miniTimeDuration, miniThemeDots87]
+                                miniTimeElapsed, miniTimeDuration]
         for view in views {
             view?.alpha = alpha
         }
@@ -2881,8 +2821,6 @@ final class HomeWallViewController: UIViewController,
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
-        // (87) 主题四圆点随内容组同启停（收起态不可点）。
-        miniThemeDots87?.isUserInteractionEnabled = interactive
     }
 
     // MARK: 附加功能浮层（3.7 (60) 第 7 条，主页墙宿主）
@@ -3408,9 +3346,9 @@ extension HomeWallViewController {
             }
         }
 
-        // 工具条 z 序（(60) 第 2 条）：提到速记簿宿主之上作双
-        // 保险——速记簿把手热区已下移（edgeTop ≥115）与本条纵
-        // 向错位，此处再保顶部条带的命中不被速记簿层拦截。
+        // 工具条 z 序（(60) 第 2 条）：提到日记本宿主之上作双
+        // 保险——日记本把手热区已下移（edgeTop ≥115）与本条纵
+        // 向错位，此处再保顶部条带的命中不被日记本层拦截。
         // (75) 第 3 项双向约束组：竖屏＝绕岛带（钉屏幕顶边
         // 全宽、高 104：凹口 0–56＋内容行 54–98＋底衬 6，
         // 条体绕岛、横线落岛左近）；横屏＝(74) 安全区侧锚
@@ -3938,8 +3876,8 @@ extension HomeWallViewController {
         if on {
             // 提层（3.7 (61) 第 1.5 条，修沉浸假卡死结构缺陷）：
             // 原退出热区被 insertSubview 到工作台宿主之下，其上
-            // 压着速记簿层与宠物层，落点到不了热区、沉浸退不出
-            // 来。进入沉浸时：①存覆盖层原状态；②速记簿整层经
+            // 压着日记本层与宠物层，落点到不了热区、沉浸退不出
+            // 来。进入沉浸时：①存覆盖层原状态；②日记本整层经
             // setExternallyCovered 藏起并穿透（把手/展开把手/
             // 热区一并不可命中）；③工作台宿主与宠物层关交互
             // （侧栏把手/悬浮头像等残留小件不可命中）；④退出
@@ -3973,7 +3911,7 @@ extension HomeWallViewController {
                     : "seam.lock77 out via=other")
             }
             if wasImmersive {
-                // 恢复原状态：速记簿原本就被外部（侧栏）covered
+                // 恢复原状态：日记本原本就被外部（侧栏）covered
                 // 时不代为解除，只恢复沉浸自己加的那层。
                 if let savedCovered = seamImmersiveSavedSketchbookCovered, !savedCovered {
                     sketchbookDrawer?.setExternallyCovered(false)

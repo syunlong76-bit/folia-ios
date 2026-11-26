@@ -106,7 +106,7 @@ enum Settings62ClusterC {
         })
         sync.addArrangedSubview(host.makeHairline())
         sync.addArrangedSubview(host.makeHintRow(
-            "协议假设：服务端在该地址下提供 PUT/GET <地址>/folia-sync.json（JSON 整体存取，Bearer 令牌鉴权），兼容 R2/S3 预签名或自建服务。同步对象＝设置域（配置白名单，含连接类非密钥项）＋速记簿，不含登录态与任何密钥。拉取覆盖速记簿前会留 .bak62 备份；拉取后速记簿以重启后生效为准。"))
+            "协议假设：服务端在该地址下提供 PUT/GET <地址>/folia-sync.json（JSON 整体存取，Bearer 令牌鉴权），兼容 R2/S3 预签名或自建服务。同步对象＝设置域（配置白名单，含连接类非密钥项）＋日记本，不含登录态与任何密钥。拉取覆盖日记本前会留 .bak62 备份；拉取后日记本以重启后生效为准。"))
         stack.addArrangedSubview(sync)
         reg(sync, 8)
 
@@ -472,7 +472,7 @@ enum Settings62ClusterC {
                     + "· 自定义字母键 —— 执行所绑命令（设置 → 快捷操作 → 命令面板组设置，默认未设置）\n\n"
                     + "触屏等价：\n"
                     + "· 长按缝合工具条 —— 打开命令面板\n"
-                    + "· 向左滑动 —— 打开所设目标（命令面板/速记簿/搜索）\n"
+                    + "· 向左滑动 —— 打开所设目标（命令面板/日记本/搜索）\n"
                     + "· 舞台三击 —— 洗牌切换下一个歌词特效\n"
                     + "· 点播台封面单击 —— 回播放页；双击台身 —— 进舞台")
             page.modalPresentationStyle = .overFullScreen
@@ -719,7 +719,7 @@ final class AIHelp62ViewController: UIViewController, UITableViewDataSource, UIT
            answer: "设置「存储与备份」的歌词导出行、命令面板「歌词」组、或播放面板歌词页签长按，都能导出当前歌的 .lrc 与 .fia。",
            keywords: ["导出", "歌词", "lrc", "fia"]),
         QA(question: "命令面板怎么打开？",
-           answer: "点播台顶排的「命令」键打开；命令涵盖播放/队列/导航/面板/歌词/速记簿/目录/大肥鱼/场景/主题等组。",
+           answer: "点播台顶排的「命令」键打开；命令涵盖播放/队列/导航/面板/歌词/日记本/目录/大肥鱼/场景/主题等组。",
            keywords: ["命令", "面板", "快捷"]),
         QA(question: "OBS 直播怎么显示歌词海报？",
            answer: "设置「连接与集成」复制 OBS 浏览器源地址，在 OBS 新建浏览器源粘贴即可；页面每 5 秒刷新当前海报与歌词。",
@@ -728,7 +728,7 @@ final class AIHelp62ViewController: UIViewController, UITableViewDataSource, UIT
            answer: "大肥鱼是 QQ 机器人（3868261380），在 QQ 加好友或进群 1135730800 @ 她聊天；在线状态以 QQ 端为准。",
            keywords: ["大肥鱼", "机器人", "qq", "陪伴"]),
         QA(question: "同步服务怎么用？",
-           answer: "设置「连接与集成」填同步地址与令牌，打开开关后手动推送/拉取；同步对象是设置与速记簿，不含登录态。",
+           answer: "设置「连接与集成」填同步地址与令牌，打开开关后手动推送/拉取；同步对象是设置与日记本，不含登录态。",
            keywords: ["同步", "r2", "备份", "令牌"]),
         QA(question: "音质怎么切换？",
            answer: "播放面板「音质」页签选档（标准/较高/极高/无损/Hi-Res），下一首取流生效；后端是否给到该档以实际出声为准。",
@@ -739,9 +739,9 @@ final class AIHelp62ViewController: UIViewController, UITableViewDataSource, UIT
         QA(question: "日志在哪看？怎么导出？",
            answer: "设置「开发者」的「查看全量日志（分页）」可翻看全部桥日志并导出分享；「写入本地文件」关后不再落盘。",
            keywords: ["日志", "导出", "桥日志", "log"]),
-        QA(question: "速记簿是什么？",
-           answer: "速记簿是跨来源的歌曲暂存本：搜索行尾按钮收歌，左缘把手拉开抽屉，可分组、看历史、编队列草稿。",
-           keywords: ["速记簿", "暂存", "抽屉"]),
+        QA(question: "日记本是什么？",
+           answer: "日记本是跨来源的歌曲暂存本：搜索行尾按钮收歌，左缘把手拉开抽屉，可分组、看历史、编队列草稿。",
+           keywords: ["日记本", "暂存", "抽屉"]),
         QA(question: "听歌统计在哪清？",
            answer: "设置「存储与备份」的「清除分析数据」会真删本机听歌统计（播放次数/时长）；智能平衡数据在同组清除。",
            keywords: ["统计", "分析", "清除", "平衡"]),

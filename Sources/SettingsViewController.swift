@@ -18,7 +18,7 @@ private var clusterCards62Key: UInt8 = 0
 /// 入，文案如实标注）。
 /// (55) 工作流 G 页签化重建：按网页十一页签 + 帮助重排为
 /// 页签式（见 tabTitles），既有 13 行并入新体系、逻辑不重
-/// 写；新增真消费行（歌词偏移做真/速记簿把手/自动跳过/加
+/// 写；新增真消费行（歌词偏移做真/日记本把手/自动跳过/加
 /// 队列位置/启动续播/缓存管理/配置码/内存读数等，消费点
 /// 见 SettingsStore 各属性注释）；每签底部固定只读「未接
 /// 入（子系统未迁）」卡逐项列未落项与原因，无控件。布局不复刻旧病：行标签一律直挂横向
@@ -94,7 +94,7 @@ final class SettingsViewController: UIViewController {
     private var selectedTab = 0
     private var cardStackRef: UIStackView?
 
-    // (55) 新增控件：速记簿把手（主页与歌单页签）
+    // (55) 新增控件：日记本把手（主页与歌单页签）
     private let sketchShowSwitch = UISwitch()
     private let sketchPositionSlider = UISlider()
     private let sketchPositionLabel = UILabel()
@@ -128,6 +128,20 @@ final class SettingsViewController: UIViewController {
     // selectTab 时同步）；导航钮复用 tabButtons（点选走
     // tabButtonTapped → selectTab 同一通路）。
     private let navTitleLabel89 = UILabel()
+
+    // port90（任务 17/18）：横向页签条与设置搜索。
+    // 导航横竖屏统一样式（Miller 20:33 更正）：顶部横向可滑
+    // chips 条＋全宽内容，不再有左列。搜索索引由现有页签注册
+    // 表（tabGroups 的行视图）遍历生成、不另造清单。
+    private var contentScroll90: UIScrollView?
+    private var navScroll90: UIScrollView?
+    private let searchField90 = UITextField()
+    private let searchResults90 = UITableView(frame: .zero, style: .plain)
+    private var searchIndex90: [(tab: Int, title: String, detail: String,
+                                 texts: [String], row: UIView)] = []
+    private var searchFiltered90: [(tab: Int, title: String, detail: String,
+                                    texts: [String], row: UIView)] = []
+    private var searchIndexBuilt90 = false
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -381,11 +395,11 @@ final class SettingsViewController: UIViewController {
             cardTint89.bottomAnchor.constraint(equalTo: cardView.bottomAnchor)
         ])
 
-        // 右列内容滚动区：既有 ScrollView＋cardStack 结构原样
+        // 内容滚动区：既有 ScrollView＋cardStack 结构原样
         // （各签组视图仍逐个 addArrangedSubview 进 cardStack、
-        // reg/selectTab 显隐通路不变），只是宿主从卡本体改到
-        // 下方 bodyRow 的右列。
+        // reg/selectTab 显隐通路不变）；port90 改全宽单列骨架。
         let scroll = UIScrollView()
+        contentScroll90 = scroll
         scroll.translatesAutoresizingMaskIntoConstraints = false
         scroll.showsVerticalScrollIndicator = false
         let cardStack = UIStackView()
@@ -403,7 +417,7 @@ final class SettingsViewController: UIViewController {
         ])
         cardStackRef = cardStack
 
-        // 右列页头：当前签标题 17 semibold＋关闭钮（既有「完成」
+        // 页头：当前签标题 17 semibold＋关闭钮（既有「完成」
         // → close 通路）。标题随 selectTab 同步（见 selectTab）。
         let header = UIStackView()
         header.axis = .horizontal
@@ -420,55 +434,86 @@ final class SettingsViewController: UIViewController {
         header.addArrangedSubview(UIView())
         header.addArrangedSubview(doneButton)
 
-        // 左导航列（手机转译宽 104）：12 签竖排列表，钮在下方
-        // 循环里逐个建（复用 tabButtons／tabButtonTapped 通路）。
+        // port90（任务 18）搜索框：标题行下、页签条上；横竖屏同位。
+        searchField90.placeholder = "搜索设置"
+        searchField90.font = .systemFont(ofSize: 14)
+        searchField90.textColor = FoliaUI.primary
+        searchField90.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        searchField90.layer.cornerRadius = 10
+        searchField90.leftView = UIView(frame: CGRect(x: 0, y: 0, width: 14, height: 1))
+        searchField90.leftViewMode = .always
+        searchField90.rightView = UIView(frame: CGRect(x: 0, y: 0, width: 14, height: 1))
+        searchField90.rightViewMode = .always
+        searchField90.autocorrectionType = .no
+        searchField90.returnKeyType = .search
+        searchField90.heightAnchor.constraint(equalToConstant: 40).isActive = true
+        searchField90.addTarget(self, action: #selector(searchChanged90),
+                                for: .editingChanged)
+        searchField90.addTarget(self, action: #selector(searchReturn90),
+                                for: .editingDidEndOnExit)
+        // 搜索结果表（默认隐藏；有查询时取代页签条＋内容区）。
+        searchResults90.backgroundColor = .clear
+        searchResults90.separatorColor = UIColor.white.withAlphaComponent(0.08)
+        searchResults90.dataSource = self
+        searchResults90.delegate = self
+        searchResults90.rowHeight = 52
+        searchResults90.isHidden = true
+        searchResults90.translatesAutoresizingMaskIntoConstraints = false
+
+        // port90（任务 17）：顶部横向页签条——横竖屏统一样式：
+        // 12 签 chips 横排可滑（高 34、圆角 17、内距 14），钮在
+        // 下方循环里逐个建（复用 tabButtons／tabButtonTapped 通路）。
+        // 覆盖 (89)B 左导航 104 列在两态的形态。
         let navScroll89 = UIScrollView()
+        navScroll89.showsHorizontalScrollIndicator = false
         navScroll89.showsVerticalScrollIndicator = false
         navScroll89.translatesAutoresizingMaskIntoConstraints = false
+        navScroll90 = navScroll89
         let navColumn89 = UIStackView()
-        navColumn89.axis = .vertical
-        navColumn89.spacing = 2
+        navColumn89.axis = .horizontal
+        navColumn89.spacing = 8
+        navColumn89.alignment = .center
         navColumn89.translatesAutoresizingMaskIntoConstraints = false
         navScroll89.addSubview(navColumn89)
         NSLayoutConstraint.activate([
             navColumn89.topAnchor.constraint(equalTo: navScroll89.contentLayoutGuide.topAnchor),
             navColumn89.bottomAnchor.constraint(equalTo: navScroll89.contentLayoutGuide.bottomAnchor),
-            navColumn89.leadingAnchor.constraint(equalTo: navScroll89.frameLayoutGuide.leadingAnchor),
-            navColumn89.trailingAnchor.constraint(equalTo: navScroll89.frameLayoutGuide.trailingAnchor)
+            navColumn89.leadingAnchor.constraint(equalTo: navScroll89.contentLayoutGuide.leadingAnchor, constant: 2),
+            navColumn89.trailingAnchor.constraint(equalTo: navScroll89.contentLayoutGuide.trailingAnchor, constant: -2),
+            navColumn89.heightAnchor.constraint(equalTo: navScroll89.frameLayoutGuide.heightAnchor)
         ])
 
-        // 卡内骨架：左导航列＋右列（页头＋内容滚动区）。
-        let rightColumn89 = UIStackView(arrangedSubviews: [header, scroll])
-        rightColumn89.axis = .vertical
-        rightColumn89.spacing = 8
-        let bodyRow89 = UIStackView(arrangedSubviews: [navScroll89, rightColumn89])
-        bodyRow89.axis = .horizontal
-        bodyRow89.spacing = 10
-        bodyRow89.translatesAutoresizingMaskIntoConstraints = false
-        cardView.addSubview(bodyRow89)
+        // 卡内骨架（port90 单列全宽）：页头→搜索框→搜索结果（隐）
+        // →横向页签条→内容滚动区。自检链与各签内容零改动。
+        let cardColumn90 = UIStackView(arrangedSubviews: [
+            header, searchField90, searchResults90, navScroll89, scroll])
+        cardColumn90.axis = .vertical
+        cardColumn90.spacing = 10
+        cardColumn90.translatesAutoresizingMaskIntoConstraints = false
+        cardView.addSubview(cardColumn90)
         NSLayoutConstraint.activate([
-            bodyRow89.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 14),
-            bodyRow89.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -14),
-            bodyRow89.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
-            bodyRow89.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -12),
-            navScroll89.widthAnchor.constraint(equalToConstant: 104)
+            cardColumn90.topAnchor.constraint(equalTo: cardView.topAnchor, constant: 14),
+            cardColumn90.bottomAnchor.constraint(equalTo: cardView.bottomAnchor, constant: -14),
+            cardColumn90.leadingAnchor.constraint(equalTo: cardView.leadingAnchor, constant: 12),
+            cardColumn90.trailingAnchor.constraint(equalTo: cardView.trailingAnchor, constant: -12),
+            navScroll89.heightAnchor.constraint(equalToConstant: 36)
         ])
-        Breadcrumbs.log("port89 settings=modal/nav")
+        Breadcrumbs.log("port90 settings=chips-h/search")
 
-        // 左导航钮（(89)B）：13pt、行高 40、左对齐；选中态白
-        // 0.12 底＋白字、未选白 0.55（样式在 applyTabVisibility
+        // 页签 chips（port90）：13pt、高 34、圆角 17、左右内距 14；
+        // 选中态白 0.12 底＋白字、未选白 0.55（样式在 applyTabVisibility
         // 落）。点选走既有 tabButtonTapped → selectTab 通路。
         let tabRow = navColumn89
         for (index, title) in Self.tabTitles.enumerated() {
             let button = UIButton(type: .system)
             button.setTitle(title, for: .normal)
             button.titleLabel?.font = .systemFont(ofSize: 13)
-            button.contentHorizontalAlignment = .leading
-            button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 8)
-            button.layer.cornerRadius = 10
+            button.contentHorizontalAlignment = .center
+            button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 14, bottom: 0, right: 14)
+            button.layer.cornerRadius = 17
             button.tag = index
             button.addTarget(self, action: #selector(tabButtonTapped(_:)), for: .touchUpInside)
-            button.heightAnchor.constraint(equalToConstant: 40).isActive = true
+            button.heightAnchor.constraint(equalToConstant: 34).isActive = true
             tabButtons.append(button)
             tabRow.addArrangedSubview(button)
         }
@@ -1132,8 +1177,16 @@ extension SettingsViewController {
     private func selectTab(_ index: Int) {
         guard Self.tabTitles.indices.contains(index) else { return }
         selectedTab = index
-        navTitleLabel89.text = Self.tabTitles[index] // (89)B：右列页头标题随签同步
+        navTitleLabel89.text = Self.tabTitles[index] // 页头标题随签同步
         applyTabVisibility()
+        // port90：选中 chip 滚入横向条视野内（两态同式）。
+        if tabButtons.indices.contains(index), let navScroll90 {
+            let chip = tabButtons[index]
+            DispatchQueue.main.async {
+                navScroll90.scrollRectToVisible(
+                    chip.frame.insetBy(dx: -16, dy: 0), animated: true)
+            }
+        }
         Breadcrumbs.log("settings.tab index=\(index) name=\(Self.tabTitles[index])")
         if index == 3 {
             systemReduceMotionLabel.text =
@@ -1230,12 +1283,12 @@ extension SettingsViewController {
     /// (55) 新增页签组 + 每签未接入卡（在 buildLayout 末尾调，
     /// 未接入卡最后注册 → 恒在本签底部）。
     private func buildExtraTabs(into cardStack: UIStackView) {
-        // —— 主页与歌单（速记簿把手三项；消费在速记簿把手，
+        // —— 主页与歌单（日记本把手三项；消费在日记本把手，
         //    工作流 H 接线，键见 SettingsStore.SketchbookHandleKey）
         beginCheckGroup("主页与歌单")
         let sketchGroup = makeGroupCard()
         sketchGroup.addArrangedSubview(makeSwitchRow(
-            "显示速记簿把手", sketchShowSwitch, #selector(sketchShowChanged)))
+            "显示日记本把手", sketchShowSwitch, #selector(sketchShowChanged)))
         sketchGroup.addArrangedSubview(makeHairline())
         let posRow = UIStackView()
         posRow.axis = .vertical
@@ -1269,7 +1322,7 @@ extension SettingsViewController {
             "把手样式", sketchStyleControl, #selector(sketchStyleChanged)))
         sketchGroup.addArrangedSubview(makeHairline())
         sketchGroup.addArrangedSubview(makeHintRow(
-            "速记簿左缘把手：改动即时保存，把手下次出现时按新值呈现。高度 0% 在最上方、100% 贴近底部；样式为线 / 点 / 图形。"))
+            "日记本左缘把手：改动即时保存，把手下次出现时按新值呈现。高度 0% 在最上方、100% 贴近底部；样式为线 / 点 / 图形。"))
         cardStack.addArrangedSubview(sketchGroup)
         reg(sketchGroup, tab: 2)
 
@@ -1697,5 +1750,123 @@ extension SettingsViewController {
         }
         for view in reordered { stack.addArrangedSubview(view) }
         Breadcrumbs.log("settings66.reorder done=1")
+    }
+}
+
+// MARK: - port90 设置搜索（任务 18）
+
+extension SettingsViewController: UITableViewDataSource, UITableViewDelegate {
+
+    /// 索引构建：遍历既有页签注册表 tabGroups（顶层组→卡内行），
+    /// 逐行收集 UILabel 文本（项名＋说明/值），不另造清单。
+    /// 分节标题（直挂 UILabel 的组）本身成一条。
+    private func buildSearchIndex90() {
+        searchIndex90 = []
+        for (tab, groups) in tabGroups.enumerated() {
+            for group in groups {
+                if let stack = group as? UIStackView {
+                    for row in stack.arrangedSubviews {
+                        appendSearchRow90(tab: tab, row: row)
+                    }
+                } else {
+                    appendSearchRow90(tab: tab, row: group)
+                }
+            }
+        }
+        searchIndexBuilt90 = true
+        Breadcrumbs.log("port90 settings search index=\(searchIndex90.count)")
+    }
+
+    private func appendSearchRow90(tab: Int, row: UIView) {
+        var labels: [UILabel] = []
+        collectLabels90(in: row, into: &labels)
+        let texts = labels.compactMap { $0.text }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard let title = texts.first else { return }
+        let detail = texts.count > 1 ? texts[1] : ""
+        searchIndex90.append((tab: tab, title: title, detail: detail,
+                              texts: texts, row: row))
+    }
+
+    private func collectLabels90(in view: UIView, into out: inout [UILabel]) {
+        if let label = view as? UILabel { out.append(label) }
+        for sub in view.subviews { collectLabels90(in: sub, into: &out) }
+    }
+
+    @objc func searchChanged90() {
+        let query = (searchField90.text ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if query.isEmpty {
+            searchResults90.isHidden = true
+            navScroll90?.isHidden = false
+            contentScroll90?.isHidden = false
+            return
+        }
+        if !searchIndexBuilt90 { buildSearchIndex90() }
+        let needle = query.lowercased()
+        searchFiltered90 = searchIndex90.filter { entry in
+            entry.texts.contains { $0.lowercased().contains(needle) }
+        }
+        searchResults90.reloadData()
+        searchResults90.isHidden = false
+        navScroll90?.isHidden = true
+        contentScroll90?.isHidden = true
+    }
+
+    @objc func searchReturn90() {
+        searchField90.resignFirstResponder()
+    }
+
+    func tableView(_ tableView: UITableView,
+                   numberOfRowsInSection section: Int) -> Int {
+        searchFiltered90.count
+    }
+
+    func tableView(_ tableView: UITableView,
+                   cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let entry = searchFiltered90[indexPath.row]
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        cell.backgroundColor = .clear
+        cell.textLabel?.text = entry.title
+        cell.textLabel?.font = .systemFont(ofSize: 14)
+        cell.textLabel?.textColor = FoliaUI.primary
+        let tabName = Self.tabTitles[entry.tab]
+        cell.detailTextLabel?.text = entry.detail.isEmpty
+            ? tabName : "\(tabName) · \(entry.detail)"
+        cell.detailTextLabel?.font = .systemFont(ofSize: 11.5)
+        cell.detailTextLabel?.textColor = FoliaUI.secondary
+        cell.accessoryType = .disclosureIndicator
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView,
+                   didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        let entry = searchFiltered90[indexPath.row]
+        // 收搜索态 → 切到目标页签 → 内容滚到该行 → 高亮闪一下。
+        searchField90.text = ""
+        searchChanged90()
+        searchField90.resignFirstResponder()
+        selectTab(entry.tab)
+        Breadcrumbs.log("port90 settings search jump tab=\(entry.tab)")
+        let row = entry.row
+        DispatchQueue.main.async { [weak self] in
+            guard let self, let scroll = self.contentScroll90,
+                  let cardStack = self.cardStackRef else { return }
+            self.view.layoutIfNeeded()
+            let rect = row.convert(row.bounds, to: cardStack)
+            scroll.scrollRectToVisible(
+                rect.insetBy(dx: 0, dy: -24), animated: true)
+            let flash = UIView(frame: row.bounds)
+            flash.backgroundColor = FoliaUI.accent.withAlphaComponent(0.30)
+            flash.isUserInteractionEnabled = false
+            row.addSubview(flash)
+            UIView.animate(withDuration: 1.2, delay: 0.35) {
+                flash.alpha = 0
+            } completion: { _ in
+                flash.removeFromSuperview()
+            }
+        }
     }
 }

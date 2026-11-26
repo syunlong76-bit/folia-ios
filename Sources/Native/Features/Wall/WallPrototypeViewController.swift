@@ -239,8 +239,7 @@ final class WallPrototypeViewController: UIViewController,
     private var miniPrevButton: UIButton!
     private var miniNextButton: UIButton!
     /// (87) 主题四圆点（台面右上，与主页墙同件同位）。
-    private var miniThemeDots87: UIStackView?
-    private var miniThemeDotButtons87: [UIButton] = []
+    // port90（任务 13）：主题四圆点已撤除（长按台面循环主题手势保留）。
     /// (82) 第 7/8 条：控制台入口圆钮＋双时间标签（E 极简
     /// 台定版，与主页墙同构）。旧 mode/paw/heart/list 四
     /// 钮随旧台退役，职能全进控制台面板。
@@ -825,13 +824,28 @@ final class WallPrototypeViewController: UIViewController,
         // 底）；字形仍走 DeckGlyph82 现行临时套。
         // (87) 样片台：播放钮改 42 圆玻璃底（白 0.13）。
         miniPlayButton.tintColor = .white
-        miniPlayButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
+        miniPlayButton.backgroundColor = .clear
         miniPlayButton.layer.cornerRadius = 21
         miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 20), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
         miniPlayButton.addTarget(self, action: #selector(miniPlayDown84), for: .touchDown)
         bar.addSubview(miniPlayButton)
+        // port90（任务 14）：播放钮改圆形毛玻璃（系统材质、透出台面底色），
+        // 尺寸/位置/字形不变；blur 子视图不接手势、置字形之下。
+        let miniPlayBlur90 = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        miniPlayBlur90.isUserInteractionEnabled = false
+        miniPlayBlur90.clipsToBounds = true
+        miniPlayBlur90.layer.cornerRadius = 21
+        miniPlayBlur90.translatesAutoresizingMaskIntoConstraints = false
+        miniPlayButton.insertSubview(miniPlayBlur90, at: 0)
+        NSLayoutConstraint.activate([
+            miniPlayBlur90.leadingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor),
+            miniPlayBlur90.trailingAnchor.constraint(equalTo: miniPlayButton.trailingAnchor),
+            miniPlayBlur90.topAnchor.constraint(equalTo: miniPlayButton.topAnchor),
+            miniPlayBlur90.bottomAnchor.constraint(equalTo: miniPlayButton.bottomAnchor),
+        ])
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
@@ -860,7 +874,7 @@ final class WallPrototypeViewController: UIViewController,
         // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
         miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
         miniConsoleButton.layer.cornerRadius = 21
-        miniConsoleButton.setImage(DeckGlyph82.image(.console, pointSize: 20), for: .normal)
+        miniConsoleButton.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 20), for: .normal)
         miniConsoleButton.tintColor = .white
         miniConsoleButton.accessibilityLabel = "控制台"
         miniConsoleButton.translatesAutoresizingMaskIntoConstraints = false
@@ -868,55 +882,7 @@ final class WallPrototypeViewController: UIViewController,
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleDown84), for: .touchDown)
         bar.addSubview(miniConsoleButton)
 
-        // (87) 主题四圆点（样片 .tdots，与主页墙同件同位）。
-        let dotsStack = UIStackView()
-        dotsStack.axis = .horizontal
-        dotsStack.spacing = 5
-        dotsStack.alignment = .center
-        dotsStack.translatesAutoresizingMaskIntoConstraints = false
-        bar.addSubview(dotsStack)
-        miniThemeDots87 = dotsStack
-        miniThemeDotButtons87 = []
-        for (index, color) in Deck87.dotColors.enumerated() {
-            let button = UIButton(type: .custom)
-            button.tag = index
-            button.accessibilityLabel = "播放台主题"
-            button.translatesAutoresizingMaskIntoConstraints = false
-            let ring = UIView()
-            ring.layer.cornerRadius = 6.5
-            ring.layer.borderWidth = 2
-            ring.layer.borderColor = UIColor.white.withAlphaComponent(0.35).cgColor
-            ring.isUserInteractionEnabled = false
-            ring.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(ring)
-            let circle = UIView()
-            circle.backgroundColor = color
-            circle.layer.cornerRadius = 4.5
-            circle.layer.borderWidth = 1
-            circle.layer.borderColor = UIColor.white.withAlphaComponent(0.55).cgColor
-            circle.isUserInteractionEnabled = false
-            circle.translatesAutoresizingMaskIntoConstraints = false
-            button.addSubview(circle)
-            NSLayoutConstraint.activate([
-                button.widthAnchor.constraint(equalToConstant: 20),
-                button.heightAnchor.constraint(equalToConstant: 20),
-                ring.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                ring.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                ring.widthAnchor.constraint(equalToConstant: 13),
-                ring.heightAnchor.constraint(equalToConstant: 13),
-                circle.centerXAnchor.constraint(equalTo: button.centerXAnchor),
-                circle.centerYAnchor.constraint(equalTo: button.centerYAnchor),
-                circle.widthAnchor.constraint(equalToConstant: 9),
-                circle.heightAnchor.constraint(equalToConstant: 9),
-            ])
-            button.addTarget(self, action: #selector(miniThemeDotTapped87(_:)), for: .touchUpInside)
-            dotsStack.addArrangedSubview(button)
-            miniThemeDotButtons87.append(button)
-        }
-        NSLayoutConstraint.activate([
-            dotsStack.topAnchor.constraint(equalTo: bar.topAnchor, constant: 2),
-            dotsStack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -8),
-        ])
+        // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
         miniTimeElapsed = UILabel()
         // (89) §3-6 对齐网页 ProgressBar：时间标签 10px 等宽。
@@ -1160,24 +1126,6 @@ final class WallPrototypeViewController: UIViewController,
         // 槽位显隐管辖。
     }
 
-    /// (87) 主题四圆点点选（与主页墙同通路）。
-    @objc private func miniThemeDotTapped87(_ sender: UIButton) {
-        guard sender.tag < Deck87.dotThemes.count else { return }
-        let theme = Deck87.dotThemes[sender.tag]
-        MiniPlayerTheme.stored = theme
-        NotificationCenter.default.post(name: .foliaMiniPlayerThemeChanged, object: nil)
-        Breadcrumbs.log("deck87 dot host=wallproto t=\(theme.rawValue)")
-        refreshThemeDots87()
-    }
-
-    private func refreshThemeDots87() {
-        let current = MiniPlayerTheme.stored
-        for (index, button) in miniThemeDotButtons87.enumerated() {
-            let selected = Deck87.dotThemes[index] == current
-            button.subviews.first?.isHidden = !selected
-        }
-    }
-
     private func applySlot(_ button: UIButton, visible: Bool, width: CGFloat) {
         button.isHidden = !visible
         if let constraint = button.constraints.first(where: {
@@ -1218,8 +1166,6 @@ final class WallPrototypeViewController: UIViewController,
         refreshMiniProgressChrome()
         // (82) 第 7 条：字形与主题解耦（DeckGlyph82 单套）。
         refreshDeckIcons82()
-        // (87) 主题四圆点选中环随主题回刷。
-        refreshThemeDots87()
     }
 
     /// (82) 第 7 条：台面字形回刷——仅播/停态（与主页墙
@@ -1952,7 +1898,7 @@ final class WallPrototypeViewController: UIViewController,
         // 台收起时浮层由 collapseMiniBarIdle 单独收起。
         let views: [UIView?] = [miniCover, miniTitle, miniArtist, miniPlayButton,
                                 miniPrevButton, miniNextButton, miniConsoleButton,
-                                miniTimeElapsed, miniTimeDuration, miniThemeDots87]
+                                miniTimeElapsed, miniTimeDuration]
         for view in views {
             view?.alpha = alpha
         }
@@ -1964,8 +1910,6 @@ final class WallPrototypeViewController: UIViewController,
         for button in buttons {
             button?.isUserInteractionEnabled = interactive
         }
-        // (87) 主题四圆点随内容组同启停。
-        miniThemeDots87?.isUserInteractionEnabled = interactive
     }
 
     // MARK: 世界缝（(85) 第 1 条，歌单页）
@@ -3226,38 +3170,15 @@ final class WallPrototypeViewController: UIViewController,
         let queueIndex = instance.queueIndex
         cell.onPlayTap = { [weak self] in self?.playTapped(queueIndex: queueIndex) }
         cell.onLikeTap = { [weak self] in self?.likeTapped(queueIndex: queueIndex) }
-        // (89)B b-detail-card：展开卡文字块文案＋加入队列动作。
-        cell.configureDetail89(
-            title: entry.title,
-            artist: nativeTracks.first { $0.id == entry.id }?.artists
-                ?? entry.subtitle ?? "")
-        cell.onQueueTap89 = { [weak self] in self?.queueTapped89(queueIndex: queueIndex) }
+        // port90（任务 8）：展开卡只留歌名（瘦身定版，覆盖 b-detail-card）。
+        cell.configureDetail89(title: entry.title)
         if wallLayout.expandedInstanceId == instance.instanceId {
             let crumb = "detail89|\(entry.id)"
             if crumb != lastDetailCrumb89 {
                 lastDetailCrumb89 = crumb
-                Breadcrumbs.log("port89 detailcard=text")
+                Breadcrumbs.log("port90 detailcard=title-only/19pt")
             }
         }
-    }
-
-    /// (89)B：展开卡「加入队列」——走 QueueManager.appendToQueue
-    /// 既有通路（去重/默认位置门控都在其内），曲目构造与点播
-    /// 队列同源（nativeTracks → foliaTrack(for:)）。
-    private func queueTapped89(queueIndex: Int) {
-        guard queueIndex < entries.count else { return }
-        let entry = entries[queueIndex]
-        let track: FoliaTrack
-        if let native = nativeTracks.first(where: { $0.id == entry.id }) {
-            track = foliaTrack(for: native)
-        } else {
-            track = FoliaTrack(id: entry.id, sourceType: .netease,
-                               title: entry.title,
-                               artist: entry.subtitle ?? "", duration: 0)
-        }
-        QueueManager.shared.appendToQueue([track])
-        Breadcrumbs.log("port89 detailcard queue-add id=\(entry.id)")
-        refreshVisiblePlaybackUI()
     }
 
     /// 原生舞台入口（3.7 (14)，M2'）：迷你台台身与双击卡片改走
@@ -3541,7 +3462,6 @@ final class WallPrototypeViewController: UIViewController,
         } else {
             guard !overlay.isHidden else { return }
             overlay.isHidden = true
-            overlay.clipTopOverride89 = nil // (89)B：隐藏时撤 clip 覆盖
             overlay.clear()
             lastLyricIndex = nil
         }
@@ -3699,17 +3619,7 @@ final class WallPrototypeViewController: UIViewController,
             if overlay.frame != frame { overlay.frame = frame }
             lyricOverlayBaseFrame = frame
         }
-        // (89)B：歌词 clip 起点下移至展开卡动作排下方——从展开
-        // cell 读动作排底缘＋8 下发；cell 不在场时撤覆盖回 0.40。
-        if let expandedId = wallLayout.expandedInstanceId,
-           let item = wallLayout.instances.firstIndex(where: { $0.instanceId == expandedId }),
-           let cell = collectionView.cellForItem(
-               at: IndexPath(item: item, section: 0)) as? WallPosterCell,
-           cell.detailActionsBottom89 > 0 {
-            overlay.clipTopOverride89 = cell.detailActionsBottom89 + 8
-        } else {
-            overlay.clipTopOverride89 = nil
-        }
+        // port90：歌词 clip 回默认（展开卡动作排已撤、无覆盖下发）。
         setLyricAnchorHidden(false, reason: restoreReason)
         let crumb = "\(targetId)|\(Int(frame.minX / 40))|\(Int(frame.minY / 40))"
         if crumb != lastLyricOverlayCrumb {
@@ -4253,6 +4163,11 @@ final class WallPosterCell: UICollectionViewCell {
     /// 砖暗而字仍可读）；alpha 由 WallLight82 按墙名＋条目
     /// id 决定，configure 与灯光广播时重刷。
     private let lightDimView82 = UIView()
+    /// port90（任务 23）：封面右上 ➕（贴进日记本）——挂
+    /// contentView（coverContainer85 关交互、挂它上面收不到
+    /// 点按）；configure 时按条目回刷贴入态。
+    private let diaryButton90 = DiaryAddButton90.make()
+    private var diarySong90: DiarySong90?
     private var lightWall82 = "tracks"
     private var lightEntryId82: String?
     /// (82) 第 9 条：焦点拖尾找旧砖用（宿主辅助读）。
@@ -4290,17 +4205,12 @@ final class WallPosterCell: UICollectionViewCell {
     var onLikeTap: (() -> Void)?
     // (89)B b-detail-card：展开卡文字块（左上标题/歌手）＋动作
     // 排（喜欢 44×44／播放／加入队列），只在展开态显示。
-    var onQueueTap89: (() -> Void)?
+    // port90（任务 8）：展开卡只留 detailTitle89（歌名）；歌手行与
+    // 喜欢/播放/加入队列动作排整组撤除（覆盖 (89)B b-detail-card）。
     private let detailTitle89 = UILabel()
-    private let detailArtist89 = UILabel()
-    private let detailLike89 = UIButton(type: .system)
-    private let detailPlay89 = UIButton(type: .system)
-    private let detailQueue89 = UIButton(type: .system)
     private var detailTitleText89 = ""
-    private var detailArtistText89 = ""
     private var detailLayoutKey89 = ""
     /// 动作排底缘（卡坐标），VC 据此下发歌词 clip 起点覆盖。
-    private(set) var detailActionsBottom89: CGFloat = 0
     private let playButton = UIButton(type: .system)
     private let likeButton = UIButton(type: .system)
     /// 「已在队列」角标（3.7 (69) P9，社区版借鉴 N4）：展开
@@ -4353,6 +4263,14 @@ final class WallPosterCell: UICollectionViewCell {
         lightDimView82.layer.cornerRadius = 8
         lightDimView82.isUserInteractionEnabled = false
         shadowView.addSubview(lightDimView82)
+
+        // port90（任务 23）：➕ 钮挂 contentView 顶层（帧在
+        // layoutSubviews 按卡宽右上落位），点按只切换日记本
+        // 贴入态、不走卡面点播通路（钮自身吞触摸）。
+        diaryButton90.addTarget(self, action: #selector(diaryTapped90), for: .touchUpInside)
+        contentView.addSubview(diaryButton90)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(diaryChanged90), name: .foliaDiary90Changed, object: nil)
 
         titleLabel.font = .systemFont(ofSize: 10, weight: .medium)
         titleLabel.textColor = .white
@@ -4437,61 +4355,20 @@ final class WallPosterCell: UICollectionViewCell {
         // (89)B b-detail-card：展开卡文字块与动作排（初始隐藏，
         // configurePlayback 按展开态显隐；排版在 layoutSubviews）。
         detailTitle89.textColor = .white
-        detailTitle89.numberOfLines = 2
-        detailTitle89.lineBreakMode = .byTruncatingTail
+        // port90：不截断——多行按词换行、完整显示。
+        detailTitle89.numberOfLines = 0
+        detailTitle89.lineBreakMode = .byWordWrapping
         detailTitle89.layer.shadowColor = UIColor.black.cgColor
         detailTitle89.layer.shadowOpacity = 0.85
         detailTitle89.layer.shadowRadius = 3
         detailTitle89.layer.shadowOffset = .zero
         detailTitle89.isHidden = true
         shadowView.addSubview(detailTitle89)
-        detailArtist89.font = .systemFont(ofSize: 17)
-        detailArtist89.textColor = UIColor.white.withAlphaComponent(0.85)
-        detailArtist89.numberOfLines = 1
-        detailArtist89.lineBreakMode = .byTruncatingTail
-        detailArtist89.layer.shadowColor = UIColor.black.cgColor
-        detailArtist89.layer.shadowOpacity = 0.85
-        detailArtist89.layer.shadowRadius = 2
-        detailArtist89.layer.shadowOffset = .zero
-        detailArtist89.isHidden = true
-        shadowView.addSubview(detailArtist89)
-        detailLike89.tintColor = .white
-        detailLike89.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        detailLike89.layer.cornerRadius = 22
-        detailLike89.setImage(UIImage(systemName: "heart"), for: .normal)
-        detailLike89.accessibilityLabel = "喜欢"
-        detailLike89.addTarget(self, action: #selector(likeButtonTapped), for: .touchUpInside)
-        detailLike89.isHidden = true
-        shadowView.addSubview(detailLike89)
-        detailPlay89.setTitle("播放", for: .normal)
-        detailPlay89.setTitleColor(.white, for: .normal)
-        detailPlay89.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
-        detailPlay89.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        detailPlay89.layer.cornerRadius = 22
-        detailPlay89.addTarget(self, action: #selector(playButtonTapped), for: .touchUpInside)
-        detailPlay89.isHidden = true
-        shadowView.addSubview(detailPlay89)
-        detailQueue89.setTitle("加入队列", for: .normal)
-        detailQueue89.setTitleColor(.white, for: .normal)
-        detailQueue89.titleLabel?.font = .systemFont(ofSize: 15, weight: .medium)
-        detailQueue89.backgroundColor = UIColor.black.withAlphaComponent(0.45)
-        detailQueue89.layer.cornerRadius = 22
-        detailQueue89.addTarget(self, action: #selector(queueButtonTapped89), for: .touchUpInside)
-        detailQueue89.isHidden = true
-        shadowView.addSubview(detailQueue89)
-
-    }
-
     @objc private func playButtonTapped() { onPlayTap?() }
     @objc private func likeButtonTapped() { onLikeTap?() }
-    @objc private func queueButtonTapped89() { onQueueTap89?() }
-
-    /// (89)B：展开卡文字块文案（VC 在 applyPlaybackState 时按
-    /// 条目下发：标题＝歌名、歌手＝nativeTracks.artists）。
-    func configureDetail89(title: String, artist: String) {
+    /// port90：展开卡文案只剩歌名（VC 在 applyPlaybackState 时下发）。
+    func configureDetail89(title: String) {
         detailTitleText89 = title
-        detailArtistText89 = artist
-        detailArtist89.text = artist
         setNeedsLayout()
     }
 
@@ -4503,22 +4380,16 @@ final class WallPosterCell: UICollectionViewCell {
                            loadState: WallPlayLoadState = .idle,
                            inQueue: Bool = false) {
         controlsVisible = expanded
-        playButton.isHidden = !expanded
-        likeButton.isHidden = !expanded
-        // (89)B：文字块/动作排只在展开态显示、收起即隐（随 cell
-        // 展开/收起同拍，无独立动画）。
+        // port90（任务 8）：卡面播放/喜欢钮在展开态撤除（点按播放走卡面
+        // 手势通路、不经此二钮）；二钮本就只在展开态显示，故恒隐。
+        playButton.isHidden = true
+        likeButton.isHidden = true
         detailTitle89.isHidden = !expanded
-        detailArtist89.isHidden = !expanded
-        detailLike89.isHidden = !expanded
-        detailPlay89.isHidden = !expanded
-        detailQueue89.isHidden = !expanded
-        detailPlay89.setTitle(isCurrent && isPlaying ? "暂停" : "播放", for: .normal)
         progressTrack.isHidden = !expanded
-        playingBadge.isHidden = !isCurrent
-        // (69) P9：角标只在展开卡出（未展开卡面维持现行），
-        // 当前曲必然在队列内、同样出角标（与播放角标并存）。
-        queueBadgeVisible = expanded && inQueue
-        queueBadge.isHidden = !queueBadgeVisible
+        // port90：展开态不叠在播角标与「已在队列」角标。
+        playingBadge.isHidden = !isCurrent || expanded
+        queueBadgeVisible = false
+        queueBadge.isHidden = true
         progressValue = progress
         playButton.setImage(
             UIImage(systemName: isCurrent && isPlaying ? "pause.fill" : "play.fill"),
@@ -4682,15 +4553,6 @@ final class WallPosterCell: UICollectionViewCell {
         likeButton.backgroundColor = liked
             ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 0.95)
             : UIColor.black.withAlphaComponent(0.45)
-        // (89)B：动作排喜欢钮与既有红心钮同状态（LikesStore 驱动）。
-        detailLike89.setImage(
-            UIImage(systemName: liked ? "heart.fill" : "heart"), for: .normal)
-        detailLike89.tintColor = .white
-        detailLike89.backgroundColor = liked
-            ? UIColor(red: 1, green: 0.35, blue: 0.45, alpha: 0.95)
-            : UIColor.black.withAlphaComponent(0.45)
-    }
-
     /// 进度条热更新（VC 的 0.3 秒计时器只打这一处，不整表刷新）。
     func updateProgress(_ progress: Double) {
         progressValue = progress
@@ -4725,6 +4587,9 @@ final class WallPosterCell: UICollectionViewCell {
             imageView.transform = zoom
         }
         lightDimView82.frame = shadowView.bounds
+        // port90（任务 23）：➕ 钮恒贴封面右上（距右/上 6）。
+        diaryButton90.frame = CGRect(x: contentView.bounds.width - 30, y: 6,
+                                     width: 24, height: 24)
         let bounds = shadowView.bounds
         // (66) 歌单卡片样式消费（playlistCardStyle62）：纯图
         // 片封面档隐藏标题/副行、封面独占卡面；拍立得卡片档
@@ -4738,51 +4603,39 @@ final class WallPosterCell: UICollectionViewCell {
         titleLabel.frame = CGRect(
             x: 6, y: titleY,
             width: bounds.width - 12, height: labelHeight)
-        titleLabel.isHidden = imageOnly
+        // port90：展开态卡底重复歌名/歌手行隐藏（封面只留顶部歌名）。
+        titleLabel.isHidden = imageOnly || controlsVisible
         subtitleLabel.frame = CGRect(
             x: 6, y: bounds.height - bottomInset - 13,
             width: bounds.width - 12, height: 12)
-        subtitleLabel.isHidden = imageOnly || !hasSubtitle
+        subtitleLabel.isHidden = imageOnly || !hasSubtitle || controlsVisible
         if controlsVisible {
-            // (89)B b-detail-card：左上文字块＋其下动作排——标题
-            // bold、字号 clamp(30, 卡宽×0.11, 46)、行高 0.95 倍、
-            // 最大宽 76% 卡宽、最多 2 行；歌手 17；动作排喜欢
-            // 44×44／播放／加入队列（高 44、字 15）。
+            // port90（任务 8 覆盖 b-detail-card）：封面只留歌名——
+            // 19pt semibold、行高 1.15、宽＝卡宽−32、按词换行不截断，
+            // 高上限 0.34×卡高（歌词窗默认 clip 自 0.40 起、不相撞）。
             let detailMargin: CGFloat = 16
-            let detailTextWidth = bounds.width * 0.76
-            let detailFontSize = min(max(bounds.width * 0.11, 30), 46)
-            let detailKey = "\(Int(detailFontSize))|\(detailTitleText89)"
-            if detailKey != detailLayoutKey89 {
-                detailLayoutKey89 = detailKey
+            let detailTextWidth = bounds.width - detailMargin * 2
+            let detailFontSize: CGFloat = 19
+            if detailTitleText89 != detailLayoutKey89 {
+                detailLayoutKey89 = detailTitleText89
                 let style = NSMutableParagraphStyle()
-                style.minimumLineHeight = detailFontSize * 0.95
-                style.maximumLineHeight = detailFontSize * 0.95
-                style.lineBreakMode = .byTruncatingTail
+                style.minimumLineHeight = detailFontSize * 1.15
+                style.maximumLineHeight = detailFontSize * 1.15
+                style.lineBreakMode = .byWordWrapping
                 detailTitle89.attributedText = NSAttributedString(
                     string: detailTitleText89,
                     attributes: [.paragraphStyle: style,
-                                 .font: UIFont.systemFont(ofSize: detailFontSize, weight: .bold),
+                                 .font: UIFont.systemFont(ofSize: detailFontSize, weight: .semibold),
                                  .foregroundColor: UIColor.white])
             }
             let detailTitleHeight = min(
                 detailTitle89.sizeThatFits(CGSize(
                     width: detailTextWidth,
                     height: .greatestFiniteMagnitude)).height,
-                detailFontSize * 0.95 * 2 + 2)
+                bounds.height * 0.34)
             detailTitle89.frame = CGRect(
                 x: detailMargin, y: 14,
                 width: detailTextWidth, height: detailTitleHeight)
-            detailArtist89.frame = CGRect(
-                x: detailMargin, y: 14 + detailTitleHeight + 6,
-                width: detailTextWidth, height: 22)
-            let detailActionsY = 14 + detailTitleHeight + 6 + 22 + 12
-            detailLike89.frame = CGRect(
-                x: detailMargin, y: detailActionsY, width: 44, height: 44)
-            detailPlay89.frame = CGRect(
-                x: detailMargin + 54, y: detailActionsY, width: 88, height: 44)
-            detailQueue89.frame = CGRect(
-                x: detailMargin + 152, y: detailActionsY, width: 104, height: 44)
-            detailActionsBottom89 = detailActionsY + 44
             let barTop = bounds.height - 37
             playButton.frame = CGRect(x: 8, y: barTop + 2, width: 30, height: 30)
             likeButton.frame = CGRect(x: bounds.width - 38, y: barTop + 2, width: 30, height: 30)
@@ -4812,8 +4665,6 @@ final class WallPosterCell: UICollectionViewCell {
                 x: bounds.width - 38 - 17,
                 y: max(8, titleY - 4 - 64),
                 width: 64, height: 64)
-        } else {
-            detailActionsBottom89 = 0 // (89)B：收起态无动作排占位
         }
         playingBadge.frame = CGRect(x: bounds.width - 30, y: 4, width: 24, height: 24)
     }
@@ -4853,6 +4704,12 @@ final class WallPosterCell: UICollectionViewCell {
         lightWall82 = wall
         lightEntryId82 = entry.id
         applyLight82(animated: false)
+        // port90（任务 23）：登记本砖歌曲并回刷 ➕ 贴入态。
+        // 歌单形条目（副行「歌单 · N」）不是歌曲、不挂 ➕。
+        diarySong90 = DiarySong90(id: entry.id, title: entry.title,
+                                  artist: entry.subtitle ?? "", artwork: entry.picUrl)
+        diaryButton90.isHidden = entry.subtitle?.hasPrefix("歌单") ?? false
+        DiaryAddButton90.refresh(diaryButton90, songId: entry.id)
         titleLabel.text = entry.title
         subtitleLabel.text = entry.subtitle
         setNeedsLayout()
@@ -4970,6 +4827,19 @@ final class WallPosterCell: UICollectionViewCell {
         let focused = !WallLight82.isOn && WallLight82.focusEnabled82
             && WallLight82.focusedId(wall: lightWall82) == entryId
         applyLightFocusZoom83(focused: focused, animated: animated)
+    }
+
+    /// port90（任务 23）：➕ 点按——只切换日记本贴入态。
+    /// 关灯态下点砖本有「首点点亮」仲裁（宿主 didSelect 通
+    /// 路），➕ 是钮自身触摸、不进宿主选择通路，两者不串。
+    @objc private func diaryTapped90() {
+        guard let song = diarySong90 else { return }
+        DiaryStore90.toggle(song)
+        DiaryAddButton90.refresh(diaryButton90, songId: song.id)
+    }
+
+    @objc private func diaryChanged90() {
+        DiaryAddButton90.refresh(diaryButton90, songId: diarySong90?.id)
     }
 
     /// (83) 第 3 条：关灯点亮时被点封面慢慢放大——曲线与

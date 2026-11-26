@@ -3,7 +3,7 @@ import Combine
 
 // SketchbookStore.swift
 //
-// 速记簿数据层（(53) 工作流 D、(55) 工作流 H 补全六大块；对应
+// 日记本数据层（(53) 工作流 D、(55) 工作流 H 补全六大块；对应
 // folia-major 的 src/stores/useScratchpadStore.ts）：本机的、跨来源
 // 的歌曲暂存区，与播放队列分开（收进来不动正在播的队列）、与歌单
 // 分开（不在任何平台上建东西）。条目按加入先后追加（记事本语义），
@@ -365,7 +365,7 @@ final class SketchbookStore: ObservableObject {
     }
 
     /// 历史按天分段（新的在前）：照网页版 historyDays 的本地零点
-    /// 分界口径，只是事件源是速记簿自己的收进/移除（见文件头）。
+    /// 分界口径，只是事件源是日记本自己的收进/移除（见文件头）。
     func historyByDay() -> [(dayStart: TimeInterval, events: [HistoryEvent])] {
         var days: [(dayStart: TimeInterval, events: [HistoryEvent])] = []
         for event in history.reversed() {

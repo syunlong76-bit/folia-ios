@@ -175,13 +175,8 @@ final class LyricWindowView: UIView {
     /// 扫光时钟（VC 注入 = 插值时钟）：扫光据此推进，暂停即冻结。
     var clock: (() -> Double)?
 
-    /// (89)B b-detail-card：clip 起点下限覆盖（卡坐标＝本视图
-    /// bounds 坐标，帧与展开卡同尺寸）。VC 按 max(0.40×卡高,
-    /// 动作排底＋8) 口径下发动作排底＋8，本视图取与现行
-    /// 0.40 起点的较大者；nil = 现行口径。
-    var clipTopOverride89: CGFloat? {
-        didSet { setNeedsLayout() }
-    }
+    // port90：clip 覆盖（clipTopOverride89）随展开卡动作排撤除退役，
+    // 歌词 clip 恒走默认 0.40 起点。
 
     private let lyricScrimView = UIView()
     private let lyricGradient = CAGradientLayer()
@@ -521,11 +516,7 @@ final class LyricWindowView: UIView {
             lyricLineHeight = (lyricCurrentFontSize * 1.65).rounded()
             if !lyricTexts.isEmpty { renderLyricWindow() }
         }
-        var lyricTop = bounds.height * 0.40 - lyricLineHeight * 2.5
-        // (89)B：展开卡动作排占位时 clip 起点下移至其下方。
-        if let clipTopOverride89 {
-            lyricTop = max(lyricTop, clipTopOverride89)
-        }
+        let lyricTop = bounds.height * 0.40 - lyricLineHeight * 2.5
         let clipFrame = CGRect(x: 10, y: lyricTop, width: clipWidth,
                                height: lyricLineHeight * 5)
         lyricScrimView.frame = clipFrame

@@ -2,7 +2,7 @@ import UIKit
 
 // SketchbookCanvasView.swift
 //
-// 速记簿画布形态（(55) 工作流 H；对应 folia-major 的
+// 日记本画布形态（(55) 工作流 H；对应 folia-major 的
 // ScratchpadCanvas.tsx + canvasLayout.ts）：暂存歌曲按组摆成卡片
 // 网格，卡片 136×176、间隙 12（canvasLayout 的 DEFAULT_SPACING /
 // CARD_WIDTH / CARD_HEIGHT），列数按可用宽现算（columnsFor）。

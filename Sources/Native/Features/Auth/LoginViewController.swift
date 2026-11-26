@@ -35,6 +35,14 @@ final class LoginViewController: UIViewController {
     /// 按此落 selectedProvider 与段控（nil = 缺省网易云）。
     var initialProvider: NativeSessionStore.Provider?
 
+    /// port90（任务 12）：专用扫码模式——由指定平台入口打开时
+    /// （initialProvider 非空），页面只剩该平台扫码：平台行组/
+    /// 账号区/同步钮/酷狗方式段全隐，与网页版「点平台直接出
+    /// 二维码弹层」同形。其余入口（不设 initialProvider）仍为
+    /// 通用登录中心、形态不变。
+    var dedicated90: Bool { initialProvider != nil }
+    private var providerRowsStack89View: UIStackView?
+
     private let neteaseClient = NeteaseQRLoginClient()
     private let qqClient = QQLoginClient()
     private let kugouClient = KugouLoginClient()
@@ -314,6 +322,7 @@ final class LoginViewController: UIViewController {
             providerRowsStack89.addArrangedSubview(row)
         }
         providerRowsStack89.widthAnchor.constraint(equalToConstant: 272).isActive = true
+        providerRowsStack89View = providerRowsStack89
         refreshProviderRows89()
         Breadcrumbs.log("port89 login=rows")
 
@@ -342,6 +351,17 @@ final class LoginViewController: UIViewController {
             syncButton.widthAnchor.constraint(equalToConstant: 200),
             closeButton.widthAnchor.constraint(equalToConstant: 160)
         ])
+        // port90：专用模式装配即隐中间层（nameLabel 留作平台名标题；
+        // QR 区由 startFlow 点亮）。后续回刷路径各自并入 dedicated90。
+        if dedicated90 {
+            providerRowsStack89View?.isHidden = true
+            avatarView.isHidden = true
+            accountStatusLabel.isHidden = true
+            actionButton.isHidden = true
+            syncButton.isHidden = true
+            syncStatusLabel.isHidden = true
+            Breadcrumbs.log("port90 login dedicated provider=\(selectedProvider.rawValue)")
+        }
     }
 
     private func rebuildChannelSegment() {
@@ -357,7 +377,8 @@ final class LoginViewController: UIViewController {
             channelSegment.selectedSegmentIndex = min(selected, qqChannels.count - 1)
         }
         // 网页版口径：只剩一个通道时不显示选择器。
-        channelSegment.isHidden = selectedProvider != .qq || qqChannels.count <= 1
+        // port90：专用模式恒隐（通道走默认）。
+        channelSegment.isHidden = dedicated90 || selectedProvider != .qq || qqChannels.count <= 1
     }
 
     // MARK: - 分段与账号区
@@ -447,7 +468,7 @@ final class LoginViewController: UIViewController {
             accountStatusLabel.text = "未登录"
             actionButton.setTitle("扫码登录", for: .normal)
         }
-        syncButton.isHidden = !status.isLoggedIn
+        syncButton.isHidden = dedicated90 || !status.isLoggedIn
         updateKugouMethodUI62(loggedIn: status.isLoggedIn)
         avatarView.image = nil
         if let avatarURL = status.avatarURL {
@@ -538,7 +559,9 @@ final class LoginViewController: UIViewController {
     /// 非扫码方式出字段组并把主钮改「登录」。
     private func updateKugouMethodUI62(loggedIn: Bool) {
         let isKugou = selectedProvider == .kugou
-        kugouMethodSegment.isHidden = !isKugou || loggedIn
+        // port90：专用模式强制扫码法——方式段恒隐、字段组恒隐、下标钉 0。
+        if dedicated90 { kugouMethodSegment.selectedSegmentIndex = 0 }
+        kugouMethodSegment.isHidden = dedicated90 || !isKugou || loggedIn
         let method = kugouMethodSegment.selectedSegmentIndex
         let showFields = isKugou && !loggedIn && method != 0
         kugouFieldStack.isHidden = !showFields

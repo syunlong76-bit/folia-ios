@@ -19,7 +19,7 @@ enum DeckGlyph82 {
 
     enum Kind {
         case prev, next, play, pause
-        case list, console, modeRepeat, modeRepeatOne, modeSequence, shuffle
+        case list, console, consoleNotes, modeRepeat, modeRepeatOne, modeSequence, shuffle
         case sparkles, paw, heart, heartFill, pencil, trash, help
         case layers, speaker, star, starFill, command, sliders
         // (87) 四特效钮字形：烟花/孔明灯 SF 无对应符号，手绘
@@ -33,6 +33,8 @@ enum DeckGlyph82 {
             return coreGlyph(kind, pointSize: pointSize)
         case .fxFirework, .fxLantern:
             return fxGlyph(kind, pointSize: pointSize)
+        case .consoleNotes:
+            return notesGlyph90(pointSize: pointSize)
         case .fxSnow:
             let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
             return UIImage(systemName: "snowflake", withConfiguration: config)?
@@ -235,6 +237,50 @@ enum DeckGlyph82 {
         return image.withRenderingMode(.alwaysTemplate)
     }
 
+    /// port90（任务 15）控制台入口字形：两个八分音符上下排列
+    /// （24×24 画布、填充模板图）。上音符头心约 (10.8, 8.6)、
+    /// 下音符头心约 (9.2, 19.4)；符头为倾斜椭圆、符干右侧竖线
+    /// 宽 1.6 圆头、符尾为四边形旗面。
+    private static func notesGlyph90(pointSize: CGFloat) -> UIImage? {
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            let cg = context.cgContext
+            UIColor.white.setFill()
+            UIColor.white.setStroke()
+            func note(headCX: CGFloat, headCY: CGFloat, stemTop: CGFloat) {
+                // 符头：倾斜椭圆（绕头心 −20°）。
+                cg.saveGState()
+                cg.translateBy(x: headCX * scale, y: headCY * scale)
+                cg.rotate(by: -20 * .pi / 180)
+                UIBezierPath(ovalIn: CGRect(
+                    x: -2.7 * scale, y: -2.0 * scale,
+                    width: 5.4 * scale, height: 4.0 * scale)).fill()
+                cg.restoreGState()
+                // 符干：符头右侧竖线。
+                let stemX = headCX + 2.35
+                let stem = UIBezierPath()
+                stem.move(to: CGPoint(x: stemX * scale, y: (headCY - 0.4) * scale))
+                stem.addLine(to: CGPoint(x: stemX * scale, y: stemTop * scale))
+                stem.lineWidth = 1.6 * scale
+                stem.lineCapStyle = .round
+                stem.stroke()
+                // 符尾：自符干顶向右下展开的旗面四边形。
+                let flag = UIBezierPath()
+                flag.move(to: CGPoint(x: stemX * scale, y: stemTop * scale))
+                flag.addLine(to: CGPoint(x: (stemX + 4.2) * scale, y: (stemTop + 1.6) * scale))
+                flag.addLine(to: CGPoint(x: (stemX + 4.2) * scale, y: (stemTop + 5.4) * scale))
+                flag.addLine(to: CGPoint(x: stemX * scale, y: (stemTop + 3.8) * scale))
+                flag.close()
+                flag.fill()
+            }
+            note(headCX: 10.8, headCY: 8.6, stemTop: 2.6)
+            note(headCX: 9.2, headCY: 19.4, stemTop: 13.4)
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
     /// 花朵进度把手（E 定版：白花瓣＋琥珀心），非模板图。
     static func flowerImage(size: CGFloat = 22) -> UIImage {
         let renderer = UIGraphicsImageRenderer(size: CGSize(width: size, height: size))
@@ -367,16 +413,8 @@ enum DblTap83 {
 /// (87) 播放台换代共享口径（样片定版 2026-11-25 15:07）：
 /// 主题四圆点（台面右上）与模式合并钮循环序的单一出处。
 enum Deck87 {
-    /// 四圆点对应的油画主题（与 MiniPlayerTheme 四套画作
-    /// 一一对应；.none 仍由长按循环/设置到达，点位只管四
-    /// 套画作）。圆点底色取各主题画作的代表色。
-    static let dotThemes: [MiniPlayerTheme] = [.meadow, .snow, .star, .ocean]
-    static let dotColors: [UIColor] = [
-        UIColor(red: 0.48, green: 0.54, blue: 0.29, alpha: 1),  // 花海·绿
-        UIColor(red: 0.75, green: 0.85, blue: 0.91, alpha: 1),  // 雪景·雪蓝白
-        UIColor(red: 0.17, green: 0.23, blue: 0.45, alpha: 1),  // 星空·深蓝
-        UIColor(red: 0.17, green: 0.48, blue: 0.45, alpha: 1),  // 海洋·青
-    ]
+    // port90（任务 13）：主题四圆点撤除后 dotThemes/dotColors 零引用，随之删除；
+    // 主题切换仍走长按台面循环（MiniPlayerTheme.stored.next）与设置页。
 
     /// 模式合并钮单击循环序（87 定版）：随机→顺序→循环→单曲→随机。
     static func nextMode(after mode: QueueManager.PlayMode) -> QueueManager.PlayMode {
