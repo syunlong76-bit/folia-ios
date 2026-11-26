@@ -31,24 +31,39 @@ final class FxLinkage91 {
         weak var cover: UIView?
         weak var container: UIView?
         let index: Int
+        /// (92) 加码 2：表面标签（wall/alt/stage），触发自证用。
+        let surface: String
         var cap: UIView?
         var glow: UIView?
         var windOn = false
         var baseScale: CGFloat = 1
-        init(cover: UIView, container: UIView, index: Int) {
+        init(cover: UIView, container: UIView, index: Int, surface: String) {
             self.cover = cover
             self.container = container
             self.index = index
+            self.surface = surface
         }
     }
 
     private final class PetRec {
         weak var view: UIView?
+        /// (92) 加码 2：表面标签（minibar/concert/island）。
+        let surface: String
+        /// (92) 任务 3：覆层宠物——宿主自有 transform 状态机
+        /// （演唱会/岛），联动只许走覆层通道（光晕/落雪附着/
+        /// 仰头贴纸），绝不写宠物本体 transform。
+        let overlayOnly: Bool
         var pile: UIView?
+        var glowOverlay: UIView?
+        var lookSticker: UIView?
         var lookUp = false
         var nextShake: CFTimeInterval = 0
         var lastJump: CFTimeInterval = 0
-        init(view: UIView) { self.view = view }
+        init(view: UIView, surface: String, overlayOnly: Bool) {
+            self.view = view
+            self.surface = surface
+            self.overlayOnly = overlayOnly
+        }
     }
 
     private var tiles: [ObjectIdentifier: TileRec] = [:]
@@ -68,10 +83,11 @@ final class FxLinkage91 {
 
     // MARK: 注册
 
-    func registerTile(cover: UIView, container: UIView) {
+    func registerTile(cover: UIView, container: UIView, surface: String = "wall") {
         let key = ObjectIdentifier(cover)
         if tiles[key] == nil {
-            tiles[key] = TileRec(cover: cover, container: container, index: nextIndex)
+            tiles[key] = TileRec(cover: cover, container: container,
+                                 index: nextIndex, surface: surface)
             nextIndex += 1
         }
         ensureLink()
@@ -90,9 +106,11 @@ final class FxLinkage91 {
         tiles[key] = nil
     }
 
-    func registerPet(_ view: UIView) {
+    func registerPet(_ view: UIView, surface: String = "minibar") {
         let key = ObjectIdentifier(view)
-        if pets[key] == nil { pets[key] = PetRec(view: view) }
+        if pets[key] == nil {
+            pets[key] = PetRec(view: view, surface: surface, overlayOnly: false)
+        }
         ensureLink()
         let fx = GlobalFx87.shared
         if let rec = pets[key] {
@@ -101,16 +119,56 @@ final class FxLinkage91 {
         }
     }
 
+    /// (92) 任务 3：覆层宠物注册（演唱会演员/岛宠物）——宿
+    /// 主自有 transform 状态机，联动只走覆层通道：落雪附着
+    /// （子视图雪堆）、孔明灯暖光覆层＋仰头贴纸、烟花闪光
+    /// 覆层；风的本体轻晃与爱心跳跃不适用于本类（会与宿主
+    /// 状态机抢 transform），分别以覆层闪光/不触发替代，
+    /// 报告注明。
+    func registerPetOverlay(_ view: UIView, surface: String) {
+        let key = ObjectIdentifier(view)
+        if pets[key] == nil {
+            pets[key] = PetRec(view: view, surface: surface, overlayOnly: true)
+        }
+        ensureLink()
+        let fx = GlobalFx87.shared
+        if let rec = pets[key], fx.isSnow { growSnowPet(rec) }
+    }
+
     func unregisterPet(_ view: UIView) {
         let key = ObjectIdentifier(view)
         guard let rec = pets[key] else { return }
         rec.pile?.removeFromSuperview()
         rec.pile = nil
-        if let v = rec.view {
+        rec.glowOverlay?.removeFromSuperview()
+        rec.glowOverlay = nil
+        rec.lookSticker?.removeFromSuperview()
+        rec.lookSticker = nil
+        if let v = rec.view, !rec.overlayOnly {
             v.layer.removeAllAnimations()
             v.transform = .identity
         }
         pets[key] = nil
+    }
+
+    // MARK: (92) 加码 2：联动触发自证
+
+    /// 每种特效在每个表面首次真触发时落一条，同（特效，
+    /// 表面）每会话只落一次防刷屏——真机日志可逐项对账
+    /// 「开某特效→某表面动了」。
+    private var linkProof92: Set<String> = []
+
+    private func proof92(fx: String, surface: String) {
+        let key = "\(fx)|\(surface)"
+        guard !linkProof92.contains(key) else { return }
+        linkProof92.insert(key)
+        Breadcrumbs.log("p92 link \(fx) on \(surface)")
+    }
+
+    /// 覆层宠物在场判据：岛宠物视图不进视图树（层嫁接），
+    /// window 恒 nil，改判 layer 已挂载；普通宠物仍判 window。
+    private func petPresent(_ rec: PetRec, _ v: UIView) -> Bool {
+        rec.overlayOnly ? v.layer.superlayer != nil : v.window != nil
     }
 
     // MARK: 显示链与状态迁移
@@ -118,9 +176,16 @@ final class FxLinkage91 {
     private func ensureLink() {
         guard link == nil else { return }
         let l = CADisplayLink(target: self, selector: #selector(tick))
+        // (92) 任务 8：联动链同样设 60 上限（旧实现常驻全速，
+        // 120Hz 机型上与引擎链叠加成倍开销）。
+        l.preferredFrameRateRange = CAFrameRateRange(
+            minimum: 30, maximum: 60, preferred: 60)
         l.add(to: .main, forMode: .common)
         link = l
     }
+
+    /// (92) 任务 8：孔明灯全表遍历限频计数（每 3 拍一趟）。
+    private var tickCount92 = 0
 
     @objc private func tick() {
         // 失效注册回收（cell 复用/宠物下台均有显式注销，此为兜底）。
@@ -157,8 +222,11 @@ final class FxLinkage91 {
                 Breadcrumbs.log("p91 link snow=0")
             }
         }
+        tickCount92 += 1
         if fx.isLanterns {
-            updateLanternGlow()
+            // (92) 任务 8：暖光逐帧全表遍历改每 3 拍一趟
+            // （≈20Hz，慢变量无感），爆点节流另见 processBurst92。
+            if tickCount92 % 3 == 0 { updateLanternGlow() }
             wasLanterns = true
         } else if wasLanterns {
             wasLanterns = false
@@ -166,7 +234,20 @@ final class FxLinkage91 {
                 guard let glow = rec.glow else { continue }
                 UIView.animate(withDuration: 0.3) { glow.alpha = 0 }
             }
-            for rec in pets.values where rec.lookUp {
+            for rec in pets.values {
+                if rec.overlayOnly {
+                    // (92) 任务 3：覆层宠物收灯——覆层淡出、
+                    // 仰头贴纸收起，本体 transform 不碰。
+                    rec.lookUp = false
+                    if let o = rec.glowOverlay {
+                        UIView.animate(withDuration: 0.3) { o.alpha = 0 }
+                    }
+                    if let s = rec.lookSticker {
+                        UIView.animate(withDuration: 0.3) { s.alpha = 0 }
+                    }
+                    continue
+                }
+                guard rec.lookUp else { continue }
                 rec.lookUp = false
                 if !GlobalFx87.shared.isWind, let v = rec.view {
                     UIView.animate(withDuration: 0.35, delay: 0,
@@ -199,6 +280,7 @@ final class FxLinkage91 {
     private func startWindTile(_ rec: TileRec) {
         guard let cover = rec.cover, !rec.windOn else { return }
         rec.windOn = true
+        proof92(fx: "wind", surface: rec.surface)
         rec.baseScale = currentScale(cover)
         let i = rec.index
         let deg = (1.5 + Double((i * 53) % 21) / 10.0) * (i % 2 == 0 ? 1 : -1)
@@ -242,7 +324,9 @@ final class FxLinkage91 {
     }
 
     private func startWindPet(_ rec: PetRec) {
-        guard let v = rec.view else { return }
+        // (92) 任务 3：覆层宠物不走本体轻晃（transform 归宿主）。
+        guard !rec.overlayOnly, let v = rec.view else { return }
+        proof92(fx: "wind", surface: rec.surface)
         v.layer.removeAllAnimations()
         v.transform = petLean(rotDeg: -1.4, skewDeg: -2.4, tx: 0)
         UIView.animate(withDuration: 2.6, delay: 0,
@@ -252,7 +336,7 @@ final class FxLinkage91 {
     }
 
     private func stopWindPet(_ rec: PetRec) {
-        guard let v = rec.view else { return }
+        guard !rec.overlayOnly, let v = rec.view else { return }
         v.layer.removeAllAnimations()
         UIView.animate(withDuration: 0.62, delay: 0,
                        usingSpringWithDamping: 0.85, initialSpringVelocity: 0.3) {
@@ -265,6 +349,7 @@ final class FxLinkage91 {
     private func growSnowTile(_ rec: TileRec) {
         guard let cover = rec.cover, let container = rec.container,
               rec.cap == nil else { return }
+        proof92(fx: "snow", surface: rec.surface)
         let cap = UIView()
         cap.backgroundColor = UIColor.white.withAlphaComponent(0.95)
         cap.layer.cornerRadius = 6
@@ -297,6 +382,7 @@ final class FxLinkage91 {
 
     private func growSnowPet(_ rec: PetRec) {
         guard let v = rec.view, rec.pile == nil else { return }
+        proof92(fx: "snow", surface: rec.surface)
         let pile = UIView()
         pile.backgroundColor = UIColor.white.withAlphaComponent(0.96)
         pile.layer.cornerRadius = 6
@@ -330,7 +416,8 @@ final class FxLinkage91 {
             guard let v = rec.view, let pile = rec.pile,
                   rec.nextShake > 0, now >= rec.nextShake else { continue }
             rec.nextShake = now + 7.0
-            if !GlobalFx87.shared.isWind {
+            // (92) 任务 3：覆层宠物只抖雪堆/飞雪粒，不摇本体。
+            if !rec.overlayOnly && !GlobalFx87.shared.isWind {
                 UIView.animateKeyframes(withDuration: 0.48, delay: 0) {
                     UIView.addKeyframe(withRelativeStartTime: 0, relativeDuration: 0.33) {
                         v.transform = CGAffineTransform(rotationAngle: -5 * .pi / 180)
@@ -391,6 +478,41 @@ final class FxLinkage91 {
         return glow
     }
 
+    /// (92) 任务 3：覆层宠物的暖光覆层（填满宠物本体、暖色、
+    ///  alpha 由灯距逐趟算）——不写本体 transform。
+    private func petGlowOverlay(_ rec: PetRec) -> UIView {
+        if let o = rec.glowOverlay { return o }
+        let o = UIView()
+        o.backgroundColor = UIColor(red: 1, green: 170 / 255, blue: 70 / 255, alpha: 1)
+        o.alpha = 0
+        o.isUserInteractionEnabled = false
+        o.layer.cornerRadius = 6
+        if let v = rec.view {
+            o.frame = v.bounds
+            o.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            v.addSubview(o)
+        }
+        rec.glowOverlay = o
+        return o
+    }
+
+    /// (92) 任务 3：覆层宠物的仰头贴纸层——宠物本体不许转
+    /// 头时，以头顶星贴纸的显隐表达「仰头看灯」（与普通宠
+    /// 物的本体仰头同触发条件）。
+    private func petLookSticker(_ rec: PetRec) -> UIView {
+        if let s = rec.lookSticker { return s }
+        let iv = UIImageView(image: DeckGlyph82.image(.starFill, pointSize: 12))
+        iv.tintColor = UIColor(red: 1, green: 0.85, blue: 0.4, alpha: 1)
+        iv.alpha = 0
+        iv.isUserInteractionEnabled = false
+        if let v = rec.view {
+            iv.frame = CGRect(x: v.bounds.midX - 6, y: -14, width: 12, height: 12)
+            v.addSubview(iv)
+        }
+        rec.lookSticker = iv
+        return iv
+    }
+
     private func updateLanternGlow() {
         let frames = GlobalFx87.shared.lanternFrames91()
         guard !frames.isEmpty else { return }
@@ -409,23 +531,46 @@ final class FxLinkage91 {
                 glow.backgroundColor = UIColor(red: 1, green: 170 / 255, blue: 70 / 255, alpha: 1)
             }
             glow.alpha = best
+            if best > 0.02 { proof92(fx: "ln", surface: rec.surface) }
         }
         // 宠物仰头：任一灯在宠物附近且灯程进度 0.16–0.86。
         let screenH = UIScreen.main.bounds.height
         for rec in pets.values {
-            guard let v = rec.view, v.window != nil else { continue }
+            guard let v = rec.view, petPresent(rec, v) else { continue }
             let center = v.convert(CGPoint(x: v.bounds.midX, y: v.bounds.midY), to: nil)
             var shouldLook = false
+            var nearest: CGFloat = .greatestFiniteMagnitude
             for f in frames {
                 let progress = 1 - f.center.y / screenH
                 let d = hypot(center.x - f.center.x, center.y - f.center.y)
+                nearest = min(nearest, d)
                 if progress > 0.16 && progress < 0.86 && d < 220 {
                     shouldLook = true
                     break
                 }
             }
+            if rec.overlayOnly {
+                // (92) 任务 3：覆层通道——暖光覆层 alpha 随灯
+                // 距、仰头以头顶星贴纸显隐表达，本体不动。
+                let overlay = petGlowOverlay(rec)
+                overlay.backgroundColor = UIColor(
+                    red: 1, green: 170 / 255, blue: 70 / 255, alpha: 1)
+                let target = nearest.isFinite
+                    ? max(0, 1 - nearest / 220) * 0.5 : 0
+                overlay.alpha = target
+                if target > 0.02 { proof92(fx: "ln", surface: rec.surface) }
+                if shouldLook != rec.lookUp {
+                    rec.lookUp = shouldLook
+                    let sticker = petLookSticker(rec)
+                    UIView.animate(withDuration: 0.35) {
+                        sticker.alpha = shouldLook ? 1 : 0
+                    }
+                }
+                continue
+            }
             if shouldLook != rec.lookUp {
                 rec.lookUp = shouldLook
+                if shouldLook { proof92(fx: "ln", surface: rec.surface) }
                 if !GlobalFx87.shared.isWind {
                     UIView.animate(withDuration: 0.35, delay: 0,
                                    usingSpringWithDamping: 0.8,
@@ -442,7 +587,36 @@ final class FxLinkage91 {
 
     // MARK: 烟花
 
+    /// (92) 任务 8：爆点节流状态——50ms 内连爆合并为一趟。
+    private var pendingBurst92: (point: CGPoint, color: UIColor)?
+    private var burstFlushArmed92 = false
+    private var lastBurstPass92: CFTimeInterval = 0
+
     private func fireworksBurst(at point: CGPoint, color: UIColor) {
+        // (92) 任务 8：同帧/连爆合并——50ms 内的后续爆点只
+        // 更新待办（保留最后一发），到点一趟全表遍历，防烟
+        // 花连发时逐爆点全表扫描叠加引擎绘制成卡顿源。
+        let now = CACurrentMediaTime()
+        if now - lastBurstPass92 < 0.05 {
+            pendingBurst92 = (point, color)
+            if !burstFlushArmed92 {
+                burstFlushArmed92 = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    guard let self else { return }
+                    self.burstFlushArmed92 = false
+                    if let pending = self.pendingBurst92 {
+                        self.pendingBurst92 = nil
+                        self.processBurst92(at: pending.point, color: pending.color)
+                    }
+                }
+            }
+            return
+        }
+        processBurst92(at: point, color: color)
+    }
+
+    private func processBurst92(at point: CGPoint, color: UIColor) {
+        lastBurstPass92 = CACurrentMediaTime()
         for rec in tiles.values {
             guard let cover = rec.cover, cover.window != nil else { continue }
             let center = cover.convert(
@@ -454,6 +628,7 @@ final class FxLinkage91 {
             glow.backgroundColor = color
             glow.layer.removeAllAnimations()
             glow.alpha = 0
+            proof92(fx: "fw", surface: rec.surface)
             UIView.animate(withDuration: 0.12, animations: { glow.alpha = 0.34 }) { _ in
                 UIView.animate(withDuration: 0.76) { glow.alpha = 0 }
             }
@@ -462,7 +637,63 @@ final class FxLinkage91 {
         for (i, rec) in pets.values.enumerated() {
             guard let v = rec.view, now - rec.lastJump > 0.5 else { continue }
             rec.lastJump = now
+            if rec.overlayOnly {
+                // (92) 任务 3：覆层宠物以闪光覆层欢呼，本体不跳。
+                guard petPresent(rec, v) else { continue }
+                proof92(fx: "fw", surface: rec.surface)
+                flashPetOverlay(rec, color: color)
+                continue
+            }
             if GlobalFx87.shared.isWind { continue }
+            proof92(fx: "fw", surface: rec.surface)
+            let base = rec.lookUp
+                ? CGAffineTransform(rotationAngle: -5.5 * .pi / 180).translatedBy(x: 0, y: -2)
+                : CGAffineTransform.identity
+            DispatchQueue.main.asyncAfter(deadline: .now() + Double(i) * 0.06) {
+                UIView.animate(withDuration: 0.28, delay: 0,
+                               usingSpringWithDamping: 0.55, initialSpringVelocity: 0.8) {
+                    v.transform = base.translatedBy(x: 0, y: -9)
+                } completion: { _ in
+                    UIView.animate(withDuration: 0.28, delay: 0,
+                                   usingSpringWithDamping: 0.6, initialSpringVelocity: 0.4) {
+                        v.transform = base
+                    }
+                }
+            }
+        }
+    }
+
+    /// (92) 任务 3/6：覆层宠物闪光一拍（烟花欢呼与爱心反应
+    /// 共用）：覆层以给定色冲亮再淡出，本体零位移。
+    private func flashPetOverlay(_ rec: PetRec, color: UIColor) {
+        let overlay = petGlowOverlay(rec)
+        overlay.backgroundColor = color
+        overlay.layer.removeAllAnimations()
+        overlay.alpha = 0
+        UIView.animate(withDuration: 0.12, animations: { overlay.alpha = 0.4 }) { _ in
+            UIView.animate(withDuration: 0.76) { overlay.alpha = 0 }
+        }
+    }
+
+    // MARK: (92) 任务 6：爱心宠物反应
+
+    /// 封面/A·B 爱心点亮且云端同步成功后由格子调用：变换宠
+    /// 物跳一拍（与烟花跳同弹簧/同让位规则）、覆层宠物闪光
+    /// 一拍；只动宠物、不动封面砖。取消喜欢与云端失败回滚
+    /// 不调本方法（调用方纪律，见三处 heartTapped91）。
+    func petHeartReaction92() {
+        let now = CACurrentMediaTime()
+        for (i, rec) in pets.values.enumerated() {
+            guard let v = rec.view else { continue }
+            if rec.overlayOnly {
+                guard petPresent(rec, v) else { continue }
+                flashPetOverlay(rec, color: UIColor(
+                    red: 1, green: 0.45, blue: 0.55, alpha: 1))
+                continue
+            }
+            guard now - rec.lastJump > 0.5,
+                  !GlobalFx87.shared.isWind else { continue }
+            rec.lastJump = now
             let base = rec.lookUp
                 ? CGAffineTransform(rotationAngle: -5.5 * .pi / 180).translatedBy(x: 0, y: -2)
                 : CGAffineTransform.identity

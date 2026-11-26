@@ -17,7 +17,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
         // 1500），覆盖全屏全场景、不绑控制台开合；渲染层
         // 每帧只清自己、绝不压暗/染色照片墙背景。
         GlobalFx87.shared.install(in: windowScene)
-        // (88) 工坊定案：下雪默认开（port88，引擎侧落值）。
+        // (92) 任务 2：四特效冷启默认全关（推翻 (88) 的下雪
+        // 默认开——那是工坊「下雪 开」存值被写成冷启默认的
+        // 误落，审计 Q2 定案）；样式值（淡蓝）保留、手动开
+        // 仍可用、12 秒自融保留。
         GlobalFx87.shared.applyDefaultSnow88()
         GlobalFx87.shared.recommendationProvider = {
             // 今日推荐：队列里挑当前曲之外的一首（优先下
@@ -116,6 +119,10 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             name: .foliaSettings62AChanged, object: nil)
         window.makeKeyAndVisible()
         self.window = window
+        // (92) 任务 1：Fx 浮层宿主与被动点按识别器改挂真主
+        // 窗——install 时主窗未建、(91) 挂到了 Fx 窗自身
+        // （审计 Q4 定案），主窗就绪后在此重挂并落 p92 自证。
+        GlobalFx87.shared.attachOverlay92(to: window)
         // (77) ⑤：窗口右下角浮动爪印退役（Miller 定：爪印
         // 上点播台、替换随机播放键位）——不再 install；
         // PetSummonButton70 本体保留为共享切换核

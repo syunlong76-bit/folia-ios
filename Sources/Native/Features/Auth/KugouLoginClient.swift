@@ -47,6 +47,10 @@ final class KugouLoginClient {
         let accountId: String?
         let nickname: String?
         let avatarURLString: String?
+        /// (92) 任务 10：资料内 VIP 初值（vip_type|vipType|
+        /// is_vip，网页版 normalizeUser 同键）；复核走
+        /// fetchVIPLevel（/user/vip/detail）。
+        let vipLevel: Int?
     }
 
     /// register_dev 换到的设备 id（本次登录流程内暂存，
@@ -278,15 +282,106 @@ final class KugouLoginClient {
             ?? NativeJSON.dict(data["profile"]) ?? data
         let nickname = ProviderLoginTransport.stringValue(
             profile, "nickname", "nick_name", "username", "name")
-        let avatar = ProviderLoginTransport.stringValue(
-            profile, "avatar", "pic", "sizable_avatar", "picUrl")
+        // (92) 任务 10：头像改走网页版 coverOf 整体移植
+        // （候选集/优先级/URL 后处理，见 coverOf92）。
+        let avatar = Self.coverOf92(profile)
         let accountId = ProviderLoginTransport.stringValue(
             profile, "userid", "user_id", "id", "uid") ?? userId
         guard nickname != nil || accountId != nil else {
             throw KugouLoginError.malformed
         }
         return LoginProfile(accountId: accountId, nickname: nickname,
-                            avatarURLString: avatar)
+                            avatarURLString: avatar,
+                            vipLevel: Self.vipValue92(in: profile))
+    }
+
+    /// JSON 值 → Int（字符串数字与 NSNumber 都认，其余 nil）。
+    private static func vipValue92(in dict: [String: Any]) -> Int? {
+        for key in ["vip_type", "vipType", "is_vip"] {
+            guard let raw = dict[key] else { continue }
+            if let text = raw as? String, let value = Int(text) { return value }
+            if let number = raw as? NSNumber { return number.intValue }
+        }
+        return nil
+    }
+
+    /// (92) 任务 10：网页版 coverOf 整体移植（kugouProvider
+    /// .ts:100-113＋:493，审计对账定案）：对 profile 本体按
+    /// 序试封面族 9 键（sizable_cover→Image→image→img→pic
+    /// →picUrl→cover→coverUrl→sizable_avatar）、再 avatar
+    /// 兜底；命中后必做 URL 后处理——{size}→1024、裸文件
+    /// 名拼 c1.kgimg.com/stdmusic/1024/<前8位>/<文件名>、
+    /// //补 https:、http→https。命中键名与值形态落 p92 面
+    /// 包屑（不记 URL 本体），把实回形态在真机定案。
+    private static func coverOf92(_ profile: [String: Any]) -> String? {
+        let keys = ["sizable_cover", "Image", "image", "img", "pic",
+                    "picUrl", "cover", "coverUrl", "sizable_avatar", "avatar"]
+        var hitKey: String?
+        var raw: String?
+        for key in keys {
+            if let value = ProviderLoginTransport.stringValue(profile, key),
+               !value.isEmpty {
+                hitKey = key
+                raw = value
+                break
+            }
+        }
+        guard let value = raw else {
+            Breadcrumbs.log("p92 kg avatar key=none form=none")
+            return nil
+        }
+        var url = value
+        var form = "https"
+        if url.contains("{size}") {
+            url = url.replacingOccurrences(of: "{size}", with: "1024")
+            form = "tpl"
+        }
+        if url.hasPrefix("//") {
+            url = "https:" + url
+            if form == "https" { form = "proto-rel" }
+        } else if isBareKugouFilename92(url) {
+            let date = String(url.prefix(8))
+            url = "https://c1.kgimg.com/stdmusic/1024/\(date)/\(url)"
+            form = "bare"
+        } else if url.hasPrefix("http://") {
+            url = "https://" + String(url.dropFirst(7))
+            if form == "https" { form = "http" }
+        } else if !url.hasPrefix("https://") {
+            form = "other"
+        }
+        Breadcrumbs.log("p92 kg avatar key=\(hitKey ?? "none") form=\(form)")
+        return url
+    }
+
+    /// 裸文件名判据（网页版正则 ^\d{8,}\.(jpe?g|png|webp)$）。
+    private static func isBareKugouFilename92(_ value: String) -> Bool {
+        guard let dot = value.lastIndex(of: ".") else { return false }
+        let ext = value[value.index(after: dot)...].lowercased()
+        guard ["jpg", "jpeg", "png", "webp"].contains(ext) else { return false }
+        let stem = value[..<dot]
+        return stem.count >= 8 && stem.allSatisfy { $0.isNumber }
+    }
+
+    /// (92) 任务 10：酷狗 VIP 复核端点（网页版 getLoginStatus
+    /// 复核段同路）：GET /user/vip/detail，data 认 vip_type|
+    /// vipType|is_vip，或 busi_vip[] 条目的同名键（任一为正
+    /// 即会员、全条目皆零回 0）；端点失败/无字段回 nil（保
+    /// 留资料内初值，不当免费）。
+    func fetchVIPLevel(cookie: String) async -> Int? {
+        guard let response = try? await ProviderLoginTransport.getJSON(
+            provider: .kugou, path: "/user/vip/detail", cookie: cookie)
+        else { return nil }
+        let data = ProviderLoginTransport.dataObject(of: response.root)
+        if let value = Self.vipValue92(in: data) { return value }
+        if let busi = data["busi_vip"] as? [Any], !busi.isEmpty {
+            for item in busi {
+                guard let dict = item as? [String: Any],
+                      let value = Self.vipValue92(in: dict) else { continue }
+                if value > 0 { return value }
+            }
+            return 0
+        }
+        return nil
     }
 
     /// 退出登录（best effort：本地先清，后端通知失败忽略——

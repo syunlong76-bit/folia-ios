@@ -332,13 +332,16 @@ final class ConsolePanel82: UIViewController,
         // 回刷逻辑保留、不再入行）。
         configureIconButton(modeButton, glyph: .modeRepeat, label: "播放模式")
         modeButton.addTarget(self, action: #selector(modeTapped87), for: .touchUpInside)
-        configureIconButtonSF89(themeButton89, systemName: "paintpalette", label: "主题")
+        // (92) 任务 4：主题格换 A4 手绘调色板（SF paintpalette 退役）。
+        configureIconButton(themeButton89, glyph: .themePalette92, label: "主题")
         themeButton89.addTarget(self, action: #selector(themeTapped89), for: .touchUpInside)
         configureIconButton(listButton87, glyph: .list, label: "歌曲列表")
         listButton87.addTarget(self, action: #selector(listTapped87), for: .touchUpInside)
-        configureIconButtonSF89(destButton89, systemName: "square.grid.2x2", label: "去处")
+        // (92) 任务 4：去处格换 A4 手绘 2×2 格（SF square.grid 退役）。
+        configureIconButton(destButton89, glyph: .destGrid92, label: "去处")
         destButton89.addTarget(self, action: #selector(destTapped89), for: .touchUpInside)
-        configureIconButtonSF89(playerButton89, systemName: "play.circle", label: "播放器")
+        // (92) 任务 4：播放器格换 A4 手绘圆盘（SF play.circle 退役）。
+        configureIconButton(playerButton89, glyph: .playerDisc92, label: "播放器")
         playerButton89.addTarget(self, action: #selector(playerTapped89), for: .touchUpInside)
         // port91（任务 3）：设置格换 A4 sliders 字形（DeckGlyph82
         // .sliders 手绘），SF gearshape 退役——控制台内部图标同换。
@@ -351,8 +354,12 @@ final class ConsolePanel82: UIViewController,
         // 缺格隐藏（网页快捷格同式）：回调未装配的格不占位。
         destButton89.isHidden = onDestination89 == nil
         playerButton89.isHidden = onPlayer89 == nil
+        // (92) 任务 5：宠物召唤钮装回功能行（(89) 提交
+        // 669b75b89 撤行未删对象，审计 Q5 定案）——位置在
+        // 队列格之后，行变 7 格等分；召唤行为走 perform-
+        // PawToggle77 同一通路（见 pawTapped）。
         let functionRow = UIStackView(arrangedSubviews: [
-            modeButton, themeButton89, listButton87,
+            modeButton, themeButton89, listButton87, pawButton,
             destButton89, playerButton89, settingsButton89])
         functionRow.axis = .horizontal
         functionRow.distribution = .fillEqually
@@ -1143,7 +1150,16 @@ final class ConsolePanel82: UIViewController,
         DeckTap82.log(host: "console", zone: "paw", view: sender)
         ConsoleFX85.tap(sender, el: "paw")
         let was = StickerSettings.miniPetsEnabled
-        StickerSettings.miniPetsEnabled = !was
+        // (92) 任务 5：召唤/关闭改走共享切换核 performPaw-
+        // Toggle77（与窗口爪印/台面爪印同路：开关双写＋告
+        // 别离场/掉落入场＋广播兜底＋岛民对账）；旧实现直
+        // 写 StickerSettings 跳过了整条收口链。烟花保留为
+        // 召唤成功的卡内点缀（原 (85) 口径不动）。
+        PetSummonButton70.performPawToggle77(
+            window: view.window,
+            src: was ? "console3s" : "console2s",
+            via: was ? "console3s" : "console2s",
+            actCrumb: "paw.act92")
         if !was {
             // (85) 第 7 条：烟花宿主改卡内坐标（内容已迁卡）。
             PawFirework81.burst(in: card85,
@@ -1152,7 +1168,7 @@ final class ConsolePanel82: UIViewController,
                                             y: sender.bounds.midY), to: card85))
         }
         refreshPawButton()
-        Breadcrumbs.log("console82 paw on=\(!was ? 1 : 0)")
+        Breadcrumbs.log("p92 paw src=console on=\(!was ? 1 : 0)")
     }
 
     @objc private func likeTapped(_ sender: UIButton) {

@@ -169,6 +169,15 @@ final class MiniBarQuickRowView: UIView {
             self, selector: #selector(themeChanged81),
             name: .foliaMiniPlayerThemeChanged, object: nil)
         themeChanged81()
+        // (92) 任务 4：整行钮面换 A4 玻璃面（审计 Q1 缺口：
+        // 本行五钮此前只有字形、无 A4Chrome91 钮面）；圆角
+        // 与按下态背景的 10 对齐，位置/尺寸/功能零改。字形
+        // 侧 paw/heart/star/command 已由 DeckGlyph82 换 A4
+        // 手绘（stateGlyph92），panel 格沿用 .sliders。
+        for button in buttons {
+            A4Chrome91.apply(to: button, cornerRadius: 10)
+        }
+        Breadcrumbs.log("p92 quickrow chrome=A4")
     }
 
     /// 图标在上、标签在下的双通道钮（UIButton.Configuration，

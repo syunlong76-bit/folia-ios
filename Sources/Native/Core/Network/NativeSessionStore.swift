@@ -360,6 +360,28 @@ final class NativeSessionStore {
         return (dict?["accountId"], dict?["displayName"], dict?["avatarURL"])
     }
 
+    /// (92) 任务 10：VIP 等级缓存——与资料缓存同 dict 合并
+    /// 写，只动 "vipLevel" 键（nil = 清除该键）；退出登录走
+    /// clear 的整表删除、VIP 随之清，不另设路。
+    func saveVIP(provider: Provider, level: Int?) {
+        let key = Self.profileKey(provider)
+        var dict = (UserDefaults.standard.dictionary(forKey: key)
+            as? [String: String]) ?? [:]
+        if let level {
+            dict["vipLevel"] = String(level)
+        } else {
+            dict.removeValue(forKey: "vipLevel")
+        }
+        UserDefaults.standard.set(dict, forKey: key)
+    }
+
+    /// 读 VIP 等级缓存（0 = 免费、>0 = 会员、nil = 未知）。
+    func vipLevel(provider: Provider) -> Int? {
+        let dict = UserDefaults.standard.dictionary(
+            forKey: Self.profileKey(provider)) as? [String: String]
+        return dict?["vipLevel"].flatMap { Int($0) }
+    }
+
     // MARK: - Keychain 基础读写
 
     private func keychainRead(account: String) -> String? {

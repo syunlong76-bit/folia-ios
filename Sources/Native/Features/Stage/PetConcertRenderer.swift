@@ -793,7 +793,10 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             relocationActive = false
             PetConcertRelocation.shared.endConcert()
         }
-        for actor in actors.values { actor.removeFromSuperview() }
+        for actor in actors.values {
+            FxLinkage91.shared.unregisterPet(actor)
+            actor.removeFromSuperview()
+        }
         actors.removeAll()
         actorOrder.removeAll()
         admittedAnimated.removeAll()
@@ -813,7 +816,10 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
     // MARK: 构建
 
     private func buildConcert(snapshot: LyricStageSnapshot) {
-        for actor in actors.values { actor.removeFromSuperview() }
+        for actor in actors.values {
+            FxLinkage91.shared.unregisterPet(actor)
+            actor.removeFromSuperview()
+        }
         actors.removeAll()
         actorOrder.removeAll()
         admittedAnimated.removeAll()
@@ -865,6 +871,9 @@ final class PetConcertStageRenderer: NSObject, LyricStageRenderer {
             actors[asset] = actor
             actorOrder.append(asset)
             petField.addSubview(actor)
+            // (92) 任务 3：演唱会宠物接入联动——覆层通道注册
+            // （演员 transform 归演唱会状态机，联动不碰本体）。
+            FxLinkage91.shared.registerPetOverlay(actor, surface: "concert")
             loadStaticImage(for: asset, into: actor)
         }
         // (65) A 组：副本静帧（cat-live 首帧，与全排共用同

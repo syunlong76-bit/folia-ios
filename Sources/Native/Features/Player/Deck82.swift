@@ -24,6 +24,10 @@ enum DeckGlyph82 {
         case list, console, consoleNotes, modeRepeat, modeRepeatOne, modeSequence, shuffle
         case sparkles, paw, heart, heartFill, pencil, trash, help
         case layers, speaker, star, starFill, command, sliders
+        // (92) 任务 4/11：控制台三格（主题/去处/播放器）与主
+        // 页缝版式三态（现行/A 杂志/B 唱片架）的 A4 手绘字形。
+        case themePalette92, destGrid92, playerDisc92
+        case layoutWall92, layoutMag92, layoutShelf92
         // (87) 四特效钮字形：烟花/孔明灯 SF 无对应符号，手绘
         // 线条（照样片 SVG 路径简化）；雪/风走 SF。
         case fxFirework, fxLantern, fxSnow, fxWind
@@ -41,6 +45,15 @@ enum DeckGlyph82 {
             return slidersGlyph91(pointSize: pointSize)
         case .consoleNotes:
             return notesGlyph91(pointSize: pointSize)
+        case .paw, .heart, .heartFill, .star, .starFill, .command:
+            // (92) 任务 4：状态字形换 A4 手绘（SF pawprint/
+            // heart/star/command 退役），与核心字形同语言
+            // （24 画布、描边 1.4–1.5、round 连接）。
+            return stateGlyph92(kind, pointSize: pointSize)
+        case .themePalette92, .destGrid92, .playerDisc92,
+             .layoutWall92, .layoutMag92, .layoutShelf92:
+            // (92) 任务 4/11：控制台三格与版式三态的 A4 手绘。
+            return utilityGlyph92(kind, pointSize: pointSize)
         case .fxSnow:
             let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
             return UIImage(systemName: "snowflake", withConfiguration: config)?
@@ -176,6 +189,199 @@ enum DeckGlyph82 {
                 UIColor.white.setStroke()
                 knob.lineWidth = 1.15 * scale
                 knob.stroke()
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// (92) 任务 4：状态字形 A4 手绘（24 画布、模板图）：
+    /// paw＝主垫＋四趾填充（爪印本体语义）；heart/star 描边
+    /// 1.5/1.4、Fill 版同路径填充；command＝四角环＋中央方
+    /// 的织纹近似（16pt 级可辨）。与核心字形同 round 纪律。
+    private static func stateGlyph92(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { _ in
+            UIColor.white.setFill()
+            UIColor.white.setStroke()
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: x * scale, y: y * scale)
+            }
+            func oval(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) {
+                UIBezierPath(ovalIn: CGRect(
+                    x: x * scale, y: y * scale,
+                    width: w * scale, height: h * scale)).fill()
+            }
+            switch kind {
+            case .paw:
+                oval(8.2, 13.4, 7.6, 6.2)          // 主垫
+                oval(3.9, 8.9, 3.0, 3.9)           // 趾 ×4
+                oval(7.7, 6.2, 3.0, 3.9)
+                oval(13.3, 6.2, 3.0, 3.9)
+                oval(17.1, 8.9, 3.0, 3.9)
+            case .heart, .heartFill:
+                let p = UIBezierPath()
+                p.move(to: pt(12, 20.2))
+                p.addCurve(to: pt(4.2, 10.6),
+                           controlPoint1: pt(7.2, 16.4),
+                           controlPoint2: pt(4.2, 13.6))
+                p.addCurve(to: pt(8.4, 5.0),
+                           controlPoint1: pt(4.2, 7.9),
+                           controlPoint2: pt(5.9, 5.0))
+                p.addCurve(to: pt(12, 7.6),
+                           controlPoint1: pt(10.0, 5.0),
+                           controlPoint2: pt(11.3, 6.1))
+                p.addCurve(to: pt(15.6, 5.0),
+                           controlPoint1: pt(12.7, 6.1),
+                           controlPoint2: pt(14.0, 5.0))
+                p.addCurve(to: pt(19.8, 10.6),
+                           controlPoint1: pt(18.1, 5.0),
+                           controlPoint2: pt(19.8, 7.9))
+                p.addCurve(to: pt(12, 20.2),
+                           controlPoint1: pt(19.8, 13.6),
+                           controlPoint2: pt(16.8, 16.4))
+                p.close()
+                p.lineJoinStyle = .round
+                if kind == .heartFill {
+                    p.fill()
+                } else {
+                    p.lineWidth = 1.5 * scale
+                    p.stroke()
+                }
+            case .star, .starFill:
+                let p = UIBezierPath()
+                let cx: CGFloat = 12, cy: CGFloat = 12
+                let rO: CGFloat = 7.6, rI: CGFloat = 3.15
+                for i in 0..<10 {
+                    let r = i % 2 == 0 ? rO : rI
+                    let a = -CGFloat.pi / 2 + CGFloat(i) * .pi / 5
+                    let point = pt(cx + r * cos(a), cy + r * sin(a))
+                    if i == 0 { p.move(to: point) } else { p.addLine(to: point) }
+                }
+                p.close()
+                p.lineJoinStyle = .round
+                if kind == .starFill {
+                    p.fill()
+                } else {
+                    p.lineWidth = 1.4 * scale
+                    p.stroke()
+                }
+            case .command:
+                // 四角环（r 2.7）＋横竖织线＋中央方，描边 1.5。
+                for (cx, cy) in [(7.2, 7.2), (16.8, 7.2),
+                                 (7.2, 16.8), (16.8, 16.8)] as [(CGFloat, CGFloat)] {
+                    let ring = UIBezierPath(ovalIn: CGRect(
+                        x: (cx - 2.7) * scale, y: (cy - 2.7) * scale,
+                        width: 5.4 * scale, height: 5.4 * scale))
+                    ring.lineWidth = 1.5 * scale
+                    ring.stroke()
+                }
+                let weave = UIBezierPath()
+                for (x1, y1, x2, y2) in [
+                    (9.9, 7.2, 14.1, 7.2), (9.9, 16.8, 14.1, 16.8),
+                    (7.2, 9.9, 7.2, 14.1), (16.8, 9.9, 16.8, 14.1),
+                ] as [(CGFloat, CGFloat, CGFloat, CGFloat)] {
+                    weave.move(to: pt(x1, y1))
+                    weave.addLine(to: pt(x2, y2))
+                }
+                weave.lineWidth = 1.5 * scale
+                weave.stroke()
+                let box = UIBezierPath(rect: CGRect(
+                    x: 9.45 * scale, y: 9.45 * scale,
+                    width: 5.1 * scale, height: 5.1 * scale))
+                box.lineWidth = 1.5 * scale
+                box.stroke()
+            default:
+                break
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// (92) 任务 4/11：功能字形 A4 手绘（24 画布、描边
+    /// 1.4–1.5）：主题＝调色板圆盘＋三色点；去处＝2×2 圆角
+    /// 格；播放器＝圆盘＋实心播三角；版式三态——现行＝不
+    /// 规则拼贴四格、A 杂志＝方图＋文行、B 唱片架＝大方
+    /// 盘＋唱芯＋基线，三态轮廓互不混同。
+    private static func utilityGlyph92(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { _ in
+            UIColor.white.setFill()
+            UIColor.white.setStroke()
+            func rrectStroke(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat,
+                             _ h: CGFloat, _ r: CGFloat, _ lw: CGFloat = 1.5) {
+                let p = UIBezierPath(roundedRect: CGRect(
+                    x: x * scale, y: y * scale,
+                    width: w * scale, height: h * scale),
+                    cornerRadius: r * scale)
+                p.lineWidth = lw * scale
+                p.stroke()
+            }
+            func line(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat,
+                      _ lw: CGFloat = 1.4) {
+                let p = UIBezierPath()
+                p.move(to: CGPoint(x: x1 * scale, y: y1 * scale))
+                p.addLine(to: CGPoint(x: x2 * scale, y: y2 * scale))
+                p.lineWidth = lw * scale
+                p.lineCapStyle = .round
+                p.stroke()
+            }
+            func dot(_ cx: CGFloat, _ cy: CGFloat, _ r: CGFloat) {
+                UIBezierPath(ovalIn: CGRect(
+                    x: (cx - r) * scale, y: (cy - r) * scale,
+                    width: 2 * r * scale, height: 2 * r * scale)).fill()
+            }
+            switch kind {
+            case .themePalette92:
+                let disc = UIBezierPath(ovalIn: CGRect(
+                    x: 5 * scale, y: 5 * scale,
+                    width: 14 * scale, height: 14 * scale))
+                disc.lineWidth = 1.5 * scale
+                disc.stroke()
+                dot(9.2, 10, 1.3)
+                dot(14.6, 9.2, 1.3)
+                dot(10.6, 14.6, 1.3)
+            case .destGrid92:
+                rrectStroke(5, 5, 6.2, 6.2, 1.6)
+                rrectStroke(12.8, 5, 6.2, 6.2, 1.6)
+                rrectStroke(5, 12.8, 6.2, 6.2, 1.6)
+                rrectStroke(12.8, 12.8, 6.2, 6.2, 1.6)
+            case .playerDisc92:
+                let disc = UIBezierPath(ovalIn: CGRect(
+                    x: 4.6 * scale, y: 4.6 * scale,
+                    width: 14.8 * scale, height: 14.8 * scale))
+                disc.lineWidth = 1.5 * scale
+                disc.stroke()
+                let tri = UIBezierPath()
+                tri.move(to: CGPoint(x: 10.2 * scale, y: 9.2 * scale))
+                tri.addLine(to: CGPoint(x: 15.2 * scale, y: 12 * scale))
+                tri.addLine(to: CGPoint(x: 10.2 * scale, y: 14.8 * scale))
+                tri.close()
+                tri.fill()
+            case .layoutWall92:
+                rrectStroke(4.5, 4.5, 7, 7, 1.6, 1.4)
+                rrectStroke(12.5, 4.5, 7, 5.2, 1.4, 1.4)
+                rrectStroke(4.5, 12.5, 5.2, 7, 1.4, 1.4)
+                rrectStroke(10.7, 10.7, 8.8, 8.8, 1.6, 1.4)
+            case .layoutMag92:
+                rrectStroke(4.5, 5, 6, 6, 1.4, 1.4)
+                line(12.3, 6.6, 19.5, 6.6)
+                line(12.3, 9.8, 17.5, 9.8)
+                line(4.5, 15.4, 19.5, 15.4)
+                line(4.5, 18.6, 15, 18.6)
+            case .layoutShelf92:
+                rrectStroke(5.2, 3.8, 13.6, 13.6, 2, 1.4)
+                let hub = UIBezierPath(ovalIn: CGRect(
+                    x: 9.8 * scale, y: 8.4 * scale,
+                    width: 4.4 * scale, height: 4.4 * scale))
+                hub.lineWidth = 1.2 * scale
+                hub.stroke()
+                line(4, 20.4, 20, 20.4)
+            default:
+                break
             }
         }
         return image.withRenderingMode(.alwaysTemplate)

@@ -1252,10 +1252,25 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 町景 OrbitControls 宿主）即刻按新宽高重绘，不等系
     /// 统布局的自然 resize 时序。揭盖回执走 onStyleFrame
     /// 原路（舞台侧结算）。
+    /// (92) 任务 9：resize 派发防抖合并——旋转连发时只保
+    /// 留最后一记（前件取消），稳定后 0.12s 派一次。
+    private var resizeNudgeWork92: DispatchWorkItem?
+
     func nudgeEffectResize81() {
-        webView.evaluateJavaScript(
-            "window.dispatchEvent(new Event('resize'))",
-            completionHandler: nil)
+        // (92) 任务 9：旧实现每次 alongside 直派一记 resize，
+        // JS 侧每记都重建画布——转场期连发即多次全量重绘
+        // （审计 Q7）。改防抖合并：0.12s 内的连发互相取消、
+        // 只派最后一记；揭盖回执链（0.9s 超时兜底）不受影响。
+        resizeNudgeWork92?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.webView.evaluateJavaScript(
+                "window.dispatchEvent(new Event('resize'))",
+                completionHandler: nil)
+            Breadcrumbs.log("p92 resize dispatch")
+        }
+        resizeNudgeWork92 = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
     /// 人工重试入口（诊断面板 / 设置页调用）：清退避计数与致命错误后重载。
@@ -2063,6 +2078,10 @@ enum NativePlaybackFailureToast {
             currentPill = nil
 
             let pill = UIView()
+            // (92) 加码 1 全窗清查：toast 药丸无点按语义，旧
+            // 实现以默认交互态直挂窗口、3.2 秒内白吞其帧内
+            // 点按——改纯显示、整帧穿透。
+            pill.isUserInteractionEnabled = false
             pill.backgroundColor = UIColor.black.withAlphaComponent(0.82)
             pill.layer.cornerRadius = 16
             pill.layer.borderWidth = 0.5

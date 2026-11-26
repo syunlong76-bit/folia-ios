@@ -31,6 +31,9 @@ final class AccountCard62ViewController: UIViewController {
     private var avatarKeys: [NativeSessionStore.Provider: String] = [:]
     private var ringViews: [NativeSessionStore.Provider: UIView] = [:]
     private var selectedProvider: NativeSessionStore.Provider = .netease
+    /// (92) 任务 10：外部指定初始选中家（侧栏点头像行落本页
+    /// 时带入）；nil 时沿旧口径（第一家已登录、否则网易云）。
+    var initialProvider92: NativeSessionStore.Provider?
     /// port90（任务 11）：资料自愈每家每次呈现只试一次（防 rebuild 循环）。
     private var enrichAttempted90: Set<NativeSessionStore.Provider> = []
 
@@ -57,9 +60,10 @@ final class AccountCard62ViewController: UIViewController {
             stack.trailingAnchor.constraint(equalTo: scroll.trailingAnchor, constant: -16),
             stack.widthAnchor.constraint(equalTo: scroll.widthAnchor, constant: -32),
         ])
-        // 默认选中：第一家已登录的，没有则网易云。
+        // 默认选中：外部指定优先，其次第一家已登录的，没有则网易云。
         let statuses = ProviderSessionStatusQuery.allStatuses()
-        selectedProvider = statuses.first(where: \.isLoggedIn)?.provider ?? .netease
+        selectedProvider = initialProvider92
+            ?? statuses.first(where: \.isLoggedIn)?.provider ?? .netease
         rebuild()
     }
 
@@ -109,7 +113,8 @@ final class AccountCard62ViewController: UIViewController {
         // QQ/酷狗无此路，存量会话缺头像即恒占位、无自愈。
         for status in statuses
         where status.isLoggedIn
-            && (status.avatarURL == nil || status.displayName == nil)
+            && (status.avatarURL == nil || status.displayName == nil
+                || status.vipLevel == nil)
             && !enrichAttempted90.contains(status.provider) {
             enrichAttempted90.insert(status.provider)
             enrichProfile90(for: status.provider)
@@ -127,23 +132,40 @@ final class AccountCard62ViewController: UIViewController {
                 NativeSessionStore.shared.saveProfile(
                     provider: .netease, accountId: status.userId,
                     displayName: status.nickname, avatarURLString: status.avatarURL)
+                // (92) 任务 10：VIP 顺手落缓存（profile.vipType 同路回）。
+                NativeSessionStore.shared.saveVIP(
+                    provider: .netease, level: status.vipType)
             case .qq:
+                let client = QQLoginClient()
                 guard let cookie = NativeSessionStore.shared.qqCookieString(),
-                      let profile = try? await QQLoginClient().fetchLoginStatus(cookie: cookie)
+                      let profile = try? await client.fetchLoginStatus(cookie: cookie)
                 else { return }
                 NativeSessionStore.shared.saveProfile(
                     provider: .qq, accountId: profile.accountId,
                     displayName: profile.nickname,
                     avatarURLString: profile.avatarURLString)
+                // (92) 任务 10：QQ VIP 走独立端点 /user/vip 复核落缓存。
+                if let vip = await client.fetchVIPLevel(cookie: cookie) {
+                    NativeSessionStore.shared.saveVIP(provider: .qq, level: vip)
+                }
             case .kugou:
+                let client = KugouLoginClient()
                 guard let cookie = NativeSessionStore.shared.kugouCookieString(),
-                      let profile = try? await KugouLoginClient().fetchUserDetail(
+                      let profile = try? await client.fetchUserDetail(
                         cookie: cookie, userId: Self.kugouUserId90(in: cookie))
                 else { return }
                 NativeSessionStore.shared.saveProfile(
                     provider: .kugou, accountId: profile.accountId,
                     displayName: profile.nickname,
                     avatarURLString: profile.avatarURLString)
+                // (92) 任务 10：酷狗 VIP 先落资料内初值、再以
+                // /user/vip/detail 复核覆盖（网页版同序）。
+                if let initial = profile.vipLevel {
+                    NativeSessionStore.shared.saveVIP(provider: .kugou, level: initial)
+                }
+                if let vip = await client.fetchVIPLevel(cookie: cookie) {
+                    NativeSessionStore.shared.saveVIP(provider: .kugou, level: vip)
+                }
             }
             Breadcrumbs.log("port90 account enrich provider=\(provider.rawValue)")
             await MainActor.run { self?.rebuild() }
@@ -269,7 +291,31 @@ final class AccountCard62ViewController: UIViewController {
         if status.isLoggedIn {
             let name = status.displayName.flatMap { $0.isEmpty ? nil : $0 }
                 ?? Self.displayName(for: status.provider)
-            label.text = "\(name) · ID \(status.accountId ?? "—")"
+            // (92) 任务 10：VIP 皇冠（网页版账户页同口径：昵
+            // 称旁一枚、vipType != 0 才显，0/未知不显）。
+            if (status.vipLevel ?? 0) > 0 {
+                let baseAttrs: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 12),
+                    .foregroundColor: UIColor.secondaryLabel,
+                ]
+                let text = NSMutableAttributedString(
+                    string: "\(name) ", attributes: baseAttrs)
+                let crown = NSTextAttachment()
+                crown.image = UIImage(
+                    systemName: "crown.fill",
+                    withConfiguration: UIImage.SymbolConfiguration(
+                        pointSize: 11, weight: .semibold))?
+                    .withTintColor(UIColor(red: 1, green: 0.78, blue: 0.25, alpha: 1),
+                                   renderingMode: .alwaysOriginal)
+                crown.bounds = CGRect(x: 0, y: -1.5, width: 13, height: 10)
+                text.append(NSAttributedString(attachment: crown))
+                text.append(NSAttributedString(
+                    string: " · ID \(status.accountId ?? "—")",
+                    attributes: baseAttrs))
+                label.attributedText = text
+            } else {
+                label.text = "\(name) · ID \(status.accountId ?? "—")"
+            }
         } else {
             label.text = "\(Self.displayName(for: status.provider)) · 未登录，点头像扫码登录"
         }

@@ -183,6 +183,12 @@ final class WorkbenchOverlayHostView: UIView {
     private let providerStack = UIStackView()
     private var providerLabels: [NativeSessionStore.Provider: UILabel] = [:]
     private var providerDots: [NativeSessionStore.Provider: UIView] = [:]
+    /// (92) 任务 10：三家头像行的头像件/皇冠/已加载键与自愈
+    /// 已试集（每家每会话至少联网补齐一次）。
+    private var providerAvatars92: [NativeSessionStore.Provider: WorkbenchAvatarView] = [:]
+    private var providerCrowns92: [NativeSessionStore.Provider: UIImageView] = [:]
+    private var providerAvatarKeys92: [NativeSessionStore.Provider: String?] = [:]
+    private var sidebarEnrichAttempted92: Set<NativeSessionStore.Provider> = []
 
     /// 已加载头像的 URL 键；nil = 还没刷过（旧值 "" 与「无头像」
     /// 的键撞车，首刷时 setFallback 被整段跳过、占位「?」糊脸，
@@ -325,7 +331,7 @@ final class WorkbenchOverlayHostView: UIView {
         let header = UIView()
         header.translatesAutoresizingMaskIntoConstraints = false
         header.addGestureRecognizer(
-            UITapGestureRecognizer(target: self, action: #selector(accountTapped)))
+            UITapGestureRecognizer(target: self, action: #selector(accountTapped(_:))))
         contentView.addSubview(header)
         sidebarAvatar.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(sidebarAvatar)
@@ -387,14 +393,41 @@ final class WorkbenchOverlayHostView: UIView {
             dot.widthAnchor.constraint(equalToConstant: 8).isActive = true
             dot.heightAnchor.constraint(equalToConstant: 8).isActive = true
             row.addArrangedSubview(dot)
+            // (92) 任务 10：三家头像行——每家一枚真头像（无图
+            // 时昵称首字占位、未登录灰位由 WorkbenchAvatarView
+            // 的状态点/占位口径表达）＋平台名＋VIP 皇冠位。
+            let avatar92 = WorkbenchAvatarView()
+            avatar92.translatesAutoresizingMaskIntoConstraints = false
+            avatar92.widthAnchor.constraint(equalToConstant: 28).isActive = true
+            avatar92.heightAnchor.constraint(equalToConstant: 28).isActive = true
+            row.addArrangedSubview(avatar92)
+            providerAvatars92[provider] = avatar92
             let label = UILabel()
             label.font = .systemFont(ofSize: 12)
             label.textColor = WorkbenchTheme.secondary
             label.translatesAutoresizingMaskIntoConstraints = false
             row.addArrangedSubview(label)
+            let crown92 = UIImageView(image: UIImage(
+                systemName: "crown.fill",
+                withConfiguration: UIImage.SymbolConfiguration(
+                    pointSize: 11, weight: .semibold))?
+                .withTintColor(UIColor(red: 1, green: 0.78, blue: 0.25, alpha: 1),
+                               renderingMode: .alwaysOriginal))
+            crown92.contentMode = .scaleAspectFit
+            crown92.isHidden = true
+            crown92.translatesAutoresizingMaskIntoConstraints = false
+            crown92.widthAnchor.constraint(equalToConstant: 14).isActive = true
+            crown92.heightAnchor.constraint(equalToConstant: 14).isActive = true
+            row.addArrangedSubview(crown92)
+            providerCrowns92[provider] = crown92
             providerStack.addArrangedSubview(row)
             providerLabels[provider] = label
             providerDots[provider] = dot
+            // (92) 任务 10：点头像行落账号页并预选该家。
+            row.tag = providerTag92(provider)
+            row.isUserInteractionEnabled = true
+            row.addGestureRecognizer(UITapGestureRecognizer(
+                target: self, action: #selector(providerRowTapped92(_:))))
         }
         NSLayoutConstraint.activate([
             providerStack.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 2),
@@ -1213,10 +1246,148 @@ final class WorkbenchOverlayHostView: UIView {
                 self?.avatarLoadKey == expectedKey
             }
         }
+        // (92) 任务 10：三家头像行逐家回填（真头像/首字占位/
+        // 未登录态点）＋VIP 皇冠（>0 才显）；头像按 URL 键变
+        // 化才重载，与顶部大头像同纪律。
+        for status in statuses {
+            if let avatarView = providerAvatars92[status.provider] {
+                avatarView.setLoggedIn(status.isLoggedIn)
+                avatarView.setFallback(
+                    name: status.displayName,
+                    hasImage: status.avatarURL != nil)
+                let rowKey = status.avatarURL?.absoluteString
+                if rowKey != providerAvatarKeys92[status.provider] {
+                    providerAvatarKeys92[status.provider] = rowKey
+                    let expectedRowKey = rowKey
+                    let provider = status.provider
+                    WorkbenchCover.loadAvatar(
+                        url: status.avatarURL, into: avatarView.imageView
+                    ) { [weak self] in
+                        self?.providerAvatarKeys92[provider] == expectedRowKey
+                    }
+                }
+            }
+            providerCrowns92[status.provider]?.isHidden =
+                !((status.vipLevel ?? 0) > 0)
+        }
+        // (92) 任务 10：侧栏自愈——已登录但资料缺头像/昵称/
+        // VIP 的家，每家每会话联网补齐一次（与 AccountCard62
+        // enrichProfile90 同源三路），不再纯读缓存恒占位。
+        for status in statuses
+        where status.isLoggedIn
+            && (status.avatarURL == nil || status.displayName == nil
+                || status.vipLevel == nil)
+            && !sidebarEnrichAttempted92.contains(status.provider) {
+            sidebarEnrichAttempted92.insert(status.provider)
+            enrichProfile92(for: status.provider)
+        }
     }
 
-    @objc private func accountTapped() {
-        presentLogin()
+    /// (92) 任务 10：资料自愈（与 AccountCard62.enrichProfile90
+    /// 同源同路＋VIP 落缓存）：只写资料/VIP 缓存、不动会话；
+    /// 成功后回刷侧栏；失败静默（下次会话再试）。
+    private func enrichProfile92(for provider: NativeSessionStore.Provider) {
+        Task { [weak self] in
+            switch provider {
+            case .netease:
+                guard let status = try? await NativeDataClient.shared.fetchLoginStatus(),
+                      status.loggedIn else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .netease, accountId: status.userId,
+                    displayName: status.nickname, avatarURLString: status.avatarURL)
+                NativeSessionStore.shared.saveVIP(
+                    provider: .netease, level: status.vipType)
+            case .qq:
+                let client = QQLoginClient()
+                guard let cookie = NativeSessionStore.shared.qqCookieString(),
+                      let profile = try? await client.fetchLoginStatus(cookie: cookie)
+                else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .qq, accountId: profile.accountId,
+                    displayName: profile.nickname,
+                    avatarURLString: profile.avatarURLString)
+                if let vip = await client.fetchVIPLevel(cookie: cookie) {
+                    NativeSessionStore.shared.saveVIP(provider: .qq, level: vip)
+                }
+            case .kugou:
+                let client = KugouLoginClient()
+                guard let cookie = NativeSessionStore.shared.kugouCookieString(),
+                      let profile = try? await client.fetchUserDetail(
+                        cookie: cookie, userId: Self.kugouUserId92(in: cookie))
+                else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .kugou, accountId: profile.accountId,
+                    displayName: profile.nickname,
+                    avatarURLString: profile.avatarURLString)
+                if let initial = profile.vipLevel {
+                    NativeSessionStore.shared.saveVIP(provider: .kugou, level: initial)
+                }
+                if let vip = await client.fetchVIPLevel(cookie: cookie) {
+                    NativeSessionStore.shared.saveVIP(provider: .kugou, level: vip)
+                }
+            }
+            Breadcrumbs.log("p92 sidebar enrich provider=\(provider.rawValue)")
+            await MainActor.run { self?.refreshAccountUI() }
+        }
+    }
+
+    private static func kugouUserId92(in cookie: String) -> String? {
+        for entry in cookie.split(separator: ";") {
+            let parts = entry.split(separator: "=", maxSplits: 1)
+            if parts.count == 2,
+               parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "userid" {
+                return parts[1].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    private func providerTag92(_ provider: NativeSessionStore.Provider) -> Int {
+        switch provider {
+        case .netease: return 0
+        case .qq: return 1
+        case .kugou: return 2
+        }
+    }
+
+    @objc private func providerRowTapped92(_ gesture: UITapGestureRecognizer) {
+        guard let tag = gesture.view?.tag else { return }
+        let provider: NativeSessionStore.Provider =
+            tag == 1 ? .qq : (tag == 2 ? .kugou : .netease)
+        presentAccount92(provider: provider, sourceView: gesture.view)
+    }
+
+    @objc private func accountTapped(_ gesture: UITapGestureRecognizer) {
+        presentAccount92(provider: nil, sourceView: gesture.view)
+    }
+
+    /// (92) 任务 10：点头像/头像行落账号页（AccountCard62 账
+    /// 号页形态，popover 锚点按处，与设置页账户卡同形态）：
+    /// 已登录家在卡内显头像＋昵称＋VIP 皇冠，未登录家在卡
+    /// 内点头像才进该家扫码页（(90) 定版流、卡内既有）；
+    /// 侧栏不再无条件直开登录中心——全未登录时才直开（保
+    /// 首次登录短路）。
+    private func presentAccount92(provider: NativeSessionStore.Provider?,
+                                  sourceView: UIView?) {
+        guard let presenter = hostViewController else { return }
+        let statuses = ProviderSessionStatusQuery.allStatuses()
+        if statuses.allSatisfy({ !$0.isLoggedIn }), provider == nil {
+            presentLogin()
+            return
+        }
+        Breadcrumbs.log("p92 account page open")
+        let card = AccountCard62ViewController()
+        card.initialProvider92 = provider
+        card.onLoginSuccess = { [weak self] in self?.refreshAccountUI() }
+        card.onSessionChanged = { [weak self] in self?.refreshAccountUI() }
+        card.modalPresentationStyle = .popover
+        if let pop = card.popoverPresentationController,
+           let sourceView {
+            pop.sourceView = sourceView
+            pop.sourceRect = sourceView.bounds
+            pop.permittedArrowDirections = [.right, .down, .up]
+        }
+        presenter.present(card, animated: true)
     }
 
     private func presentLogin() {

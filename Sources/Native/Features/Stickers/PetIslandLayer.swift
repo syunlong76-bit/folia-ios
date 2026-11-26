@@ -868,6 +868,10 @@ final class PetIslandLayer: UIView {
         pet.islandLayer = self
         addSubview(pet)
         pets.append(pet)
+        // (92) 任务 3：岛宠物接入联动——覆层通道注册（本层
+        // 视图不进窗口树、靠层嫁接渲染，联动在场判据走
+        // layer 挂载，见 FxLinkage91.petPresent）。
+        FxLinkage91.shared.registerPetOverlay(pet, surface: "island")
         reseatAll(animated: false)
         if animated, let fromRect {
             let target = pet.center
@@ -909,6 +913,8 @@ final class PetIslandLayer: UIView {
     /// 由目标台自己的入场动画承接。
     func releasePet(asset: String) {
         guard let pet = pets.first(where: { $0.asset == asset }) else { return }
+        // (92) 任务 3：联动注册随离场注销（覆层件随之摘除）。
+        FxLinkage91.shared.unregisterPet(pet)
         pets.removeAll { $0 === pet }
         if chatLines.contains(where: { $0.pet === pet }) { endChat() }
         if bubbleLabel != nil { hideBubble() }

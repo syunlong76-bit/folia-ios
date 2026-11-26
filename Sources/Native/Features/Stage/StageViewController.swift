@@ -979,13 +979,17 @@ final class StageViewController: UIViewController {
             var extraRun86 = 0
             if self.stageLayoutPending {
                 self.stageLayoutPending = false
-                if self.view.bounds.size != self.stageRotLaidSize86
-                    || self.view.safeAreaInsets != self.stageRotLaidInsets86 {
+                // (92) 任务 9：补排判据去掉安全区比较——along-
+                // side 记录的 stageRotLaidInsets86 在转场中可
+                // 能未稳、与落定值比对是假阳性源（审计 Q7），
+                // 补轮与否只认 bounds.size 一致性。
+                if self.view.bounds.size != self.stageRotLaidSize86 {
                     self.layoutStage()
                     self.pushSnapshot()
                     extraRun86 = 1
                 }
             }
+            Breadcrumbs.log("p92 rot extra=\(extraRun86)")
             Breadcrumbs.log("stage.rotate76 landed gen=\(generation)"
                 + " runs=\(self.stageLayoutRuns)")
             // (82) 第 6 条：rot82 landed 量测点（全样式）。
@@ -1032,7 +1036,15 @@ final class StageViewController: UIViewController {
         webRotRevealWork81?.cancel()
         webRotRevealWork81 = nil
         let webView = WebEffectBridge.shared.webView
-        webView.takeSnapshot(with: nil) { [weak self] image, _ in
+        // (92) 任务 9：冻结盖快照降采样——旧实现全屏全分辨率
+        // takeSnapshot 是旋转长帧的一源（审计 Q7）；盖层只活
+        // 转场期且随容器拉伸显示，半宽采样视觉无差、合成成
+        // 本大减。揭盖时序/盖层语义不动。
+        let snapConfig = WKSnapshotConfiguration()
+        let snapWidth = max(200, webView.bounds.width * 0.5)
+        snapConfig.snapshotWidth = NSNumber(value: Double(snapWidth))
+        Breadcrumbs.log("p92 rot snapw=\(Int(snapWidth))")
+        webView.takeSnapshot(with: snapConfig) { [weak self] image, _ in
             guard let self, rotGen == self.webRotGen81,
                   self.webEmbedStyleId != nil else { return }
             guard let image else {
@@ -3229,6 +3241,10 @@ final class StageViewController: UIViewController {
         stageCover82.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         stageCover82.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(stageCover82)
+        // (92) 任务 3：舞台在播封面作为砖接入联动注册（风掀/
+        // 雪檐/灯暖光/烟花闪与墙砖同路，表面标签 stage）。
+        FxLinkage91.shared.registerTile(
+            cover: stageCover82, container: bar, surface: "stage")
         // (84) 第 1 条：封面/歌手复原上台面（(80) 版式）。
         // (87) 样片台：标题 15 bold。
         stageTitle82.font = .systemFont(ofSize: 15, weight: .bold)

@@ -153,6 +153,19 @@ final class HomeSeam85View: UIView {
     var onQueue: (() -> Void)?
     var onMore: (() -> Void)?
 
+    /// (92) 任务 11：版式切换（现行/A/B）——Miller 令「页面
+    /// 展示 ab 做到主页中间的缝」：开关落缝内原账户空区
+    /// （直达双列与工具格之间），写歌单页同一持久化键
+    /// foliaPlaylistLayout91（宿主经 onLayoutMode92 落键＋
+    /// 落痕，歌单页出现时重读对齐）。
+    var onLayoutMode92: ((Int) -> Void)?
+    var layoutMode92: Int =
+        UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91") {
+        didSet { refreshLayoutSwitch92() }
+    }
+    private let layoutSwitch92 = UIView()
+    private var layoutButtons92: [UIButton] = []
+
     /// 内容纵向内边距（宿主按工具条/点播台占位设定）。
     var contentTopInset: CGFloat = 108
     var contentBottomInset: CGFloat = 132
@@ -291,8 +304,80 @@ final class HomeSeam85View: UIView {
             contentView.addSubview(button)
             toolButtons.append(button)
         }
+        // (92) 任务 11：版式开关——玻璃胶囊＋三态 A4 字形
+        // （现行拼贴/A 杂志/B 唱片架，DeckGlyph82 手绘、三
+        // 态轮廓互不混同），选中态走缝页签同语言（白 pill
+        // ＋深字形）。帧位在 layoutSubviews 按可用带高自适
+        // 应（带高不足 40 时隐藏，见彼处注释）。
+        layoutSwitch92.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        layoutSwitch92.layer.borderWidth = 0.5
+        layoutSwitch92.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        layoutSwitch92.layer.cornerRadius = 18
+        contentView.addSubview(layoutSwitch92)
+        let layoutGlyphs92: [DeckGlyph82.Kind] = [.layoutWall92, .layoutMag92, .layoutShelf92]
+        let layoutNames92 = ["现行版式", "杂志式", "唱片架式"]
+        for (index, glyph) in layoutGlyphs92.enumerated() {
+            let button = UIButton(type: .system)
+            button.setImage(DeckGlyph82.image(glyph, pointSize: 14), for: .normal)
+            button.layer.cornerRadius = 15
+            button.tag = index
+            button.accessibilityLabel = layoutNames92[index]
+            button.addTarget(self, action: #selector(layoutModeTapped92(_:)),
+                             for: .touchUpInside)
+            layoutSwitch92.addSubview(button)
+            layoutButtons92.append(button)
+        }
+        refreshLayoutSwitch92()
+
         // port88 见证：主页缝建成即无头像位（站点存活自证）。
         Breadcrumbs.log("port88 seam=avatarless host=home")
+    }
+
+    /// (92) 任务 11：版式开关选中态回刷（缝页签同语言）。
+    private func refreshLayoutSwitch92() {
+        for (index, button) in layoutButtons92.enumerated() {
+            let selected = index == layoutMode92
+            button.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.9) : .clear
+            button.tintColor = selected
+                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                          blue: 27.0 / 255, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.62)
+        }
+    }
+
+    @objc private func layoutModeTapped92(_ sender: UIButton) {
+        layoutMode92 = sender.tag
+        onLayoutMode92?(sender.tag)
+    }
+
+    /// (92) 任务 11：开关帧位——直达区底与工具格顶之间的
+    /// 空带居中（窄档横胶囊 58 宽、宽档整行宽）；带高不足
+    /// 40（横屏内容高被压扁、与缝内既有元素同级退化）时
+    /// 隐藏，版式仍可经宽档/竖屏缝切换、歌单页重读生效。
+    private func layoutLayoutSwitch92(H: CGFloat, cx: CGFloat,
+                                      contentW: CGFloat,
+                                      shortcutsBottom: CGFloat) {
+        let toolsTop = H - 0.025 * H - 0.08 * H
+        let bandTop = shortcutsBottom + 4
+        let bandBottom = toolsTop - 4
+        guard bandBottom - bandTop >= 40 else {
+            layoutSwitch92.isHidden = true
+            return
+        }
+        layoutSwitch92.isHidden = false
+        let width: CGFloat = displayWide89 ? contentW - 20 : 58
+        let height: CGFloat = 36
+        let x: CGFloat = displayWide89 ? 10 : cx - width / 2
+        let y = (bandTop + bandBottom) / 2 - height / 2
+        layoutSwitch92.frame = CGRect(x: x, y: y, width: width, height: height)
+        let inner = width - 6
+        let buttonW = (inner - 4) / 3
+        for (index, button) in layoutButtons92.enumerated() {
+            button.frame = CGRect(
+                x: 3 + CGFloat(index) * (buttonW + 2), y: 3,
+                width: buttonW, height: height - 6)
+        }
     }
 
     private func refreshTabSelection() {
@@ -389,6 +474,9 @@ final class HomeSeam85View: UIView {
                     x: 10 + toolStep * CGFloat(index) + (toolStep - 28) / 2,
                     y: toolsTop + (toolsH - 28) / 2, width: 28, height: 28)
             }
+            // (92) 任务 11：宽档版式开关（直达两行底＝0.64H＋64）。
+            layoutLayoutSwitch92(H: H, cx: cx, contentW: contentW,
+                                 shortcutsBottom: 0.64 * H + 64)
             return
         }
         // port90 页签自适应排版：旧固定步距 0.07H/高 0.062H 下
@@ -436,6 +524,9 @@ final class HomeSeam85View: UIView {
                 y: toolsTop + row * cellH + (cellH - 28) / 2,
                 width: 28, height: 28)
         }
+        // (92) 任务 11：窄档版式开关（直达双列底＝0.64H＋84）。
+        layoutLayoutSwitch92(H: H, cx: cx, contentW: contentW,
+                             shortcutsBottom: 0.64 * H + shortcutH)
     }
 
     // MARK: 命中纪律（只认按钮本体，其余穿透给墙面）

@@ -53,13 +53,57 @@ private func fxRGB(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> CGColo
             blue: CGFloat(b / 255), alpha: CGFloat(max(0, min(1, a)))).cgColor
 }
 
-/// 径向渐变填充矩形区（stops 为 (location, color)；调用方按需先设 clip）。
-private func fxFillRadial(_ ctx: CGContext, center: CGPoint, r0: CGFloat, r1: CGFloat,
-                          stops: [(CGFloat, CGColor)], rect: CGRect) {
+/// (92) 任务 8：渐变对象缓存——旧实现每帧为每颗光晕/每盏
+/// 灯新建 CGGradient，是烟花卡的主因之一。按 stops 签名
+/// （位置与颜色分量量化到 1/64，alpha 台阶差不可见）缓存
+/// 复用；签名集有界（调色板×alpha 台阶），容量 96 满即清。
+private var fxGradientCache92: [String: CGGradient] = [:]
+
+private func fxGradient92(stops: [(CGFloat, CGColor)]) -> CGGradient? {
+    var key = ""
+    for (loc, col) in stops {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        UIColor(cgColor: col).getRed(&r, green: &g, blue: &b, alpha: &a)
+        key += "\(Int((loc * 64).rounded()))/"
+            + "\(Int((r * 64).rounded())),\(Int((g * 64).rounded())),"
+            + "\(Int((b * 64).rounded())),\(Int((a * 64).rounded()));"
+    }
+    if let cached = fxGradientCache92[key] { return cached }
     let colors = stops.map { $0.1 } as CFArray
     let locs = stops.map { $0.0 }
     guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                colors: colors, locations: locs) else { return }
+                                colors: colors, locations: locs) else { return nil }
+    if fxGradientCache92.count > 96 { fxGradientCache92.removeAll() }
+    fxGradientCache92[key] = grad
+    return grad
+}
+
+/// (92) 任务 8：火箭辉光精灵（预渲染一次、全程复用）——旧
+/// 实现逐火箭逐帧 setShadow(blur:16) 触发离屏渲染，同为
+/// 烟花卡主因。径向对称图，翻转绘制无碍。
+private let fxRocketGlow92: CGImage? = {
+    let side: CGFloat = 56
+    let renderer = UIGraphicsImageRenderer(
+        size: CGSize(width: side, height: side))
+    let image = renderer.image { ctx in
+        let colors = [fxRGB(255, 190, 90, 0.55),
+                      fxRGB(255, 190, 90, 0)] as CFArray
+        if let grad = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: colors, locations: [0, 1]) {
+            let center = CGPoint(x: side / 2, y: side / 2)
+            ctx.cgContext.drawRadialGradient(
+                grad, startCenter: center, startRadius: 1,
+                endCenter: center, endRadius: side / 2, options: [])
+        }
+    }
+    return image.cgImage
+}()
+
+/// 径向渐变填充矩形区（stops 为 (location, color)；调用方按需先设 clip）。
+private func fxFillRadial(_ ctx: CGContext, center: CGPoint, r0: CGFloat, r1: CGFloat,
+                          stops: [(CGFloat, CGColor)], rect: CGRect) {
+    guard let grad = fxGradient92(stops: stops) else { return }
     ctx.saveGState()
     ctx.clip(to: rect)
     ctx.drawRadialGradient(grad, startCenter: center, startRadius: r0,
@@ -70,10 +114,7 @@ private func fxFillRadial(_ ctx: CGContext, center: CGPoint, r0: CGFloat, r1: CG
 /// 竖直线性渐变填充当前路径（须先 addPath，再 clip 后调用本函数填 bounds）。
 private func fxFillLinearV(_ ctx: CGContext, top: CGPoint, bottom: CGPoint,
                            stops: [(CGFloat, CGColor)], rect: CGRect) {
-    let colors = stops.map { $0.1 } as CFArray
-    let locs = stops.map { $0.0 }
-    guard let grad = CGGradient(colorsSpace: CGColorSpaceCreateDeviceRGB(),
-                                colors: colors, locations: locs) else { return }
+    guard let grad = fxGradient92(stops: stops) else { return }
     ctx.saveGState()
     ctx.clip(to: rect)
     ctx.drawLinearGradient(grad, start: top, end: bottom, options: [])
@@ -353,6 +394,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private weak var mainWindow: UIWindow?
     /// port91（任务 1）：主窗浮层宿主（祝福卡/写灯钮/推荐卡的新家）。
     private var overlayHost91: FxOverlayHost91?
+    /// (92) 任务 1：被动点按识别器（随宿主迁窗，见 attachOverlay92）。
+    private var passiveTap91: UITapGestureRecognizer?
     private var displayLink: CADisplayLink?
     private var lastTick: CFTimeInterval = 0
 
@@ -433,29 +476,101 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         // port91（任务 1）：纯显示层架构落位见证。
         Breadcrumbs.log("p91 fxwin=pure")
 
-        // 主 window 上的被动识别器：不取消他人触摸、可与他人并行。
-        let main = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
+        // (92) 任务 1：宿主与被动识别器只许挂真主窗。install
+        // 由 SceneDelegate 在主窗建成前调用，此时 scene 里
+        // 只有刚建的 Fx 窗自身——(91) 正是把两者挂到了 Fx
+        // 窗上（审计 Q4 定案：旁路永不触发、祝福卡截点按）。
+        // 此处排除 Fx 窗自身：已有真主窗（scene 重连）即挂，
+        // 否则等 SceneDelegate 建窗后调 attachOverlay92。
+        if let main = scene.windows.first(where: { $0 !== win }) {
+            attachOverlay92(to: main)
+        }
+    }
+
+    /// (92) 任务 1：把浮层宿主（祝福卡/写灯钮/推荐卡）与被
+    /// 动点按识别器挂到真主窗。同一宿主实例迁挂（卡片随迁
+    /// 不重建），识别器随迁；落 p92 自证记宿主所在窗类名
+    /// 与 level，真机日志可直接对账宿主落点。
+    public func attachOverlay92(to main: UIWindow) {
         mainWindow = main
-        if let main = main {
-            // port91（任务 1）：可交互的浮层件（祝福卡/写灯钮/
-            // 推荐卡）迁主窗浮层宿主，功能不丢、点按不再经 Fx 窗。
-            let host = FxOverlayHost91()
+        let host: FxOverlayHost91
+        if let existing = overlayHost91 {
+            host = existing
+            host.removeFromSuperview()
+        } else {
+            host = FxOverlayHost91()
             host.backgroundColor = .clear
             host.translatesAutoresizingMaskIntoConstraints = false
-            main.addSubview(host)
-            NSLayoutConstraint.activate([
-                host.leadingAnchor.constraint(equalTo: main.leadingAnchor),
-                host.trailingAnchor.constraint(equalTo: main.trailingAnchor),
-                host.topAnchor.constraint(equalTo: main.topAnchor),
-                host.bottomAnchor.constraint(equalTo: main.bottomAnchor),
-            ])
             overlayHost91 = host
             buildCards91(in: host)
-            let tap = UITapGestureRecognizer(target: self, action: #selector(handlePassiveTap(_:)))
+        }
+        main.addSubview(host)
+        NSLayoutConstraint.activate([
+            host.leadingAnchor.constraint(equalTo: main.leadingAnchor),
+            host.trailingAnchor.constraint(equalTo: main.trailingAnchor),
+            host.topAnchor.constraint(equalTo: main.topAnchor),
+            host.bottomAnchor.constraint(equalTo: main.bottomAnchor),
+        ])
+        if passiveTap91 == nil {
+            let tap = UITapGestureRecognizer(
+                target: self, action: #selector(handlePassiveTap(_:)))
             tap.cancelsTouchesInView = false
             tap.delegate = self
+            passiveTap91 = tap
+        }
+        if let tap = passiveTap91 {
+            tap.view?.removeGestureRecognizer(tap)
             main.addGestureRecognizer(tap)
         }
+        if let probe = tapProbe92, probe.view !== main {
+            probe.view?.removeGestureRecognizer(probe)
+            main.addGestureRecognizer(probe)
+        }
+        Breadcrumbs.log("p92 fxhost win=\(String(describing: type(of: main)))"
+            + " level=\(Int(main.windowLevel.rawValue))")
+        installTapProbe92IfNeeded()
+    }
+
+    // MARK: (92) 加码 1：点按到达探针
+
+    /// 特效开启期间装在主窗的被动识别器：每次点按落一条节
+    /// 流面包屑（每秒至多 2 条、粗粒度九宫格区域），使日志
+    /// 能自证「特效开着时点按到达主窗」——(91)「特效开着全
+    /// 屏点死」在代码里无对应结构（审计 Q10 未定案），本探
+    /// 针即为下次定案而设。特效全关时识别器停用、零落痕。
+    private var tapProbe92: UITapGestureRecognizer?
+    private var tapProbeCount92 = 0
+    private var tapProbeWindowStart92: CFTimeInterval = 0
+
+    private func installTapProbe92IfNeeded() {
+        guard tapProbe92 == nil, let main = mainWindow else { return }
+        let probe = UITapGestureRecognizer(
+            target: self, action: #selector(handleTapProbe92(_:)))
+        probe.cancelsTouchesInView = false
+        probe.delegate = self
+        probe.isEnabled = isFireworks || isLanterns || isSnow || isWind
+        main.addGestureRecognizer(probe)
+        tapProbe92 = probe
+    }
+
+    private func refreshTapProbe92() {
+        tapProbe92?.isEnabled = isFireworks || isLanterns || isSnow || isWind
+    }
+
+    @objc private func handleTapProbe92(_ gr: UITapGestureRecognizer) {
+        guard let view = gr.view else { return }
+        let now = CACurrentMediaTime()
+        if now - tapProbeWindowStart92 >= 1 {
+            tapProbeWindowStart92 = now
+            tapProbeCount92 = 0
+        }
+        guard tapProbeCount92 < 2 else { return }
+        tapProbeCount92 += 1
+        let p = gr.location(in: view)
+        let w = max(1, view.bounds.width), h = max(1, view.bounds.height)
+        let zx = p.x < w / 3 ? "l" : (p.x < w * 2 / 3 ? "c" : "r")
+        let zy = p.y < h / 3 ? "t" : (p.y < h * 2 / 3 ? "m" : "b")
+        Breadcrumbs.log("p92 tap ok zone=\(zx)\(zy)")
     }
 
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
@@ -527,13 +642,15 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         return isWind
     }
 
-    /// (88) 工坊定案：下雪默认开。装机（install）后由
-    /// SceneDelegate 调用一次，雪未开即起雪（12 秒自融为样
-    /// 片既定行为、不改）；已开则空转。
+    /// (92) 任务 2：冷启默认关（推翻 (88) 默认开，审计 Q2
+    /// 定案：工坊「下雪 开」存值被误落成冷启无条件开雪）。
+    /// 方法名保留供 SceneDelegate 冷启调用点不动，职责改为
+    /// 「确保冷启无雪」＋落 p92 自证；四特效冷启默认全关，
+    /// 雪样式值（淡蓝）保留、手动开仍走 startSnow、12 秒
+    /// 自融保留。
     public func applyDefaultSnow88() {
-        guard !isSnow else { return }
-        startSnow()
-        Breadcrumbs.log("port88 snow=default-on")
+        if isSnow { stopSnow(hard: true) }
+        Breadcrumbs.log("p92 snow=default-off")
     }
 
     // MARK: 状态切换（互斥规则照样片 start/stop 函数）
@@ -543,12 +660,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         isFireworks = on
         Breadcrumbs.log(on ? "fx87 fw=1" : "fx87 fw=0")
         onStateChanged?()
+        refreshTapProbe92()
     }
     private func setLantern(_ on: Bool) {
         guard isLanterns != on else { return }
         isLanterns = on
         Breadcrumbs.log(on ? "fx87 ln=1" : "fx87 ln=0")
         onStateChanged?()
+        refreshTapProbe92()
         refreshWishButton()
     }
     private func setSnow(_ on: Bool) {
@@ -556,12 +675,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         isSnow = on
         Breadcrumbs.log(on ? "fx87 sn=1" : "fx87 sn=0")
         onStateChanged?()
+        refreshTapProbe92()
     }
     private func setWind(_ on: Bool) {
         guard isWind != on else { return }
         isWind = on
         Breadcrumbs.log(on ? "fx87 wd=1" : "fx87 wd=0")
         onStateChanged?()
+        refreshTapProbe92()
     }
 
     /// 首帧 render 前 W/H 可能未刷新：生成粒子前先按根视图 bounds 兜底。
@@ -659,6 +780,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if displayLink == nil {
             lastTick = 0
             let link = CADisplayLink(target: self, selector: #selector(tick(_:)))
+            // (92) 任务 8：帧率上限 60——旧实现在 120Hz 机型
+            // 上以 120fps 全屏软件光栅，是烟花卡的主因之一；
+            // 帧步进本就按 dt*60 归一，60 上限不改动画时序。
+            link.preferredFrameRateRange = CAFrameRateRange(
+                minimum: 30, maximum: 60, preferred: 60)
             link.add(to: .main, forMode: .common)
             displayLink = link
         }
@@ -897,11 +1023,15 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 pushSpark(s)
             }
             _ = px; _ = py
-            ctx.saveGState()
-            ctx.setShadow(offset: .zero, blur: 16, color: fxRGB(255, 190, 90, 0.9))
+            // (92) 任务 8：辉光改预渲染精灵绘制——旧实现逐火
+            // 箭逐帧 setShadow(blur:16) 触发离屏渲染，同为烟
+            // 花卡主因；核心亮点保留原填充。
+            if let glow = fxRocketGlow92 {
+                ctx.draw(glow, in: CGRect(x: r.x - 14, y: r.y - 14,
+                                          width: 28, height: 28))
+            }
             ctx.setFillColor(fxRGB(255, 246, 214, 0.98))
             ctx.fillEllipse(in: CGRect(x: r.x - 2.2, y: r.y - 2.2, width: 4.4, height: 4.4))
-            ctx.restoreGState()
             if r.y <= r.ty || r.vy >= -0.4 {
                 burstStar(x: r.x, y: r.y, o: r.opts)
                 return false

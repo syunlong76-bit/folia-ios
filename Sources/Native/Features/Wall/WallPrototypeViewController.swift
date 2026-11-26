@@ -130,8 +130,12 @@ final class WallPrototypeViewController: UIViewController,
     /// 式／2 B 唱片架式），持久化键 foliaPlaylistLayout91。
     private var playlistLayout91 =
         UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91")
-    private var layoutSwitch91: UIView?
-    private var layoutSwitchButtons91: [UIButton] = []
+    /// (92) 任务 7：A/B 定点刷新的基线（上次已知的在播 id 与
+    /// 歌单头签名）；全量重刷（reloadAltPlaylist91）后同步。
+    private var altCurrentId92: String?
+    private var altHeaderSignature92 = ""
+    /// port91 顶部段控成员（layoutSwitch91/layoutSwitchButtons91）
+    /// 已随 (92) 任务 11 撤除：版式切换移主页缝，见 installPlaylistLayout91。
     private var magazineTable91: UITableView?
     private var shelfView91: UIView?
     private var shelfCollection91: UICollectionView?
@@ -2586,6 +2590,8 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // (92) 任务 11：版式键可能被主页缝开关改过，出现时重读对齐。
+        refreshPlaylistLayoutFromDefaults92()
         // port88：(86) 第 3 条的缝头像账户态随出现刷新已退役。
         // (72) 单宿主认领：本页在前时迷你台形态归本宿主；
         // 形态与共享旗标不一致时无动画对齐一次（交接不跳变）。
@@ -3295,7 +3301,9 @@ final class WallPrototypeViewController: UIViewController,
 
     private func refreshVisiblePlaybackUI() {
         // port91（任务 8）：A/B 版式的在播标识随播放态同拍回刷。
-        if playlistLayout91 != 0 { reloadAltPlaylist91() }
+        // (92) 任务 7：改走定点刷新（refreshAltPlaybackState92），
+        // 不再全量 reloadData＋重建歌单头（A/B 点封面闪黑根因）。
+        if playlistLayout91 != 0 { refreshAltPlaybackState92() }
         for case let cell as WallPosterCell in collectionView.visibleCells {
             guard let indexPath = collectionView.indexPath(for: cell),
                   indexPath.item < wallLayout.instances.count else { continue }
@@ -4969,8 +4977,24 @@ final class WallPosterCell: UICollectionViewCell {
             Task {
                 do {
                     _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+                    // (92) 任务 6：点亮且云端同步成功才触发宠
+                    // 物反应（回滚支不触发，见 catch）；格子已
+                    // 复用给别曲时只发全局宠物反应、不在本格
+                    // 误炸烟花。
+                    if newState {
+                        await MainActor.run {
+                            FxLinkage91.shared.petHeartReaction92()
+                            if self.heartTrackId91 == id,
+                               let host = self.heartButton91.superview {
+                                PawFirework81.burst(
+                                    in: host, at: self.heartButton91.center)
+                            }
+                            Breadcrumbs.log("p92 heart react=1")
+                        }
+                    }
                 } catch {
                     LikesStore.shared.toggle(id)
+                    Breadcrumbs.log("p92 heart react=0")
                 }
             }
         }
@@ -5379,47 +5403,10 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
     /// 切换器（顶部居中分段钮，样板歌单视图定版位）＋A/B
     /// 两套视图装配；现行版即既有照片墙、零改动。
     fileprivate func installPlaylistLayout91() {
-        // 分段钮：毛玻璃胶囊＋三档（现行/A/B），选中白底黑字。
-        let blur = UIVisualEffectView(
-            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = 15
-        blur.layer.borderWidth = 0.5
-        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
-        blur.clipsToBounds = true
-        blur.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(blur)
-        layoutSwitch91 = blur
-        let titles = ["现行", "A", "B"]
-        for (index, title) in titles.enumerated() {
-            let button = UIButton(type: .system)
-            button.setTitle(title, for: .normal)
-            button.titleLabel?.font = .systemFont(ofSize: 12.5, weight: .semibold)
-            button.layer.cornerRadius = 12
-            button.tag = index
-            button.accessibilityLabel = ["现行版式", "杂志式", "唱片架式"][index]
-            button.translatesAutoresizingMaskIntoConstraints = false
-            button.addTarget(self, action: #selector(layoutSwitchTapped91(_:)),
-                             for: .touchUpInside)
-            blur.contentView.addSubview(button)
-            layoutSwitchButtons91.append(button)
-            NSLayoutConstraint.activate([
-                button.topAnchor.constraint(equalTo: blur.contentView.topAnchor, constant: 3),
-                button.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor, constant: -3),
-                button.widthAnchor.constraint(equalToConstant: 52),
-                button.leadingAnchor.constraint(
-                    equalTo: index == 0
-                        ? blur.contentView.leadingAnchor
-                        : layoutSwitchButtons91[index - 1].trailingAnchor,
-                    constant: index == 0 ? 3 : 2),
-            ])
-        }
-        NSLayoutConstraint.activate([
-            blur.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            blur.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            blur.heightAnchor.constraint(equalToConstant: 30),
-            blur.widthAnchor.constraint(equalToConstant: 166),
-        ])
-
+        // (92) 任务 11：顶部段控撤下——版式切换移主页缝
+        // （HomeSeam85View 的 layoutSwitch92），写同一持久化
+        // 键 foliaPlaylistLayout91；本页出现时重读（viewWill-
+        // Appear → refreshPlaylistLayoutFromDefaults92）。
         // A 杂志式：编号列表表（歌单头走 tableHeaderView）。
         let table = UITableView(frame: .zero, style: .plain)
         table.backgroundColor = .black
@@ -5491,11 +5478,14 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         applyPlaylistLayout91()
     }
 
-    @objc private func layoutSwitchTapped91(_ sender: UIButton) {
-        playlistLayout91 = sender.tag
-        UserDefaults.standard.set(sender.tag, forKey: "foliaPlaylistLayout91")
-        Breadcrumbs.log("p91 plist mode=\(sender.tag)")
+    /// (92) 任务 11：主页缝开关写键后，本页出现时重读对齐
+    /// （同页内无其他改键入口）。
+    fileprivate func refreshPlaylistLayoutFromDefaults92() {
+        let mode = UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91")
+        guard mode != playlistLayout91 else { return }
+        playlistLayout91 = mode
         applyPlaylistLayout91()
+        Breadcrumbs.log("p92 plist mode=\(mode) src=appear")
     }
 
     fileprivate func applyPlaylistLayout91() {
@@ -5503,18 +5493,11 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         collectionView.isHidden = mode != 0
         magazineTable91?.isHidden = mode != 1
         shelfView91?.isHidden = mode != 2
-        // 切换钮恒在最前（A/B 两套全屏视图装配在其后，不许盖住）；
-        // 左侧缝（书脊导航）同理提至 A/B 视图之上，A/B 内容
-        // leading 64 即为避缝留白。
-        if let switch91 = layoutSwitch91 { view.bringSubviewToFront(switch91) }
+        // 左侧缝（书脊导航）提至 A/B 视图之上，A/B 内容
+        // leading 64 即为避缝留白。（(92) 任务 11：顶部段控
+        // 已撤，不再有切换钮提序与段控态回刷。）
         if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
         if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
-        for (index, button) in layoutSwitchButtons91.enumerated() {
-            let selected = index == mode
-            button.backgroundColor = selected ? .white : .clear
-            button.setTitleColor(selected ? .black : UIColor.white.withAlphaComponent(0.65),
-                                 for: .normal)
-        }
         reloadAltPlaylist91()
     }
 
@@ -5528,6 +5511,62 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
             shelfHeaderCount91?.text = "\(entries.count) 首"
             shelfCollection91?.reloadData()
         }
+        // (92) 任务 7：全量重刷后同步定点刷新基线，后续播放
+        // 态变化只走 refreshAltPlaybackState92 定点路。
+        altCurrentId92 = PlaybackEngine.shared.currentTrack?.id
+        altHeaderSignature92 = "\(playlistTitle ?? "")|\(entries.count)"
+    }
+
+    /// (92) 任务 7：A/B 在播态定点刷新——只对新旧在播行/格
+    /// reloadRows/reloadItems，歌单头仅在标题/计数签名真变
+    /// 化时重建；一次点播零全量重刷（审计 Q9 的闪黑根因即
+    /// 旧路每次点播 ≥2 次全量 reloadData＋重建黑底歌单头）。
+    /// 结构变化（种子落地/分页拼接/版式切换）仍走 reloadAlt-
+    /// Playlist91，不经此路；现行版式（mode 0）不经此路。
+    fileprivate func refreshAltPlaybackState92() {
+        guard playlistLayout91 != 0 else { return }
+        let newId = PlaybackEngine.shared.currentTrack?.id
+        let oldId = altCurrentId92
+        altCurrentId92 = newId
+        guard oldId != newId else { return }
+        var touched = 0
+        let signature = "\(playlistTitle ?? "")|\(entries.count)"
+        if playlistLayout91 == 1, let table = magazineTable91 {
+            var rows: [IndexPath] = []
+            for id in [oldId, newId] {
+                guard let id,
+                      let row = entries.firstIndex(where: { $0.id == id })
+                else { continue }
+                rows.append(IndexPath(row: row, section: 0))
+            }
+            if !rows.isEmpty {
+                table.reloadRows(at: rows, with: .none)
+                touched = rows.count
+            }
+            if signature != altHeaderSignature92 {
+                altHeaderSignature92 = signature
+                table.tableHeaderView = makeMagazineHeader91()
+            }
+        }
+        if playlistLayout91 == 2, let shelf = shelfCollection91 {
+            var items: [IndexPath] = []
+            for id in [oldId, newId] {
+                guard let id,
+                      let row = entries.firstIndex(where: { $0.id == id })
+                else { continue }
+                items.append(IndexPath(item: row, section: 0))
+            }
+            if !items.isEmpty {
+                shelf.reloadItems(at: items)
+                touched = items.count
+            }
+            if signature != altHeaderSignature92 {
+                altHeaderSignature92 = signature
+                shelfHeaderTitle91?.text = playlistTitle ?? "歌单"
+                shelfHeaderCount91?.text = "\(entries.count) 首"
+            }
+        }
+        Breadcrumbs.log("p92 alt refresh=targeted n=\(touched)")
     }
 
     /// A 杂志式歌单头：大标题＋计数行＋发丝线（样板定版）。
@@ -5678,7 +5717,7 @@ final class PlaylistMagazineCell91: UITableViewCell {
         accentBar.isHidden = !isCurrent
         DiaryAddButton90.refresh(diaryButton91, songId: entry.id)
         refreshHeart91()
-        FxLinkage91.shared.registerTile(cover: coverView, container: contentView)
+        FxLinkage91.shared.registerTile(cover: coverView, container: contentView, surface: "alt")
         coverTask?.cancel()
         coverView.image = nil
         guard let raw = entry.picUrl else { return }
@@ -5732,8 +5771,23 @@ final class PlaylistMagazineCell91: UITableViewCell {
         Task {
             do {
                 _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+                // (92) 任务 6：点亮且云端同步成功才触发宠物
+                // 反应（取消喜欢/回滚不触发）；格子已复用给
+                // 别曲时只发全局宠物反应、不在本格误炸烟花。
+                if newState {
+                    await MainActor.run {
+                        FxLinkage91.shared.petHeartReaction92()
+                        if self.entryId91 == id,
+                           let host = self.heartButton91.superview {
+                            PawFirework81.burst(
+                                in: host, at: self.heartButton91.center)
+                        }
+                        Breadcrumbs.log("p92 heart react=1")
+                    }
+                }
             } catch {
                 LikesStore.shared.toggle(id)
+                Breadcrumbs.log("p92 heart react=0")
             }
         }
     }
@@ -5838,7 +5892,7 @@ final class PlaylistShelfCell91: UICollectionViewCell {
         coverView.layer.borderWidth = isCurrent ? 2 : 0
         DiaryAddButton90.refresh(diaryButton91, songId: entry.id)
         refreshHeart91()
-        FxLinkage91.shared.registerTile(cover: coverView, container: contentView)
+        FxLinkage91.shared.registerTile(cover: coverView, container: contentView, surface: "alt")
         coverTask?.cancel()
         coverView.image = nil
         guard let raw = entry.picUrl else { return }
@@ -5892,8 +5946,23 @@ final class PlaylistShelfCell91: UICollectionViewCell {
         Task {
             do {
                 _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+                // (92) 任务 6：点亮且云端同步成功才触发宠物
+                // 反应（取消喜欢/回滚不触发）；格子已复用给
+                // 别曲时只发全局宠物反应、不在本格误炸烟花。
+                if newState {
+                    await MainActor.run {
+                        FxLinkage91.shared.petHeartReaction92()
+                        if self.entryId91 == id,
+                           let host = self.heartButton91.superview {
+                            PawFirework81.burst(
+                                in: host, at: self.heartButton91.center)
+                        }
+                        Breadcrumbs.log("p92 heart react=1")
+                    }
+                }
             } catch {
                 LikesStore.shared.toggle(id)
+                Breadcrumbs.log("p92 heart react=0")
             }
         }
     }

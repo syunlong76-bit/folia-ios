@@ -151,10 +151,39 @@ final class QQLoginClient {
         let nickname = ProviderLoginTransport.stringValue(
             profile, "nickname", "nick", "name", "userName")
             ?? ProviderLoginTransport.stringValue(info, "nickname", "nick", "name", "userName")
-        let avatar = ProviderLoginTransport.stringValue(profile, "avatarUrl")
-            ?? ProviderLoginTransport.stringValue(info, "logo", "avatarUrl")
+        // (92) 任务 10：解析口径一字不改（审计定案与网页版逐
+        // 字一致），只把两层候选的命中键名落 p92 面包屑（不
+        // 记 URL 本体），把「头像到底在哪层」在真机定案。
+        let avatar: String?
+        let avatarKey: String
+        if let value = ProviderLoginTransport.stringValue(profile, "avatarUrl") {
+            avatar = value; avatarKey = "profile.avatarUrl"
+        } else if let value = ProviderLoginTransport.stringValue(info, "logo") {
+            avatar = value; avatarKey = "info.logo"
+        } else if let value = ProviderLoginTransport.stringValue(info, "avatarUrl") {
+            avatar = value; avatarKey = "info.avatarUrl"
+        } else {
+            avatar = nil; avatarKey = "none"
+        }
+        Breadcrumbs.log("p92 qq avatar key=\(avatarKey)")
         return LoginProfile(accountId: accountId, nickname: nickname,
                             avatarURLString: avatar)
+    }
+
+    /// (92) 任务 10：QQ VIP 独立端点（登录资料里没有，网页
+    /// 版 qqTransport 同路）：GET /user/vip → data.vipLevel
+    /// 字符串映射 free→0、green（绿钻）→1、super（超级会
+    /// 员）→2；unknown/失败回 nil（不当免费、保留未知态）。
+    func fetchVIPLevel(cookie: String) async -> Int? {
+        guard let response = try? await ProviderLoginTransport.getJSON(
+            provider: .qq, path: "/user/vip", cookie: cookie) else { return nil }
+        let data = ProviderLoginTransport.dataObject(of: response.root)
+        switch ProviderLoginTransport.stringValue(data, "vipLevel") {
+        case "free": return 0
+        case "green": return 1
+        case "super": return 2
+        default: return nil
+        }
     }
 
     /// 退出登录（best effort：后端通知失败不阻塞本地清会话）。

@@ -4078,6 +4078,13 @@ extension HomeWallViewController {
             QueueLatticeViewController.present(from: self)
         }
         seam.onMore = { [weak self] in self?.presentSeamMore85() }
+        // (92) 任务 11：缝内版式开关写歌单页同一持久化键
+        // （foliaPlaylistLayout91），歌单页出现时重读对齐；
+        // 初值由缝视图自读同一键，不在此另设。
+        seam.onLayoutMode92 = { mode in
+            UserDefaults.standard.set(mode, forKey: "foliaPlaylistLayout91")
+            Breadcrumbs.log("p92 plist mode=\(mode) src=seam")
+        }
         homeSeam85 = seam
         let tab = SeamEdgeTab85View()
         tab.isHidden = true
