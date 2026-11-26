@@ -4364,6 +4364,9 @@ final class WallPosterCell: UICollectionViewCell {
         detailTitle89.layer.shadowOffset = .zero
         detailTitle89.isHidden = true
         shadowView.addSubview(detailTitle89)
+
+    }
+
     @objc private func playButtonTapped() { onPlayTap?() }
     @objc private func likeButtonTapped() { onLikeTap?() }
     /// port90：展开卡文案只剩歌名（VC 在 applyPlaybackState 时下发）。
