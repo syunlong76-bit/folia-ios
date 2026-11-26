@@ -1694,6 +1694,8 @@ final class HomeWallViewController: UIViewController,
             miniPlayBlur90.topAnchor.constraint(equalTo: miniPlayButton.topAnchor),
             miniPlayBlur90.bottomAnchor.constraint(equalTo: miniPlayButton.bottomAnchor),
         ])
+        // port91（任务 3）：台面播放/控制台钮换 A4 玻璃面。
+        A4Chrome91.apply(to: miniPlayButton, cornerRadius: 21)
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
@@ -1729,6 +1731,9 @@ final class HomeWallViewController: UIViewController,
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleTapped82), for: .touchUpInside)
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleDown84), for: .touchDown)
         bar.addSubview(miniConsoleButton)
+        // port91（任务 3）：控制台入口钮 A4 玻璃面（字形已换
+        // gen3 双音符上下对称，见 DeckGlyph82.consoleNotes）。
+        A4Chrome91.apply(to: miniConsoleButton, cornerRadius: 21)
 
         // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
@@ -1816,7 +1821,7 @@ final class HomeWallViewController: UIViewController,
             // (84) 第 1 条：标题复原 (80) 锚法——封面右侧起、
             // 顶随封面 +5、右界让给主排钮簇。
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
-            miniTitle.trailingAnchor.constraint(lessThanOrEqualTo: miniPrevButton.leadingAnchor, constant: -6),
+            miniTitle.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -14),
             miniTitle.topAnchor.constraint(equalTo: miniCover.topAnchor, constant: 5),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
@@ -1831,11 +1836,11 @@ final class HomeWallViewController: UIViewController,
             miniConsoleButton.widthAnchor.constraint(equalToConstant: 42),
             miniConsoleButton.heightAnchor.constraint(equalToConstant: 42),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: miniConsoleButton.leadingAnchor, constant: -2),
+            miniNextButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
+            miniPlayButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
             miniPlayButton.widthAnchor.constraint(equalToConstant: 42),
             miniPlayButton.heightAnchor.constraint(equalToConstant: 42),
 
@@ -1871,9 +1876,12 @@ final class HomeWallViewController: UIViewController,
         // 写 −5）。
         // (87) 样片台两行版式：主行上移（台高 84、主行
         // 42 居上部），进度行独立成行于台底。
+        // port91（任务 4）：三行构成——封面顶行 −30、控制钮
+        // 中行 ＋20（数组序与 setMiniBarForm 逐项回写对应）。
         miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton,
-                           miniNextButton, miniConsoleButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -14)
+                           miniNextButton, miniConsoleButton].enumerated().map {
+            $0.element.centerYAnchor.constraint(
+                equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -30 : 20)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // (82) 第 7 条：轨道纵向锚制——展开态一锚在场、收
@@ -1885,7 +1893,7 @@ final class HomeWallViewController: UIViewController,
         // (84) 第 1 条：展开轨底锚复原 (80) 的 −7（(83) 的
         // −14 系三行版式收口、随紧凑台退役）。
         // (87) 样片台：进度行独立、轨底锚 −9。
-        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -9)
+        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
         miniTrackTopC?.isActive = true
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5.5)
         miniTrackBottomConstraint?.isActive = false
@@ -2679,7 +2687,10 @@ final class HomeWallViewController: UIViewController,
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (84) 第 1 条：主排纵向复原 (80)——两形态恒同值。
         // (87) 样片台两行版式：恒 −14（台高 84 的主行位）。
-        for constraint in miniMainCenterY { constraint.constant = -14 }
+        // port91（任务 4）：三行位恒定（首项顶行 −30、余项中行 ＋20）。
+        for (index, constraint) in miniMainCenterY.enumerated() {
+            constraint.constant = index == 0 ? -30 : 20
+        }
         // (74) 第 5 项小横线：收起态轨道不再整宽——换居中
         // 134×5 圆角小横线（Home 指示条量级），进度填充仍在
         // 线内表达（fill 宽随轨道宽、scaleX 分数不变）；圆点

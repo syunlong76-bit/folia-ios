@@ -8,13 +8,15 @@ import UIKit
 /// 只改本文件的核心四字形绘制（prev/next/play/pause＋list），
 /// 其余调用点零改动。次级字形走 SF Symbols（苹果风、与控
 /// 制台极简口径一致）。
-/// (88) 图标集定版 M（几何融合）：Miller 2026-11-25 在页面
-/// 工坊亲试定案（port88 icon=M），核心五字形按样板
-/// design-samples-82/icons2 的 M 定义（build_icons2.py M()
-/// 的 SVG 路径，24×24 画布）逐字形移植：prev/next＝三角与
-/// 竖条共边熔成的旗形剪影（prev 尖朝左、next 镜像朝右）、
-/// play＝实心圆负空间切三角、pause＝圆角方负空间切双槽、
-/// list＝半圆点头＋圆角行块三行。J/K/L 三套就此退役。
+/// (88) 图标集定版 M（几何融合）已于 port91 退役：Miller
+/// 2026-11-26 23:16 点选 A4 visionOS 悬浮系定版（样板
+/// design-samples-91/icons/icon-set-a4.png，字形源
+/// /tmp/iconbuild/gen2.py 的 A4 定义＋gen3.py 双音符），全
+/// 仓图标统一换 A4 字形语言：细线条描边字形（play 三角描
+/// 边、pause 双圆角矩形、prev/next 竖条＋三角描边、设置＝
+/// 三横线＋三圆钮 sliders），钮面走 A4Chrome91 玻璃面
+/// （160° 高光渐变＋白 .38 边＋字形柔光晕）。只换字形与
+/// 钮面绘制，任何按钮位置/尺寸/布局/功能不动（port91 任务 3）。
 enum DeckGlyph82 {
 
     enum Kind {
@@ -33,8 +35,12 @@ enum DeckGlyph82 {
             return coreGlyph(kind, pointSize: pointSize)
         case .fxFirework, .fxLantern:
             return fxGlyph(kind, pointSize: pointSize)
+        case .console, .sliders:
+            // port91：控制台/设置字形换 A4 sliders（三横线＋三圆钮，
+            // gen2 A4 settings 定义），SF slider.horizontal.3 退役。
+            return slidersGlyph91(pointSize: pointSize)
         case .consoleNotes:
-            return notesGlyph90(pointSize: pointSize)
+            return notesGlyph91(pointSize: pointSize)
         case .fxSnow:
             let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
             return UIImage(systemName: "snowflake", withConfiguration: config)?
@@ -46,7 +52,6 @@ enum DeckGlyph82 {
         default:
             let name: String
             switch kind {
-            case .console: name = "slider.horizontal.3"
             case .modeRepeat: name = "repeat"
             case .modeRepeatOne: name = "repeat.1"
             case .modeSequence: name = "list.bullet"
@@ -63,7 +68,6 @@ enum DeckGlyph82 {
             case .star: name = "star"
             case .starFill: name = "star.fill"
             case .command: name = "command"
-            case .sliders: name = "slider.horizontal.3"
             default: name = "circle"
             }
             let config = UIImage.SymbolConfiguration(pointSize: pointSize, weight: .medium)
@@ -73,18 +77,19 @@ enum DeckGlyph82 {
     }
 
     /// 核心五字形手绘（24×24 画布，模板图、白色由 tint 决定）。
-    /// (88) M 几何融合定版：路径逐条照样板 build_icons2.py 的
-    /// M() SVG（数值即 24 画布坐标）。prev/next 的 SVG 带
-    /// stroke-width 1 同色描边柔边，这里以 1pt 同色描边＋圆
-    /// 角接合等价还原；play/pause 的负空间用 evenOdd 填充规
-    /// 则切形。朝向：prev 尖朝左、next 尖朝右（逐字形回读
-    /// 核对，见 (88) 交付报告）。
-    private static var loggedIconM88 = false
+    /// port91 A4 visionOS 定版：几何逐字形照 gen2.py 的 A4
+    /// 定义（原 48 画布坐标 ÷2 落 24 画布）：play＝三角描边
+    /// （线宽 1.7、round join、无填充）；pause＝双圆角矩形
+    /// 填充（x 8.85/12.65、y 7.8、w 2.5、h 8.4、rx 1.25）；
+    /// prev＝左竖条圆角矩形（x 6.8、w 2.2）＋尖朝左三角描
+    /// 边（线宽 1.4）；next 镜像。list 无 A4 原定义，按同
+    /// 语言补：三横细线（线宽 1.4、round cap）＋三实心圆点。
+    private static var loggedIconA4 = false
 
     private static func coreGlyph(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
-        if !loggedIconM88 {
-            loggedIconM88 = true
-            Breadcrumbs.log("port88 icon=M")
+        if !loggedIconA4 {
+            loggedIconA4 = true
+            Breadcrumbs.log("p91 icon=A4")
         }
         let canvas: CGFloat = 24
         let scale = pointSize / canvas
@@ -93,77 +98,84 @@ enum DeckGlyph82 {
         let image = renderer.image { _ in
             UIColor.white.setFill()
             UIColor.white.setStroke()
-            func poly(_ points: [(CGFloat, CGFloat)], softEdge: Bool = false) {
+            func triStroke(_ points: [(CGFloat, CGFloat)], w: CGFloat) {
                 let path = UIBezierPath()
                 path.move(to: CGPoint(x: points[0].0 * scale, y: points[0].1 * scale))
                 for p in points.dropFirst() {
                     path.addLine(to: CGPoint(x: p.0 * scale, y: p.1 * scale))
                 }
                 path.close()
-                path.fill()
-                if softEdge {
-                    path.lineWidth = 1 * scale
-                    path.lineJoinStyle = .round
-                    path.stroke()
-                }
+                path.lineWidth = w * scale
+                path.lineJoinStyle = .round
+                path.stroke()
             }
-            func rect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, r: CGFloat = 0) {
-                let path = UIBezierPath(roundedRect: CGRect(
+            func rrect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat, r: CGFloat) {
+                UIBezierPath(roundedRect: CGRect(
                     x: x * scale, y: y * scale, width: w * scale, height: h * scale),
-                    cornerRadius: r * scale)
-                path.fill()
+                    cornerRadius: r * scale).fill()
             }
             switch kind {
-            case .prev:
-                // M prev：M5 5 H8.4 V7 L19 12 L8.4 17 V19 H5Z
-                poly([(5, 5), (8.4, 5), (8.4, 7), (19, 12),
-                      (8.4, 17), (8.4, 19), (5, 19)], softEdge: true)
-            case .next:
-                // M next：M19 5 H15.6 V7 L5 12 L15.6 17 V19 H19Z
-                poly([(19, 5), (15.6, 5), (15.6, 7), (5, 12),
-                      (15.6, 17), (15.6, 19), (19, 19)], softEdge: true)
             case .play:
-                // M play：圆 (12,12) r8.6 负空间切三角
-                // (10.4,8.8) (15.6,12) (10.4,15.2)。
-                let path = UIBezierPath(arcCenter: CGPoint(x: 12 * scale, y: 12 * scale),
-                                        radius: 8.6 * scale,
-                                        startAngle: 0, endAngle: .pi * 2, clockwise: true)
-                let tri = UIBezierPath()
-                tri.move(to: CGPoint(x: 10.4 * scale, y: 8.8 * scale))
-                tri.addLine(to: CGPoint(x: 15.6 * scale, y: 12 * scale))
-                tri.addLine(to: CGPoint(x: 10.4 * scale, y: 15.2 * scale))
-                tri.close()
-                path.append(tri)
-                path.usesEvenOddFillRule = true
-                path.fill()
+                // A4 play（gen2 48 画布 M20,16.2 L34.6,24 L20,31.8 ÷2）。
+                triStroke([(10, 8.1), (17.3, 12), (10, 15.9)], w: 1.7)
             case .pause:
-                // M pause：圆角方 (4.6,4.6,14.8×14.8) r2.5 负空
-                // 间切双槽 (9.1,8.6,1.9×6.8) 与 (13,8.6,1.9×6.8)。
-                let path = UIBezierPath(roundedRect: CGRect(
-                    x: 4.6 * scale, y: 4.6 * scale,
-                    width: 14.8 * scale, height: 14.8 * scale),
-                    cornerRadius: 2.5 * scale)
-                path.append(UIBezierPath(rect: CGRect(
-                    x: 9.1 * scale, y: 8.6 * scale, width: 1.9 * scale, height: 6.8 * scale)))
-                path.append(UIBezierPath(rect: CGRect(
-                    x: 13 * scale, y: 8.6 * scale, width: 1.9 * scale, height: 6.8 * scale)))
-                path.usesEvenOddFillRule = true
-                path.fill()
+                // A4 pause：双圆角矩形填充。
+                rrect(8.85, 7.8, 2.5, 8.4, r: 1.25)
+                rrect(12.65, 7.8, 2.5, 8.4, r: 1.25)
+            case .prev:
+                // A4 prev：竖条（x13.6 w4.4 @48 ÷2）＋尖朝左三角描边。
+                rrect(6.8, 8.2, 2.2, 7.6, r: 1.1)
+                triStroke([(16.9, 8.2), (10.6, 12), (16.9, 15.8)], w: 1.4)
+            case .next:
+                // A4 next：prev 的水平镜像。
+                rrect(15, 8.2, 2.2, 7.6, r: 1.1)
+                triStroke([(7.1, 8.2), (13.4, 12), (7.1, 15.8)], w: 1.4)
             case .list:
-                // M list：三行半圆点头（圆心 (7.1, y+1.95)、
-                // r1.95 的右半圆）＋圆角行块 rx0.7；行 y＝
-                // 5.3/10.05/14.8，第三行行块短（宽 6.8）。
-                for (i, row) in [(5.3, 5.5), (10.05, 10.3), (14.8, 15.1)].enumerated() {
-                    let head = UIBezierPath(arcCenter: CGPoint(x: 7.1 * scale, y: (row.0 + 1.95) * scale),
-                                            radius: 1.95 * scale,
-                                            startAngle: -.pi / 2, endAngle: .pi / 2,
-                                            clockwise: true)
-                    head.close()
-                    head.fill()
-                    rect(9.8, row.1, i == 2 ? 6.8 : 9.8, 3.4, r: 0.7)
+                // A4 语言补形：三横细线＋三圆点（与 sliders 同族）。
+                for y in [7.6, 12, 16.4] as [CGFloat] {
+                    let line = UIBezierPath()
+                    line.move(to: CGPoint(x: 8.6 * scale, y: y * scale))
+                    line.addLine(to: CGPoint(x: 18.5 * scale, y: y * scale))
+                    line.lineWidth = 1.4 * scale
+                    line.lineCapStyle = .round
+                    line.stroke()
+                    UIBezierPath(ovalIn: CGRect(
+                        x: (5.8 - 1.5) * scale, y: (y - 1.5) * scale,
+                        width: 3 * scale, height: 3 * scale)).fill()
                 }
             default:
                 break
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// port91 A4 设置字形（gen2 A4 settings，48 画布 ÷2）：
+    /// 三横线（y 8.75/12/15.25、x 7–17、白 .85、线宽 1.4）
+    /// ＋三圆钮（r 2、位于 (13.5,8.75)/(10,12)/(13,15.25)、
+    /// 填充白 .30＋描边 1.15）。模板图的 alpha 层次在 tint
+    /// 渲染下保留（半透部分以 tint 半透出）。
+    private static func slidersGlyph91(pointSize: CGFloat) -> UIImage? {
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { _ in
+            for (cy, cx) in [(8.75, 13.5), (12, 10), (15.25, 13)] as [(CGFloat, CGFloat)] {
+                let line = UIBezierPath()
+                line.move(to: CGPoint(x: 7 * scale, y: cy * scale))
+                line.addLine(to: CGPoint(x: 17 * scale, y: cy * scale))
+                line.lineWidth = 1.4 * scale
+                line.lineCapStyle = .round
+                UIColor.white.withAlphaComponent(0.85).setStroke()
+                line.stroke()
+                let knob = UIBezierPath(ovalIn: CGRect(
+                    x: (cx - 2) * scale, y: (cy - 2) * scale,
+                    width: 4 * scale, height: 4 * scale))
+                UIColor.white.withAlphaComponent(0.30).setFill()
+                knob.fill()
+                UIColor.white.setStroke()
+                knob.lineWidth = 1.15 * scale
+                knob.stroke()
             }
         }
         return image.withRenderingMode(.alwaysTemplate)
@@ -180,7 +192,7 @@ enum DeckGlyph82 {
         let image = renderer.image { _ in
             UIColor.white.setStroke()
             UIColor.white.setFill()
-            func line(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat, w: CGFloat = 1.7) {
+            func line(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat, w: CGFloat = 1.4) {
                 let path = UIBezierPath()
                 path.move(to: CGPoint(x: x1 * scale, y: y1 * scale))
                 path.addLine(to: CGPoint(x: x2 * scale, y: y2 * scale))
@@ -215,7 +227,7 @@ enum DeckGlyph82 {
                 body.addCurve(to: CGPoint(x: 14.5 * scale, y: 17.1 * scale),
                               controlPoint1: CGPoint(x: 16.8 * scale, y: 6.4 * scale),
                               controlPoint2: CGPoint(x: 17.7 * scale, y: 12.5 * scale))
-                body.lineWidth = 1.7 * scale
+                body.lineWidth = 1.4 * scale
                 body.lineCapStyle = .round
                 body.stroke()
                 line(9.5, 17.1, 14.5, 17.1)
@@ -237,46 +249,55 @@ enum DeckGlyph82 {
         return image.withRenderingMode(.alwaysTemplate)
     }
 
-    /// port90（任务 15）控制台入口字形：两个八分音符上下排列
-    /// （24×24 画布、填充模板图）。上音符头心约 (10.8, 8.6)、
-    /// 下音符头心约 (9.2, 19.4)；符头为倾斜椭圆、符干右侧竖线
-    /// 宽 1.6 圆头、符尾为四边形旗面。
-    private static func notesGlyph90(pointSize: CGFloat) -> UIImage? {
+    /// port91 控制台入口字形（Miller 23:11 定版）：双音符
+    /// **上下对称**——单个实心八分音符（gen3.py 的 A4
+    /// note_solid，48 画布 ÷2 落 24 画布）＋其绕画布中心
+    /// (12,12) 旋转 180° 的副本，构成中心对称。单符几何：
+    /// 符头椭圆心 (9.1,10.8)、rx 2.45/ry 1.8、倾 −16°；符
+    /// 干 x 10.8、y 5.2–11.1、宽 1.25 圆角；符尾贝塞尔旗
+    /// 面 M(12.05,5.2) C(14.3,5.9)(15.3,7.6)(15,10)
+    /// C(14.5,8.2)(13.6,7.3)(12.05,6.7) Z。
+    private static func notesGlyph91(pointSize: CGFloat) -> UIImage? {
         let scale = pointSize / 24
         let size = CGSize(width: pointSize, height: pointSize)
         let renderer = UIGraphicsImageRenderer(size: size)
         let image = renderer.image { context in
             let cg = context.cgContext
             UIColor.white.setFill()
-            UIColor.white.setStroke()
-            func note(headCX: CGFloat, headCY: CGFloat, stemTop: CGFloat) {
-                // 符头：倾斜椭圆（绕头心 −20°）。
+            func note() {
+                // 符头：倾斜椭圆。
                 cg.saveGState()
-                cg.translateBy(x: headCX * scale, y: headCY * scale)
-                cg.rotate(by: -20 * .pi / 180)
+                cg.translateBy(x: 9.1 * scale, y: 10.8 * scale)
+                cg.rotate(by: -16 * .pi / 180)
                 UIBezierPath(ovalIn: CGRect(
-                    x: -2.7 * scale, y: -2.0 * scale,
-                    width: 5.4 * scale, height: 4.0 * scale)).fill()
+                    x: -2.45 * scale, y: -1.8 * scale,
+                    width: 4.9 * scale, height: 3.6 * scale)).fill()
                 cg.restoreGState()
-                // 符干：符头右侧竖线。
-                let stemX = headCX + 2.35
-                let stem = UIBezierPath()
-                stem.move(to: CGPoint(x: stemX * scale, y: (headCY - 0.4) * scale))
-                stem.addLine(to: CGPoint(x: stemX * scale, y: stemTop * scale))
-                stem.lineWidth = 1.6 * scale
-                stem.lineCapStyle = .round
-                stem.stroke()
-                // 符尾：自符干顶向右下展开的旗面四边形。
-                let flag = UIBezierPath()
-                flag.move(to: CGPoint(x: stemX * scale, y: stemTop * scale))
-                flag.addLine(to: CGPoint(x: (stemX + 4.2) * scale, y: (stemTop + 1.6) * scale))
-                flag.addLine(to: CGPoint(x: (stemX + 4.2) * scale, y: (stemTop + 5.4) * scale))
-                flag.addLine(to: CGPoint(x: stemX * scale, y: (stemTop + 3.8) * scale))
-                flag.close()
-                flag.fill()
+                // 符干：圆角矩形。
+                UIBezierPath(roundedRect: CGRect(
+                    x: 10.8 * scale, y: 5.2 * scale,
+                    width: 1.25 * scale, height: 5.9 * scale),
+                    cornerRadius: 0.55 * scale).fill()
+                // 符尾：贝塞尔旗面。
+                let tail = UIBezierPath()
+                tail.move(to: CGPoint(x: 12.05 * scale, y: 5.2 * scale))
+                tail.addCurve(to: CGPoint(x: 15 * scale, y: 10 * scale),
+                              controlPoint1: CGPoint(x: 14.3 * scale, y: 5.9 * scale),
+                              controlPoint2: CGPoint(x: 15.3 * scale, y: 7.6 * scale))
+                tail.addCurve(to: CGPoint(x: 12.05 * scale, y: 6.7 * scale),
+                              controlPoint1: CGPoint(x: 14.5 * scale, y: 8.2 * scale),
+                              controlPoint2: CGPoint(x: 13.6 * scale, y: 7.3 * scale))
+                tail.close()
+                tail.fill()
             }
-            note(headCX: 10.8, headCY: 8.6, stemTop: 2.6)
-            note(headCX: 9.2, headCY: 19.4, stemTop: 13.4)
+            note()
+            // 180° 中心对称副本（绕 (12,12)）。
+            cg.saveGState()
+            cg.translateBy(x: 12 * scale, y: 12 * scale)
+            cg.rotate(by: .pi)
+            cg.translateBy(x: -12 * scale, y: -12 * scale)
+            note()
+            cg.restoreGState()
         }
         return image.withRenderingMode(.alwaysTemplate)
     }
@@ -423,6 +444,60 @@ enum Deck87 {
         case .off: return .loopAll
         case .loopAll: return .repeatOne
         case .repeatOne: return .shuffle
+        }
+    }
+}
+
+/// port91 A4 钮面（样板 .t-a4 chrome）：160° 线性渐变
+/// （白 .15 → 白 .04）＋边框白 .38/1pt＋内高光，渐变层以
+/// 约束钉满钮面、圆角随钮；字形柔光晕由 apply 侧给
+/// imageView 加白 .30 光晕（radius 6、offset (0,2)）。
+/// 渐变层不接手势、恒在字形之下（insert at 0；调用方原有
+/// 的 backgroundColor 状态色仍透过半透渐变可见）。
+final class A4GradientView91: UIView {
+    override class var layerClass: AnyClass { CAGradientLayer.self }
+
+    init(cornerRadius: CGFloat) {
+        super.init(frame: .zero)
+        isUserInteractionEnabled = false
+        layer.cornerRadius = cornerRadius
+        clipsToBounds = true
+        let grad = layer as! CAGradientLayer
+        grad.colors = [
+            UIColor.white.withAlphaComponent(0.15).cgColor,
+            UIColor.white.withAlphaComponent(0.04).cgColor,
+        ]
+        // 160°：自左上向右下。
+        grad.startPoint = CGPoint(x: 0.15, y: 0)
+        grad.endPoint = CGPoint(x: 0.85, y: 1)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+}
+
+enum A4Chrome91 {
+    /// 给钮套 A4 玻璃面：渐变层＋边框＋字形光晕。重复调用
+    /// 幂等（已套过的钮按 tag 标记跳过）。cornerRadius 应
+    /// 与钮既有圆角一致（调用方在设好圆角后调用）。
+    static func apply(to button: UIButton, cornerRadius: CGFloat) {
+        if button.viewWithTag(910_411) != nil { return }
+        let grad = A4GradientView91(cornerRadius: cornerRadius)
+        grad.tag = 910_411
+        grad.translatesAutoresizingMaskIntoConstraints = false
+        button.insertSubview(grad, at: 0)
+        NSLayoutConstraint.activate([
+            grad.leadingAnchor.constraint(equalTo: button.leadingAnchor),
+            grad.trailingAnchor.constraint(equalTo: button.trailingAnchor),
+            grad.topAnchor.constraint(equalTo: button.topAnchor),
+            grad.bottomAnchor.constraint(equalTo: button.bottomAnchor),
+        ])
+        button.layer.borderWidth = 1
+        button.layer.borderColor = UIColor.white.withAlphaComponent(0.38).cgColor
+        if let imageView = button.imageView {
+            imageView.layer.shadowColor = UIColor.white.cgColor
+            imageView.layer.shadowOpacity = 0.30
+            imageView.layer.shadowRadius = 6
+            imageView.layer.shadowOffset = CGSize(width: 0, height: 2)
         }
     }
 }

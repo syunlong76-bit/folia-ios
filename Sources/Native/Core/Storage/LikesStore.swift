@@ -29,6 +29,16 @@ final class LikesStore {
             ids.insert(trackId)
         }
         UserDefaults.standard.set(Array(ids), forKey: defaultsKey)
+        // port91（任务 9）：喜欢态变更广播——各封面爱心位
+        // （墙砖/条目行）监听回刷，保证全 App 同一源同拍。
+        NotificationCenter.default.post(
+            name: .foliaLikesChanged91, object: nil,
+            userInfo: ["trackId": trackId])
         return ids.contains(trackId)
     }
+}
+
+extension Notification.Name {
+    /// port91：LikesStore.toggle 的变更广播（userInfo 带 trackId）。
+    static let foliaLikesChanged91 = Notification.Name("FoliaLikesChanged91")
 }

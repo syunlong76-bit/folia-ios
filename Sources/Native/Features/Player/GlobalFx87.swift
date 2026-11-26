@@ -281,7 +281,7 @@ private let FX_BLESSINGS: [String] = [
     "前路浩浩荡荡，万事尽可期待", "愿你一生被爱，一生可爱", "把烦恼放飞，把好运留下"
 ]
 
-// MARK: - 根视图（透明、hitTest 纪律）
+// MARK: - 根视图（透明、纯显示层）
 
 final class Fx87RootView: UIView {
     weak var engine: GlobalFx87?
@@ -291,24 +291,24 @@ final class Fx87RootView: UIView {
         engine?.render(in: ctx, size: bounds.size)
     }
 
-    /// 铁律：特效只是叠加层，绝不挡正常操作——默认返回 nil 放行；
-    /// 仅卡片/写灯钮可见区域交回系统命中、孔明灯命中区返回自身。
-    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        guard let engine = engine else { return nil }
-        if engine.interactiveSubviewHit(at: point, in: self) {
-            return super.hitTest(point, with: event)
-        }
-        if engine.lantern(at: point) != nil { return self }
-        return nil
-    }
+    // port91（任务 1）：根视图 isUserInteractionEnabled=false
+    // （install 时置），整窗不接点按——旧 hitTest/touchesEnded
+    // 纸面放行已被 (90) 真机日志证伪、随交互关闭一并退役；
+    // 孔明灯点按改走主窗旁路（见 handlePassiveTap），卡片/写
+    // 灯钮迁主窗浮层（FxOverlayHost91）。
+}
 
-    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
-        super.touchesEnded(touches, with: event)
-        guard let touch = touches.first, let engine = engine else { return }
-        let p = touch.location(in: self)
-        if let lantern = engine.lantern(at: p) {
-            engine.showBless(lantern.bless)
+/// port91（任务 1）：主窗浮层宿主——承载自 Fx 窗迁来的祝福
+/// 卡/写灯钮/推荐卡。hitTest 纪律：仅当点落在可见子视图
+/// （卡/钮）帧内才交回系统命中，其余整屏穿透回主窗。
+final class FxOverlayHost91: UIView {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        for sub in subviews where !sub.isHidden && sub.alpha > 0.01 {
+            if sub.frame.contains(point) {
+                return super.hitTest(point, with: event)
+            }
         }
+        return nil
     }
 }
 
@@ -338,6 +338,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     public var recommendationProvider: (() -> (title: String, artist: String, cover: UIImage?)?)?
     /// 推荐卡点「播放」时回调。
     public var onPlayRecommendation: (() -> Void)?
+    /// port91（任务 2）：烟花爆点回调（爆点＋晕色），FxLinkage91
+    /// 据此给附近封面提亮一拍＋宠物跳跃。
+    public var onFwBurst91: ((CGPoint, UIColor) -> Void)?
 
     public private(set) var isFireworks = false
     public private(set) var isLanterns = false
@@ -348,6 +351,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private var window: UIWindow?
     private var rootView: Fx87RootView?
     private weak var mainWindow: UIWindow?
+    /// port91（任务 1）：主窗浮层宿主（祝福卡/写灯钮/推荐卡的新家）。
+    private var overlayHost91: FxOverlayHost91?
     private var displayLink: CADisplayLink?
     private var lastTick: CFTimeInterval = 0
 
@@ -415,18 +420,37 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if let rv = vc.view as? Fx87RootView {
             rv.engine = self
             rv.contentScaleFactor = scene.screen.scale
+            // port91（任务 1）：Fx 窗改纯显示层——根视图关交互、
+            // 整窗不接点按；闪光层是纯视觉件、仍留 Fx 窗内。
+            rv.isUserInteractionEnabled = false
             rootView = rv
-            buildOverlayUI(in: rv)
+            buildFlash91(in: rv)
         }
         win.isHidden = true
 
         // (88) 工坊 fx 定案落值见证（FxTuning88）。
         Breadcrumbs.log("port88 fx=fw.85/1.1/1.7g ln1.25r snPale")
+        // port91（任务 1）：纯显示层架构落位见证。
+        Breadcrumbs.log("p91 fxwin=pure")
 
         // 主 window 上的被动识别器：不取消他人触摸、可与他人并行。
         let main = scene.windows.first(where: { $0.isKeyWindow }) ?? scene.windows.first
         mainWindow = main
         if let main = main {
+            // port91（任务 1）：可交互的浮层件（祝福卡/写灯钮/
+            // 推荐卡）迁主窗浮层宿主，功能不丢、点按不再经 Fx 窗。
+            let host = FxOverlayHost91()
+            host.backgroundColor = .clear
+            host.translatesAutoresizingMaskIntoConstraints = false
+            main.addSubview(host)
+            NSLayoutConstraint.activate([
+                host.leadingAnchor.constraint(equalTo: main.leadingAnchor),
+                host.trailingAnchor.constraint(equalTo: main.trailingAnchor),
+                host.topAnchor.constraint(equalTo: main.topAnchor),
+                host.bottomAnchor.constraint(equalTo: main.bottomAnchor),
+            ])
+            overlayHost91 = host
+            buildCards91(in: host)
             let tap = UITapGestureRecognizer(target: self, action: #selector(handlePassiveTap(_:)))
             tap.cancelsTouchesInView = false
             tap.delegate = self
@@ -440,11 +464,38 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     }
 
     @objc private func handlePassiveTap(_ gr: UITapGestureRecognizer) {
-        guard isFireworks, let rv = rootView else { return }
+        guard let rv = rootView else { return }
         let p = gr.location(in: rv)
-        if lantern(at: p) != nil { return }   // 灯命中区不补放
+        // port91（任务 1）：孔明灯点按看祝福走主窗旁路——点中
+        // 灯体、且该点未命中任何可交互控件/自有浮层卡时才
+        // showBless 并落 p91 lamp hit 自证；灯命中区不补放
+        // 烟花（旧口径保留）。
+        if let lantern = lantern(at: p) {
+            if !tapHitsInteractive91(at: p) {
+                Breadcrumbs.log("p91 lamp hit")
+                showBless(lantern.bless)
+            }
+            return
+        }
+        guard isFireworks else { return }
         launch(x: Double(p.x), ty: max(60, Double(p.y) - 40), opts: FW_MAIN)
         ensureLoop()
+    }
+
+    /// port91（任务 1）：点是否命中主窗内的可交互目标——沿
+    /// 命中视图祖先链查 UIControl／集合格／表格式／Fx 自有
+    /// 三张浮层卡，任一命中即视为「点在控件上」，旁路不抢。
+    private func tapHitsInteractive91(at p: CGPoint) -> Bool {
+        guard let main = mainWindow,
+              let hit = main.hitTest(p, with: nil) else { return false }
+        var node: UIView? = hit
+        while let v = node {
+            if v is UIControl || v is UICollectionViewCell
+                || v is UITableViewCell { return true }
+            if v === blessCard || v === wishButton || v === recCard { return true }
+            node = v.superview
+        }
+        return false
     }
 
     // MARK: 公开开关（返回新状态）
@@ -701,6 +752,12 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                                 amp: o.amp * FxTuning88.fwGlowMul))
         }
         if o.flash { flashWall() }
+        // port91（任务 2）：爆点外送联动协调器（附近封面按花
+        // 色提亮一拍＋宠物跳跃）；晕色与本发光晕同源。
+        onFwBurst91?(CGPoint(x: x, y: y),
+                     UIColor(red: CGFloat(haloCol.0 / 255),
+                             green: CGFloat(haloCol.1 / 255),
+                             blue: CGFloat(haloCol.2 / 255), alpha: 1))
 
         func shell(_ n: Int, _ spBase: Double, _ pals: [FxHSL], _ inner: Bool) {
             for i in 0..<n {
@@ -1032,7 +1089,13 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    /// 灯体命中（供 hitTest / touchesEnded）：半宽 s*0.66+12、半高 s*0.88+12。
+    /// port91（任务 2）：当前灯体帧（根视图坐标：中心＋灯高
+    /// s），供 FxLinkage91 按距离给附近封面砖加暖色提亮。
+    func lanternFrames91() -> [(center: CGPoint, radius: CGFloat)] {
+        lanterns.map { (CGPoint(x: $0.x, y: $0.y), CGFloat($0.s)) }
+    }
+
+    /// 灯体命中（供主窗旁路点按）：半宽 s*0.66+12、半高 s*0.88+12。
     fileprivate func lantern(at p: CGPoint) -> FxLantern? {
         for L in lanterns.reversed() {
             if abs(Double(p.x) - L.x) <= L.s * 0.66 + 12
@@ -1404,7 +1467,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: - 叠加 UI（闪光层 / 祝福卡 / 写灯钮 / 推荐卡，照样片样式）
 
-    private func buildOverlayUI(in rv: Fx87RootView) {
+    /// port91（任务 1）：闪光层是纯视觉件，留在 Fx 窗内（随
+    /// 纯显示层一并渲染）；其余可交互件迁主窗浮层（下）。
+    private func buildFlash91(in rv: Fx87RootView) {
         // 白色闪光层（flashWall）：不拦截触摸
         let fv = UIView()
         fv.backgroundColor = .white
@@ -1419,7 +1484,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             fv.bottomAnchor.constraint(equalTo: rv.bottomAnchor),
         ])
         flashView = fv
+    }
 
+    /// port91（任务 1）：祝福卡/写灯钮/推荐卡建在主窗浮层宿
+    /// 主上（约束锚宿主＝主窗全幅，几何与旧 Fx 窗内一致）。
+    private func buildCards91(in rv: UIView) {
         // 祝福卡：居中偏下、深棕渐变＋灯图标＋16.5pt 文案＋「收起」钮
         let card = UIView()
         card.layer.cornerRadius = 18
@@ -1637,7 +1706,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: 卡片显隐与命中
 
-    /// 点是否落在可见的卡片/写灯钮上（hitTest 交回系统命中用）。
+    /// 点是否落在可见的卡片/写灯钮上（port91 前为 Fx 窗
+    /// hitTest 用；纯显示层后保留备查，点按判定走主窗旁路）。
     func interactiveSubviewHit(at point: CGPoint, in view: UIView) -> Bool {
         for sub in [recCard, blessCard, wishButton] {
             guard let sub = sub, !sub.isHidden, sub.alpha > 0 else { continue }
@@ -1702,27 +1772,28 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         onPlayRecommendation?()
     }
 
-    // MARK: 写灯放飞（UIAlertController 输入，照样片 composer 语义）
+    // MARK: 写灯放飞（port91 任务 6：许愿灯整页，替换系统弹窗）
+
+    /// 孔明灯图标外送（许愿页大灯造型复用同一字形源）。
+    static func wishIcon91() -> UIImage { lanternIconImage() }
 
     @objc private func wishButtonTapped() {
-        guard let vc = window?.rootViewController else { return }
         hideBless()
-        let alert = UIAlertController(title: nil, message: nil, preferredStyle: .alert)
-        alert.addTextField { tf in
-            tf.placeholder = "把秘密写在这盏灯上…"
+        // port91（任务 6）：UIAlertController 退役——改样板许
+        // 愿灯整页（大灯居中＋文字实时落灯纸＋放飞升空），自
+        // 主窗顶层 VC 呈现；入口仍是原写灯钮。
+        guard let top = MiniPlayerPanelPresenter.topViewController() else { return }
+        let wish = WishLanternViewController91()
+        wish.onRelease = { [weak self] text in
+            self?.releaseWishLantern(text)
         }
-        alert.addAction(UIAlertAction(title: "放飞", style: .default) { [weak self, weak alert] _ in
-            guard let self = self else { return }
-            let raw = alert?.textFields?.first?.text?
-                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            let text = raw.isEmpty ? "愿心想事成" : String(raw.prefix(60))
-            self.releaseWishLantern(text)
-        })
-        alert.addAction(UIAlertAction(title: "取消", style: .cancel))
-        vc.present(alert, animated: true)
+        wish.modalPresentationStyle = .overFullScreen
+        wish.modalTransitionStyle = .crossDissolve
+        top.present(wish, animated: true)
+        Breadcrumbs.log("p91 wish open")
     }
 
-    private func releaseWishLantern(_ text: String) {
+    func releaseWishLantern(_ text: String) {
         if !isLanterns { setLantern(true) }
         lnStopping = false
         spawnLantern(init: false, wish: text)

@@ -3268,6 +3268,10 @@ final class StageViewController: UIViewController {
         stageConsoleButton82.addTarget(self, action: #selector(stageConsoleTapped82), for: .touchUpInside)
         stageConsoleButton82.addTarget(self, action: #selector(stageConsoleDown84), for: .touchDown)
         bar.addSubview(stageConsoleButton82)
+        // port91（任务 3）：舞台台面控制台钮 A4 玻璃面＋播放
+        // 钮同套（字形经 DeckGlyph82 已全换 A4）。
+        A4Chrome91.apply(to: stageConsoleButton82, cornerRadius: 21)
+        A4Chrome91.apply(to: playButton, cornerRadius: 21)
 
         // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
@@ -3360,7 +3364,7 @@ final class StageViewController: UIViewController {
             stageCover82.widthAnchor.constraint(equalToConstant: 42),
             stageCover82.heightAnchor.constraint(equalToConstant: 42),
             stageTitle82.leadingAnchor.constraint(equalTo: stageCover82.trailingAnchor, constant: 12),
-            stageTitle82.trailingAnchor.constraint(lessThanOrEqualTo: prevButton.leadingAnchor, constant: -6),
+            stageTitle82.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -14),
             stageTitle82.topAnchor.constraint(equalTo: stageCover82.topAnchor, constant: 5),
             stageArtist82.leadingAnchor.constraint(equalTo: stageTitle82.leadingAnchor),
             stageArtist82.trailingAnchor.constraint(equalTo: stageTitle82.trailingAnchor),
@@ -3374,13 +3378,13 @@ final class StageViewController: UIViewController {
             // (87) 样片台：播放钮撤离居中、改右端簇（与两面
             // 墙同链：控制台最右、次/播/上一曲向左排布）；
             // prev/next 恒隐藏宽 0（藏进控制台），链锚保留。
-            playButton.trailingAnchor.constraint(equalTo: nextButton.leadingAnchor, constant: -2),
+            playButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
             playButton.widthAnchor.constraint(equalToConstant: 42),
             playButton.heightAnchor.constraint(equalToConstant: 42),
             prevButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -2),
             prevButton.widthAnchor.constraint(equalToConstant: 34),
             prevButton.heightAnchor.constraint(equalToConstant: 40),
-            nextButton.trailingAnchor.constraint(equalTo: stageConsoleButton82.leadingAnchor, constant: -2),
+            nextButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -2),
             nextButton.widthAnchor.constraint(equalToConstant: 34),
             nextButton.heightAnchor.constraint(equalToConstant: 40),
             // (85) 审计四(b)：控制台钮移出进度行、回主排
@@ -3391,7 +3395,7 @@ final class StageViewController: UIViewController {
             // 纵向恒为主排位（收起态该钮 alpha 0 不上屏、
             // 不必随收起组换位；恒定约束免收起态纵向无约束）。
             // (87) 样片台：控制台钮并入主行组 −14、42 圆。
-            stageConsoleButton82.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -14),
+            stageConsoleButton82.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 20),
             stageConsoleButton82.widthAnchor.constraint(equalToConstant: 42),
             stageConsoleButton82.heightAnchor.constraint(equalToConstant: 42),
 
@@ -3409,7 +3413,7 @@ final class StageViewController: UIViewController {
         // 6 条：展开锚改台底 −14（封面行退役，同两面墙）。
         // (84) 第 1 条：展开轨底锚复原 (80) 的 −7。
         // (87) 样片台：展开轨底锚 −9（进度行独立成行）。
-        stageTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -9)
+        stageTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
         stageTrackTopC?.isActive = true
         stageTrackBottomConstraint = progressTrack.bottomAnchor.constraint(
             equalTo: bar.bottomAnchor, constant: -5.5)
@@ -3421,8 +3425,11 @@ final class StageViewController: UIViewController {
         // (84) 第 1 条：主排纵向复原 (80)——封面与三键同组
         // 居台中心 −5（模式/列表钮已撤、退出本组）。
         // (87) 样片台两行版式：主行恒 −14（台高 84）。
-        stageMainCenterY = [stageCover82, playButton, prevButton, nextButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -14)
+        // port91（任务 4）：三行构成——封面顶行 −30、控制钮
+        // 中行 ＋20（数组序与 setStageBarForm 逐项回写对应）。
+        stageMainCenterY = [stageCover82, playButton, prevButton, nextButton].enumerated().map {
+            $0.element.centerYAnchor.constraint(
+                equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -30 : 20)
         }
         NSLayoutConstraint.activate(stageMainCenterY)
         // (83) 双击闪退定行删除：原「模式钮纵向跟随主排」
@@ -3929,7 +3936,10 @@ final class StageViewController: UIViewController {
             ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (84) 第 1 条：主排纵向复原 (80)——两形态恒同值。
         // (87) 样片台两行版式：恒 −14（台高 84）。
-        for constraint in stageMainCenterY { constraint.constant = -14 }
+        // port91（任务 4）：三行位恒定（首项顶行 −30、余项中行 ＋20）。
+        for (index, constraint) in stageMainCenterY.enumerated() {
+            constraint.constant = index == 0 ? -30 : 20
+        }
         // (74) 第 5 项小横线（同两面墙台口径）：收起态轨道
         // 换居中 134×5 小横线、圆点收起；台体容器与命中带
         // 不动。底距 −5.5 使 5pt 线在 16pt 容器内居中。

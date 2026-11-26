@@ -66,7 +66,11 @@ final class MiniBarQuickRowView: UIView {
     /// 的同值死常数 expandedHeight 已删，本常量为唯一出处。）
     /// (87) 播放台换代：样片台两行版式（主行 42＋进度行）
     /// 展开高 70→84，三宿主同源跟随、本常量仍是唯一出处。
-    static let expandedBarHeight: CGFloat = 84
+    /// port91（任务 4，Miller 23:11 口径）：展开台改三行构成
+    /// （顶行封面＋歌名＋歌手名／中行控制钮／进度条压最下
+    /// 沿），展开高 84→124（账：顶留 11＋顶行 42＋间 8＋中
+    /// 行 42＋进度行约 21）；收起态/5 秒收细条口径不动。
+    static let expandedBarHeight: CGFloat = 124
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?

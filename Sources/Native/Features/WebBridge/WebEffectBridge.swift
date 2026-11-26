@@ -2056,6 +2056,7 @@ enum NativePlaybackFailureToast {
     /// 窗口级、自动消失、不在墙面留任何常驻条/胶囊；与点播
     /// 失败 toast 同一实现（弹簧入场、3.2 秒淡出、只留最新）。
     static func show(message: String) {
+        let message = sanitized91(message)
         DispatchQueue.main.async {
             guard let window = keyWindow() else { return }
             currentPill?.removeFromSuperview()
@@ -2110,6 +2111,28 @@ enum NativePlaybackFailureToast {
                 })
             }
         }
+    }
+
+    /// port91（任务 10）：原始 i18n 键拦截——(90) 录屏实锤
+    /// 顶部 toast 露出 `status.songPreviewPlaying` 原始键。
+    /// 定案：该键为上游 Folia 同源键（上游语言包有正式译文
+    /// 「当前账号仅可试听，正在播放 {{seconds}} 秒片段」），
+    /// 本 fork 的四语言包缺失此键、运行时回退显键；同族
+    /// `status.songPreviewLoading` 全仓无字面量、疑动态拼接
+    /// 键，一并兜底。凡形如 `status.*` 的无空格串到达本
+    /// toast，一律映射为正式文案并落 p91 toast key 自证，
+    /// 原始键永不上屏。语言包侧已同步补键（folia-major
+    /// 四语言 status 段），双保险。
+    private static func sanitized91(_ raw: String) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("status."), !trimmed.contains(" ") else { return raw }
+        Breadcrumbs.log("p91 toast key=\(trimmed)")
+        if trimmed.contains("songPreview") { return "当前账号仅可试听此歌曲" }
+        if trimmed.contains("loadingSong") { return "正在获取歌曲链接…" }
+        if trimmed.contains("songRetrying") { return "连接失败，正在重试…" }
+        if trimmed.contains("songVip") { return "第三方播放器暂时无法获取完整 VIP 歌曲" }
+        if trimmed.contains("loginExpired") { return "登录状态已失效，请重新登录" }
+        return "操作未完成，请稍后再试"
     }
 
     private static func keyWindow() -> UIWindow? {

@@ -126,6 +126,17 @@ final class WallPrototypeViewController: UIViewController,
     /// 转时只有最新一代的 completion 才收尾解冻。
     private var wallRotationGeneration = 0
     private var collectionView: UICollectionView!
+    /// port91（任务 8）：歌单三版式状态（0 现行墙／1 A 杂志
+    /// 式／2 B 唱片架式），持久化键 foliaPlaylistLayout91。
+    private var playlistLayout91 =
+        UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91")
+    private var layoutSwitch91: UIView?
+    private var layoutSwitchButtons91: [UIButton] = []
+    private var magazineTable91: UITableView?
+    private var shelfView91: UIView?
+    private var shelfCollection91: UICollectionView?
+    private var shelfHeaderTitle91: UILabel?
+    private var shelfHeaderCount91: UILabel?
     // 顶部行动胶囊已整段撤除（3.7 (54) 工作流 L）：原 statusLabel
     // 及其 showStatusNotice/statusTapped 一并删除——未登录入口归
     // 主页侧栏账户区、失败重试归失败贴纸点按、定位瞬时提示归窗口
@@ -417,6 +428,8 @@ final class WallPrototypeViewController: UIViewController,
 
         installPlaylistSeamToolbar()
         installPlaylistSeam85()
+        // port91（任务 8）：歌单三版式切换器＋A/B 两套视图装配。
+        installPlaylistLayout91()
 
         // (76) ④左缘滑动返回（与 ⑧ 摘 ✕ 互为前提、同批落
         // 地）：落点 = closeTapped 既有契约（背板在场时
@@ -846,6 +859,8 @@ final class WallPrototypeViewController: UIViewController,
             miniPlayBlur90.topAnchor.constraint(equalTo: miniPlayButton.topAnchor),
             miniPlayBlur90.bottomAnchor.constraint(equalTo: miniPlayButton.bottomAnchor),
         ])
+        // port91（任务 3）：台面播放/控制台钮换 A4 玻璃面。
+        A4Chrome91.apply(to: miniPlayButton, cornerRadius: 21)
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
@@ -881,6 +896,9 @@ final class WallPrototypeViewController: UIViewController,
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleTapped82), for: .touchUpInside)
         miniConsoleButton.addTarget(self, action: #selector(miniConsoleDown84), for: .touchDown)
         bar.addSubview(miniConsoleButton)
+        // port91（任务 3）：控制台入口钮 A4 玻璃面（字形已换
+        // gen3 双音符上下对称，见 DeckGlyph82.consoleNotes）。
+        A4Chrome91.apply(to: miniConsoleButton, cornerRadius: 21)
 
         // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
@@ -969,7 +987,7 @@ final class WallPrototypeViewController: UIViewController,
 
             // (84) 第 1 条：标题复原 (80) 锚法（同主页墙）。
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
-            miniTitle.trailingAnchor.constraint(lessThanOrEqualTo: miniPrevButton.leadingAnchor, constant: -6),
+            miniTitle.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -14),
             miniTitle.topAnchor.constraint(equalTo: miniCover.topAnchor, constant: 5),
 
             miniArtist.leadingAnchor.constraint(equalTo: miniTitle.leadingAnchor),
@@ -982,11 +1000,11 @@ final class WallPrototypeViewController: UIViewController,
             miniConsoleButton.widthAnchor.constraint(equalToConstant: 42),
             miniConsoleButton.heightAnchor.constraint(equalToConstant: 42),
 
-            miniNextButton.trailingAnchor.constraint(equalTo: miniConsoleButton.leadingAnchor, constant: -2),
+            miniNextButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
-            miniPlayButton.trailingAnchor.constraint(equalTo: miniNextButton.leadingAnchor, constant: -2),
+            miniPlayButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
             miniPlayButton.widthAnchor.constraint(equalToConstant: 42),
             miniPlayButton.heightAnchor.constraint(equalToConstant: 42),
 
@@ -1016,9 +1034,13 @@ final class WallPrototypeViewController: UIViewController,
         // (84) 第 1 条：主排纵向复原 (80)——封面与四钮同组
         // 居台中心 −5，两形态同值。
         // (87) 样片台两行版式：主行恒 −14（台高 84）。
+        // port91（任务 4）：三行构成——封面走顶行（centerY
+        // −30）、控制钮走中行（＋20），数组序与 setMiniBarForm
+        // 的逐项回写一一对应（首项封面、余项中行）。
         miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton,
-                           miniNextButton, miniConsoleButton].map {
-            $0.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: -14)
+                           miniNextButton, miniConsoleButton].enumerated().map {
+            $0.element.centerYAnchor.constraint(
+                equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -30 : 20)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // (82) 第 7 条：轨道纵锚制（展开）/底锚（收起）由
@@ -1026,7 +1048,7 @@ final class WallPrototypeViewController: UIViewController,
         // 台底 −14（封面行退役），先按展开装配。
         // (84) 第 1 条：展开轨底锚复原 (80) 的 −7。
         // (87) 样片台：展开轨底锚 −9（进度行独立成行）。
-        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -9)
+        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -7)
         miniTrackTopC?.isActive = true
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5.5)
         miniTrackBottomConstraint?.isActive = false
@@ -1792,7 +1814,10 @@ final class WallPrototypeViewController: UIViewController,
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (84) 第 1 条：主排纵向复原 (80)——两形态恒同值。
         // (87) 样片台两行版式：恒 −14（台高 84）。
-        for constraint in miniMainCenterY { constraint.constant = -14 }
+        // port91（任务 4）：三行位恒定（首项顶行 −30、余项中行 ＋20）。
+        for (index, constraint) in miniMainCenterY.enumerated() {
+            constraint.constant = index == 0 ? -30 : 20
+        }
         // (74) 第 5 项小横线（同主页墙口径）：收起态轨道换
         // 居中 134×5 小横线、圆点收起；台体容器与命中带不
         // 动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
@@ -2846,6 +2871,7 @@ final class WallPrototypeViewController: UIViewController,
                     // 墙面即反馈。
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
+                    self.reloadAltPlaylist91()
                     self.centerCameraIfNeeded()
                     // (85) 第 1 条：缝计数随种子落地回填（总
                     // 数以 detail.trackCount 为准、与墙面计数
@@ -2920,6 +2946,7 @@ final class WallPrototypeViewController: UIViewController,
                         // 分页进度文案已删（3.7 (53) L 组）：拼接
                         // 照常推进，只刷新墙面，不再上屏计数。
                         self.collectionView.reloadData()
+                        self.reloadAltPlaylist91()
                         // (83) 黑屏定案③：分页续接后新条目同
                         // 批预热（已缓存者自动跳过）。
                         self.prefetchWall83(dirX: 0, dirY: 0, source: "warm")
@@ -3098,11 +3125,23 @@ final class WallPrototypeViewController: UIViewController,
     // MARK: - 数据源
 
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
-        wallLayout.instances.count
+        // port91（任务 8）：B 唱片架走条目数，墙走实例数。
+        if collectionView === shelfCollection91 { return entries.count }
+        return wallLayout.instances.count
     }
 
     func collectionView(_ collectionView: UICollectionView,
                         cellForItemAt indexPath: IndexPath) -> UICollectionViewCell {
+        // port91（任务 8）：B 唱片架格（大封面＋爱心＋➕＋在播标识）。
+        if collectionView === shelfCollection91 {
+            let cell = collectionView.dequeueReusableCell(
+                withReuseIdentifier: PlaylistShelfCell91.reuseId,
+                for: indexPath) as! PlaylistShelfCell91
+            let entry = entries[indexPath.item]
+            cell.configure91(entry: entry,
+                             isCurrent: PlaybackEngine.shared.currentTrack?.id == entry.id)
+            return cell
+        }
         let cell = collectionView.dequeueReusableCell(
             withReuseIdentifier: WallPosterCell.reuseId, for: indexPath) as! WallPosterCell
         let instance = wallLayout.instances[indexPath.item]
@@ -3255,6 +3294,8 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     private func refreshVisiblePlaybackUI() {
+        // port91（任务 8）：A/B 版式的在播标识随播放态同拍回刷。
+        if playlistLayout91 != 0 { reloadAltPlaylist91() }
         for case let cell as WallPosterCell in collectionView.visibleCells {
             guard let indexPath = collectionView.indexPath(for: cell),
                   indexPath.item < wallLayout.instances.count else { continue }
@@ -3826,6 +3867,11 @@ final class WallPrototypeViewController: UIViewController,
     }
 
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
+        // port91（任务 8）：B 唱片架点格即播（不走墙面展开通路）。
+        if collectionView === shelfCollection91 {
+            startQueueAt(queueIndex: indexPath.item)
+            return
+        }
         let instance = wallLayout.instances[indexPath.item]
         // (82) 第 9 条：关灯态首点只点亮该砖（消费＋粒子
         // 环/拖尾），已亮砖再点才走原动作（展开/播放）。
@@ -4168,6 +4214,14 @@ final class WallPosterCell: UICollectionViewCell {
     /// 点按）；configure 时按条目回刷贴入态。
     private let diaryButton90 = DiaryAddButton90.make()
     private var diarySong90: DiarySong90?
+    /// port91（任务 9）：封面左下爱心——24pt 毛玻璃圆片＋
+    /// 15pt 心，真接 LikesStore（与各面同一源），Pulse
+    /// Heart 时序（收缩→翻色→弹簧过冲）；与右上 ➕ 错开。
+    private let heartDisc91 = UIVisualEffectView(
+        effect: UIBlurEffect(style: .systemThinMaterialDark))
+    private let heartButton91 = UIButton(type: .custom)
+    private var heartTrackId91: String?
+    private var heartIsSong91 = false
     private var lightWall82 = "tracks"
     private var lightEntryId82: String?
     /// (82) 第 9 条：焦点拖尾找旧砖用（宿主辅助读）。
@@ -4271,6 +4325,20 @@ final class WallPosterCell: UICollectionViewCell {
         contentView.addSubview(diaryButton90)
         NotificationCenter.default.addObserver(
             self, selector: #selector(diaryChanged90), name: .foliaDiary90Changed, object: nil)
+
+        // port91（任务 9）：爱心圆片（毛玻璃 disc＋描边）＋心钮。
+        heartDisc91.layer.cornerRadius = 12
+        heartDisc91.layer.borderWidth = 0.5
+        heartDisc91.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        heartDisc91.clipsToBounds = true
+        heartDisc91.isUserInteractionEnabled = false
+        contentView.addSubview(heartDisc91)
+        heartButton91.addTarget(self, action: #selector(heartTapped91), for: .touchUpInside)
+        heartButton91.accessibilityLabel = "喜欢"
+        contentView.addSubview(heartButton91)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(likesChanged91),
+            name: .foliaLikesChanged91, object: nil)
 
         titleLabel.font = .systemFont(ofSize: 10, weight: .medium)
         titleLabel.textColor = .white
@@ -4614,6 +4682,14 @@ final class WallPosterCell: UICollectionViewCell {
             x: 6, y: bounds.height - bottomInset - 13,
             width: bounds.width - 12, height: 12)
         subtitleLabel.isHidden = imageOnly || !hasSubtitle || controlsVisible
+        // port91（任务 9）：爱心钉封面左下（标题带上方 6pt；
+        // 纯图档贴底 6pt），展开卡形态不挂（详情走卡内通路）。
+        let heartY = imageOnly ? bounds.height - 30 : titleY - 30
+        heartDisc91.frame = CGRect(x: 6, y: heartY, width: 24, height: 24)
+        heartButton91.frame = heartDisc91.frame
+        let heartHidden91 = controlsVisible || !heartIsSong91
+        heartDisc91.isHidden = heartHidden91
+        heartButton91.isHidden = heartHidden91
         if controlsVisible {
             // port90（任务 8 覆盖 b-detail-card）：封面只留歌名——
             // 19pt semibold、行高 1.15、宽＝卡宽−32、按词换行不截断，
@@ -4715,6 +4791,12 @@ final class WallPosterCell: UICollectionViewCell {
                                   artist: entry.subtitle ?? "", artwork: entry.picUrl)
         diaryButton90.isHidden = entry.subtitle?.hasPrefix("歌单") ?? false
         DiaryAddButton90.refresh(diaryButton90, songId: entry.id)
+        // port91（任务 9）：爱心登记本砖歌曲并回刷（歌单形
+        // 条目不挂）；任务 2：封面砖注册进 FxLinkage91 联动。
+        heartTrackId91 = entry.id
+        heartIsSong91 = !(entry.subtitle?.hasPrefix("歌单") ?? false)
+        refreshHeart91()
+        FxLinkage91.shared.registerTile(cover: imageView, container: coverContainer85)
         titleLabel.text = entry.title
         subtitleLabel.text = entry.subtitle
         setNeedsLayout()
@@ -4847,6 +4929,53 @@ final class WallPosterCell: UICollectionViewCell {
         DiaryAddButton90.refresh(diaryButton90, songId: diarySong90?.id)
     }
 
+    /// port91（任务 9）：爱心回刷——未选白描边空心、已选
+    /// 实心红 #FF5973（与样板爱心视图定版一致）。
+    private func refreshHeart91() {
+        let liked = heartTrackId91.map { LikesStore.shared.isLiked($0) } ?? false
+        heartButton91.setImage(
+            DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 15),
+            for: .normal)
+        heartButton91.tintColor = liked
+            ? UIColor(red: 1, green: 0x59 / 255, blue: 0x73 / 255, alpha: 1) : .white
+        heartButton91.accessibilityLabel = liked ? "取消喜欢" : "喜欢"
+    }
+
+    @objc private func likesChanged91(_ note: Notification) {
+        guard let id = note.userInfo?["trackId"] as? String,
+              id == heartTrackId91 else { return }
+        refreshHeart91()
+    }
+
+    /// port91（任务 9）：爱心点按——LikesStore 本地先行（与
+    /// 播放台/控制台同一源）＋云端同步失败回滚；Pulse
+    /// Heart：收缩（0.45s×30%）→翻色→弹簧过冲 1.25→0.94→1。
+    @objc private func heartTapped91() {
+        guard let id = heartTrackId91 else { return }
+        UIView.animate(withDuration: 0.135, delay: 0, options: [.curveEaseIn]) {
+            self.heartButton91.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
+            self.heartDisc91.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
+        } completion: { _ in
+            let newState = LikesStore.shared.toggle(id)
+            self.refreshHeart91()
+            UIView.animate(withDuration: 0.315, delay: 0,
+                           usingSpringWithDamping: 0.45, initialSpringVelocity: 1.4,
+                           options: [.allowUserInteraction]) {
+                self.heartButton91.transform = .identity
+                self.heartDisc91.transform = .identity
+            }
+            NativePlaybackFailureToast.show(message: newState ? "已喜欢" : "已取消喜欢")
+            Breadcrumbs.log("p91 heart on=\(newState ? 1 : 0)")
+            Task {
+                do {
+                    _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+                } catch {
+                    LikesStore.shared.toggle(id)
+                }
+            }
+        }
+    }
+
     /// (83) 第 3 条：关灯点亮时被点封面慢慢放大——曲线与
     /// 时长不另写一版：与曲目墙平时点按展开的共享弹簧同
     /// 参（animateHeroExpansion 的 UIViewPropertyAnimator
@@ -4945,6 +5074,9 @@ final class WallPosterCell: UICollectionViewCell {
 
     override func prepareForReuse() {
         super.prepareForReuse()
+        // port91：联动注销（防复用砖残留雪檐/提亮/风摆）。
+        FxLinkage91.shared.unregisterTile(cover: imageView)
+        heartTrackId91 = nil
         loadTask?.cancel()
         loadTask = nil
         currentUrl = nil
@@ -5239,3 +5371,538 @@ extension WallPrototypeViewController {
 }
 
 // (84) 第 3 条：(82) 的 UIGestureRecognizerDelegate 豁免扩展已删（同主页墙）。
+
+// MARK: - port91（任务 8）歌单三版式：现行墙／A 杂志式／B 唱片架式
+
+extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegate {
+
+    /// 切换器（顶部居中分段钮，样板歌单视图定版位）＋A/B
+    /// 两套视图装配；现行版即既有照片墙、零改动。
+    fileprivate func installPlaylistLayout91() {
+        // 分段钮：毛玻璃胶囊＋三档（现行/A/B），选中白底黑字。
+        let blur = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        blur.layer.cornerRadius = 15
+        blur.layer.borderWidth = 0.5
+        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
+        blur.clipsToBounds = true
+        blur.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(blur)
+        layoutSwitch91 = blur
+        let titles = ["现行", "A", "B"]
+        for (index, title) in titles.enumerated() {
+            let button = UIButton(type: .system)
+            button.setTitle(title, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 12.5, weight: .semibold)
+            button.layer.cornerRadius = 12
+            button.tag = index
+            button.accessibilityLabel = ["现行版式", "杂志式", "唱片架式"][index]
+            button.translatesAutoresizingMaskIntoConstraints = false
+            button.addTarget(self, action: #selector(layoutSwitchTapped91(_:)),
+                             for: .touchUpInside)
+            blur.contentView.addSubview(button)
+            layoutSwitchButtons91.append(button)
+            NSLayoutConstraint.activate([
+                button.topAnchor.constraint(equalTo: blur.contentView.topAnchor, constant: 3),
+                button.bottomAnchor.constraint(equalTo: blur.contentView.bottomAnchor, constant: -3),
+                button.widthAnchor.constraint(equalToConstant: 52),
+                button.leadingAnchor.constraint(
+                    equalTo: index == 0
+                        ? blur.contentView.leadingAnchor
+                        : layoutSwitchButtons91[index - 1].trailingAnchor,
+                    constant: index == 0 ? 3 : 2),
+            ])
+        }
+        NSLayoutConstraint.activate([
+            blur.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            blur.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            blur.heightAnchor.constraint(equalToConstant: 30),
+            blur.widthAnchor.constraint(equalToConstant: 166),
+        ])
+
+        // A 杂志式：编号列表表（歌单头走 tableHeaderView）。
+        let table = UITableView(frame: .zero, style: .plain)
+        table.backgroundColor = .black
+        table.separatorStyle = .none
+        table.showsVerticalScrollIndicator = false
+        table.rowHeight = 56
+        table.dataSource = self
+        table.delegate = self
+        table.register(PlaylistMagazineCell91.self,
+                       forCellReuseIdentifier: PlaylistMagazineCell91.reuseId)
+        table.translatesAutoresizingMaskIntoConstraints = false
+        table.isHidden = true
+        view.addSubview(table)
+        magazineTable91 = table
+
+        // B 唱片架式：头行（标题＋计数）＋横滑大封面架层。
+        let shelf = UIView()
+        shelf.backgroundColor = .black
+        shelf.translatesAutoresizingMaskIntoConstraints = false
+        shelf.isHidden = true
+        view.addSubview(shelf)
+        shelfView91 = shelf
+        let headTitle = UILabel()
+        headTitle.font = .systemFont(ofSize: 17, weight: .semibold)
+        headTitle.textColor = .white
+        headTitle.translatesAutoresizingMaskIntoConstraints = false
+        shelf.addSubview(headTitle)
+        shelfHeaderTitle91 = headTitle
+        let headCount = UILabel()
+        headCount.font = .systemFont(ofSize: 12.5)
+        headCount.textColor = UIColor.white.withAlphaComponent(0.5)
+        headCount.translatesAutoresizingMaskIntoConstraints = false
+        shelf.addSubview(headCount)
+        shelfHeaderCount91 = headCount
+        let flow = UICollectionViewFlowLayout()
+        flow.scrollDirection = .horizontal
+        flow.itemSize = CGSize(width: 150, height: 198)
+        flow.minimumLineSpacing = 14
+        flow.sectionInset = UIEdgeInsets(top: 0, left: 64, bottom: 0, right: 24)
+        let shelfCV = UICollectionView(frame: .zero, collectionViewLayout: flow)
+        shelfCV.backgroundColor = .clear
+        shelfCV.showsHorizontalScrollIndicator = false
+        shelfCV.dataSource = self
+        shelfCV.delegate = self
+        shelfCV.register(PlaylistShelfCell91.self,
+                         forCellWithReuseIdentifier: PlaylistShelfCell91.reuseId)
+        shelfCV.translatesAutoresizingMaskIntoConstraints = false
+        shelf.addSubview(shelfCV)
+        shelfCollection91 = shelfCV
+        NSLayoutConstraint.activate([
+            table.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            table.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            table.topAnchor.constraint(equalTo: view.topAnchor),
+            table.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            shelf.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            shelf.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            shelf.topAnchor.constraint(equalTo: view.topAnchor),
+            shelf.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            headTitle.leadingAnchor.constraint(equalTo: shelf.leadingAnchor, constant: 64),
+            headTitle.topAnchor.constraint(equalTo: shelf.safeAreaLayoutGuide.topAnchor, constant: 52),
+            headCount.trailingAnchor.constraint(equalTo: shelf.trailingAnchor, constant: -20),
+            headCount.centerYAnchor.constraint(equalTo: headTitle.centerYAnchor),
+            shelfCV.leadingAnchor.constraint(equalTo: shelf.leadingAnchor),
+            shelfCV.trailingAnchor.constraint(equalTo: shelf.trailingAnchor),
+            shelfCV.topAnchor.constraint(equalTo: headTitle.bottomAnchor, constant: 14),
+            shelfCV.heightAnchor.constraint(equalToConstant: 214),
+        ])
+        table.contentInset = UIEdgeInsets(top: 46, left: 0, bottom: 120, right: 0)
+        applyPlaylistLayout91()
+    }
+
+    @objc private func layoutSwitchTapped91(_ sender: UIButton) {
+        playlistLayout91 = sender.tag
+        UserDefaults.standard.set(sender.tag, forKey: "foliaPlaylistLayout91")
+        Breadcrumbs.log("p91 plist mode=\(sender.tag)")
+        applyPlaylistLayout91()
+    }
+
+    fileprivate func applyPlaylistLayout91() {
+        let mode = playlistLayout91
+        collectionView.isHidden = mode != 0
+        magazineTable91?.isHidden = mode != 1
+        shelfView91?.isHidden = mode != 2
+        // 切换钮恒在最前（A/B 两套全屏视图装配在其后，不许盖住）；
+        // 左侧缝（书脊导航）同理提至 A/B 视图之上，A/B 内容
+        // leading 64 即为避缝留白。
+        if let switch91 = layoutSwitch91 { view.bringSubviewToFront(switch91) }
+        if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
+        if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
+        for (index, button) in layoutSwitchButtons91.enumerated() {
+            let selected = index == mode
+            button.backgroundColor = selected ? .white : .clear
+            button.setTitleColor(selected ? .black : UIColor.white.withAlphaComponent(0.65),
+                                 for: .normal)
+        }
+        reloadAltPlaylist91()
+    }
+
+    fileprivate func reloadAltPlaylist91() {
+        if playlistLayout91 == 1, let table = magazineTable91 {
+            table.tableHeaderView = makeMagazineHeader91()
+            table.reloadData()
+        }
+        if playlistLayout91 == 2 {
+            shelfHeaderTitle91?.text = playlistTitle ?? "歌单"
+            shelfHeaderCount91?.text = "\(entries.count) 首"
+            shelfCollection91?.reloadData()
+        }
+    }
+
+    /// A 杂志式歌单头：大标题＋计数行＋发丝线（样板定版）。
+    private func makeMagazineHeader91() -> UIView {
+        let width = max(view.bounds.width, 320)
+        let header = UIView(frame: CGRect(x: 0, y: 0, width: width, height: 118))
+        header.backgroundColor = .black
+        let title = UILabel()
+        title.text = playlistTitle ?? "歌单"
+        title.font = .systemFont(ofSize: 26, weight: .bold)
+        title.textColor = .white
+        title.numberOfLines = 2
+        title.lineBreakMode = .byTruncatingTail
+        title.frame = CGRect(x: 64, y: 16, width: width - 84, height: 64)
+        header.addSubview(title)
+        let sub = UILabel()
+        sub.text = "\(entries.count) 首 · 歌单"
+        sub.font = .systemFont(ofSize: 12.5)
+        sub.textColor = UIColor.white.withAlphaComponent(0.5)
+        sub.frame = CGRect(x: 64, y: 84, width: width - 84, height: 16)
+        header.addSubview(sub)
+        let rule = UIView()
+        rule.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        rule.frame = CGRect(x: 64, y: 110, width: width - 84, height: 0.5)
+        header.addSubview(rule)
+        return header
+    }
+
+    // MARK: A 杂志式表数据源
+
+    func tableView(_ tableView: UITableView,
+                   numberOfRowsInSection section: Int) -> Int {
+        entries.count
+    }
+
+    func tableView(_ tableView: UITableView,
+                   cellForRowAt indexPath: IndexPath) -> UITableViewCell {
+        let cell = tableView.dequeueReusableCell(
+            withIdentifier: PlaylistMagazineCell91.reuseId,
+            for: indexPath) as! PlaylistMagazineCell91
+        let entry = entries[indexPath.row]
+        cell.configure91(entry: entry, index: indexPath.row,
+                         isCurrent: PlaybackEngine.shared.currentTrack?.id == entry.id)
+        return cell
+    }
+
+    func tableView(_ tableView: UITableView,
+                   didSelectRowAt indexPath: IndexPath) {
+        tableView.deselectRow(at: indexPath, animated: true)
+        startQueueAt(queueIndex: indexPath.row)
+    }
+}
+
+/// port91（任务 8/9）：A 杂志式行——编号＋44 封面＋标题/
+/// 歌手＋爱心（18 圆片/11 心）＋➕；在播行左 3pt 琥珀条＋
+/// 标题 semibold。爱心与墙砖同一 LikesStore 源。
+final class PlaylistMagazineCell91: UITableViewCell {
+
+    static let reuseId = "PlaylistMagazineCell91"
+
+    private let accentBar = UIView()
+    private let numberLabel = UILabel()
+    private let coverView = UIImageView()
+    private let titleLabel = UILabel()
+    private let artistLabel = UILabel()
+    private let heartDisc91 = UIView()
+    private let heartButton91 = UIButton(type: .custom)
+    private let diaryButton91 = DiaryAddButton90.make()
+    private var coverTask: Task<Void, Never>?
+    private var entryId91: String?
+
+    override init(style: UITableViewCell.CellStyle, reuseIdentifier: String?) {
+        super.init(style: style, reuseIdentifier: reuseIdentifier)
+        backgroundColor = .clear
+        selectionStyle = .none
+        accentBar.backgroundColor = ThemeSystem62.currentAccent
+        accentBar.isHidden = true
+        contentView.addSubview(accentBar)
+        numberLabel.font = .monospacedDigitSystemFont(ofSize: 12.5, weight: .regular)
+        numberLabel.textColor = UIColor.white.withAlphaComponent(0.35)
+        numberLabel.textAlignment = .right
+        contentView.addSubview(numberLabel)
+        coverView.contentMode = .scaleAspectFill
+        coverView.clipsToBounds = true
+        coverView.layer.cornerRadius = 6
+        coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        contentView.addSubview(coverView)
+        titleLabel.font = .systemFont(ofSize: 14)
+        titleLabel.textColor = UIColor.white.withAlphaComponent(0.92)
+        titleLabel.lineBreakMode = .byTruncatingTail
+        contentView.addSubview(titleLabel)
+        artistLabel.font = .systemFont(ofSize: 12)
+        artistLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+        artistLabel.lineBreakMode = .byTruncatingTail
+        contentView.addSubview(artistLabel)
+        heartDisc91.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        heartDisc91.layer.cornerRadius = 9
+        heartDisc91.layer.borderWidth = 0.5
+        heartDisc91.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        heartDisc91.isUserInteractionEnabled = false
+        contentView.addSubview(heartDisc91)
+        heartButton91.addTarget(self, action: #selector(heartTapped91), for: .touchUpInside)
+        contentView.addSubview(heartButton91)
+        diaryButton91.addTarget(self, action: #selector(diaryTapped91), for: .touchUpInside)
+        contentView.addSubview(diaryButton91)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(likesChanged91),
+            name: .foliaLikesChanged91, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(diaryChanged91),
+            name: .foliaDiary90Changed, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        let w = contentView.bounds.width, h = contentView.bounds.height
+        accentBar.frame = CGRect(x: 0, y: 14, width: 3, height: h - 28)
+        numberLabel.frame = CGRect(x: 64, y: 0, width: 26, height: h)
+        coverView.frame = CGRect(x: 100, y: (h - 44) / 2, width: 44, height: 44)
+        diaryButton91.frame = CGRect(x: w - 44, y: (h - 24) / 2, width: 24, height: 24)
+        heartDisc91.frame = CGRect(x: w - 76, y: (h - 18) / 2, width: 18, height: 18)
+        heartButton91.frame = heartDisc91.frame
+        let textX: CGFloat = 156
+        titleLabel.frame = CGRect(x: textX, y: h / 2 - 17,
+                                  width: w - textX - 88, height: 17)
+        artistLabel.frame = CGRect(x: textX, y: h / 2 + 2,
+                                   width: w - textX - 88, height: 15)
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        FxLinkage91.shared.unregisterTile(cover: coverView)
+        coverTask?.cancel()
+        coverView.image = nil
+        entryId91 = nil
+    }
+
+    func configure91(entry: WallPrototypeViewController.Entry,
+                     index: Int, isCurrent: Bool) {
+        entryId91 = entry.id
+        numberLabel.text = String(format: "%02d", index + 1)
+        titleLabel.text = entry.title
+        titleLabel.font = .systemFont(ofSize: 14,
+                                      weight: isCurrent ? .semibold : .regular)
+        artistLabel.text = entry.subtitle
+        accentBar.isHidden = !isCurrent
+        DiaryAddButton90.refresh(diaryButton91, songId: entry.id)
+        refreshHeart91()
+        FxLinkage91.shared.registerTile(cover: coverView, container: contentView)
+        coverTask?.cancel()
+        coverView.image = nil
+        guard let raw = entry.picUrl else { return }
+        let loader = NativeCoverLoader.shared
+        let proxy = loader.proxiedURLString(raw, tier: 256)
+        if let key = proxy, let cached = loader.cachedImage(for: key) {
+            coverView.image = cached
+            return
+        }
+        if let cached = loader.cachedImageAnyTier(raw: raw, excludingTier: 256) {
+            coverView.image = cached
+            return
+        }
+        let id = entry.id
+        coverTask = Task { [weak self] in
+            let image = await loader.image(for: proxy ?? raw, tier: 256)
+            guard let self, self.entryId91 == id, let image else { return }
+            self.coverView.image = image
+        }
+    }
+
+    private func refreshHeart91() {
+        let liked = entryId91.map { LikesStore.shared.isLiked($0) } ?? false
+        heartButton91.setImage(
+            DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 11),
+            for: .normal)
+        heartButton91.tintColor = liked
+            ? UIColor(red: 1, green: 0x59 / 255, blue: 0x73 / 255, alpha: 1) : .white
+    }
+
+    @objc private func likesChanged91(_ note: Notification) {
+        guard let id = note.userInfo?["trackId"] as? String,
+              id == entryId91 else { return }
+        refreshHeart91()
+    }
+
+    @objc private func diaryChanged91() {
+        DiaryAddButton90.refresh(diaryButton91, songId: entryId91)
+    }
+
+    @objc private func heartTapped91() {
+        guard let id = entryId91 else { return }
+        let newState = LikesStore.shared.toggle(id)
+        refreshHeart91()
+        heartButton91.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
+        UIView.animate(withDuration: 0.45, delay: 0,
+                       usingSpringWithDamping: 0.45, initialSpringVelocity: 1.4) {
+            self.heartButton91.transform = .identity
+        }
+        Breadcrumbs.log("p91 heart on=\(newState ? 1 : 0)")
+        Task {
+            do {
+                _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+            } catch {
+                LikesStore.shared.toggle(id)
+            }
+        }
+    }
+
+    @objc private func diaryTapped91() {
+        guard let id = entryId91 else { return }
+        DiaryStore90.toggle(DiarySong90(
+            id: id, title: titleLabel.text ?? "",
+            artist: artistLabel.text ?? "", artwork: nil))
+        DiaryAddButton90.refresh(diaryButton91, songId: id)
+    }
+}
+
+/// port91（任务 8/9）：B 唱片架格——150 大封面＋标题/歌手
+/// ＋爱心（18 圆片/11 心，封面左下）＋➕（封面右上）；在播
+/// 态封面琥珀描边＋左上在播角标。
+final class PlaylistShelfCell91: UICollectionViewCell {
+
+    static let reuseId = "PlaylistShelfCell91"
+
+    private let coverView = UIImageView()
+    private let titleLabel = UILabel()
+    private let artistLabel = UILabel()
+    private let heartDisc91 = UIView()
+    private let heartButton91 = UIButton(type: .custom)
+    private let diaryButton91 = DiaryAddButton90.make()
+    private let playingBadge91 = UIImageView()
+    private var coverTask: Task<Void, Never>?
+    private var entryId91: String?
+    private var entryArtwork91: String?
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        coverView.contentMode = .scaleAspectFill
+        coverView.clipsToBounds = true
+        coverView.layer.cornerRadius = 10
+        coverView.layer.borderColor = ThemeSystem62.currentAccent.cgColor
+        coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        contentView.addSubview(coverView)
+        playingBadge91.image = UIImage(systemName: "speaker.wave.2.fill",
+            withConfiguration: UIImage.SymbolConfiguration(pointSize: 10, weight: .semibold))
+        playingBadge91.tintColor = .white
+        playingBadge91.contentMode = .center
+        playingBadge91.backgroundColor = UIColor.black.withAlphaComponent(0.5)
+        playingBadge91.layer.cornerRadius = 9
+        playingBadge91.clipsToBounds = true
+        playingBadge91.isHidden = true
+        contentView.addSubview(playingBadge91)
+        heartDisc91.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        heartDisc91.layer.cornerRadius = 9
+        heartDisc91.layer.borderWidth = 0.5
+        heartDisc91.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        heartDisc91.isUserInteractionEnabled = false
+        contentView.addSubview(heartDisc91)
+        heartButton91.addTarget(self, action: #selector(heartTapped91), for: .touchUpInside)
+        contentView.addSubview(heartButton91)
+        diaryButton91.addTarget(self, action: #selector(diaryTapped91), for: .touchUpInside)
+        contentView.addSubview(diaryButton91)
+        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        titleLabel.textColor = .white
+        titleLabel.lineBreakMode = .byTruncatingTail
+        contentView.addSubview(titleLabel)
+        artistLabel.font = .systemFont(ofSize: 11)
+        artistLabel.textColor = UIColor.white.withAlphaComponent(0.5)
+        artistLabel.lineBreakMode = .byTruncatingTail
+        contentView.addSubview(artistLabel)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(likesChanged91),
+            name: .foliaLikesChanged91, object: nil)
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(diaryChanged91),
+            name: .foliaDiary90Changed, object: nil)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        coverView.frame = CGRect(x: 0, y: 0, width: 150, height: 150)
+        playingBadge91.frame = CGRect(x: 6, y: 6, width: 18, height: 18)
+        diaryButton91.frame = CGRect(x: 120, y: 6, width: 24, height: 24)
+        heartDisc91.frame = CGRect(x: 6, y: 124, width: 18, height: 18)
+        heartButton91.frame = heartDisc91.frame
+        titleLabel.frame = CGRect(x: 0, y: 156, width: 150, height: 17)
+        artistLabel.frame = CGRect(x: 0, y: 175, width: 150, height: 14)
+    }
+
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        FxLinkage91.shared.unregisterTile(cover: coverView)
+        coverTask?.cancel()
+        coverView.image = nil
+        entryId91 = nil
+    }
+
+    func configure91(entry: WallPrototypeViewController.Entry, isCurrent: Bool) {
+        entryId91 = entry.id
+        entryArtwork91 = entry.picUrl
+        titleLabel.text = entry.title
+        artistLabel.text = entry.subtitle
+        playingBadge91.isHidden = !isCurrent
+        coverView.layer.borderWidth = isCurrent ? 2 : 0
+        DiaryAddButton90.refresh(diaryButton91, songId: entry.id)
+        refreshHeart91()
+        FxLinkage91.shared.registerTile(cover: coverView, container: contentView)
+        coverTask?.cancel()
+        coverView.image = nil
+        guard let raw = entry.picUrl else { return }
+        let loader = NativeCoverLoader.shared
+        let proxy = loader.proxiedURLString(raw, tier: 256)
+        if let key = proxy, let cached = loader.cachedImage(for: key) {
+            coverView.image = cached
+            return
+        }
+        if let cached = loader.cachedImageAnyTier(raw: raw, excludingTier: 256) {
+            coverView.image = cached
+            return
+        }
+        let id = entry.id
+        coverTask = Task { [weak self] in
+            let image = await loader.image(for: proxy ?? raw, tier: 256)
+            guard let self, self.entryId91 == id, let image else { return }
+            self.coverView.image = image
+        }
+    }
+
+    private func refreshHeart91() {
+        let liked = entryId91.map { LikesStore.shared.isLiked($0) } ?? false
+        heartButton91.setImage(
+            DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 11),
+            for: .normal)
+        heartButton91.tintColor = liked
+            ? UIColor(red: 1, green: 0x59 / 255, blue: 0x73 / 255, alpha: 1) : .white
+    }
+
+    @objc private func likesChanged91(_ note: Notification) {
+        guard let id = note.userInfo?["trackId"] as? String,
+              id == entryId91 else { return }
+        refreshHeart91()
+    }
+
+    @objc private func diaryChanged91() {
+        DiaryAddButton90.refresh(diaryButton91, songId: entryId91)
+    }
+
+    @objc private func heartTapped91() {
+        guard let id = entryId91 else { return }
+        let newState = LikesStore.shared.toggle(id)
+        refreshHeart91()
+        heartButton91.transform = CGAffineTransform(scaleX: 0.3, y: 0.3)
+        UIView.animate(withDuration: 0.45, delay: 0,
+                       usingSpringWithDamping: 0.45, initialSpringVelocity: 1.4) {
+            self.heartButton91.transform = .identity
+        }
+        Breadcrumbs.log("p91 heart on=\(newState ? 1 : 0)")
+        Task {
+            do {
+                _ = try await NativeDataClient.shared.setLike(trackId: id, like: newState)
+            } catch {
+                LikesStore.shared.toggle(id)
+            }
+        }
+    }
+
+    @objc private func diaryTapped91() {
+        guard let id = entryId91 else { return }
+        DiaryStore90.toggle(DiarySong90(
+            id: id, title: titleLabel.text ?? "",
+            artist: artistLabel.text ?? "", artwork: entryArtwork91))
+        DiaryAddButton90.refresh(diaryButton91, songId: id)
+    }
+}

@@ -1091,6 +1091,9 @@ final class MiniBarPetStage: UIView {
         let actor = MiniPetActor(asset: asset, size: petSizeNow())
         actor.stage = self
         addSubview(actor)
+        // port91（任务 2）：宠物注册进 FxLinkage91 联动（风晃/
+        // 雪积/灯仰头/烟花跳，变换落 actor 本体、雪堆落子视图）。
+        FxLinkage91.shared.registerPet(actor)
         // 去向登记：上台即变更去向（召回岛民/详情页待命者时
         // pet.move 在此落痕，岛层经回调同步撤下）。
         PetHomeRegistry.shared.setHome(asset, role == .wall ? .wallBar : .stageBar)
@@ -1420,6 +1423,8 @@ final class MiniBarPetStage: UIView {
     /// 好（岛/stageBar），此处默认不动登记。
     private func removeActor(_ actor: MiniPetActor, animated: Bool,
                              sendToPool: Bool = false) {
+        // port91（任务 2）：下台先注销联动（清雪堆/复位变换）。
+        FxLinkage91.shared.unregisterPet(actor)
         guests.removeAll { $0 === actor }
         if resident === actor { resident = nil }
         if chatPair?.0 === actor || chatPair?.1 === actor {

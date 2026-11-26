@@ -340,7 +340,8 @@ final class PolaroidCard90: UIControl {
         titleLabel.textColor = UIColor(red: 0.20, green: 0.19, blue: 0.16, alpha: 1)
         titleLabel.lineBreakMode = .byTruncatingTail
         addSubview(titleLabel)
-        artistLabel.font = .systemFont(ofSize: 8.5)
+        // port91（任务 7）：歌手字号 8.5 → 9.5（样板 11/9.5 等比口径）。
+        artistLabel.font = .systemFont(ofSize: 9.5)
         artistLabel.textColor = UIColor(red: 0.60, green: 0.57, blue: 0.49, alpha: 1)
         artistLabel.lineBreakMode = .byTruncatingTail
         addSubview(artistLabel)
@@ -363,14 +364,21 @@ final class PolaroidCard90: UIControl {
 
     override func layoutSubviews() {
         super.layoutSubviews()
+        // port91（任务 7）：题注区改固定高 30（歌名 13＋间 1＋
+        // 歌手 11＋上下留白），两行各一行卡内截断、永不溢出
+        // 卡外与邻卡叠字；照片区让出题注固定带与顶部钉带：
+        // 照片顶边下移 12 给 ➕ 留卡纸边缘位，➕ 钉卡纸右上
+        // 角（2,2），只压卡纸不压照片主体。
         let pad = bounds.width * 0.075
-        let imgSide = bounds.width - pad * 2
-        imageView.frame = CGRect(x: pad, y: pad, width: imgSide, height: imgSide)
-        addButton.frame = CGRect(x: imageView.frame.maxX - 29, y: imageView.frame.minY + 5,
-                                 width: 24, height: 24)
-        let capY = imageView.frame.maxY + 4
-        bookButton.frame = CGRect(x: bounds.width - pad - 20, y: capY - 2, width: 20, height: 20)
-        titleLabel.frame = CGRect(x: pad, y: capY, width: bounds.width - pad * 2 - 20, height: 14)
+        let captionH: CGFloat = 30
+        let imgTop = pad + 12
+        let imgH = max(10, bounds.height - imgTop - captionH)
+        imageView.frame = CGRect(x: pad, y: imgTop,
+                                 width: bounds.width - pad * 2, height: imgH)
+        addButton.frame = CGRect(x: bounds.width - 26, y: 2, width: 24, height: 24)
+        let capY = bounds.height - captionH + 3
+        bookButton.frame = CGRect(x: bounds.width - pad - 20, y: capY - 1, width: 20, height: 20)
+        titleLabel.frame = CGRect(x: pad, y: capY, width: bounds.width - pad * 2 - 22, height: 13)
         artistLabel.frame = CGRect(x: pad, y: capY + 14, width: bounds.width - pad * 2, height: 11)
     }
 
