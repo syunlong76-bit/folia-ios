@@ -59,10 +59,18 @@ struct LyricWordStamp {
 /// 当前行扫光视图（3.7 (12)）：暗字打底 + 亮字被 mask 按进度裁切，
 /// 唱到哪亮到哪。mask 按文本实际宽度居中起算（居中文本不能从
 /// label 左缘扫起）；进度由 cell 的 CADisplayLink 按引擎时钟推进。
+/// (97) 第 10 条（封面歌词新样式，样板 cover-lyric-apple-style
+/// 定版）：三段呈现——已唱填充段（brightLabel＋mask）／前锋亮
+/// 边段（frontLabel＋mask，宽 = 行宽 13%，居前锋位）／未唱底
+/// 段（dimLabel）；左对齐（样板口径，行首留白由宿主帧内缩）；
+/// 配色由 applyStyle97 按封面明暗模式下发；字形阴影退役、
+/// 当前行光晕改由容器层 drop-shadow 承担（见 LyricWindowView）。
 private final class SweepLyricLineView: UIView {
     private let dimLabel = UILabel()
     private let brightLabel = UILabel()
+    private let frontLabel = UILabel()
     private let maskLayer = CALayer()
+    private let frontMaskLayer = CALayer()
     /// 整行文本宽缓存（(62) 尾波第 4 组）：setText 时一次量
     /// 好，updateMask 与逐字进度逐帧只读——旧实现每帧约 4 次
     /// 整行 NSString shaping/量宽，是歌词条拖动卡帧主因之一。
@@ -73,20 +81,17 @@ private final class SweepLyricLineView: UIView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        for label in [dimLabel, brightLabel] {
-            label.textAlignment = .center
+        for label in [dimLabel, brightLabel, frontLabel] {
+            label.textAlignment = .left
             label.textColor = .white
-            // (61) WC：与非当前行同源阴影保障对齐（黑影 0.85/2pt）——
-            // 此前阴影只在 plain 行标签上（LyricWindowView init），
-            // 扫光行两标签无影，压亮封面时当前行同样被吃。
-            label.layer.shadowColor = UIColor.black.cgColor
-            label.layer.shadowOpacity = 0.85
-            label.layer.shadowRadius = 2
-            label.layer.shadowOffset = .zero
+            // (97) 第 10 条：当前行无字形阴影（样板 .cur
+            // text-shadow:none），光晕走容器 drop-shadow。
+            label.layer.shadowOpacity = 0
             addSubview(label)
         }
-        dimLabel.alpha = 0.38
+        dimLabel.alpha = 1
         maskLayer.backgroundColor = UIColor.black.cgColor
+        frontMaskLayer.backgroundColor = UIColor.black.cgColor
         // 扫光迟滞摘除（3.7 (44) 呈现层审计）：progress 每帧改
         // mask frame，未禁隐式动画时被 CALayer 默认 0.25s 隐式
         // 动画低通——扫光边恒定拖尾约 250ms（位置量本身逐帧
@@ -94,7 +99,29 @@ private final class SweepLyricLineView: UIView {
         // 与 progress 同帧到位，拖尾 250ms → 0。
         maskLayer.actions = ["bounds": NSNull(), "position": NSNull(),
                              "anchorPoint": NSNull()]
+        frontMaskLayer.actions = maskLayer.actions
         brightLabel.layer.mask = maskLayer
+        frontLabel.layer.mask = frontMaskLayer
+        applyStyle97(light: false)
+    }
+
+    /// (97) 第 10 条配色（样板渐变三段）：深封面＝已唱纯白／
+    /// 前锋暖金 #FFE9AD／未唱白 48%；浅封面＝已唱深红
+    /// #C8102E／前锋暖橙 #FF7847／未唱深炭 42%。
+    func applyStyle97(light: Bool) {
+        if light {
+            dimLabel.textColor = UIColor(red: 35 / 255, green: 33 / 255,
+                blue: 38 / 255, alpha: 0.42)
+            brightLabel.textColor = UIColor(red: 200 / 255, green: 16 / 255,
+                blue: 46 / 255, alpha: 1)
+            frontLabel.textColor = UIColor(red: 1, green: 120 / 255,
+                blue: 71 / 255, alpha: 1)
+        } else {
+            dimLabel.textColor = UIColor.white.withAlphaComponent(0.48)
+            brightLabel.textColor = .white
+            frontLabel.textColor = UIColor(red: 1, green: 233 / 255,
+                blue: 173 / 255, alpha: 1)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -102,6 +129,7 @@ private final class SweepLyricLineView: UIView {
     func setText(_ attributed: NSAttributedString) {
         dimLabel.attributedText = attributed
         brightLabel.attributedText = attributed
+        frontLabel.attributedText = attributed
         // 整行宽一次量好缓存（量宽口径与旧 updateMask 逐帧量
         // 宽逐字一致：同一属性集、ceil 取整）。
         if attributed.length > 0 {
@@ -126,12 +154,7 @@ private final class SweepLyricLineView: UIView {
         super.layoutSubviews()
         dimLabel.frame = bounds
         brightLabel.frame = bounds
-        // (62) 尾波第 4 组：阴影给静态路径——歌词条拖动跟随时
-        // 标签 frame 逐帧变，无 shadowPath 的阴影须逐帧离屏重
-        // 栅格；bounds 即阴影形状（整行矩形），布局时设一次。
-        let path = UIBezierPath(rect: bounds).cgPath
-        dimLabel.layer.shadowPath = path
-        brightLabel.layer.shadowPath = path
+        frontLabel.frame = bounds
         updateMask()
     }
 
@@ -139,14 +162,28 @@ private final class SweepLyricLineView: UIView {
         guard bounds.width > 0,
               let text = dimLabel.attributedText, text.length > 0 else {
             maskLayer.frame = .zero
+            frontMaskLayer.frame = .zero
             return
         }
+        // (97) 第 10 条：左对齐口径——文本自帧左缘起（行首
+        // 留白由宿主给行帧内缩），扫光起点恒 0。
         let textWidth = cachedTextWidth
         let span = min(textWidth, bounds.width)
-        let startX = textWidth >= bounds.width ? 0 : (bounds.width - textWidth) / 2
-        maskLayer.frame = CGRect(x: startX, y: 0,
-                                 width: span * CGFloat(progress),
+        let frontier = span * CGFloat(progress)
+        // 前锋带：样板渐变的前锋色段约当前锋位 −9%～+4%
+        // （占行宽 13%）；已唱段止于带左缘。
+        let band = span * 0.13
+        let fillEnd = max(0, frontier - band * (9.0 / 13.0))
+        maskLayer.frame = CGRect(x: 0, y: 0,
+                                 width: fillEnd,
                                  height: bounds.height)
+        if progress > 0, progress < 0.999 {
+            frontMaskLayer.frame = CGRect(x: fillEnd, y: 0,
+                                          width: min(band, span - fillEnd),
+                                          height: bounds.height)
+        } else {
+            frontMaskLayer.frame = .zero
+        }
     }
 }
 
@@ -166,10 +203,96 @@ private final class LyricSweepLinkProxy: NSObject {
     }
 }
 
+/// (97) 第 10 条：邻行景深行——文本离屏渲染成图后按距施
+/// 高斯模糊（样板 TrueFocus 式衰减：|d|=1 模糊 0.7、|d|=2
+/// 1.8、|d|≥3 3pt）。UILabel 本体无模糊通道，故走图化：
+/// 行内容只在翻行/宽度/模式变化时重渲（非逐帧），成本可控；
+/// 阴影随图一并烘焙（模式决定：深封面黑影、浅封面白晕）。
+private final class LyricBlurRow97: UIView {
+    private let imageView = UIImageView()
+    private var attributed: NSAttributedString?
+    private var blur: CGFloat = 0
+    private var shadowColor: UIColor = .black
+    private var shadowOpacity: Float = 0
+    private var shadowRadius: CGFloat = 0
+    private var renderKey = ""
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        isUserInteractionEnabled = false
+        imageView.contentMode = .scaleToFill
+        addSubview(imageView)
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    func setText97(_ attributed: NSAttributedString, blur: CGFloat,
+                   shadowColor: UIColor, shadowOpacity: Float,
+                   shadowRadius: CGFloat) {
+        self.attributed = attributed
+        self.blur = blur
+        self.shadowColor = shadowColor
+        self.shadowOpacity = shadowOpacity
+        self.shadowRadius = shadowRadius
+        renderIfNeeded()
+    }
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        renderIfNeeded()
+    }
+
+    private func renderIfNeeded() {
+        guard bounds.width > 0, bounds.height > 0,
+              let attributed else { imageView.image = nil; return }
+        let key = "\(attributed.hash)|\(blur)|\(Int(bounds.width))x\(Int(bounds.height))|\(shadowOpacity)|\(shadowColor.hashValue)"
+        guard key != renderKey else { return }
+        renderKey = key
+        if attributed.length == 0 { imageView.image = nil; return }
+        let pad = blur * 3 + shadowRadius * 2 + 4
+        let size = CGSize(width: bounds.width + pad * 2,
+                          height: bounds.height + pad * 2)
+        let label = UILabel()
+        label.attributedText = attributed
+        label.textAlignment = .left
+        label.layer.shadowColor = shadowColor.cgColor
+        label.layer.shadowOpacity = shadowOpacity
+        label.layer.shadowRadius = shadowRadius
+        label.layer.shadowOffset = CGSize(width: 0, height: 1)
+        label.frame = CGRect(x: pad, y: pad,
+                             width: bounds.width, height: bounds.height)
+        let holder = UIView(frame: CGRect(origin: .zero, size: size))
+        holder.addSubview(label)
+        var image = UIGraphicsImageRenderer(size: size).image { ctx in
+            holder.layer.render(in: ctx.cgContext)
+        }
+        if blur > 0,
+           let ci = CIImage(image: image),
+           let filter = CIFilter(name: "CIGaussianBlur", parameters: [
+               kCIInputImageKey: ci, kCIInputRadiusKey: blur]),
+           let out = filter.outputImage {
+            let ctx = CIContext(options: nil)
+            if let cg = ctx.createCGImage(out, from: ci.extent) {
+                image = UIImage(cgImage: cg, scale: image.scale,
+                                orientation: .up)
+            }
+        }
+        imageView.image = image
+        imageView.frame = CGRect(x: -pad, y: -pad,
+                                 width: size.width, height: size.height)
+    }
+}
+
 /// 展开卡滚动歌词窗口（包一 P2/P3：自 WallPosterCell 搬家）：独立
 /// overlay 视图，不随 cell 复用生灭；渲染栈与视觉参数（字号公式、
 /// 6 行窗、alpha 梯度、扫光、呼吸、时长夹取）与旧 cell 实现逐字
 /// 一致，只换宿主与扫光时钟来源（VC 注入的插值时钟）。
+/// (97) 第 10 条视觉换代（样板 cover-lyric-apple-style 定版，
+/// 旧 Songti/居中/黑影口径退役）：封面在场、仅横带羽化轻罩
+/// （罩色随封面明暗）、左对齐、当前行 800 字重＋三段填充
+/// （已唱/前锋/未唱）＋容器光晕、邻行按距衰减（透明＋模糊
+/// ＋缩放）、行迁移 0.62s 样板贝塞尔曲线。窗口/滑行/扫光时
+/// 钟机制不动（(41) 解耦口径保留：当前行同帧落位、邻行滑行）。
 final class LyricWindowView: UIView {
 
     /// 扫光时钟（VC 注入 = 插值时钟）：扫光据此推进，暂停即冻结。
@@ -182,8 +305,16 @@ final class LyricWindowView: UIView {
     private let lyricGradient = CAGradientLayer()
     private let lyricClipView = UIView()
     private let lyricLinesContainer = UIView()
-    private var lyricPlainLabels: [Int: UILabel] = [:]
+    private var lyricPlainLabels: [Int: LyricBlurRow97] = [:]
     private let lyricSweepView = SweepLyricLineView()
+    /// (97) 第 10 条：封面明暗模式（宿主采样歌词横带亮度后
+    /// 经 applyCoverMode97 下发；默认深封面口径）。
+    private(set) var coverLight97 = false
+    /// (97) 第 10 条：当前行字阶缩放（样板 cur scale 1.12，
+    /// 与呼吸动画共用 transform，故收口为基准值）。
+    private let sweepScale97: CGFloat = 1.12
+    /// (97) 第 10 条：邻行按距缩放表（行号 → scale）。
+    private var rowScales97: [Int: CGFloat] = [:]
     private var lyricTexts: [String] = []
     private var lyricLineHeight: CGFloat = 27
     private var lyricCurrentFontSize: CGFloat = 16
@@ -208,14 +339,11 @@ final class LyricWindowView: UIView {
         super.init(frame: frame)
         isUserInteractionEnabled = false
 
-        // 柔光罩（歌词区可读性垫层）+ 裁剪窗 + 6 行容器（行 2 = 扫光行）。
+        // (97) 第 10 条：横带羽化轻罩（整卡幅、罩在文字之
+        // 下、上下羽化为 0）+ 裁剪窗 + 6 行容器（行 2 = 扫光
+        // 行）。罩的 6 档渐变与配色在 applyCoverMode97 收口。
         lyricScrimView.isHidden = true
-        lyricScrimView.layer.cornerRadius = 10
         lyricScrimView.clipsToBounds = true
-        lyricGradient.colors = [
-            UIColor.black.withAlphaComponent(0.30).cgColor,
-            UIColor.black.withAlphaComponent(0.08).cgColor
-        ]
         lyricScrimView.layer.addSublayer(lyricGradient)
         addSubview(lyricScrimView)
 
@@ -227,23 +355,57 @@ final class LyricWindowView: UIView {
             if row == 2 {
                 lyricLinesContainer.addSubview(lyricSweepView)
             } else {
-                let label = UILabel()
-                label.textAlignment = .center
-                label.textColor = .white
-                label.layer.shadowColor = UIColor.black.cgColor
-                label.layer.shadowOpacity = 0.85
-                label.layer.shadowRadius = 2
-                label.layer.shadowOffset = .zero
+                let label = LyricBlurRow97()
                 lyricPlainLabels[row] = label
                 lyricLinesContainer.addSubview(label)
             }
         }
+        applyCoverMode97(light: false)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     deinit {
         sweepDisplayLink?.invalidate()
+    }
+
+    /// (97) 第 10 条：封面明暗模式下发（宿主按样板规则采样
+    /// 歌词横带亮度：L≥0.35 判浅）。收口三处：横带罩渐变
+    /// （深＝黑罩 0/.34/.44/.38/.16/0、浅＝白罩
+    /// 0/.36/.50/.42/.18/0，档位 20/34/50/66/76/86%）、扫
+    /// 光行三段配色、当前行容器光晕（深＝暖金光、浅＝暖橙
+    /// 光，radius 7）；邻行配色/阴影在 renderLyricWindow 按
+    /// 本模式烘焙进图。模式变更即重渲现窗。
+    func applyCoverMode97(light: Bool) {
+        coverLight97 = light
+        let veil: UIColor = light ? .white : .black
+        let alphas: [CGFloat] = light
+            ? [0, 0, 0.36, 0.50, 0.42, 0.18, 0, 0]
+            : [0, 0, 0.34, 0.44, 0.38, 0.16, 0, 0]
+        lyricGradient.colors = alphas.map {
+            veil.withAlphaComponent($0).cgColor
+        }
+        lyricGradient.locations = [0, 0.20, 0.34, 0.50, 0.66, 0.76, 0.86, 1]
+        lyricGradient.startPoint = CGPoint(x: 0.5, y: 0)
+        lyricGradient.endPoint = CGPoint(x: 0.5, y: 1)
+        lyricSweepView.applyStyle97(light: light)
+        // 当前行 drop-shadow 光晕（样板 .cur filter）：跟随
+        // 文本 alpha 轮廓，非矩形投影。
+        lyricSweepView.layer.shadowColor = light
+            ? UIColor(red: 1, green: 110 / 255, blue: 64 / 255, alpha: 1).cgColor
+            : UIColor(red: 1, green: 238 / 255, blue: 190 / 255, alpha: 1).cgColor
+        lyricSweepView.layer.shadowOpacity = light ? 0.45 : 0.5
+        lyricSweepView.layer.shadowRadius = 7
+        lyricSweepView.layer.shadowOffset = .zero
+        if !lyricTexts.isEmpty { renderLyricWindow() }
+    }
+
+    /// (97) 第 10 条：行 transform 收口 = 距衰减缩放 ∘ 滑行
+    /// 位移（滑行时 slideY=行高、落位 0）。
+    private func rowTransform97(row: Int, slideY: CGFloat) -> CGAffineTransform {
+        let s = rowScales97[row] ?? 1
+        return CGAffineTransform(translationX: 0, y: slideY)
+            .concatenating(CGAffineTransform(scaleX: s, y: s))
     }
 
     /// 等价旧 cell 的空窗口下发：整组收起并停扫光。
@@ -254,10 +416,11 @@ final class LyricWindowView: UIView {
         lyricLinesContainer.transform = .identity
         for row in 0..<6 where row != 2 {
             lyricPlainLabels[row]?.layer.removeAllAnimations()
-            lyricPlainLabels[row]?.transform = .identity
+            lyricPlainLabels[row]?.transform = rowTransform97(row: row, slideY: 0)
         }
         lyricSweepView.layer.removeAllAnimations()
-        lyricSweepView.transform = .identity
+        lyricSweepView.transform = CGAffineTransform(
+            scaleX: sweepScale97, y: sweepScale97)
         lyricSweepView.progress = 0
     }
 
@@ -310,30 +473,44 @@ final class LyricWindowView: UIView {
             // 容器滑行里扫光行要等 0.18s 走完才停稳在行 2，
             // 人眼判「换行完成」恒晚约 0.1s 级，与翻行面包
             // 屑的准点并存——本版把这段拖尾从当前行身上摘掉。
+            // (97) 第 10 条：行迁移曲线换样板定版 0.62s
+            // cubic-bezier(.32,.72,.24,1)（系统弹簧感），经
+            // UIViewPropertyAnimator 的 UICubicTimingParameters
+            // 精确落曲线；位移与距衰减缩放经 rowTransform97
+            // 复合，落位值非 identity 而是各行衰减缩放。
             for row in 0..<6 where row != 2 {
                 lyricPlainLabels[row]?.transform =
-                    CGAffineTransform(translationX: 0, y: lyricLineHeight)
+                    rowTransform97(row: row, slideY: lyricLineHeight)
             }
-            UIView.animate(withDuration: 0.18, delay: 0,
-                           options: [.curveEaseOut]) {
+            let slideAnimator97 = UIViewPropertyAnimator(
+                duration: 0.62,
+                timingParameters: UICubicTimingParameters(
+                    controlPoint1: CGPoint(x: 0.32, y: 0.72),
+                    controlPoint2: CGPoint(x: 0.24, y: 1)))
+            slideAnimator97.addAnimations {
                 for row in 0..<6 where row != 2 {
-                    self.lyricPlainLabels[row]?.transform = .identity
-                }
-            } completion: { finished in
-                // 被打断（finished=false）时打断方已接管 transform
-                // 与内容（非滑行路径/removeAllAnimations），此处
-                // 不再触碰任何状态——保留防行窗双写的守卫语义。
-                guard finished else { return }
-                for row in 0..<6 where row != 2 {
-                    self.lyricPlainLabels[row]?.transform = .identity
+                    self.lyricPlainLabels[row]?.transform =
+                        self.rowTransform97(row: row, slideY: 0)
                 }
             }
+            slideAnimator97.addCompletion { position in
+                // 被打断（position 非 .end）时打断方已接管
+                // transform 与内容，此处不触碰任何状态——保
+                // 留防行窗双写的守卫语义（旧 completion 同款）。
+                guard position == .end else { return }
+                for row in 0..<6 where row != 2 {
+                    self.lyricPlainLabels[row]?.transform =
+                        self.rowTransform97(row: row, slideY: 0)
+                }
+            }
+            slideAnimator97.startAnimation()
         } else {
             lyricLinesContainer.layer.removeAllAnimations()
             lyricLinesContainer.transform = .identity
             for row in 0..<6 where row != 2 {
                 lyricPlainLabels[row]?.layer.removeAllAnimations()
-                lyricPlainLabels[row]?.transform = .identity
+                lyricPlainLabels[row]?.transform =
+                    rowTransform97(row: row, slideY: 0)
             }
             renderLyricWindow()
             if lineActive {
@@ -348,15 +525,33 @@ final class LyricWindowView: UIView {
     }
 
     private func renderLyricWindow() {
-        // (61) WC：非当前行 alpha 下限 0.45（原梯度 0.28/0.45）。
-        let alphas: [CGFloat] = [0.45, 0.45, 1, 0.45, 0.45, 0.45]
+        // (97) 第 10 条：距衰减表（样板 TrueFocus 口径）——
+        // |d|=1: op .66/blur .7/scale 1；|d|=2: .40/1.8/.97；
+        // |d|≥3: .26/3/.95；已唱行（d<0）op +0.08。
+        // 行序：0,1 为已唱侧（d=-2,-1），3,4,5 为未唱（+1,+2,+3）。
+        let decay97: [Int: (op: CGFloat, blur: CGFloat, scale: CGFloat)] = [
+            0: (0.48, 1.8, 0.97),
+            1: (0.74, 0.7, 1.0),
+            3: (0.66, 0.7, 1.0),
+            4: (0.40, 1.8, 0.97),
+            5: (0.26, 3.0, 0.95),
+        ]
         for row in 0..<6 {
             let text = row < lyricTexts.count ? lyricTexts[row] : ""
             if row == 2 {
                 lyricSweepView.setText(lyricAttributed(text, center: true))
+                lyricSweepView.transform = CGAffineTransform(
+                    scaleX: sweepScale97, y: sweepScale97)
             } else if let label = lyricPlainLabels[row] {
-                label.attributedText = lyricAttributed(text, center: false)
-                label.alpha = alphas[row]
+                let d = decay97[row] ?? (0.45, 0, 1)
+                rowScales97[row] = d.scale
+                label.setText97(lyricAttributed(text, center: false),
+                                blur: d.blur,
+                                shadowColor: coverLight97 ? .white : .black,
+                                shadowOpacity: coverLight97 ? 0.8 : 0.45,
+                                shadowRadius: coverLight97 ? 5 : 4)
+                label.alpha = d.op
+                label.transform = rowTransform97(row: row, slideY: 0)
             }
         }
         // 逐字前缀宽表随本次渲染一并算好（量宽口径与旧逐帧
@@ -379,19 +574,27 @@ final class LyricWindowView: UIView {
         }
     }
 
-    /// Songti 排版（唱片内页感）：当前行粗体 + 字距 1.2，邻行细体
-    /// + 字距 0.6；字体名取不到时回系统粗/细体（DS27 定版）。
+    /// (97) 第 10 条排版（样板口径）：系统字重——当前行
+    /// 800（.heavy）、邻行 600（.semibold）同字号（大小差
+    /// 距由距衰减缩放承担）；字距 .02em。当前行不带
+    /// .foregroundColor 属性（三段配色由 SweepLyricLineView
+    /// 的 label textColor 决定，属性会盖掉它）；邻行配色
+    /// 烘焙进属性串（深封面白 .9／浅封面深炭 .88）。
     private func lyricAttributed(_ text: String, center: Bool) -> NSAttributedString {
-        let font: UIFont = center
-            ? (UIFont(name: "STSongti-SC-Bold", size: lyricCurrentFontSize)
-               ?? .systemFont(ofSize: lyricCurrentFontSize, weight: .bold))
-            : (UIFont(name: "STSongti-SC-Light", size: lyricNeighborFontSize)
-               ?? .systemFont(ofSize: lyricNeighborFontSize, weight: .light))
-        return NSAttributedString(string: text, attributes: [
+        let font = center
+            ? UIFont.systemFont(ofSize: lyricCurrentFontSize, weight: .heavy)
+            : UIFont.systemFont(ofSize: lyricCurrentFontSize, weight: .semibold)
+        var attributes: [NSAttributedString.Key: Any] = [
             .font: font,
-            .foregroundColor: UIColor.white,
-            .kern: center ? 1.2 : 0.6
-        ])
+            .kern: lyricCurrentFontSize * 0.02
+        ]
+        if !center {
+            attributes[.foregroundColor] = coverLight97
+                ? UIColor(red: 35 / 255, green: 33 / 255,
+                          blue: 38 / 255, alpha: 0.88)
+                : UIColor.white.withAlphaComponent(0.9)
+        }
+        return NSAttributedString(string: text, attributes: attributes)
     }
 
     /// 扫光起跑：CADisplayLink 每帧按引擎时钟算进度（0.3 秒心跳
@@ -489,16 +692,21 @@ final class LyricWindowView: UIView {
     }
 
     /// 呼吸缩放：只作用当前行视图，滑入落位后 1.04 弹簧落回。
+    /// (97) 第 10 条：基准缩放改样板字阶 1.12（呼吸在其上叠
+    /// ±4%），不再以 identity 为落点。
     private func playLyricBreathing() {
         lyricSweepView.layer.removeAllAnimations()
-        lyricSweepView.transform = .identity
+        lyricSweepView.transform = CGAffineTransform(
+            scaleX: sweepScale97, y: sweepScale97)
         UIView.animate(withDuration: 0.10, delay: 0, options: [.curveEaseOut]) {
-            self.lyricSweepView.transform = CGAffineTransform(scaleX: 1.04, y: 1.04)
+            self.lyricSweepView.transform = CGAffineTransform(
+                scaleX: self.sweepScale97 * 1.04, y: self.sweepScale97 * 1.04)
         } completion: { _ in
             UIView.animate(withDuration: 0.22, delay: 0,
                            usingSpringWithDamping: 0.6, initialSpringVelocity: 0.3,
                            options: []) {
-                self.lyricSweepView.transform = .identity
+                self.lyricSweepView.transform = CGAffineTransform(
+                    scaleX: self.sweepScale97, y: self.sweepScale97)
             }
         }
     }
@@ -519,20 +727,23 @@ final class LyricWindowView: UIView {
         let lyricTop = bounds.height * 0.40 - lyricLineHeight * 2.5
         let clipFrame = CGRect(x: 10, y: lyricTop, width: clipWidth,
                                height: lyricLineHeight * 5)
-        lyricScrimView.frame = clipFrame
+        // (97) 第 10 条：轻罩改整卡幅（羽化带相对卡高定位，
+        // 样板档位 20–86%），不再只罩 clip 帧。
+        lyricScrimView.frame = bounds
         lyricGradient.frame = lyricScrimView.bounds
         lyricClipView.frame = clipFrame
         lyricLinesContainer.frame = CGRect(x: 0, y: 0, width: clipWidth,
                                            height: lyricLineHeight * 6)
+        // (97) 第 10 条：行帧左对齐内缩 8%（样板 padding-left
+        // 8cqw），文本自左缘起、扫光同口径。
+        let rowInset97 = clipWidth * 0.08
         for row in 0..<6 {
-            let frame = CGRect(x: 0, y: CGFloat(row) * lyricLineHeight,
-                               width: clipWidth, height: lyricLineHeight)
+            let frame = CGRect(x: rowInset97, y: CGFloat(row) * lyricLineHeight,
+                               width: clipWidth - rowInset97,
+                               height: lyricLineHeight)
             if row == 2 { lyricSweepView.frame = frame }
             else if let label = lyricPlainLabels[row] {
                 label.frame = frame
-                // (62) 尾波第 4 组：邻行标签阴影同样给静态路
-                // 径（整行矩形），免拖动跟随时逐帧离屏重栅格。
-                label.layer.shadowPath = UIBezierPath(rect: label.bounds).cgPath
             }
         }
     }

@@ -82,7 +82,11 @@ final class MiniBarQuickRowView: UIView {
     /// 圆封面＋歌名/歌手＋四钮一行＋进度细轨贴下沿），三
     /// 宿主同源跟随、本常量仍是唯一出处；宿主内部构成按
     /// (95) 第 11 条统一规格在各宿主文件重排。
-    static let expandedBarHeight: CGFloat = 62
+    /// (97) 第 5 条：Miller (96) 真机令台面再做大一点——
+    /// 展开高 62→72（＋16%），三宿主同源跟随；胶囊圆角
+    /// 随高改 36（=高/2 的 pill 口径，三宿主 bar/blur/tint
+    /// 与形态回写共 12 处已同步）。
+    static let expandedBarHeight: CGFloat = 72
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?

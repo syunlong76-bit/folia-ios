@@ -590,8 +590,25 @@ final class BridgeLog62ViewController: UIViewController {
             textView.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -12),
         ])
 
+        // (97) 件一续修：与主查看器（BridgeLogViewController）
+        // 同口径——段序一致：上一会话全量快照 → fx 事件 →
+        // 本会话（全量 cap 100_000，会话头 `p96 session
+        // begin` 必然在内）。全量/fx 两段恒在，缺席时显式
+        // 标注行，与主查看器逐字一致。
+        let prevFull = FoliaBridgeLogStore.shared.prevSessionFullText()
+        let fxEvents = FoliaBridgeLogStore.shared.fxEventsText()
         let full = FoliaBridgeLogStore.shared.recentLogText(maxLines: 100_000)
-        allLines = full.isEmpty ? [] : full.split(separator: "\n").map(String.init)
+        var combined: [String] = ["—— 上一会话全量 ——"]
+        combined += (prevFull ?? "prev-session-full: empty")
+            .split(separator: "\n").map(String.init)
+        combined.append("—— 特效事件 ——")
+        combined += (fxEvents ?? "fx events: none")
+            .split(separator: "\n").map(String.init)
+        combined.append("—— 本会话 ——")
+        if !full.isEmpty {
+            combined += full.split(separator: "\n").map(String.init)
+        }
+        allLines = combined
         page = max(0, Int(ceil(Double(allLines.count) / Double(pageSize))) - 1)
         renderPage()
         Breadcrumbs.log("bridgelog62.open lines=\(allLines.count)")

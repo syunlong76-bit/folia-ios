@@ -83,6 +83,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 歌词窗口去重与滑入判定：同曲且索引恰好 +1 才滑入，其余 snap。
     private var lastLyricTrackId: String?
     private var lastLyricIndex: Int?
+    /// (97) 第 10 条：封面横带亮度判定缓存（trackId → 是否
+    /// 浅封面）与在途/节流表（采样走后台队列、每曲只算一次）。
+    private var bandLumCache97: [String: Bool] = [:]
+    private var bandLumPending97 = Set<String>()
+    private var bandLumLastTry97: [String: CFTimeInterval] = [:]
     /// 前奏预告态去重（3.7 (13) #2）：同 idx 下 active 翻转要重下发。
     private var lastLyricActive = true
     /// 翻行分段埋点（3.7 (23)）：judge 判定提交翻行后记
@@ -148,6 +153,15 @@ final class WallPrototypeViewController: UIViewController,
     /// （p96GuardDeferred91），数据到达重验成功互换后清零。
     private var p96LayoutRetryUsed91 = false
     private var p96GuardDeferred91 = false
+    /// (97) 第 11 条：排版切换计时（begin 落点 switch 入口、
+    /// end 收口 p94EndWallSwitch）。
+    private var p97LayoutT0: CFTimeInterval = 0
+    private var p97LayoutFrom = -1
+    private var p97LayoutTo = -1
+    /// (97) 第 11 条：数据落地时墙（mode 0）隐藏而跳过其
+    /// reloadData 的待办旗——切回 mode 0 时由 p94Reanchor-
+    /// Wall 补刷（与 identity 变更的 reload 条件取或）。
+    private var wallReloadPending97 = false
     /// port91 顶部段控成员（layoutSwitch91/layoutSwitchButtons91）
     /// 已随 (92) 任务 11 撤除：版式切换移主页缝，见 installPlaylistLayout91。
     private var magazineTable91: UITableView?
@@ -633,7 +647,7 @@ final class WallPrototypeViewController: UIViewController,
         let bar = MiniBarHitView()
         bar.backgroundColor = .clear
         // (95) 第 11 条：胶囊台身圆角 35→31（高 62 的 pill）。
-        bar.layer.cornerRadius = 31
+        bar.layer.cornerRadius = 36
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -700,7 +714,7 @@ final class WallPrototypeViewController: UIViewController,
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = 31
+        blur.layer.cornerRadius = 36
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -754,7 +768,7 @@ final class WallPrototypeViewController: UIViewController,
         miniRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = 31
+        glassTint.layer.cornerRadius = 36
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -1034,7 +1048,7 @@ final class WallPrototypeViewController: UIViewController,
             // 把手底边 = 台底 −1，不露胶囊下沿；旧锚轨心时
             // 底边出台底 3.5pt，见 S4-1）。收起态台高 16 时
             // 中心同为 8，与轨心重合、无形态差。
-            knob.centerYAnchor.constraint(equalTo: bar.bottomAnchor, constant: -8),
+            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             knob.widthAnchor.constraint(equalToConstant: 14),
             knob.heightAnchor.constraint(equalToConstant: 14),
 
@@ -1537,14 +1551,14 @@ final class WallPrototypeViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniConsoleButton.frame.contains(point) { return }
-        // 进度带分域（标题优先于进度带，与旧封面分发序一致）。
-        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
-            Breadcrumbs.log("minibar.tap host=wallproto zone=seekband action=skip")
-            return
-        }
-        // (62) 尾波第 5 组：封面区单击换动作——回封面播放页，
-        // 不再与台身同走浮层开关。
-        if miniTitle.frame.contains(point) {
+        // (97) 第 8 条：定位区扩为身份簇（封面＋标题＋歌手）
+        // 并前置——旧判定只认标题文字帧，点封面落空走控制
+        // 台、定位从未触发（与主页墙同修）；命中落 p97 自
+        // 证，下游 locate82/locate86 续证。
+        if miniCover.frame.contains(point)
+            || miniTitle.frame.contains(point)
+            || miniArtist.frame.contains(point) {
+            Breadcrumbs.log("p97 locate tap host=wall")
             // (82) 第 3 条：与主页墙统一语义落痕——本墙有
             // 当前曲即本墙定位（via=self）。
             if let currentId = PlaybackEngine.shared.currentTrack?.id {
@@ -1552,6 +1566,11 @@ final class WallPrototypeViewController: UIViewController,
             }
             Breadcrumbs.log("minibar.tap host=wallproto zone=cover action=locate")
             locateCurrentTrack()
+            return
+        }
+        // 进度带分域（标题优先于进度带，与旧封面分发序一致）。
+        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
+            Breadcrumbs.log("minibar.tap host=wallproto zone=seekband action=skip")
             return
         }
         // (82) 第 8 条：台身空白单击改开控制台面板（旧浮
@@ -1583,7 +1602,7 @@ final class WallPrototypeViewController: UIViewController,
             DblTap83.step("wall", "skipbtn")
             return
         }
-        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
+        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point), !miniCover.frame.contains(point), !miniArtist.frame.contains(point) {
             Breadcrumbs.log("minibar.doubletap host=wallproto zone=seekband action=skip")
             DblTap83.step("wall", "skipseek")
             return
@@ -1625,7 +1644,10 @@ final class WallPrototypeViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniConsoleButton.frame.contains(point) { return }
-        if miniTitle.frame.contains(point) { return }
+        // (97) 第 8 条：身份簇不 seek（同主页墙）。
+        if miniCover.frame.contains(point)
+            || miniTitle.frame.contains(point)
+            || miniArtist.frame.contains(point) { return }
         guard miniSeekHit.frame.contains(point) else { return }
         let track = miniProgressTrack.frame
         let engine = PlaybackEngine.shared
@@ -1683,6 +1705,8 @@ final class WallPrototypeViewController: UIViewController,
             // 收起态不响应拖动（3.7 (21)）：细条只认点按展开。
             if miniBarCollapsed { return }
             if miniTitle.frame.contains(barPoint)
+                || miniCover.frame.contains(barPoint)
+                || miniArtist.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint)
@@ -2002,7 +2026,7 @@ final class WallPrototypeViewController: UIViewController,
         // 起态不再压平（同主页墙）。
         miniProgressKnob.transform = .identity
         // (95) 第 11 条：展开圆角随台身 31（收起 8 不动）。
-        let radius: CGFloat = collapsed ? 8 : 31
+        let radius: CGFloat = collapsed ? 8 : 36
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
         // 收起态命中带（3.7 (21.1)）：视觉仍 16pt，纵向命中
@@ -2027,6 +2051,13 @@ final class WallPrototypeViewController: UIViewController,
         // 命中带禁交互，堵其截走细条中央带展开点按的盲区。
         miniSeekHit.isUserInteractionEnabled = !collapsed
         Breadcrumbs.log("seek85 host=wall hit=\(collapsed ? 0 : 1)")
+        // (97) 第 5 条自证：圆点与轨道中心距（同主页口径）。
+        if let bar = miniBar {
+            bar.layoutIfNeeded()
+            let dy = abs(miniProgressKnob.center.y - miniProgressTrack.center.y)
+            Breadcrumbs.log("p97 knob wall dy=\(String(format: "%.1f", dy))"
+                + " col=\(collapsed ? 1 : 0)")
+        }
         // (63) 第 2 条形态面包屑（与主页墙同构）：标志/几何
         // 高/三识别器启停位同行落盘，供失同步判读。
         Breadcrumbs.log("minibar.form host=wallproto collapsed=\(collapsed ? 1 : 0)"
@@ -3095,6 +3126,8 @@ final class WallPrototypeViewController: UIViewController,
                     Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl, subtitle: $0.artists)
                 }
                 await MainActor.run {
+                    // (97) 第 11 条：种子装配主线程段计时自证。
+                    let p97SeedT0 = CACurrentMediaTime()
                     self.nativeTracks = detail.tracks
                     self.allTrackIds = detail.trackIds
                     self.entries = seed
@@ -3106,7 +3139,17 @@ final class WallPrototypeViewController: UIViewController,
                     // 撤胶囊）：种子落地无任何上屏文案，背板退场、
                     // 墙面即反馈。
                     self.wallLayout.refreshInstances()
-                    self.collectionView.reloadData()
+                    // (97) 第 11 条优化（不改变行为）：A/B 版式
+                    // 在场时墙本体隐藏——跳过其 reloadData（视
+                    // 图侧全量重排是装配主线程大头之一），置待
+                    // 办旗，切回 mode 0 时 p94ReanchorWall 补刷；
+                    // 实例集已在上行刷新、定位/切换读的是数据
+                    // 侧，不受影响。
+                    if self.playlistLayout91 == 0 {
+                        self.collectionView.reloadData()
+                    } else {
+                        self.wallReloadPending97 = true
+                    }
                     self.reloadAltPlaylist91()
                     // (96) B-2：数据到达后重验——守卫曾因 vis==0
                     // 拦下目标视图时（p96GuardDeferred91），晚到
@@ -3127,6 +3170,11 @@ final class WallPrototypeViewController: UIViewController,
                     self.loadAttempts = 0
                     self.loadFailed = false
                     Breadcrumbs.log("tracks seed ok n=\(seed.count)/\(total)")
+                    // (97) 第 11 条：装配耗时收口（refresh/reload
+                    // 等主线程段合计；与 p97 layout apply 对读）。
+                    Breadcrumbs.log("p97 seed asm ms="
+                        + "\(Int((CACurrentMediaTime() - p97SeedT0) * 1000))"
+                        + " n=\(seed.count) mode=\(self.playlistLayout91)")
                     self.seedReady = true
                     self.flushSeedWaiters()
                     // (62) 尾波第 5 组：待定位且已呈现 → 此刻飞；
@@ -3140,7 +3188,12 @@ final class WallPrototypeViewController: UIViewController,
                     // (83) 黑屏定案③：入墙预热——种子落地即
                     // 把在场实例环封面按已解码档批量喂缓存
                     // （pf83 src=warm）。
-                    self.prefetchWall83(dirX: 0, dirY: 0, source: "warm")
+                    // (97) 第 11 条：预热推迟一轮 runloop——不
+                    // 与装配同帧抢主线程/解码并发，首帧先落地；
+                    // 预热本身是缓存优化、迟一拍不改变行为。
+                    DispatchQueue.main.async { [weak self] in
+                        self?.prefetchWall83(dirX: 0, dirY: 0, source: "warm")
+                    }
                     // 贴纸层（3.7 (24)，纯新增）：空歌单出空态贴纸。
                     if total == 0 { self.stickerShowEmptyPlaylist() }
                 }
@@ -3189,7 +3242,13 @@ final class WallPrototypeViewController: UIViewController,
                         })
                         // 分页进度文案已删（3.7 (53) L 组）：拼接
                         // 照常推进，只刷新墙面，不再上屏计数。
-                        self.collectionView.reloadData()
+                        // (97) 第 11 条：同种子落点——隐藏墙跳过
+                        // reloadData、置待办旗（切回补刷）。
+                        if self.playlistLayout91 == 0 {
+                            self.collectionView.reloadData()
+                        } else {
+                            self.wallReloadPending97 = true
+                        }
                         self.reloadAltPlaylist91()
                         // (96) B-2：分页续接同理——守卫曾拦下目标
                         // 时，新到的数据页也触发一次重验（见种子
@@ -3199,7 +3258,10 @@ final class WallPrototypeViewController: UIViewController,
                         }
                         // (83) 黑屏定案③：分页续接后新条目同
                         // 批预热（已缓存者自动跳过）。
-                        self.prefetchWall83(dirX: 0, dirY: 0, source: "warm")
+                        // (97) 第 11 条：同种子落点，推迟一轮。
+                        DispatchQueue.main.async { [weak self] in
+                            self?.prefetchWall83(dirX: 0, dirY: 0, source: "warm")
+                        }
                     }
                     if reachedEnd || !progressed { break }
                 }
@@ -3678,6 +3740,10 @@ final class WallPrototypeViewController: UIViewController,
         if anchorOutcome == .noCandidate {
             setLyricOverlayVisible(false)
         }
+        // (97) 第 10 条：封面明暗模式（采样当前曲封面横带亮
+        // 度、缓存后下发 overlay；去重 return 之前跑，保证
+        // 模式不被行去重吞掉）。
+        updateCoverMode97(track: track)
         if lastLyricTrackId == track.id, lastLyricIndex == idx,
            lastLyricActive == lineActive { return }
         if lastLyricIndex != idx || lastLyricTrackId != track.id {
@@ -3748,6 +3814,85 @@ final class WallPrototypeViewController: UIViewController,
             }
         }
         return result
+    }
+
+    /// (97) 第 10 条：封面明暗模式维护——判定命中缓存即比
+    /// 对下发；未命中且封面图已在引擎手里时后台采样一次
+    /// （每曲一次、失败 2s 节流重试）。判定落 p97 面包屑。
+    private func updateCoverMode97(track: FoliaTrack) {
+        if let light = bandLumCache97[track.id] {
+            if lyricOverlay?.coverLight97 != light {
+                lyricOverlay?.applyCoverMode97(light: light)
+            }
+            return
+        }
+        guard !bandLumPending97.contains(track.id),
+              let image = PlaybackEngine.shared.currentArtwork else { return }
+        let now = CACurrentMediaTime()
+        if let last = bandLumLastTry97[track.id], now - last < 2 { return }
+        bandLumLastTry97[track.id] = now
+        bandLumPending97.insert(track.id)
+        let id = track.id
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let lum = Self.bandLuminance97(image: image)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.bandLumPending97.remove(id)
+                guard let lum else { return }
+                let light = lum >= 0.35
+                self.bandLumCache97[id] = light
+                Breadcrumbs.log("p97 lrc mode=\(light ? "light" : "dark")"
+                    + " L=\(String(format: "%.3f", lum))")
+                if PlaybackEngine.shared.currentTrack?.id == id {
+                    self.lyricOverlay?.applyCoverMode97(light: light)
+                }
+            }
+        }
+    }
+
+    /// (97) 第 10 条：封面歌词横带亮度采样（样板规则 1:1）
+    /// ——封面按 3:4 cover 显示（position 50%/68%）绘入
+    /// 300×400，取纵向 30%–80% 横带、sRGB 线性化后
+    /// 0.2126R+0.7152G+0.0722B 的平均相对亮度；≥0.35 判浅。
+    static func bandLuminance97(image: UIImage) -> Double? {
+        guard let cg = image.cgImage else { return nil }
+        let cw = 300, ch = 400
+        let iw = Double(cg.width), ih = Double(cg.height)
+        let s = max(Double(cw) / iw, Double(ch) / ih)
+        let dw = iw * s, dh = ih * s
+        let dx = (Double(cw) - dw) * 0.5, dy = (Double(ch) - dh) * 0.68
+        var pixels = [UInt8](repeating: 0, count: cw * ch * 4)
+        guard let ctx = CGContext(
+            data: &pixels, width: cw, height: ch, bitsPerComponent: 8,
+            bytesPerRow: cw * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return nil }
+        ctx.setFillColor(UIColor.black.cgColor)
+        ctx.fill(CGRect(x: 0, y: 0, width: cw, height: ch))
+        // CG 原点左下：样板 canvas 自顶 68% 的 position 换算
+        // 为自底起的绘制原点 y = ch − dy − dh。
+        ctx.draw(cg, in: CGRect(x: dx, y: Double(ch) - dy - dh,
+                                width: dw, height: dh))
+        // 横带自顶 30%–80% ＝ 自底 20%–70%。
+        let rowLo = Int(Double(ch) * 0.20), rowHi = Int(Double(ch) * 0.70)
+        func lin(_ c: UInt8) -> Double {
+            let v = Double(c) / 255
+            return v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4)
+        }
+        var sum = 0.0, n = 0
+        for row in rowLo..<rowHi {
+            var i = (row * cw) * 4
+            let rowEnd = i + cw * 4
+            while i < rowEnd {
+                sum += 0.2126 * lin(pixels[i])
+                    + 0.7152 * lin(pixels[i + 1])
+                    + 0.0722 * lin(pixels[i + 2])
+                n += 1
+                i += 16
+            }
+        }
+        guard n > 0 else { return nil }
+        return sum / Double(n)
     }
 
     private func setLyricOverlayVisible(_ show: Bool) {
@@ -4938,8 +5083,11 @@ final class WallPosterCell: UICollectionViewCell {
         subtitleLabel.isHidden = imageOnly || !hasSubtitle || controlsVisible
         // port91（任务 9）：爱心钉封面左下（标题带上方 6pt；
         // 纯图档贴底 6pt），展开卡形态不挂（详情走卡内通路）。
+        // (97) 第 7 条：Miller (96) 真机令爱心改右下角——x 自
+        // 左 6 改右缘内 6（右上角 ➕ 日记本不动、不相撞：
+        // 日记在顶行 y=6、爱心在底部标题带上方）。
         let heartY = imageOnly ? bounds.height - 30 : titleY - 30
-        heartDisc91.frame = CGRect(x: 6, y: heartY, width: 24, height: 24)
+        heartDisc91.frame = CGRect(x: bounds.width - 30, y: heartY, width: 24, height: 24)
         heartButton91.frame = heartDisc91.frame
         let heartHidden91 = controlsVisible || !heartIsSong91
         heartDisc91.isHidden = heartHidden91
@@ -5752,6 +5900,15 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         Breadcrumbs.log("p93 layout sw=\(SeamGlyph93.layoutName93(mode))")
         guard mode != playlistLayout91 else { return }
         let oldMode = playlistLayout91
+        // (97) 第 11 条：切换全程自证——入口落 begin（from/
+        // to/src/entries），耗时由 p94EndWallSwitch 收口落
+        // end（全出口共用）；排版卡退现场仍缺席，本包只补
+        // 证、不宣称已修（待 (97) 真机日志定案）。
+        p97LayoutT0 = CACurrentMediaTime()
+        p97LayoutFrom = oldMode
+        p97LayoutTo = mode
+        Breadcrumbs.log("p97 layout begin from=\(oldMode) to=\(mode)"
+            + " src=\(src95) entries=\(entries.count)")
         // (94) 94-5 ①：切版式入口即停机——停墙 fling/减速与
         // display link 驱动、禁 bounce 残余，并捕获当前可见
         // 锚点。(93) 日志的黑屏组合证据（identity 连变＋
@@ -5899,8 +6056,12 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
     /// 模式 0 墙本体有世界相机；A/B 无此步（可见性由 ③ 把关）。
     private func p94ReanchorWall(_ ctx: P94WallSwitch) {
         guard ctx.to == 0 else { return }
-        if wallLayout.refreshInstances() {
+        // (97) 第 11 条：数据落地时隐藏墙跳过 reloadData 的
+        // 待办在此补刷（refreshInstances 已在种子落点跑过、
+        // identity 未变时原条件会漏掉这次补刷）。
+        if wallLayout.refreshInstances() || wallReloadPending97 {
             collectionView.reloadData()
+            wallReloadPending97 = false
         }
         guard let anchorCenter = ctx.anchorCenter,
               wallLayout.cameraScale > 0,
@@ -5971,9 +6132,19 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         for (sv, bounces) in p94SavedBounces { sv.bounces = bounces }
         p94SavedBounces = []
         p94WallSwitchInFlight = false
+        // (97) 第 11 条：切换收口耗时（begin 在 switch 入口）。
+        if p97LayoutT0 > 0 {
+            let ms = Int((CACurrentMediaTime() - p97LayoutT0) * 1000)
+            Breadcrumbs.log("p97 layout end from=\(p97LayoutFrom) to=\(p97LayoutTo)"
+                + " mode=\(playlistLayout91) ms=\(ms)")
+            p97LayoutT0 = 0
+        }
     }
 
     fileprivate func applyPlaylistLayout91() {
+        // (97) 第 11 条：装配/互换全程计时自证（出口在函数尾
+        // p95 bypass 行后落 p97 layout apply 同行带 ms）。
+        let p97ApplyT0 = CACurrentMediaTime()
         let mode = playlistLayout91
         // (95) 5：互换顺序改「先装载→验证→再互换」——旧序
         // 先揭目标视图（mode 1 为纯黑底 table）再 reload，
@@ -6032,6 +6203,10 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
             targetView.alpha = savedAlpha
         }
         Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis) entries=\(entries.count)")
+        // (97) 第 11 条：apply 耗时收口（与 p95 行对读）。
+        Breadcrumbs.log("p97 layout apply mode=\(mode) vis=\(vis)"
+            + " entries=\(entries.count)"
+            + " ms=\(Int((CACurrentMediaTime() - p97ApplyT0) * 1000))")
         collectionView.isHidden = mode != 0
         magazineTable91?.isHidden = mode != 1
         shelfView91?.isHidden = mode != 2
@@ -6442,7 +6617,8 @@ final class PlaylistShelfCell91: UICollectionViewCell {
         coverView.frame = CGRect(x: 0, y: 0, width: 150, height: 150)
         playingBadge91.frame = CGRect(x: 6, y: 6, width: 18, height: 18)
         diaryButton91.frame = CGRect(x: 120, y: 6, width: 24, height: 24)
-        heartDisc91.frame = CGRect(x: 6, y: 124, width: 18, height: 18)
+        // (97) 第 7 条：爱心改右下角（原左下 (6,124)）。
+        heartDisc91.frame = CGRect(x: 126, y: 124, width: 18, height: 18)
         heartButton91.frame = heartDisc91.frame
         titleLabel.frame = CGRect(x: 0, y: 156, width: 150, height: 17)
         artistLabel.frame = CGRect(x: 0, y: 175, width: 150, height: 14)

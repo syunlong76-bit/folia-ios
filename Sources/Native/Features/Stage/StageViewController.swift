@@ -692,6 +692,8 @@ final class StageViewController: UIViewController {
         noticeBar.isHidden = true
         view.setNeedsLayout()
         swapRenderer(to: styleId)
+        // (97) 第 5 条：样式变更影响小白条隐藏判定（圣诞＋收起）。
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
     }
 
     /// 选样式统一落点·网页兜底（同上共用）：袋子对账 + 跳
@@ -828,6 +830,15 @@ final class StageViewController: UIViewController {
         guard target != activeStyleId else { return }
         Breadcrumbs.log("stage62.randomPerSong live-swap to=\(target)")
         applyNativeStyleSelection(target)
+    }
+
+    /// (97) 第 5 条：圣诞样式＋点播台收起态时藏系统小白条
+    /// ——收起细条双轨的实根是台轨（距屏底约 15–20pt）与
+    /// 系统小白条（8–13pt）相邻 2pt、在圣诞深色场景上同
+    /// 时显形（录屏量测见 (97) 报告）；其余样式/展开态恢
+    /// 复系统默认。刷新点：setStageBarForm 与选样式通路。
+    override var prefersHomeIndicatorAutoHidden: Bool {
+        activeStyleId == "christmas" && stageBarCollapsed
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -3283,7 +3294,7 @@ final class StageViewController: UIViewController {
         let bar = stageBar
         bar.backgroundColor = .clear
         // (95) 第 11 条：台身圆角 35→31（胶囊形态，四宿主同值）。
-        bar.layer.cornerRadius = 31
+        bar.layer.cornerRadius = 36
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -3340,7 +3351,7 @@ final class StageViewController: UIViewController {
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = 31
+        blur.layer.cornerRadius = 36
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -3380,7 +3391,7 @@ final class StageViewController: UIViewController {
         stageRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = 31
+        glassTint.layer.cornerRadius = 36
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -3501,6 +3512,11 @@ final class StageViewController: UIViewController {
         nextButton.setImage(DeckGlyph82.image(.next, pointSize: 19), for: .normal)
         for button in [prevButton, nextButton] {
             button.tintColor = .white
+            // (97) 第 4 条：prev/next 补钮身圆角 20——此前缺设，
+            // A4Chrome91 画在 button.layer 上的 1pt 边框因
+            // layer.cornerRadius=0 呈方形（(96) 录屏方格实根）；
+            // 主页/歌单页同钮均有 20，本处对齐。
+            button.layer.cornerRadius = 20
             button.translatesAutoresizingMaskIntoConstraints = false
             bar.addSubview(button)
         }
@@ -3587,6 +3603,13 @@ final class StageViewController: UIViewController {
         // (95) 第 11 条：prev/next 补 A4 玻璃面（radius 20）。
         A4Chrome91.apply(to: prevButton, cornerRadius: 20)
         A4Chrome91.apply(to: nextButton, cornerRadius: 20)
+        // (97) 第 4 条自证：四钮钮身圆角现值落痕（方格修后
+        // 应为 prev/next/console=20、play=23，与主页同值）。
+        Breadcrumbs.log("p97 deck stage r="
+            + "\(Int(prevButton.layer.cornerRadius))/"
+            + "\(Int(playButton.layer.cornerRadius))/"
+            + "\(Int(nextButton.layer.cornerRadius))/"
+            + "\(Int(stageConsoleButton82.layer.cornerRadius))")
 
         // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
@@ -3667,7 +3690,7 @@ final class StageViewController: UIViewController {
             // 把手底边 = 台底 −1，不露胶囊下沿；旧锚轨心时
             // 底边出台底 3.5pt，见 S4-1）。收起态台高 16 时
             // 中心同为 8，与轨心重合、无形态差。
-            knob.centerYAnchor.constraint(equalTo: bar.bottomAnchor, constant: -8),
+            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             knob.widthAnchor.constraint(equalToConstant: 14),
             knob.heightAnchor.constraint(equalToConstant: 14),
 
@@ -4311,7 +4334,7 @@ final class StageViewController: UIViewController {
         // 起态不再压平（同两面墙）。
         stageProgressKnob?.transform = .identity
         // (95) 第 11 条：展开圆角 35→31（收起 8 不动）。
-        let radius: CGFloat = collapsed ? 8 : 31
+        let radius: CGFloat = collapsed ? 8 : 36
         stageBar.layer.cornerRadius = radius
         stageBlurView?.layer.cornerRadius = radius
         stageBar.hitExpansionY = collapsed ? 14 : 0
@@ -4326,6 +4349,18 @@ final class StageViewController: UIViewController {
         // 响应，禁交互后点按直达台身识别器组展开）。
         stageSeekHit?.isUserInteractionEnabled = !collapsed
         Breadcrumbs.log("seek85 host=stage hit=\(collapsed ? 0 : 1)")
+        // (97) 第 5 条自证：圆点与轨道中心距（同主页口径，
+        // 修复后应 ≈0）＋圣诞双轨处置：圣诞样式＋收起态时
+        // 藏系统小白条（双轨实为台轨与系统小白条在深色场
+        // 景上相邻显形，量测见 (97) 报告），其余组合恢复。
+        if let knob = stageProgressKnob, let track = stageProgressTrack {
+            stageBar.layoutIfNeeded()
+            let dy = abs(knob.center.y - track.center.y)
+            Breadcrumbs.log("p97 knob stage dy=\(String(format: "%.1f", dy))"
+                + " col=\(collapsed ? 1 : 0)")
+        }
+        setNeedsUpdateOfHomeIndicatorAutoHidden()
+        Breadcrumbs.log("p97 hind=\(prefersHomeIndicatorAutoHidden ? 1 : 0)")
         // (63) 第 2 条形态面包屑（舞台宿主）：标志/几何高/双
         // 击识别器启停位同行（本宿主形态识别器只有双击一位，
         // 单击恒启停于 require 链，见 syncStageBarDoubleTapEnabled）。

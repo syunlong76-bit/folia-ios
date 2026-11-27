@@ -1,5 +1,6 @@
 import UIKit
 import QuartzCore
+import MetalKit
 
 // 圣诞树 christmas（(93) 新增原生歌词样式）：粒子圣诞树＋无人机
 // 环绕镜头，当前行歌词由雪粒汇聚成形、唱完碎散成雪。参数口径
@@ -38,20 +39,8 @@ private func p93Hash01(_ n: Double) -> Double {
     return x - floor(x)
 }
 
-// MARK: - 画布视图（draw 贴图 + layout 转发）
-
-private final class P93CanvasView: UIView {
-    var onDraw: ((CGContext, CGRect) -> Void)?
-    var onLayout: (() -> Void)?
-    override func draw(_ rect: CGRect) {
-        guard let ctx = UIGraphicsGetCurrentContext() else { return }
-        onDraw?(ctx, bounds)
-    }
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        onLayout?()
-    }
-}
+// MARK: - 画布视图（(97) 第 2 条起为 Metal 画布，见
+// ChristmasMetal97.swift；layout 转发保留旧语义）
 
 // MARK: - 渲染方
 
@@ -61,7 +50,12 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     let capabilities = LyricStageCapabilities(
         supportsWordSync: false, requiresSpectrum: false, supportsLineSeek: false)
 
-    private let canvas = P93CanvasView()
+    // (97) 第 2 条：GPU 画布＋批量绘制器（旧 CG 逐帧全量重画退役）。
+    private let canvas = XmasMetalCanvas97()
+    private let metal97 = XmasMetalRenderer97()
+    private var frameSprites97: [XmasSpriteInstance97] = []
+    private var frameTris97: [XmasSolidTri97] = []
+    private var atlasReady97 = false
     private var context: LyricStageContext?
     private var snapshot: LyricStageSnapshot?
     private var isActive = false
@@ -120,16 +114,26 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
 
     init() {
         view = canvas
-        canvas.backgroundColor = UIColor(red: 0.016, green: 0.086, blue: 0.051, alpha: 1) // #04160d 样片底
+        // (97) 第 2 条：Metal 画布口径——手动驱动（isPaused，
+        // 与宿主 frameTick 同拍）、drawable 原生分辨率（默认
+        // 跟随屏幕 scale、不降清不封顶）、清屏色＝旧画布底色。
+        canvas.device = MTLCreateSystemDefaultDevice()
+        canvas.colorPixelFormat = .bgra8Unorm
+        canvas.clearColor = MTLClearColor(red: 0.016, green: 0.086, blue: 0.051, alpha: 1) // #04160d 样片底
+        canvas.isPaused = true
+        canvas.enableSetNeedsDisplay = false
+        canvas.framebufferOnly = true
+        canvas.delegate = metal97
+        metal97.configure(view: canvas)
+        canvas.backgroundColor = UIColor(red: 0.016, green: 0.086, blue: 0.051, alpha: 1)
         canvas.isUserInteractionEnabled = false
-        canvas.contentMode = .redraw
         buildPools()
-        canvas.onDraw = { [weak self] ctx, rect in self?.drawFrame(ctx, rect: rect) }
-        canvas.onLayout = { [weak self] in
+        canvas.onLayout97 = { [weak self] in
             // 横竖屏/尺寸变化：标脏，下一帧重算投影与目标（样片 layout() 同义）
             self?.sizeDirty = true
             self?.targetsDirty = true
         }
+        Breadcrumbs.log("p97 xmas gpu=\(metal97.isReady ? 1 : 0)")
     }
 
     // MARK: LyricStageRenderer
@@ -137,6 +141,10 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     func mount(context: LyricStageContext) {
         self.context = context
         bakeSpritesIfNeeded()
+        // (97) 第 2 条：精灵表→GPU 图集（装配期一次建好，首帧
+        // 不再付 CG 全量绘制的钱——(96) 进入冻结 1056ms 的主项）。
+        atlasReady97 = metal97.buildAtlas(sprites: sprites)
+        Breadcrumbs.log("p97 xmas atlas=\(atlasReady97 ? 1 : 0)")
         Breadcrumbs.log("p93 xmas on n=\(Self.totalParticles)")
         // (94) 94-8：分账/scale/纹理账同行自证（纹理对 ≤250MB 口径）。
         Breadcrumbs.log("p94 xmas pools lyric=\(Self.lyricCount) tree=\(Self.treeCount)"
@@ -192,7 +200,14 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             targetsDirty = true
         }
         if targetsDirty { rebuildTargets() }
-        canvas.setNeedsDisplay()
+        // (97) 第 2 条：逐帧只算实例数组，GPU 一次提交（旧
+        // setNeedsDisplay→CG draw 全量重画退役）。
+        if atlasReady97, metal97.isReady, canvas.bounds.width > 0 {
+            buildFrame97(rect: canvas.bounds)
+            metal97.submit(sprites: frameSprites97, tris: frameTris97,
+                            viewSize: canvas.bounds.size)
+            canvas.draw()
+        }
     }
 
     func unmount() {
@@ -201,6 +216,8 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         isActive = false
         sprites = []
         spritesReady = false
+        atlasReady97 = false
+        metal97.clearAtlas()
         bakedScale94 = 0
         treePos = []; treeSprite = []; garlandPos = []
         snowFarSeed = []; snowNearSeed = []
@@ -219,7 +236,10 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         fpsWindow += dt
         if fpsWindow >= 5.0 && fpsFrames > 0 {
             let avg = fpsAccum / Double(fpsFrames)
-            Breadcrumbs.log("p94 xmas fps=\(String(format: "%.1f", 1.0 / avg)) avgMs=\(String(format: "%.2f", avg * 1000))")
+            // (97) 第 2 条：帧采样加记 footprint——(96) 两会话
+            // 卡/流畅的差异点在内存（311–345MB vs 155–197MB），
+            // 往后判读须有同行协变量。
+            Breadcrumbs.log("p94 xmas fps=\(String(format: "%.1f", 1.0 / avg)) avgMs=\(String(format: "%.2f", avg * 1000)) fp=\(Breadcrumbs.footprintMB97())")
             fpsAccum = 0; fpsFrames = 0; fpsWindow = 0
         }
     }
@@ -534,28 +554,58 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         return (cam.cx + xc * s, cam.cy - yc * s, s)
     }
 
-    private func drawSprite(_ ctx: CGContext, _ img: CGImage?, center: (Double, Double),
-                            sizePx: Double, alpha: CGFloat) {
-        guard let img, sizePx > 0.5, alpha > 0.01 else { return }
-        ctx.saveGState()
-        ctx.setAlpha(alpha)
-        // draw(_:) 上下文里 CGImage 须绕中心翻 y 才正向（径向点
-        // 精灵无感、金星靠此保持尖角朝上）
-        ctx.translateBy(x: CGFloat(center.0), y: CGFloat(center.1))
-        ctx.scaleBy(x: 1, y: -1)
-        let r = CGRect(x: -sizePx / 2, y: -sizePx / 2, width: sizePx, height: sizePx)
-        ctx.draw(img, in: r)
-        ctx.restoreGState()
+    // (97) 第 2 条：旧 drawSprite（CG 逐粒贴图）→ 实例追加。
+    // 径向精灵无方向性；金星靠图集内烘焙朝向（位图行序已在
+    // 图集构建时对齐屏幕朝向），不再需要旧 draw 的 y 翻转。
+    private func appendSprite97(_ spriteIndex: Int, center: (Double, Double),
+                                sizePx: Double, alpha: CGFloat) {
+        guard sizePx > 0.5, alpha > 0.01,
+              let uv = metal97.uvRect(forSprite: spriteIndex) else { return }
+        frameSprites97.append(XmasSpriteInstance97(
+            cx: Float(center.0), cy: Float(center.1),
+            w: Float(sizePx), h: Float(sizePx),
+            u0: Float(uv.minX), v0: Float(uv.minY),
+            u1: Float(uv.maxX), v1: Float(uv.maxY),
+            alpha: Float(alpha)))
     }
 
-    private func drawFrame(_ ctx: CGContext, rect: CGRect) {
+    /// 非方形贴图（地面暖光池/歌词带衬底，旧 ctx.draw 直贴）。
+    private func appendSpriteRect97(_ spriteIndex: Int, center: (Double, Double),
+                                    wPx: Double, hPx: Double, alpha: CGFloat) {
+        guard wPx > 0.5, hPx > 0.5, alpha > 0.01,
+              let uv = metal97.uvRect(forSprite: spriteIndex) else { return }
+        frameSprites97.append(XmasSpriteInstance97(
+            cx: Float(center.0), cy: Float(center.1),
+            w: Float(wPx), h: Float(hPx),
+            u0: Float(uv.minX), v0: Float(uv.minY),
+            u1: Float(uv.maxX), v1: Float(uv.maxY),
+            alpha: Float(alpha)))
+    }
+
+    private func appendTri97(_ p0: (Double, Double), _ p1: (Double, Double),
+                             _ p2: (Double, Double), color: UIColor) {
+        var r: CGFloat = 0, g: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
+        color.getRed(&r, green: &g, blue: &b, alpha: &a)
+        frameTris97.append(XmasSolidTri97(
+            x0: Float(p0.0), y0: Float(p0.1),
+            x1: Float(p1.0), y1: Float(p1.1),
+            x2: Float(p2.0), y2: Float(p2.1),
+            r: Float(r), g: Float(g), b: Float(b), a: Float(a)))
+    }
+
+    private func buildFrame97(rect: CGRect) {
         // (94) 94-8：scale 漂移兜底重烘（同机旋转不触发）。
         if spritesReady && bakedScale94 != UIScreen.main.scale {
             sprites = []; spritesReady = false; bakeSpritesIfNeeded()
+            atlasReady97 = metal97.buildAtlas(sprites: sprites)
             Breadcrumbs.log("p94 xmas scale=\(String(format: "%.1f", UIScreen.main.scale))"
                 + " tex=\(String(format: "%.1f", textureMB94()))MB rebake=1")
         }
-        guard sprites.count > 15, !treePos.isEmpty else { return }
+        guard sprites.count > 15, !treePos.isEmpty else {
+            frameSprites97 = []; frameTris97 = []; return
+        }
+        frameSprites97.removeAll(keepingCapacity: true)
+        frameTris97.removeAll(keepingCapacity: true)
         let t = elapsed
         let cam = makeCamera(t: t, rect: rect)
         let aspect = Double(rect.width / max(rect.height, 1))
@@ -563,8 +613,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         let fitW = fitWidth(radius: radius, aspect: aspect)
 
         // 远景剪影（样片 buildBackdrop：9 棵暗锥，纯色填充非滤镜）
-        ctx.saveGState()
-        ctx.setFillColor(UIColor(red: 0.027, green: 0.153, blue: 0.102, alpha: 1).cgColor)
+        let silhouette = UIColor(red: 0.027, green: 0.153, blue: 0.102, alpha: 1)
         let brng = p93Mulberry32(seed: 777)
         for i in 0..<9 {
             let a = Double(i) / 9 * .pi * 2 + brng() * 0.4
@@ -573,41 +622,28 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             let bx = cos(a) * dist, bz = sin(a) * dist
             guard let base = project(cam, bx, h / 2 - 0.2, bz) else { continue }
             let wPx = h * 0.32 * base.scale, hPx = h * base.scale
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: base.sx, y: base.sy - hPx / 2))
-            path.addLine(to: CGPoint(x: base.sx - wPx, y: base.sy + hPx / 2))
-            path.addLine(to: CGPoint(x: base.sx + wPx, y: base.sy + hPx / 2))
-            path.closeSubpath()
-            ctx.addPath(path)
-            ctx.fillPath()
+            appendTri97((base.sx, base.sy - hPx / 2),
+                        (base.sx - wPx, base.sy + hPx / 2),
+                        (base.sx + wPx, base.sy + hPx / 2),
+                        color: silhouette)
         }
-        ctx.restoreGState()
 
         // 地面暖光池（扁椭圆近似地面圆，样片半径 4.4）
-        if let g = project(cam, 0, 0.02, 0), let glow = sprites[14] {
+        if let g = project(cam, 0, 0.02, 0) {
             let wPx = 8.8 * g.scale
-            ctx.saveGState()
-            ctx.setAlpha(0.9)
-            ctx.draw(glow, in: CGRect(x: g.sx - wPx / 2, y: g.sy - wPx * 0.16,
-                                      width: wPx, height: wPx * 0.32))
-            ctx.restoreGState()
+            appendSpriteRect97(14, center: (g.sx, g.sy), wPx: wPx,
+                               hPx: wPx * 0.32, alpha: 0.9)
         }
 
         // 树干（样片圆柱 #2e1c10 的屏幕近似：投影梯形填充）
-        ctx.saveGState()
-        ctx.setFillColor(UIColor(red: 0.18, green: 0.11, blue: 0.063, alpha: 1).cgColor)
         if let tb = project(cam, 0, 0.1, 0), let tt = project(cam, 0, 0.5, 0) {
             let wb = 0.4 * tb.scale / 2, wt = 0.26 * tt.scale / 2
-            let path = CGMutablePath()
-            path.move(to: CGPoint(x: tb.sx - wb, y: tb.sy))
-            path.addLine(to: CGPoint(x: tb.sx + wb, y: tb.sy))
-            path.addLine(to: CGPoint(x: tt.sx + wt, y: tt.sy))
-            path.addLine(to: CGPoint(x: tt.sx - wt, y: tt.sy))
-            path.closeSubpath()
-            ctx.addPath(path)
-            ctx.fillPath()
+            let trunk = UIColor(red: 0.18, green: 0.11, blue: 0.063, alpha: 1)
+            appendTri97((tb.sx - wb, tb.sy), (tb.sx + wb, tb.sy),
+                        (tt.sx + wt, tt.sy), color: trunk)
+            appendTri97((tb.sx - wb, tb.sy), (tt.sx + wt, tt.sy),
+                        (tt.sx - wt, tt.sy), color: trunk)
         }
-        ctx.restoreGState()
 
         // 树体 + 金链（树组微摆 sin(t*0.05)*0.04，样片同式）
         let sway = sin(t * 0.05) * 0.04
@@ -615,39 +651,39 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         for i in 0..<Self.treeCount {
             let x = Double(treePos[i * 3]), y = Double(treePos[i * 3 + 1]), z = Double(treePos[i * 3 + 2])
             guard let p = project(cam, x * cs - z * sn, y, x * sn + z * cs) else { continue }
-            drawSprite(ctx, sprites[Int(treeSprite[i])], center: (p.sx, p.sy),
-                       sizePx: 0.085 * p.scale, alpha: 0.95)
+            appendSprite97(Int(treeSprite[i]), center: (p.sx, p.sy),
+                           sizePx: 0.085 * p.scale, alpha: 0.95)
         }
         for j in 0..<Self.garlandCount {
             let x = Double(garlandPos[j * 3]), y = Double(garlandPos[j * 3 + 1]), z = Double(garlandPos[j * 3 + 2])
             guard let p = project(cam, x * cs - z * sn, y, x * sn + z * cs) else { continue }
             let tw = 0.8 + 0.35 * sin(Double(j) * 1.7)
-            drawSprite(ctx, sprites[7], center: (p.sx, p.sy),
-                       sizePx: 0.11 * p.scale, alpha: CGFloat(min(tw, 1)))
+            appendSprite97(7, center: (p.sx, p.sy),
+                           sizePx: 0.11 * p.scale, alpha: CGFloat(min(tw, 1)))
         }
 
         // 树顶金星 + 光晕（样片：星 1.05 脉动 ±0.07、晕 2.6）
         let starY = 0.35 + 4.6 + 0.42
         if let sp = project(cam, 0, starY, 0) {
             let pulse = 1.02 + sin(t * 2.2) * 0.07
-            drawSprite(ctx, sprites[4], center: (sp.sx, sp.sy),
-                       sizePx: 2.6 * sp.scale, alpha: 0.28) // 暖晕：金点精灵放大低 alpha 近似样片 glowTex 晕
-            drawSprite(ctx, sprites[13], center: (sp.sx, sp.sy),
-                       sizePx: 1.05 * pulse * sp.scale, alpha: 1)
+            appendSprite97(4, center: (sp.sx, sp.sy),
+                           sizePx: 2.6 * sp.scale, alpha: 0.28) // 暖晕：金点精灵放大低 alpha 近似样片 glowTex 晕
+            appendSprite97(13, center: (sp.sx, sp.sy),
+                           sizePx: 1.05 * pulse * sp.scale, alpha: 1)
         }
 
-        drawSnow(ctx, cam: cam, seeds: snowFarSeed, count: Self.snowFarCount,
-                 spread: 30, height: 13, size: 0.13, alpha: 0.75, t: t)
-        drawSnow(ctx, cam: cam, seeds: snowNearSeed, count: Self.snowNearCount,
-                 spread: 22, height: 11, size: 0.46, alpha: 0.30, t: t * 0.6)
+        drawSnow97(cam: cam, seeds: snowFarSeed, count: Self.snowFarCount,
+                   spread: 30, height: 13, size: 0.13, alpha: 0.75, t: t)
+        drawSnow97(cam: cam, seeds: snowNearSeed, count: Self.snowNearCount,
+                   spread: 22, height: 11, size: 0.46, alpha: 0.30, t: t * 0.6)
 
-        drawLyrics(ctx, cam: cam, t: t, fitW: fitW)
+        drawLyrics97(cam: cam, t: t, fitW: fitW)
     }
 
-    private func drawSnow(_ ctx: CGContext, cam: P93Cam, seeds: [Float], count: Int,
-                          spread: Double, height: Double, size: Double,
-                          alpha: CGFloat, t: TimeInterval) {
-        guard seeds.count >= count * 3, let img = sprites[11] else { return }
+    private func drawSnow97(cam: P93Cam, seeds: [Float], count: Int,
+                            spread: Double, height: Double, size: Double,
+                            alpha: CGFloat, t: TimeInterval) {
+        guard seeds.count >= count * 3 else { return }
         for i in 0..<count {
             let x0 = Double(seeds[i * 3]) * spread
             let speed = Double(seeds[i * 3 + 1])
@@ -655,13 +691,13 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             let yy = (speed * t + phase * 3.7).truncatingRemainder(dividingBy: height)
             let x = x0 + sin(t * 0.55 + phase) * 0.55
             guard let p = project(cam, x, height - yy, (p93Hash01(Double(i * 7 + 1)) - 0.5) * spread) else { continue }
-            drawSprite(ctx, img, center: (p.sx, p.sy), sizePx: size * p.scale, alpha: alpha)
+            appendSprite97(11, center: (p.sx, p.sy), sizePx: size * p.scale, alpha: alpha)
         }
     }
 
     // MARK: 歌词聚字（三态时序，样片 updateLyrics）
 
-    private func drawLyrics(_ ctx: CGContext, cam: P93Cam, t: TimeInterval, fitW: Double) {
+    private func drawLyrics97(cam: P93Cam, t: TimeInterval, fitW: Double) {
         guard let snapshot, currentLineIndex >= 0,
               snapshot.lines.indices.contains(currentLineIndex),
               targets.count >= Self.lyricCount * 3 else { return }
@@ -683,12 +719,10 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         let r = cam.right, u = cam.up
 
         // 歌词带暗椭圆衬底（只盖歌词带，样片 bandMesh 尺寸口径）
-        if let bp = project(cam, center.0, center.1, center.2), let band = sprites[15] {
+        if let bp = project(cam, center.0, center.1, center.2) {
             let wPx = fitW * 1.22 * bp.scale
             let hPx = fitW * 0.25 * 2.3 * bp.scale
-            ctx.saveGState()
-            ctx.draw(band, in: CGRect(x: bp.sx - wPx / 2, y: bp.sy - hPx / 2, width: wPx, height: hPx))
-            ctx.restoreGState()
+            appendSpriteRect97(15, center: (bp.sx, bp.sy), wPx: wPx, hPx: hPx, alpha: 1)
         }
 
         let coreSize = max(0.06, fitW * 0.016)
@@ -735,10 +769,10 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             let wz = center.2 + r.2 * lx + u.2 * ly + dir.2 * lz
             guard let p = project(cam, wx, wy, wz) else { continue }
             // 深色描边晕先行（大 2.1×、在芯后方），再亮芯
-            drawSprite(ctx, sprites[12], center: (p.sx, p.sy),
-                       sizePx: coreSize * 2.1 * p.scale, alpha: CGFloat(min(bright, 1)) * 0.55)
-            drawSprite(ctx, sprites[spriteIdx], center: (p.sx, p.sy),
-                       sizePx: coreSize * p.scale, alpha: CGFloat(min(max(bright, 0), 1)))
+            appendSprite97(12, center: (p.sx, p.sy),
+                           sizePx: coreSize * 2.1 * p.scale, alpha: CGFloat(min(bright, 1)) * 0.55)
+            appendSprite97(spriteIdx, center: (p.sx, p.sy),
+                           sizePx: coreSize * p.scale, alpha: CGFloat(min(max(bright, 0), 1)))
         }
     }
 }

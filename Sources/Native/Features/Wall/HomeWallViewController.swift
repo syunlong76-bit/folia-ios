@@ -1478,7 +1478,7 @@ final class HomeWallViewController: UIViewController,
         let bar = MiniBarHitView()
         bar.backgroundColor = .clear
         // (95) 第 1 条：胶囊台高 62、bar 圆角取半高 31。
-        bar.layer.cornerRadius = 31
+        bar.layer.cornerRadius = 36
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -1540,7 +1540,7 @@ final class HomeWallViewController: UIViewController,
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = 31
+        blur.layer.cornerRadius = 36
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -1602,7 +1602,7 @@ final class HomeWallViewController: UIViewController,
         miniRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = 31
+        glassTint.layer.cornerRadius = 36
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -1881,7 +1881,7 @@ final class HomeWallViewController: UIViewController,
             // 把手底边 = 台底 −1，不露胶囊下沿；旧锚轨心时
             // 底边出台底 3.5pt，见 S4-1）。收起态台高 16 时
             // 中心同为 8，与轨心重合、无形态差。
-            knob.centerYAnchor.constraint(equalTo: bar.bottomAnchor, constant: -8),
+            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
             knob.widthAnchor.constraint(equalToConstant: 14),
             knob.heightAnchor.constraint(equalToConstant: 14),
 
@@ -2457,14 +2457,21 @@ final class HomeWallViewController: UIViewController,
             || miniConsoleButton.frame.contains(point) { return }
         // 进度带分域（标题优先于进度带，与旧封面分发序一
         // 致）：带内落点直接返回，seek 已即时发生。
-        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
-            Breadcrumbs.log("minibar.tap host=homewall zone=seekband action=skip")
+        // (97) 第 8 条：定位区扩为身份簇（封面＋标题＋歌手）
+        // ——旧判定只认 miniTitle 文字帧，点封面（Miller 说
+        // 的「点头像」）落空走控制台、定位从未触发；身份簇
+        // 前置于进度带判定（封面下缘与 seek 带重叠处归封面，
+        // 同 (61) 封面规格），命中落 p97 自证、下游 locate82
+        // /locate86 续证全程。
+        if miniCover.frame.contains(point)
+            || miniTitle.frame.contains(point)
+            || miniArtist.frame.contains(point) {
+            Breadcrumbs.log("p97 locate tap host=home")
+            locateCurrentTrackFromCover()
             return
         }
-        // (62) 尾波第 5 组：封面区单击换动作——回封面播放页，
-        // 不再与台身同走浮层开关。
-        if miniTitle.frame.contains(point) {
-            locateCurrentTrackFromCover()
+        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
+            Breadcrumbs.log("minibar.tap host=homewall zone=seekband action=skip")
             return
         }
         // (82) 第 8 条：台身空白单击改开控制台面板（旧附
@@ -2498,7 +2505,7 @@ final class HomeWallViewController: UIViewController,
             DblTap83.step("home", "skipbtn")
             return
         }
-        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point) {
+        if miniSeekHit.frame.contains(point), !miniTitle.frame.contains(point), !miniCover.frame.contains(point), !miniArtist.frame.contains(point) {
             Breadcrumbs.log("minibar.doubletap host=homewall zone=seekband action=skip")
             DblTap83.step("home", "skipseek")
             return
@@ -2590,7 +2597,11 @@ final class HomeWallViewController: UIViewController,
             || miniPrevButton.frame.contains(point)
             || miniNextButton.frame.contains(point)
             || miniConsoleButton.frame.contains(point) { return }
-        if miniTitle.frame.contains(point) { return }
+        // (97) 第 8 条：身份簇（封面/标题/歌手）不 seek（同
+        // 标题旧口径扩到封面，防 seek 带抢定位点按）。
+        if miniCover.frame.contains(point)
+            || miniTitle.frame.contains(point)
+            || miniArtist.frame.contains(point) { return }
         guard miniSeekHit.frame.contains(point) else { return }
         let track = miniProgressTrack.frame
         let engine = PlaybackEngine.shared
@@ -2639,6 +2650,8 @@ final class HomeWallViewController: UIViewController,
             // 收起态不响应拖动（3.7 (21)）：细条只认点按展开。
             if miniBarCollapsed { return }
             if miniTitle.frame.contains(barPoint)
+                || miniCover.frame.contains(barPoint)
+                || miniArtist.frame.contains(barPoint)
                 || miniPlayButton.frame.contains(barPoint)
                 || miniPrevButton.frame.contains(barPoint)
                 || miniNextButton.frame.contains(barPoint)
@@ -2942,7 +2955,7 @@ final class HomeWallViewController: UIViewController,
         // 随花朵退役；(80)/(23) 口径圆点两态同形）。
         miniProgressKnob.transform = .identity
         // (95) 第 1 条：展开圆角随胶囊新高改 31（收起 8 不动）。
-        let radius: CGFloat = collapsed ? 8 : 31
+        let radius: CGFloat = collapsed ? 8 : 36
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
         // 收起态命中带（3.7 (21.1)）：视觉仍 16pt，纵向命中
@@ -2976,6 +2989,15 @@ final class HomeWallViewController: UIViewController,
         // hit=0 同窗对位）。
         miniSeekHit.isUserInteractionEnabled = !collapsed
         Breadcrumbs.log("seek85 host=home hit=\(collapsed ? 0 : 1)")
+        // (97) 第 5 条自证：圆点与轨道的中心距——圆点纵锚
+        // 已改锚轨道自身 centerY（旧锚 bar 底 −8 系收起态
+        // 轨心、展开态恒高出 4.5pt），形态收口后实测应 ≈0。
+        if let bar = miniBar {
+            bar.layoutIfNeeded()
+            let dy = abs(miniProgressKnob.center.y - miniProgressTrack.center.y)
+            Breadcrumbs.log("p97 knob home dy=\(String(format: "%.1f", dy))"
+                + " col=\(collapsed ? 1 : 0)")
+        }
         // (63) 第 2 条形态面包屑：每次形态收口落一行——标志/
         // 几何高/三识别器启停位同行，下轮日志一次判清标志与
         // 几何是否同值（细条无法展开的判别证据）。

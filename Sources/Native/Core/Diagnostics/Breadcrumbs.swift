@@ -215,6 +215,9 @@ enum Breadcrumbs {
         }
     }
 
+    /// (97) 第 2 条：帧采样协变量出口（圣诞 fps 行同记 footprint）。
+    static func footprintMB97() -> Int { footprintMB() }
+
     private static func footprintMB() -> Int {
         var info = task_vm_info_data_t()
         var count = mach_msg_type_number_t(

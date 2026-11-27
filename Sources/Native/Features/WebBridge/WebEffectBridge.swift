@@ -222,6 +222,36 @@ final class FoliaBridgeLogStore {
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
+    /// (97) 上一会话全量快照全文（preservePreviousSessionTail
+    /// 写点同目录 folia-prev-session-full.log）。文件不存在/
+    /// 为空返回 nil，调用方据此显式标注缺席，不与「读到空」
+    /// 混淆。
+    func prevSessionFullText() -> String? {
+        let url = logDirectory
+            .appendingPathComponent("folia-prev-session-full.log")
+        guard let text = try? String(contentsOf: url, encoding: .utf8)
+        else { return nil }
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+
+    /// (97) fx 事件全文：FxEventLog96 的两份文件按时序拼接
+    /// （轮换旧份 folia-fx-events.old.log 在前、当前份
+    /// folia-fx-events.log 在后，与 FxEventLog96.fileName /
+    /// oldFileName 常量同名）。两份都不存在/为空返回 nil，
+    /// 调用方据此显式标注无事件。
+    func fxEventsText() -> String? {
+        var parts: [String] = []
+        for name in ["folia-fx-events.old.log", "folia-fx-events.log"] {
+            let url = logDirectory.appendingPathComponent(name)
+            if let text = try? String(contentsOf: url, encoding: .utf8) {
+                let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if !trimmed.isEmpty { parts.append(trimmed) }
+            }
+        }
+        return parts.isEmpty ? nil : parts.joined(separator: "\n")
+    }
+
     private var logDirectory: URL {
         let dir = FileManager.default.urls(for:.cachesDirectory, in:.userDomainMask)[0]
             .appendingPathComponent("folia-logs", isDirectory: true)
@@ -656,6 +686,15 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         (function () {
           if (window.__foliaP94) return;
           var seq = 0, selfDispatch = false, resizeDoneSent = false;
+          // (97) 第 3 条：resize 风暴合并——旋转期间 WKWebView 以
+          // 约 34 条/秒连发 resize（转场中间尺寸），旧实现每条都
+          // verifyBuffer＋report＋起一轮 rAF 稳定帧链，中途尺寸还
+          // 会触发 buffer 不匹配的自派发、催网页渲染器按中间尺寸
+          // 反复重建。改：外部 resize 只记数（coal97），静默
+          // 120ms 后只跑最后一记的完整链；自派发（verifyBuffer
+          // 补派）仍直通不合并。report 时把合并掉的条数以 coal
+          // 字段带回原生自证。
+          var coal97 = 0, rzTimer97 = 0;
           function post(msg) {
             try {
               var h = window.webkit && window.webkit.messageHandlers
@@ -697,6 +736,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             var info = snapshot();
             info.type = 'p94Web';
             info.kind = kind;
+            info.coal = coal97;
+            coal97 = 0;
             post(info);
             return info;
           }
@@ -709,8 +750,18 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             return info;
           }
           function onResize() {
-            if (selfDispatch) { selfDispatch = false; }
-            else { verifyBuffer(); }
+            // (97) 第 3 条：自派发直通；外部连发先合并（见上）。
+            // 自派发路径不重跑 verifyBuffer（旧语义：防自派发递归）。
+            if (selfDispatch) { selfDispatch = false; runResizeChain97(false); return; }
+            coal97 += 1;
+            if (rzTimer97) clearTimeout(rzTimer97);
+            rzTimer97 = setTimeout(function () {
+              rzTimer97 = 0;
+              runResizeChain97(true);
+            }, 120);
+          }
+          function runResizeChain97(doVerify) {
+            if (doVerify) verifyBuffer();
             seq += 1;
             var mySeq = seq;
             resizeDoneSent = false;
@@ -2120,8 +2171,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             let bw = (body["bufW"] as? NSNumber)?.intValue ?? 0
             let bh = (body["bufH"] as? NSNumber)?.intValue ?? 0
             let kind = (body["kind"] as? String) ?? "-"
+            // (97) 第 3 条：coal＝本轮 resize 风暴被合并掉的条数。
+            let coal = (body["coal"] as? NSNumber)?.intValue ?? 0
             Breadcrumbs.log("p94 web dpr=\(dpr) canvas=\(cw)x\(ch)"
-                + " client=\(vw)x\(vh) buf=\(bw)x\(bh) kind=\(kind)")
+                + " client=\(vw)x\(vh) buf=\(bw)x\(bh) kind=\(kind)"
+                + " coal=\(coal)")
             // contentsScale 纪律：不许被改成 1（或任何非屏幕值），
             // 发现即复原并在同一行留痕。
             let screenScale = UIScreen.main.scale

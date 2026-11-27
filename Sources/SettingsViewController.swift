@@ -1662,14 +1662,29 @@ final class BridgeLogViewController: UIViewController {
         ])
 
         // (65) 件一导出拼接（取证报告定稿）：上一会话尾巴
-        // （启动时已转存 folia-prev-tail.log）置顶，其后接
-        // 本会话最近 1000 行（原上限 300 一并提至 1000 作
-        // 保险）——崩溃会话尾部在重启后导出时带得出来。
+        // （启动时已转存 folia-prev-tail.log）置顶——崩溃会
+        // 话尾部在重启后导出时带得出来。
+        // (97) 件一续修（forensics-96-gap-diagnosis 第五节）：
+        // 段序定死＝尾巴 → 上一会话全量快照 → fx 事件 →
+        // 本会话；全量/fx 两段恒在，缺席时显式标注行，不许
+        // 与「未读到」混淆。本会话 cap 由 1000 提至与全量
+        // 查看器（BridgeLog62）一致的 100_000：会话头部的
+        // 启动见证行（含本会话 `p96 session begin`）由此
+        // 必然落在导出内，不再被尾部截断吞掉。
         let tail = FoliaBridgeLogStore.shared.prevTailText()
-        let recent = FoliaBridgeLogStore.shared.recentLogText(maxLines: 1000)
-        let text = tail.isEmpty ? recent
-            : "—— 上一会话尾巴（自动留存）——\n" + tail
-                + "\n—— 本会话 ——\n" + recent
+        let prevFull = FoliaBridgeLogStore.shared.prevSessionFullText()
+        let fxEvents = FoliaBridgeLogStore.shared.fxEventsText()
+        let recent = FoliaBridgeLogStore.shared.recentLogText(maxLines: 100_000)
+        var sections: [String] = []
+        if !tail.isEmpty {
+            sections.append("—— 上一会话尾巴（自动留存）——\n" + tail)
+        }
+        sections.append("—— 上一会话全量 ——\n"
+            + (prevFull ?? "prev-session-full: empty"))
+        sections.append("—— 特效事件 ——\n"
+            + (fxEvents ?? "fx events: none"))
+        sections.append("—— 本会话 ——\n" + recent)
+        let text = sections.joined(separator: "\n")
         textView.text = text.isEmpty ? "（暂无日志）" : text
         // 打开即滚到底，最新留痕在最下面。
         DispatchQueue.main.async { [weak self] in

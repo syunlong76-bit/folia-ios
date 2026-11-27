@@ -515,10 +515,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     // 公开回调（集成方接线）
     /// 任一特效状态变化时回调（集成方刷新控制台钮）。
     public var onStateChanged: (() -> Void)?
-    /// 烟花收尾出推荐卡时取今日推荐；返回 nil 则不出卡。
-    public var recommendationProvider: (() -> (title: String, artist: String, cover: UIImage?)?)?
-    /// 推荐卡点「播放」时回调。
-    public var onPlayRecommendation: (() -> Void)?
+    // (97) 第 6 条：特效推荐歌曲整条取消——recommendationProvider /
+    // onPlayRecommendation 回调与 SceneDelegate 接线已一并拆除。
     /// port91（任务 2）：烟花爆点回调（爆点＋晕色），FxLinkage91
     /// 据此给附近封面提亮一拍＋宠物跳跃。
     public var onFwBurst91: ((CGPoint, UIColor) -> Void)?
@@ -534,6 +532,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private weak var mainWindow: UIWindow?
     /// (96) 96-2：独立退出窗（level 1600，平时隐藏）。
     private var panicWindow96: FxPanicWindow96?
+    /// (97) 第 9 条：梵高烟花视频层（在场时原生粒子烟花停画）。
+    private var vgFwView97: VangoghFwView97?
+    private var vgFwActive97 = false
     /// port91（任务 1）：主窗浮层宿主（祝福卡/写灯钮/推荐卡的新家）。
     private var overlayHost91: FxOverlayHost91?
     /// (92) 任务 1：被动点按识别器（随宿主迁窗，见 attachOverlay92）。
@@ -549,18 +550,6 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// (94) 94-7：showBless 防重入计数（展示中再触发落痕）。
     private var blessDup94 = 0
     private var wishButton: UIButton?
-    private var recCard: UIView?
-    private var recCover: UIImageView?
-    private var recTitle: UILabel?
-    private var recArtist: UILabel?
-    /// (93) C4：推荐卡默认落位约束（底部 −46/宽 ≤340/居中，
-    /// 控制台不在场时用）与控制台对齐动态约束（在场时用，
-    /// show 时按 presentedCardFrame 现建、hide/换态时拆）。
-    private var recDefaultPos93: [NSLayoutConstraint] = []
-    private var recDynPos93: [NSLayoutConstraint] = []
-    /// (93) C4：推荐卡 12 秒自动轮换计时器（卡可见＋任一
-    /// 特效开启时才转，关卡即停）。
-    private var recRotateTimer93: Timer?
 
     // 帧状态（now 为毫秒，与样片 performance.now() 同口径）
     private var nowMs: Double = 0
@@ -577,7 +566,6 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private var splitQueue: [FxSpark] = []
     private var fwStart: Double = 0
     private var fwStep: Int = 0
-    private var recShown = false
 
     // 孔明灯
     private var lanterns: [FxLantern] = []
@@ -624,6 +612,18 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             rv.isUserInteractionEnabled = false
             rootView = rv
             buildFlash91(in: rv)
+            // (97) 第 9 条：梵高烟花视频层挂根视图（闪光层之上、
+            // 与粒子同平面），点火联动接回既有 onFwBurst91。
+            let vg = VangoghFwView97(frame: rv.bounds)
+            vg.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+            vg.onIgnition97 = { [weak self] in
+                guard let self else { return }
+                self.onFwBurst91?(CGPoint(x: self.W * 0.5, y: self.H * 0.32),
+                                  UIColor(red: 1, green: 186 / 255, blue: 92 / 255, alpha: 1))
+                Breadcrumbs.log("p97 vgfw burst")
+            }
+            rv.addSubview(vg)
+            vgFwView97 = vg
         }
         win.isHidden = true
 
@@ -790,15 +790,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 FxEventLog96.markActive(code: activeNames, gen: fxGeneration96)
                 FxEventLog96.record("arm fx=\(activeNames) gen=\(fxGeneration96)")
                 fxArmHitAudit96()
-                // (95) 任务 3：推荐卡触发统一到开启边沿——与
-                // p94 fx arm 同点调用呈现判断（会话内只呈一
-                // 次，recShown 在全关时复位，见 disarm 边沿）。
-                maybeShowRec95()
+                // (97) 第 6 条：原推荐卡开启边沿触发点已拆除。
             } else {
                 Breadcrumbs.log("p93 probe off")
-                // (95) 任务 3：fx 会话结束（任一特效开→全关）
-                // ——推荐卡呈现额度复位，下一会话可再呈一次。
-                recShown = false
                 // (96) 96-2/96-3：全关收口——panic 窗藏起、
                 // 看门狗停表、孤儿标记清除。
                 panicWindow96?.isHidden = true
@@ -816,7 +810,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// 满主窗，宿主系＝窗口系）。
     private func tapOwn93(at p: CGPoint) -> String {
         guard let host = overlayHost91, host.window != nil else { return "none" }
-        for sub in [recCard, blessCard, wishButton] {
+        for sub in [blessCard, wishButton] {
             guard let sub = sub, !sub.isHidden, sub.alpha > 0.01 else { continue }
             if sub.frame.contains(p) { return "card" }
         }
@@ -842,7 +836,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// 子视图）；host＝宿主在场但点在卡外非控件区（hitTest
     /// 恒穿透）；nil＝宿主不在场。
     private func tapOwn94(at p: CGPoint, hit: UIView?) -> String {
-        for sub in [recCard, blessCard, wishButton] {
+        for sub in [blessCard, wishButton] {
             guard let sub = sub, !sub.isHidden, sub.alpha > 0.01 else { continue }
             if sub.frame.contains(p) { return "card" }
         }
@@ -996,6 +990,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             return
         }
         guard isFireworks else { return }
+        // (97) 第 9 条：视频在场时点按＝从头补发一轮梵高烟花。
+        if vgFwActive97 {
+            vgFwView97?.restart97()
+            return
+        }
         launch(x: Double(p.x), ty: max(60, Double(p.y) - 40), opts: FW_MAIN)
         ensureLoop()
     }
@@ -1010,7 +1009,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         while let v = node {
             if v is UIControl || v is UICollectionViewCell
                 || v is UITableViewCell { return true }
-            if v === blessCard || v === wishButton || v === recCard { return true }
+            if v === blessCard || v === wishButton { return true }
             node = v.superview
         }
         return false
@@ -1029,7 +1028,6 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         stopSnow(hard: true, src: src)
         stopWind(src: src)
         hideBless()
-        hideRecCard()
         let still = isFireworks || isLanterns || isSnow || isWind
         Breadcrumbs.logSync("p96 forceStop gen=\(gen) src=\(src) still=\(still ? 1 : 0)")
         FxEventLog96.record("forceStop gen=\(gen) src=\(src) still=\(still ? 1 : 0)")
@@ -1195,6 +1193,15 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         isFireworks = on
         Breadcrumbs.log(on ? "fx87 fw=1" : "fx87 fw=0")
         Breadcrumbs.log("p94 fx sw fx=fw on=\(on ? 1 : 0) src=\(src) state=\(isFireworks ? 1 : 0)")
+        // (97) 第 9 条：梵高烟花视频层启停（唯一挂钩点，覆盖
+        // 全部启停路径）；素材缺失/起播失败回落原生粒子路径。
+        if on {
+            vgFwActive97 = vgFwView97?.start97() ?? false
+            Breadcrumbs.log("p97 vgfw on=\(vgFwActive97 ? 1 : 0)")
+        } else {
+            vgFwView97?.stop97()
+            vgFwActive97 = false
+        }
         noteFxOrder93("fw", on)
         memLog93("fw", on)
         onStateChanged?()
@@ -1267,11 +1274,10 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private func startFw(src: String = "auto") {
         refreshSizeFromRootView()
         stopLantern(hard: true, src: "mutex"); stopSnow(hard: true, src: "mutex"); stopWind(src: "mutex")
-        recShown = false; fwStep = 0; rains = []
+        fwStep = 0; rains = []
         fwStart = nowMsNow()
         // (93) E：dt 采样窗自本场烟花起算。
         fwDtSum93 = 0; fwDtN93 = 0; fwDtLogAt93 = fwStart
-        hideRecCard()
         setFw(true, src: src)
         ensureLoop()
     }
@@ -1553,6 +1559,13 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 fwDtSum93 = 0; fwDtN93 = 0; fwDtLogAt93 = nowMs
             }
         }
+        // (97) 第 9 条：梵高视频在场时原生粒子烟花停算停画，
+        // 只保留 15.5s 自动收尾（旧时间轴口径）；点火/绽放由
+        // 视频本体呈现，联动走点火回调。
+        if vgFwActive97 {
+            if isFireworks, nowMs - fwStart > 15500 { setFw(false, src: "auto") }
+            return
+        }
         // 时间轴（ms，照样片；launch 在爆点前约 1s 由火箭上升耗时形成）
         if isFireworks {
             let t = nowMs - fwStart
@@ -1589,9 +1602,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             if t < 3000 && chance(0.10, f) {
                 spawnRain(x: fxRand(0, W), y: H * (0.7 + fxRand(0, 0.2)), riser: true)
             }
-            // (95) 任务 3：推荐卡触发已摘除本时间轴——改由任
-            // 一特效开启边沿统一调用（refreshTapProbe92 的
-            // arm 点 → maybeShowRec95），此处不再呈现。
+            // (97) 第 6 条：推荐卡触发（原烟花时间轴＋开启边沿
+            // 两处）已随特效推荐歌曲功能整条拆除。
             if t > 15500 { setFw(false, src: "auto") }
         }
 
@@ -2316,97 +2328,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         ])
         wishButton = wish
 
-        // 推荐卡：底部、封面＋标题/歌手＋播放/下次吧
-        let rec = UIView()
-        rec.backgroundColor = UIColor(red: 24 / 255, green: 23 / 255, blue: 30 / 255, alpha: 0.88)
-        rec.layer.cornerRadius = 20
-        rec.layer.borderWidth = 1
-        rec.layer.borderColor = fxRGB(255, 205, 120, 0.4)
-        rec.layer.shadowColor = UIColor.black.cgColor
-        rec.layer.shadowOpacity = 0.55
-        rec.layer.shadowRadius = 30
-        rec.layer.shadowOffset = CGSize(width: 0, height: 24)
-        rec.isHidden = true
-        rec.translatesAutoresizingMaskIntoConstraints = false
-        let cover = UIImageView()
-        cover.contentMode = .scaleAspectFill
-        cover.clipsToBounds = true
-        cover.layer.cornerRadius = 13
-        cover.backgroundColor = UIColor(white: 1, alpha: 0.12)
-        cover.translatesAutoresizingMaskIntoConstraints = false
-        rec.addSubview(cover)
-        recCover = cover
-        let title = UILabel()
-        title.font = .systemFont(ofSize: 17.5, weight: .heavy)
-        title.textColor = UIColor(red: 246 / 255, green: 243 / 255, blue: 236 / 255, alpha: 1)
-        title.numberOfLines = 2
-        title.translatesAutoresizingMaskIntoConstraints = false
-        rec.addSubview(title)
-        recTitle = title
-        let artist = UILabel()
-        artist.font = .systemFont(ofSize: 13)
-        artist.textColor = UIColor(red: 246 / 255, green: 243 / 255, blue: 236 / 255, alpha: 0.65)
-        artist.translatesAutoresizingMaskIntoConstraints = false
-        rec.addSubview(artist)
-        recArtist = artist
-        let play = UIButton(type: .system)
-        play.setTitle("播放", for: .normal)
-        play.titleLabel?.font = .systemFont(ofSize: 14.5, weight: .bold)
-        play.setTitleColor(UIColor(red: 36 / 255, green: 19 / 255, blue: 0, alpha: 1), for: .normal)
-        play.layer.cornerRadius = 12
-        play.translatesAutoresizingMaskIntoConstraints = false
-        let playGrad = CAGradientLayer()
-        playGrad.colors = [UIColor(red: 1, green: 176 / 255, blue: 46 / 255, alpha: 1).cgColor,
-                           UIColor(red: 1, green: 125 / 255, blue: 84 / 255, alpha: 1).cgColor]
-        playGrad.startPoint = CGPoint(x: 0, y: 0)
-        playGrad.endPoint = CGPoint(x: 1, y: 1)
-        playGrad.frame = CGRect(x: 0, y: 0, width: 200, height: 44)
-        playGrad.cornerRadius = 12
-        play.layer.insertSublayer(playGrad, at: 0)
-        play.addTarget(self, action: #selector(recPlayTapped), for: .touchUpInside)
-        rec.addSubview(play)
-        let later = UIButton(type: .system)
-        later.setTitle("下次吧", for: .normal)
-        later.titleLabel?.font = .systemFont(ofSize: 14)
-        later.setTitleColor(UIColor(red: 246 / 255, green: 243 / 255, blue: 236 / 255, alpha: 1), for: .normal)
-        later.layer.borderWidth = 1
-        later.layer.borderColor = UIColor(white: 1, alpha: 0.25).cgColor
-        later.layer.cornerRadius = 12
-        later.translatesAutoresizingMaskIntoConstraints = false
-        later.addTarget(self, action: #selector(hideRecCard), for: .touchUpInside)
-        rec.addSubview(later)
-        rv.addSubview(rec)
-        // (93) C4：定位三约束单独持有（默认落位），show 时
-        // 可整组停用换动态对齐约束；边距守卫约束恒在。
-        let recCenterX93 = rec.centerXAnchor.constraint(equalTo: rv.centerXAnchor)
-        let recBottom93 = rec.bottomAnchor.constraint(equalTo: rv.bottomAnchor, constant: -46)
-        let recWidth93 = rec.widthAnchor.constraint(lessThanOrEqualToConstant: 340)
-        recDefaultPos93 = [recCenterX93, recBottom93, recWidth93]
-        NSLayoutConstraint.activate([
-            recCenterX93, recBottom93, recWidth93,
-            rec.leadingAnchor.constraint(greaterThanOrEqualTo: rv.leadingAnchor, constant: 20),
-            rec.trailingAnchor.constraint(lessThanOrEqualTo: rv.trailingAnchor, constant: -20),
-            cover.leadingAnchor.constraint(equalTo: rec.leadingAnchor, constant: 15),
-            cover.topAnchor.constraint(equalTo: rec.topAnchor, constant: 15),
-            cover.widthAnchor.constraint(equalToConstant: 74),
-            cover.heightAnchor.constraint(equalToConstant: 74),
-            title.leadingAnchor.constraint(equalTo: cover.trailingAnchor, constant: 13),
-            title.trailingAnchor.constraint(equalTo: rec.trailingAnchor, constant: -15),
-            title.topAnchor.constraint(equalTo: rec.topAnchor, constant: 24),
-            artist.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            artist.trailingAnchor.constraint(equalTo: title.trailingAnchor),
-            artist.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 3),
-            play.leadingAnchor.constraint(equalTo: rec.leadingAnchor, constant: 15),
-            play.topAnchor.constraint(equalTo: cover.bottomAnchor, constant: 13),
-            play.heightAnchor.constraint(equalToConstant: 44),
-            later.leadingAnchor.constraint(equalTo: play.trailingAnchor, constant: 9),
-            later.trailingAnchor.constraint(equalTo: rec.trailingAnchor, constant: -15),
-            later.topAnchor.constraint(equalTo: play.topAnchor),
-            later.widthAnchor.constraint(equalToConstant: 84),
-            later.heightAnchor.constraint(equalToConstant: 44),
-            play.bottomAnchor.constraint(equalTo: rec.bottomAnchor, constant: -15),
-        ])
-        recCard = rec
+        // (97) 第 6 条：特效推荐卡已整条拆除（Miller 点名取消特效推荐歌曲）。
     }
 
     /// 孔明灯图标（按样片 SVG 路径近似描画，程序生成、无外部素材）。
@@ -2452,7 +2374,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// 点是否落在可见的卡片/写灯钮上（port91 前为 Fx 窗
     /// hitTest 用；纯显示层后保留备查，点按判定走主窗旁路）。
     func interactiveSubviewHit(at point: CGPoint, in view: UIView) -> Bool {
-        for sub in [recCard, blessCard, wishButton] {
+        for sub in [blessCard, wishButton] {
             guard let sub = sub, !sub.isHidden, sub.alpha > 0 else { continue }
             if sub.frame.contains(point) { return true }
         }
@@ -2493,136 +2415,6 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         blessHideWork?.cancel()
         blessHideWork = nil
         blessCard?.isHidden = true
-    }
-
-    /// (93) C4：推荐卡落位——控制台在场（ConsolePanel82.
-    /// presentedCardFrame 非 nil，窗口坐标；宿主钉满主窗
-    /// 故宿主系＝窗口系）时：卡宽＝该帧宽、x 与该帧对齐、
-    /// y＝该帧 maxY＋8；算出卡底超出宿主高则改贴底收口。
-    /// 控制台不在场：恢复默认落位（底部 −46/宽 ≤340）。
-    private func layoutRecCard93(_ card: UIView) {
-        NSLayoutConstraint.deactivate(recDynPos93)
-        recDynPos93 = []
-        guard let host = overlayHost91,
-              let frame = ConsolePanel82.presentedCardFrame else {
-            NSLayoutConstraint.activate(recDefaultPos93)
-            return
-        }
-        NSLayoutConstraint.deactivate(recDefaultPos93)
-        let top = card.topAnchor.constraint(
-            equalTo: host.topAnchor, constant: frame.maxY + 8)
-        recDynPos93 = [
-            card.leadingAnchor.constraint(
-                equalTo: host.leadingAnchor, constant: frame.minX),
-            card.widthAnchor.constraint(equalToConstant: frame.width),
-            top,
-        ]
-        NSLayoutConstraint.activate(recDynPos93)
-        host.layoutIfNeeded()
-        if card.frame.maxY > host.bounds.height {
-            // 贴底收口：拆 top 换底锚（宿主底 −8）。
-            NSLayoutConstraint.deactivate([top])
-            let bottom = card.bottomAnchor.constraint(
-                equalTo: host.bottomAnchor, constant: -8)
-            recDynPos93[2] = bottom
-            NSLayoutConstraint.activate([bottom])
-            host.layoutIfNeeded()
-        }
-    }
-
-    /// (95) 任务 3：推荐卡统一开启边沿呈现判断——本 fx 会
-    /// 话（任一特效开→全关）内只呈一次；recShown 在全部特
-    /// 效关闭时于 refreshTapProbe92 的 disarm 边沿复位，
-    /// startFw 内原有的 recShown 复位保留（新一轮烟花秀
-    /// 语义与新口径一致：互斥清场先全关、复位已在彼处发
-    /// 生，此处再置 false 无副作用）。
-    private func maybeShowRec95() {
-        guard !recShown else { return }
-        recShown = true
-        showRecCard()
-    }
-
-    private func showRecCard() {
-        // (95) 任务 3：provider 缺失不再静默——落 miss 自证。
-        guard let provider = recommendationProvider else {
-            Breadcrumbs.log("fx87 rec miss why=noprovider")
-            return
-        }
-        guard let rec = provider() else {
-            Breadcrumbs.log("fx87 rec miss why=norec")
-            return
-        }
-        guard let card = recCard else { return }
-        recTitle?.text = rec.title
-        recArtist?.text = rec.artist
-        recCover?.image = rec.cover
-        Breadcrumbs.log("fx87 rec")
-        card.isHidden = false
-        layoutRecCard93(card)
-        // (95) 任务 3：几何对账——卡实际落位 minX/宽与控制
-        // 台 presentedCardFrame 宽同行（无控制台时 -1）。
-        let consoleW95 = ConsolePanel82.presentedCardFrame
-            .map { Int($0.width.rounded()) } ?? -1
-        Breadcrumbs.log("p95 rec geo x=\(Int(card.frame.minX.rounded()))"
-            + " w=\(Int(card.frame.width.rounded())) console=\(consoleW95)")
-        startRecRotate93()
-        // (93) C4：入场按当前活跃特效区分（多特效同开取最
-        // 近开启者 fxOnOrder93 尾元且仍活跃者）；无特效/
-        // 无记录走旧通用入场（上移 30 淡入）。
-        let fx = fxOnOrder93.last(where: {
-            ($0 == "fw" && isFireworks) || ($0 == "ln" && isLanterns)
-                || ($0 == "sn" && isSnow) || ($0 == "wd" && isWind)
-        })
-        card.alpha = 0
-        var damping: CGFloat = 0.7
-        switch fx {
-        case "fw":   // 烟花：0.7 缩放绽开
-            card.transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
-        case "ln":   // 孔明灯：自下方 26pt 升起
-            card.transform = CGAffineTransform(translationX: 0, y: 26)
-        case "sn":   // 下雪：自上方 14pt 落定（回弹弹簧）
-            card.transform = CGAffineTransform(translationX: 0, y: -14)
-            damping = 0.55
-        case "wd":   // 风：自侧方 30pt 掠入
-            card.transform = CGAffineTransform(translationX: 30, y: 0)
-        default:
-            card.transform = CGAffineTransform(translationX: 0, y: 30)
-        }
-        UIView.animate(withDuration: 0.5, delay: 0,
-                       usingSpringWithDamping: damping, initialSpringVelocity: 0.3,
-                       options: [.allowUserInteraction]) {
-            card.transform = .identity
-            card.alpha = 1
-        }
-    }
-
-    /// (93) C4：12 秒轮换——卡可见且任一特效开启时换下一
-    /// 首推荐（走既有 recommendationProvider 通路，播放
-    /// 仍走 onPlayRecommendation，点卡切歌通路不动）。
-    private func startRecRotate93() {
-        recRotateTimer93?.invalidate()
-        recRotateTimer93 = Timer.scheduledTimer(
-            withTimeInterval: 12, repeats: true) { [weak self] _ in
-            guard let self,
-                  self.isFireworks || self.isLanterns || self.isSnow || self.isWind,
-                  let card = self.recCard, !card.isHidden,
-                  let provider = self.recommendationProvider,
-                  let rec = provider() else { return }
-            self.recTitle?.text = rec.title
-            self.recArtist?.text = rec.artist
-            self.recCover?.image = rec.cover
-        }
-    }
-
-    @objc private func hideRecCard() {
-        recRotateTimer93?.invalidate()
-        recRotateTimer93 = nil
-        recCard?.isHidden = true
-    }
-
-    @objc private func recPlayTapped() {
-        hideRecCard()
-        onPlayRecommendation?()
     }
 
     // MARK: 写灯放飞（port91 任务 6：许愿灯整页，替换系统弹窗）

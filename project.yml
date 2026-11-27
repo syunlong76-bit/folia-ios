@@ -42,6 +42,10 @@ targets:
       # 演唱会加载优先于原贴纸）
       - path: Resources/StickersCutout
         type: folder
+      # (97) 第 9 条：梵高烟花视频（v4 过审版 4K 规格重制，
+      # folder reference，运行时定位 "FxMedia/vangogh-fireworks.mp4"）
+      - path: Resources/FxMedia
+        type: folder
     info:
       path: Info.plist
       # 注意：XcodeGen 在 generate 时按这里的 properties 重写 Info.plist，
@@ -51,7 +55,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Virelai
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "96"
+        CFBundleVersion: "97"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -125,7 +129,7 @@ targets:
       properties:
         CFBundleDisplayName: FoliaWidgets
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "96"
+        CFBundleVersion: "97"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
