@@ -781,11 +781,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     }
 
     /// (93) A4：四特效各自启/停落内存对账行——MB 走仓内既
-    /// 有 footprint 口径（StageStyleStore.physFootprintMB，
+    /// 有 footprint 口径（StyleOpenTrace.physFootprintMB，
     /// 与 Breadcrumbs 尾巴 footprintMB 同源同值，双写互证）。
     private func memLog93(_ fx: String, _ on: Bool) {
         Breadcrumbs.log("p93 mem fx=\(fx) on=\(on ? 1 : 0)"
-            + " mb=\(StageStyleStore.physFootprintMB())")
+            + " mb=\(StyleOpenTrace.physFootprintMB())")
     }
 
     private func setFw(_ on: Bool) {
