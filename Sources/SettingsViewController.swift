@@ -102,6 +102,9 @@ final class SettingsViewController: UIViewController {
     // (55) 动画与性能页签
     private let renderScaleControl = UISegmentedControl(
         items: ["0.5×", "0.75×", "1×", "1.5×", "2×"])
+    // (98) 第 8 条：舞台旋转转场盲测二选一（不标注优劣，
+    // 键 folia.rot98.mode：freeze/live，缺省方式一）。
+    private let rotMode98Control = UISegmentedControl(items: ["方式一", "方式二"])
     private static let renderScales: [Double] = [0.5, 0.75, 1.0, 1.5, 2.0]
     private let reduceMotionSwitch = UISwitch()
     private let systemReduceMotionLabel = UILabel()
@@ -531,6 +534,19 @@ final class SettingsViewController: UIViewController {
             "开启后，长按播放台可循环切换花海、雪景、星空、海洋四款主题；关掉后播放台恢复素面，特效全部停用。"))
         cardStack.addArrangedSubview(themeGroup)
         reg(themeGroup, tab: 0)
+
+        // (98) 第 8 条：舞台旋转转场盲测开关——两种转场方式
+        // 二选一、不标注优劣，切换后下一次旋转舞台时生效；
+        // 每次旋转的实选方式由舞台面包屑 p98 rot mode 自证。
+        rotMode98Control.selectedSegmentIndex =
+            UserDefaults.standard.string(forKey: "folia.rot98.mode") == "live" ? 1 : 0
+        let rotGroup98 = makeGroupCard()
+        rotGroup98.addArrangedSubview(makeSegmentedRow(
+            "舞台旋转转场", rotMode98Control, #selector(rotMode98Changed)))
+        rotGroup98.addArrangedSubview(makeHintRow(
+            "两种转场方式二选一，切换后下一次旋转舞台时生效。"))
+        cardStack.addArrangedSubview(rotGroup98)
+        reg(rotGroup98, tab: 0)
 
         // 点播台按钮分组卡（3.7 (50)）：三键显隐，默认全开 =
         // 现状；关掉的键在三台同步隐藏并收拢让位。主页墙台本
@@ -1053,6 +1069,15 @@ final class SettingsViewController: UIViewController {
             }
             present(login, animated: true)
         }
+    }
+
+    /// (98) 第 8 条：旋转转场盲测方式切换（方式一＝freeze
+    /// 冻帧盖、方式二＝live 实时渲染；键与舞台侧同名）。
+    @objc private func rotMode98Changed() {
+        let live = rotMode98Control.selectedSegmentIndex == 1
+        UserDefaults.standard.set(live ? "live" : "freeze",
+                                  forKey: "folia.rot98.mode")
+        Breadcrumbs.log("p98 rot mode v=\(live ? "live" : "frz") src=set")
     }
 
     @objc private func themeSwitchChanged() {

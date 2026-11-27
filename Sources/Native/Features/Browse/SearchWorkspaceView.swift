@@ -96,9 +96,12 @@ struct SearchWorkspaceView: View {
     @State private var entered = false
     /// 搜索代际：快速连搜时过期结果直接丢弃。
     @State private var searchGeneration = 0
-    /// 星标刷新代次（(55) 工作流 F）：订阅 FoliaStarChanged 后
-    /// 自增，强制行重算 StarStore 显态（他面切换星标也同步）。
-    @State private var starRefreshTick = 0
+    /// (98) 第 7 条：喜欢刷新代次——订阅 .foliaLikesChanged91
+    /// 后自增，强制卡重算 LikesStore 显态（全 App 同一喜欢源）。
+    @State private var likeRefreshTick98 = 0
+    /// (98) 第 7 条：单击展开的卡 id（卡内详情：大播放钮＋
+    /// 收藏到歌单/进日记本/我喜欢）；双击直接进详情播放页。
+    @State private var expandedId98: String?
     /// 「收藏到歌单」弹层的目标歌曲（(55) 工作流 F）：加号点按
     /// 置入后由 sheet 呈 AddToPlaylistViewController。
     @State private var addTarget: SongItem?
@@ -194,8 +197,8 @@ struct SearchWorkspaceView: View {
             }
         }
         .preferredColorScheme(.dark)
-        .onReceive(NotificationCenter.default.publisher(for: .foliaStarChanged)) { _ in
-            starRefreshTick += 1
+        .onReceive(NotificationCenter.default.publisher(for: .foliaLikesChanged91)) { _ in
+            likeRefreshTick98 += 1
         }
         .sheet(item: $addTarget) { item in
             AddToPlaylistSheet(track: item.track)
@@ -473,10 +476,29 @@ struct SearchWorkspaceView: View {
 
     // MARK: - 单曲拍立得卡
 
+    /// (98) 第 7 条：展开详情内的语义动作小钮（图标＋11pt 标签）。
+    private func expandedAction98(icon: String, label: String,
+                                  action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: icon)
+                    .font(.system(size: 15))
+                Text(label)
+                    .font(.system(size: 11, weight: .medium))
+            }
+            .foregroundColor(cardInk)
+            .frame(maxWidth: .infinity)
+            .frame(height: 44)
+            .background(RoundedRectangle(cornerRadius: 10)
+                .fill(Color.black.opacity(0.05)))
+        }
+        .buttonStyle(.plain)
+    }
+
     private func songCard(index: Int, item: SongItem) -> some View {
         let track = item.track
-        // 读一次星标代次，把 FoliaStarChanged 的刷新依赖挂到卡渲染上。
-        _ = starRefreshTick
+        // 读一次喜欢代次，把 .foliaLikesChanged91 的刷新依赖挂到卡渲染上。
+        _ = likeRefreshTick98
         return VStack(alignment: .leading, spacing: 0) {
             // 封面区：卡面内缩 10pt、圆角 4；右下角标承接旧行尾的
             // MV / 已下架标签（落在设计 A 的封面角标位）；多选态
@@ -484,7 +506,7 @@ struct SearchWorkspaceView: View {
             NativeCoverView(url: track.artworkURL, targetPixels: 300)
                 .aspectRatio(1.22, contentMode: .fit)
                 .clipShape(RoundedRectangle(cornerRadius: 4))
-                .overlay(alignment: .bottomTrailing) {
+                .overlay(alignment: .topTrailing) {
                     if let tag = item.isUnavailable ? "已下架" : (item.hasVideo ? "MV" : nil) {
                         Text(tag)
                             .font(.system(size: 11, weight: .bold))   // (95) 集成：字号下限 11pt 硬线，角标由 9 抬到 11
@@ -495,6 +517,17 @@ struct SearchWorkspaceView: View {
                                 .fill(Color.black.opacity(0.72)))
                             .padding(6)
                     }
+                }
+                // (98) 第 7 条：封面右下毛玻璃播放角标（原右下
+                // MV/已下架标签移右上让位）。
+                .overlay(alignment: .bottomTrailing) {
+                    Image(systemName: "play.fill")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundColor(.white)
+                        .frame(width: 26, height: 26)
+                        .background(Circle().fill(.ultraThinMaterial))
+                        .overlay(Circle().stroke(Color.white.opacity(0.35), lineWidth: 0.5))
+                        .padding(6)
                 }
                 .overlay(alignment: .topLeading) {
                     if selecting62 {
@@ -525,6 +558,8 @@ struct SearchWorkspaceView: View {
                     Text(searchFormatDuration(track.duration))
                         .font(.system(size: 11).monospacedDigit())
                         .foregroundColor(cardSub)
+                        .lineLimit(1)
+                        .frame(width: 46, alignment: .leading)   // (98) 第 7 条：时长单行定宽，不许被动作钮挤成竖排
                     Spacer(minLength: 0)
                     // 日记本（(53) 工作流 D）：点按收进/移出，视觉态随已收切换。
                     let inSketchbook = sketchbookStore.contains(trackId: track.id)
@@ -543,20 +578,23 @@ struct SearchWorkspaceView: View {
                     }
                     .buttonStyle(.plain)
 
-                    // 星标（(55) 工作流 F）：StarStore 本地真源。
-                    let starred = StarStore.shared.isStarred(track.id)
+                    // (98) 第 7 条：星标删除——收藏语义全 App 统一
+                    // 到爱心「我喜欢」（LikesStore 唯一真源）。
+                    let liked98 = LikesStore.shared.isLiked(track.id)
                     Button {
-                        let on = StarStore.shared.toggle(track.id)
-                        Breadcrumbs.log("search.row.star id=\(track.id) on=\(on)")
+                        let on = LikesStore.shared.toggle(track.id)
+                        Breadcrumbs.log("p98 search like id=\(track.id) on=\(on ? 1 : 0)")
                     } label: {
-                        Image(systemName: starred ? "star.fill" : "star")
+                        Image(systemName: liked98 ? "heart.fill" : "heart")
                             .font(.system(size: 14))
-                            .foregroundColor(starred ? cardInk : cardSub)
+                            .foregroundColor(liked98
+                                ? Color(red: 0xC8 / 255, green: 0x10 / 255, blue: 0x2E / 255)
+                                : cardSub)
                             .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .accessibilityLabel(starred ? "取消星标" : "星标")
+                    .accessibilityLabel(liked98 ? "取消喜欢" : "我喜欢")
 
                     // 加号（(55) F）：点按开「收藏到歌单」弹层，长按追加队列。
                     Image(systemName: "plus")
@@ -576,6 +614,56 @@ struct SearchWorkspaceView: View {
                         .accessibilityLabel("添加到歌单，长按加入播放队列")
                         .accessibilityAddTraits(.isButton)
                 }
+
+                // (98) 第 7 条：单击展开的卡内详情——大播放钮
+                // （起播后回墙、由 84 胶囊台承接）＋三枚语义
+                // 动作（收藏到歌单/进日记本/我喜欢）。
+                if expandedId98 == item.id {
+                    VStack(spacing: 10) {
+                        Button {
+                            guard !item.isUnavailable else { return }
+                            Breadcrumbs.log("p98 search play id=\(track.id)")
+                            onPlaySong(track, songs.map(\.track))
+                            onClose()
+                        } label: {
+                            HStack(spacing: 8) {
+                                Image(systemName: "play.fill")
+                                    .font(.system(size: 15, weight: .bold))
+                                Text("播放")
+                                    .font(.system(size: 15, weight: .bold))
+                            }
+                            .foregroundColor(cardInk)
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 44)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(gold))
+                        }
+                        .buttonStyle(.plain)
+                        HStack(spacing: 8) {
+                            expandedAction98(icon: "plus.circle", label: "收藏到歌单") {
+                                Breadcrumbs.log("search.row.addtoplaylist id=\(track.id)")
+                                addTarget = item
+                            }
+                            expandedAction98(
+                                icon: sketchbookStore.contains(trackId: track.id)
+                                    ? "checkmark.circle.fill" : "note.text",
+                                label: "进日记本") {
+                                if sketchbookStore.contains(trackId: track.id) {
+                                    sketchbookStore.remove(trackId: track.id, source: "search")
+                                } else {
+                                    sketchbookStore.add(track, source: "search")
+                                }
+                            }
+                            expandedAction98(
+                                icon: LikesStore.shared.isLiked(track.id)
+                                    ? "heart.fill" : "heart",
+                                label: "我喜欢") {
+                                let on = LikesStore.shared.toggle(track.id)
+                                Breadcrumbs.log("p98 search like id=\(track.id) on=\(on ? 1 : 0)")
+                            }
+                        }
+                    }
+                    .padding(.top, 6)
+                }
             }
             .padding(.horizontal, 10)
             .padding(.top, 8)
@@ -585,6 +673,15 @@ struct SearchWorkspaceView: View {
         .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
         .rotationEffect(.degrees(cardTilt(index)))
         .contentShape(RoundedRectangle(cornerRadius: 8))
+        .onTapGesture(count: 2) {
+            // (98) 第 7 条：双击＝进入详情播放页（起播＋开
+            // 全屏播放页＋收搜索页回墙）。
+            if selecting62 || item.isUnavailable { return }
+            Breadcrumbs.log("p98 search dbl id=\(track.id)")
+            onPlaySong(track, songs.map(\.track))
+            NativeBrowseView.openFullPlayer()
+            onClose()
+        }
         .onTapGesture {
             // (62) 多选态下点按改切换选中，不起播。
             if selecting62 {
@@ -596,7 +693,12 @@ struct SearchWorkspaceView: View {
                 return
             }
             guard !item.isUnavailable else { return }
-            onPlaySong(track, songs.map(\.track))
+            // (98) 第 7 条：单击＝卡内展开/收起歌曲详情
+            // （与墙面展开逻辑对齐，不再直接起播）。
+            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                expandedId98 = expandedId98 == item.id ? nil : item.id
+            }
+            Breadcrumbs.log("p98 search exp id=\(track.id) on=\(expandedId98 == item.id ? 1 : 0)")
         }
         // (62) §7：卡长按进多选态（批量收进日记本/加入队列，
         // 底栏承接；加号钮自身的长按加队列语义不动）。
@@ -769,7 +871,7 @@ struct SearchWorkspaceView: View {
                     notes.append("QQ 音乐：\(items.count) 首")
                 }
             } catch {
-                notes.append("QQ 音乐：后端未通，暂无结果（D5）")
+                notes.append("QQ 音乐：后端未通，暂无结果")
                 Breadcrumbs.log("search62.provider qq failed")
             }
         }

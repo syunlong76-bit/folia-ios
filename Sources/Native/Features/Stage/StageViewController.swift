@@ -352,6 +352,13 @@ final class StageViewController: UIViewController {
     private var p94RotLyricGeo: (x: Int, w: Int)?
     private var p94RotLink: CADisplayLink?
     private var p94RotSafetyWork: DispatchWorkItem?
+    /// (98) 第 8 条：旋转根治第一步——四齐门删除后的状态：
+    /// p98RotLive＝盲测模式（设置页二选一，live 时不设冻帧
+    /// 盖、网页层随系统转场实时渲染）；p98RotHoldWork＝
+    /// landed 后 stage.ready 未到时的有界等待（≤400ms，
+    /// ready 先到即揭 via=hold98、超时强揭 via=cap98）。
+    private var p98RotLive = false
+    private var p98RotHoldWork: DispatchWorkItem?
     /// (86) 第 9 条：alongside 已排轮的几何（尺寸＋安全
     /// 区），completion 据此判补轮——一致即零补轮、landed
     /// runs 收敛为 1（(85) 实锤旧法解冻后中间 bounds 反复
@@ -980,17 +987,33 @@ final class StageViewController: UIViewController {
         // 停舞台内嵌 WebView 滚动面的惯性/回弹残余。
         WallPrototypeViewController.p94StopScrollMomentum(
             WebEffectBridge.shared.webView.scrollView)
+        // (98) 第 8 条：稳定帧计数链随四齐门一并删除——
+        // 释放不再等帧数，landed 即结算（p98RotReleaseAtLanded）。
         p94RotLink?.invalidate()
-        let p94Link = CADisplayLink(target: self,
-                                    selector: #selector(p94RotFrameTick))
-        p94Link.add(to: .main, forMode: .common)
-        p94RotLink = p94Link
+        p94RotLink = nil
         // (81) 第 3 条：网页特效层纳入同一冻结管线——冻
         // 结拍先给 WebView 截图盖层（与 (70) B6 切换盖同
         // 法），转场期网页层本体藏在盖下、不再被系统旋转
         // 快照当刚性平面倾斜/侧躺；落定后等新尺寸首帧回
         // 执再揭（见 armWebRotReveal81）。
+        // (98) 第 8 条：盲测模式读取（设置页「舞台旋转转场」
+        // 二选一、不标注优劣）：freeze＝全分辨率冻帧盖；
+        // live＝不设盖、网页层随系统转场实时渲染。
+        let rotLive98 = UserDefaults.standard.string(
+            forKey: "folia.rot98.mode") == "live"
+        p98RotLive = rotLive98
+        Breadcrumbs.log("p98 rot mode v=\(rotLive98 ? "live" : "frz")")
+        // (98) 第 8 条：冻结拍即以目标尺寸并行启动网页层
+        // 重建——不等 landed、不等静默合并：帧先行设目标
+        // 尺寸、清 zoom/inset 残留、即刻派 resize（桥侧防
+        // 抖已摘、JS 合并窗已归零，重建与系统转场并行跑）。
         if webEmbedStyleId != nil {
+            let wv98 = WebEffectBridge.shared.webView
+            wv98.frame = CGRect(origin: wv98.frame.origin, size: size)
+            WebEffectBridge.shared.prepareRotationResize94()
+            WebEffectBridge.shared.nudgeEffectResize81()
+        }
+        if webEmbedStyleId != nil && !rotLive98 {
             beginWebRotCover81(generation: generation)
         }
         coordinator.animate(alongsideTransition: { [weak self] _ in
@@ -1041,12 +1064,14 @@ final class StageViewController: UIViewController {
             // 的布局请求若几何与 alongside 已排一致（纯旋
             // 转常态），零补轮、runs 收敛为 1；不一致才补
             // 一轮并落 extra=1。
-            // (94) 94-6：原生 landed 只喂四齐门之一，不再在此
-            // 直接解冻——解冻移交 p94RotMaybeRelease（四齐才放）。
+            // (98) 第 8 条：landed 即结算（见下 p98RotRelease-
+            // AtLanded）——(94) 四齐门口径已废除。
             self.p94RotNativeLanded = true
             Breadcrumbs.log("p94 rot native landed dt="
                 + "\(Int((CACurrentMediaTime() - self.p94RotStart) * 1000))")
-            self.p94RotMaybeRelease()
+            // (98) 第 8 条：landed 即结算（四齐门已删）——
+            // 原生当场解冻、网页盖即揭或进 ≤400ms 有界等待。
+            self.p98RotReleaseAtLanded()
             var extraRun86 = 0
             if self.stageLayoutPending {
                 self.stageLayoutPending = false
@@ -1090,46 +1115,28 @@ final class StageViewController: UIViewController {
             self.refreshTrackWidth86(portrait: size.width < size.height)
             if self.webRotCover81 != nil {
                 Breadcrumbs.log("webfx.rot81 landed gen=\(generation)")
-                self.armWebRotReveal81(generation: generation)
-            } else if self.p94RotAwaiting {
-                // (94) 94-6：无网页盖的原生样式同样挂四齐门
-                // 安全网（防死锁，触发自证 via=tmo94）。
-                self.p94RotArmSafety()
             }
+            // (98) 第 8 条：揭盖/有界等待已在 p98RotRelease-
+            // AtLanded 内结算，旧 armWebRotReveal81 的 3s
+            // 安全网口径（tmo94）随四齐门一并废除。
         }
     }
 
     // MARK: - (94) 94-6 旋转四齐门结算
 
-    /// 稳定帧计数：朝向尺寸与 WebView 帧都落到目标值才计
-    /// 一帧，任一不符清零；满 2 帧喂门结算。
-    @objc private func p94RotFrameTick() {
-        guard p94RotAwaiting else { return }
-        let sizeOK = abs(view.bounds.width - p94RotTargetSize.width) < 0.5
-            && abs(view.bounds.height - p94RotTargetSize.height) < 0.5
-        var webOK = true
-        if webEmbedStyleId != nil {
-            webOK = WebEffectBridge.shared.webView.frame.size
-                == rendererContainer.bounds.size
-        }
-        if sizeOK && webOK {
-            p94RotStableFrames += 1
-        } else {
-            p94RotStableFrames = 0
-        }
-        if p94RotStableFrames >= 2 {
-            p94RotMaybeRelease()
-        }
-    }
-
-    /// 桥侧旋转信号（stageResizeDone / stageReady）：回报的
-    /// CSS 宽须与本次目标尺寸对位（横竖任一），防上一朝向
-    /// 的迟到回报误喂本门。
+    /// (98) 第 8 条：桥侧旋转信号（stageResizeDone /
+    /// stage.ready）——四齐门删除后只作诊断与有界等待的
+    /// ready 证据：回报 CSS 宽须与本次目标尺寸对位（防上
+    /// 一朝向迟到回报污染）；ready 在有界等待期内到达即
+    /// 揭盖（via=hold98）。到达时刻落 p98 rot sig 供判读
+    /// （含 3410ms 级死锁样本的链路活性）。
     private func p94HandleRotSignal(kind: String, body: [String: Any]) {
-        guard p94RotAwaiting else { return }
+        guard p94RotAwaiting || p98RotHoldWork != nil else { return }
         let cw = (body["cssW"] as? NSNumber)?.intValue ?? -1
         guard cw == Int(p94RotTargetSize.width.rounded())
             || cw == Int(p94RotTargetSize.height.rounded()) else { return }
+        let dt = Int((CACurrentMediaTime() - p94RotStart) * 1000)
+        Breadcrumbs.log("p98 rot sig k=\(kind) dt=\(dt)")
         if kind == "resized" {
             p94RotWebResized = true
         } else if kind == "ready" {
@@ -1137,58 +1144,34 @@ final class StageViewController: UIViewController {
             let x = (body["x"] as? NSNumber)?.intValue ?? 0
             let w = (body["clientW"] as? NSNumber)?.intValue ?? 0
             if w > 0 { p94RotLyricGeo = (x: x, w: w) }
+            if let hold = p98RotHoldWork {
+                hold.cancel()
+                p98RotHoldWork = nil
+                if webRotCover81 != nil {
+                    revealWebRotCover81(via: "hold98")
+                }
+            }
         }
-        p94RotMaybeRelease()
     }
 
-    /// 四齐结算：原生 landed＋WebView resize 完成＋JS
-    /// stage.ready＋连续 2 稳定帧全齐才解冻并揭盖；歌词行
-    /// 新几何同点落行（JS 主画布客户区优先，否则按舞台左
-    /// 右安全边距推算——歌词行不许出界）。
-    /// (95) 第五门：四齐之外还须 stageRotLaidSize86 已等
-    /// 于本次目标尺寸——(94) 真机横屏后只剩顶部一条带，
-    /// 判读推测四齐门不验「已按新尺寸重排」、pending 未
-    /// 置位时可零重排揭盖。不等时释放前无条件补一轮
-    /// layoutStage（既有入口，排后 pushSnapshot，与
-    /// alongside/completion 补轮同式）、laid 回读补排后
-    /// 实测的 view.bounds.size（(96) E 项，不许直接盖章
-    /// = target）；实测与目标差 <0.5pt 即认已排、递归重
-    /// 走全部门判定，仍差 ≥0.5 即返、等下一稳定帧再结算
-    /// （不递归，bounds 不变时递归必空转；3 秒 tmo94 安
-    /// 全网不动）。
-    private func p94RotMaybeRelease() {
-        guard p94RotAwaiting, p94RotNativeLanded,
-              p94RotStableFrames >= 2 else { return }
-        if webEmbedStyleId != nil {
-            guard p94RotWebResized, p94RotStageReady else { return }
-        }
-        // (96) E 项：比对按 0.5pt 容差（与 p94RotFrameTick
-        // 的 sizeOK 同口径）。注：alongside :995 写的是转
-        // 场 size 参数（即目标本身），非排版后回读；此处
-        // view.bounds.size 才是补排实际用的几何。
-        if abs(stageRotLaidSize86.width - p94RotTargetSize.width) >= 0.5
-            || abs(stageRotLaidSize86.height - p94RotTargetSize.height) >= 0.5 {
-            stageLayoutPending = false
-            layoutStage()
-            pushSnapshot()
-            stageRotLaidSize86 = view.bounds.size
-            stageRotLaidInsets86 = view.safeAreaInsets
-            guard abs(stageRotLaidSize86.width - p94RotTargetSize.width) < 0.5,
-                  abs(stageRotLaidSize86.height - p94RotTargetSize.height) < 0.5 else { return }
-            p94RotMaybeRelease()
-            return
-        }
+    /// (98) 第 8 条：landed 结算——四齐门删除后唯一的释放
+    /// 点（DS 对账定案第一步）。原生侧当场解冻＋补轮（冻
+    /// 结期 pending 以最终 bounds 单轮补齐）；网页盖：
+    /// stage.ready 已到即揭（via=landed98）；未到进有界
+    /// 等待 ≤400ms——ready 先到经 p94HandleRotSignal 揭
+    /// （via=hold98）、超时强揭（via=cap98）。异常路径有
+    /// 界兜底：错误内容最多被盖多挡 400ms，绝不裸奔 3s、
+    /// 绝不长冻。live 盲测模式无盖、天然直达。
+    private func p98RotReleaseAtLanded() {
+        guard p94RotAwaiting else { return }
         p94RotAwaiting = false
-        p94RotLink?.invalidate()
-        p94RotLink = nil
         p94RotSafetyWork?.cancel()
         p94RotSafetyWork = nil
         stageRotationFrozen = false
         p94RotCatchUpLayout()
         let dt = Int((CACurrentMediaTime() - p94RotStart) * 1000)
-        Breadcrumbs.log("p94 rot ready dt=\(dt) frames=2"
-            + " laid=\(Int(stageRotLaidSize86.width))x\(Int(stageRotLaidSize86.height))"
-            + " target=\(Int(p94RotTargetSize.width))x\(Int(p94RotTargetSize.height))")
+        Breadcrumbs.log("p98 rot rel dt=\(dt)"
+            + " rdy=\(p94RotStageReady ? 1 : 0)")
         if let geo = p94RotLyricGeo {
             Breadcrumbs.log("p94 rot lyric x=\(geo.x) w=\(geo.w)")
         } else {
@@ -1197,9 +1180,21 @@ final class StageViewController: UIViewController {
             Breadcrumbs.log("p94 rot lyric x=\(left)"
                 + " w=\(Int(view.bounds.width) - left - right)")
         }
-        if webRotCover81 != nil {
-            revealWebRotCover81(via: "ready94")
+        guard webRotCover81 != nil else { return }
+        if p94RotStageReady {
+            revealWebRotCover81(via: "landed98")
+            return
         }
+        let gen = p94RotGen
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, gen == self.p94RotGen else { return }
+            self.p98RotHoldWork = nil
+            if self.webRotCover81 != nil {
+                self.revealWebRotCover81(via: "cap98")
+            }
+        }
+        p98RotHoldWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
     }
 
     /// 释放后补轮：冻结期记下的待办布局以最终 bounds 单轮
@@ -1209,31 +1204,6 @@ final class StageViewController: UIViewController {
         stageLayoutPending = false
         layoutStage()
         pushSnapshot()
-    }
-
-    /// 防死锁安全网：四齐门 3s 未齐则强制释放并自证
-    /// （via=tmo94＋实测稳定帧数）——不是释放条件，是防永冻
-    /// 的兜底，触发即说明 JS 回报链断，日志可判。
-    private func p94RotArmSafety() {
-        p94RotSafetyWork?.cancel()
-        let gen = p94RotGen
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, self.p94RotAwaiting,
-                  gen == self.p94RotGen else { return }
-            self.p94RotAwaiting = false
-            self.p94RotLink?.invalidate()
-            self.p94RotLink = nil
-            self.stageRotationFrozen = false
-            self.p94RotCatchUpLayout()
-            let dt = Int((CACurrentMediaTime() - self.p94RotStart) * 1000)
-            Breadcrumbs.log("p94 rot ready dt=\(dt)"
-                + " frames=\(self.p94RotStableFrames) via=tmo94")
-            if self.webRotCover81 != nil {
-                self.revealWebRotCover81(via: "tmo94")
-            }
-        }
-        p94RotSafetyWork = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
     }
 
     /// (81) 第 3 条：旋转冻结拍给网页层上截图盖。截图是
@@ -1248,14 +1218,14 @@ final class StageViewController: UIViewController {
         webRotRevealWork81?.cancel()
         webRotRevealWork81 = nil
         let webView = WebEffectBridge.shared.webView
-        // (92) 任务 9：冻结盖快照降采样——旧实现全屏全分辨率
-        // takeSnapshot 是旋转长帧的一源（审计 Q7）；盖层只活
-        // 转场期且随容器拉伸显示，半宽采样视觉无差、合成成
-        // 本大减。揭盖时序/盖层语义不动。
+        // (98) 第 8 条：盖换全分辨率正确比例——(92) 的半宽
+        // 降采样是 DS 评审点名的「糊盖」嫌疑（冻帧可接受性
+        // 须与清晰度分开盲测），本轮恢复全宽采样；快照宽
+        // 度落 p98 rot cap 自证。
         let snapConfig = WKSnapshotConfiguration()
-        let snapWidth = max(200, webView.bounds.width * 0.5)
+        let snapWidth = max(200, webView.bounds.width)
         snapConfig.snapshotWidth = NSNumber(value: Double(snapWidth))
-        Breadcrumbs.log("p92 rot snapw=\(Int(snapWidth))")
+        Breadcrumbs.log("p98 rot cap w=\(Int(snapWidth))")
         webView.takeSnapshot(with: snapConfig) { [weak self] image, _ in
             guard let self, rotGen == self.webRotGen81,
                   self.webEmbedStyleId != nil else { return }
@@ -1273,21 +1243,6 @@ final class StageViewController: UIViewController {
             self.webRotCover81 = cover
             Breadcrumbs.log("webfx.rot81 freeze gen=\(generation)")
         }
-    }
-
-    /// (81) 第 3 条：落定后揭盖武装——催网页层按新尺寸
-    /// 重排（桥侧 dispatch resize），等其首帧回执
-    /// （handleWebStyleFrame 转交）或 0.9s 超时，任一先
-    /// 到即交叉淡出盖层并落 ready 量测（ms=冻结→揭盖）。
-    private func armWebRotReveal81(generation: Int) {
-        // (86) 第 9 条：nudge 已提前到 alongside 转场期发
-        // （新尺寸一定即催网页层重排、回执到达由
-        // handleWebStyleFrame 直揭），此处不再重复催。
-        // (94) 94-6 改：揭盖不再走此处的固定超时（旧 0.9s
-        // 口径废除）——释放归四齐门（p94RotMaybeRelease，
-        // 回执经 handleWebStyleFrame 喂 stage.ready 条件）；
-        // 此处只挂四齐门的防死锁安全网（3s、via=tmo94）。
-        p94RotArmSafety()
     }
 
     private func revealWebRotCover81(via: String) {
@@ -2192,13 +2147,15 @@ final class StageViewController: UIViewController {
         // (81) 第 3 条：旋转揭盖等的是同一路首帧回执——
         // 盖在场时先结算揭盖（与样式淡换武装相互独立）。
         if webRotCover81 != nil, styleId == webEmbedStyleId {
-            // (94) 94-6：四齐门在岗时首帧回执只作 stage.ready
-            // 证据喂门、不直揭——四齐才释放揭盖。
-            if p94RotAwaiting {
-                p94RotStageReady = true
-                p94RotMaybeRelease()
-            } else {
-                revealWebRotCover81(via: "ack")
+            // (98) 第 8 条：首帧回执＝ready 证据——记旗供
+            // landed 结算；若已在有界等待期则即揭
+            // （via=hold98）；landed 前到达不直揭（盖随系统
+            // 转场动画走完再揭，防中途露未落定帧）。
+            p94RotStageReady = true
+            if let hold = p98RotHoldWork {
+                hold.cancel()
+                p98RotHoldWork = nil
+                revealWebRotCover81(via: "hold98")
             }
         }
         guard styleId == webEmbedStyleId, webFadeWorkItem != nil else { return }
@@ -3294,7 +3251,7 @@ final class StageViewController: UIViewController {
         let bar = stageBar
         bar.backgroundColor = .clear
         // (95) 第 11 条：台身圆角 35→31（胶囊形态，四宿主同值）。
-        bar.layer.cornerRadius = 36
+        bar.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -3351,7 +3308,7 @@ final class StageViewController: UIViewController {
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = 36
+        blur.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -3391,7 +3348,7 @@ final class StageViewController: UIViewController {
         stageRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = 36
+        glassTint.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -3779,7 +3736,7 @@ final class StageViewController: UIViewController {
         Breadcrumbs.log("p93 deck host=stage")
         // (95) 第 11 条自证：胶囊形态已落（台高 62 由
         // expandedBarHeight 单一出处收口）。
-        Breadcrumbs.log("p95 deck capsule h=62 host=stage")
+        Breadcrumbs.log("p98 deck cap h=\(Int(MiniBarQuickRowView.expandedBarHeight)) host=stage")
         // (83) 双击闪退定行删除：原「模式钮纵向跟随主排」
         // 约束块（stageModeButton/stagePawButton 锚主排）
         // 整段已删——(82) 提交 90aa29c1 删两钮 addSubview

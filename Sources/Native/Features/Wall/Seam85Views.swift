@@ -470,6 +470,50 @@ final class SeamMaster: UIView {
     // 与切换动画帧间隔自证探针。
     private var qrCachedImage95: UIImage?
     private var qrCachedKey95: String?
+
+    // (98) 第 5 条：二维码加速——channels 会话缓存（App 生命周期
+    // 内复用）、key 预取缓存（TTL 120s，unikey 180s 留 60s 余
+    // 量）、双槽码缓存（按 provider 存 key＋图 payload＋生成时
+    // 刻，切回未过前端有效窗直接复用图并以原 key 续轮询）。
+    static var qrChannels98: [String]?
+    static var qrKeyCache98: [String: (key: String, channel: String, at: Date)] = [:]
+    static var qrSlot98: [String: (key: String, base64: String?, content: String?, at: Date)] = [:]
+    private var qrT098: Date?
+    private var qrTotalLogged98 = false
+    private var qrCacheHit98 = false
+    private var qrReuseKey98: String?
+
+    private func qrSeg98(_ prov: String, _ stage: String, _ t0: Date) {
+        Breadcrumbs.log("p98 qr seg prov=\(prov) stage=\(stage) ms=\(Int(Date().timeIntervalSince(t0) * 1000)) node=\(ProviderLoginTransport.lastNodeIndex98)")
+    }
+
+    private func qrTotal98(_ prov: String) {
+        guard !qrTotalLogged98, let t0 = qrT098 else { return }
+        qrTotalLogged98 = true
+        Breadcrumbs.log("p98 qr total prov=\(prov) ms=\(Int(Date().timeIntervalSince(t0) * 1000)) cache=\(qrCacheHit98 ? 1 : 0)")
+    }
+
+    /// 缝构建时后台预取：默认平台（openQR94 同判据）预跑
+    /// fetchKey 入缓存，另一家同轮预热（结果同样入缓存）。
+    /// 只预取 key 不预取整码（码 TTL 自生成起算）。
+    private func prefetchQRKeys98() {
+        Task { [weak self] in
+            guard let self else { return }
+            if Self.qrKeyCache98["qq"] == nil {
+                var channel = "qq"
+                if let chs = Self.qrChannels98, !chs.contains(channel) {
+                    channel = chs.first ?? channel
+                }
+                if let key = try? await self.qqClient94.fetchKey(channel: channel) {
+                    Self.qrKeyCache98["qq"] = (key, channel, Date())
+                }
+            }
+            if Self.qrKeyCache98["kugou"] == nil,
+               let key = try? await self.kugouClient94.fetchKey() {
+                Self.qrKeyCache98["kugou"] = (key, "", Date())
+            }
+        }
+    }
     private var qrAnimLink95: CADisplayLink?
     private var qrAnimLast95: CFTimeInterval = 0
     private var qrAnimMaxGap95: Double = 0
@@ -482,6 +526,7 @@ final class SeamMaster: UIView {
         // (94) 94-4 自证：每页缝构建落一行（avatar/qr 为母
         // 版槽位在岗标记：头像位与二维码切换区均已装配）。
         Breadcrumbs.log("p94 seam host=\(host) avatar=1 qr=1 ver=master")
+        prefetchQRKeys98()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -1067,9 +1112,23 @@ final class SeamMaster: UIView {
         let provider = qrProvider
         let gen = coordinator94.begin(provider: provider)
         qrFlowActive = true
-        // (95) 10：新一轮取码使旧 payload 缓存失效。
-        qrCachedKey95 = nil
-        qrCachedImage95 = nil
+        // (98) 第 5 条：计时起点＋双槽判定——本台槽未过前端有
+        // 效窗（QQ 160s／酷狗 285s，各留 15s 余量）则复用其
+        // key 续轮询；过期才清槽整链重跑。(95) 的 payload 解
+        // 码缓存只在整链重跑时失效。
+        qrT098 = Date()
+        qrTotalLogged98 = false
+        qrCacheHit98 = false
+        qrReuseKey98 = nil
+        if let slot = Self.qrSlot98[provider.rawValue],
+           Date().timeIntervalSince(slot.at) < (provider == .qq ? 160 : 285) {
+            qrReuseKey98 = slot.key
+            qrCacheHit98 = true
+        } else {
+            Self.qrSlot98[provider.rawValue] = nil
+            qrCachedKey95 = nil
+            qrCachedImage95 = nil
+        }
         qrImageView.image = nil
         qrStatusLabel.text = "正在生成二维码…"
         qrSpinner.startAnimating()
@@ -1122,22 +1181,62 @@ final class SeamMaster: UIView {
 
     private func runOneQQQRCode(gen: Int, deadline: Date) async -> QRFlowOutcome {
         let qr: QQLoginClient.QRCode
-        do {
-            // 通道沿 LoginViewController：先探测后端声明，
-            // 缺省 qq 通道在列则用之、否则用声明首个。
+        if let reuse = qrReuseKey98, let slot = Self.qrSlot98["qq"] {
+            // (98) 第 5 条：双槽复用——跳过取码段直入轮询。
+            qrReuseKey98 = nil
+            qr = QQLoginClient.QRCode(key: reuse, qrimgBase64: slot.base64)
+        } else {
+          do {
+            // (98) 第 5 条：channels 改会话缓存——缺省直接以
+            // "qq" 发 key（静态回落集同口径），缓存缺席时后台
+            // 补探测、不再每开必付串行探测跳；fetchKey 失败才
+            // 回头探测 channels 换通道重试一次。
             var channel = "qq"
-            if let channels = await qqClient94.fetchChannels(),
-               !channels.contains(channel) {
-                channel = channels.first ?? channel
+            if let chs = Self.qrChannels98, !chs.contains(channel) {
+                channel = chs.first ?? channel
             }
-            let key = try await qqClient94.fetchKey(channel: channel)
+            if Self.qrChannels98 == nil {
+                Task { [weak self] in
+                    guard let self else { return }
+                    if let chs = await self.qqClient94.fetchChannels() {
+                        Self.qrChannels98 = chs
+                    }
+                }
+            }
+            var key = ""
+            if let kc = Self.qrKeyCache98["qq"], kc.channel == channel,
+               Date().timeIntervalSince(kc.at) < 120 {
+                key = kc.key
+                qrCacheHit98 = true
+                Breadcrumbs.log("p98 qr seg prov=qq stage=key ms=0 node=-1")
+            } else {
+                let kt0 = Date()
+                do {
+                    key = try await qqClient94.fetchKey(channel: channel)
+                } catch {
+                    let ct0 = Date()
+                    guard let chs = await qqClient94.fetchChannels() else { throw error }
+                    Self.qrChannels98 = chs
+                    qrSeg98("qq", "ch", ct0)
+                    let alt = chs.contains("qq") ? "qq" : (chs.first ?? channel)
+                    guard alt != channel else { throw error }
+                    channel = alt
+                    key = try await qqClient94.fetchKey(channel: channel)
+                }
+                qrSeg98("qq", "key", kt0)
+                Self.qrKeyCache98["qq"] = (key, channel, Date())
+            }
+            let ct0 = Date()
             qr = try await qqClient94.createQR(key: key)
-        } catch {
+            qrSeg98("qq", "create", ct0)
+            Self.qrSlot98["qq"] = (qr.key, qr.qrimgBase64, nil, Date())
+          } catch {
             await MainActor.run {
                 self.qrStatusLabel.text = "二维码生成失败，请检查网络后重试"
                 self.qrSpinner.stopAnimating()
             }
             return .fatal
+        }
         }
         if Task.isCancelled || !coordinator94.isCurrent(gen) { return .done }
         guard let image = qr.qrimgBase64, !image.isEmpty else {
@@ -1150,6 +1249,7 @@ final class SeamMaster: UIView {
         }
         await MainActor.run {
             self.showQRImage(base64: image, content: nil)
+            self.qrTotal98("qq")
             self.qrStatusLabel.text = "请用 QQ 扫码"
             self.qrSpinner.stopAnimating()
         }
@@ -1240,19 +1340,40 @@ final class SeamMaster: UIView {
 
     private func runOneKugouQRCode(gen: Int, deadline: Date) async -> QRFlowOutcome {
         let qr: KugouLoginClient.QRCode
-        do {
-            let key = try await kugouClient94.fetchKey()
+        if let reuse = qrReuseKey98, let slot = Self.qrSlot98["kugou"] {
+            qrReuseKey98 = nil
+            qr = KugouLoginClient.QRCode(key: reuse, qrimgBase64: slot.base64,
+                                         qrContent: slot.content)
+        } else {
+          do {
+            var key = ""
+            if let kc = Self.qrKeyCache98["kugou"],
+               Date().timeIntervalSince(kc.at) < 120 {
+                key = kc.key
+                qrCacheHit98 = true
+                Breadcrumbs.log("p98 qr seg prov=kugou stage=key ms=0 node=-1")
+            } else {
+                let kt0 = Date()
+                key = try await kugouClient94.fetchKey()
+                qrSeg98("kugou", "key", kt0)
+                Self.qrKeyCache98["kugou"] = (key, "", Date())
+            }
+            let ct0 = Date()
             qr = try await kugouClient94.createQR(key: key)
-        } catch {
+            qrSeg98("kugou", "create", ct0)
+            Self.qrSlot98["kugou"] = (qr.key, qr.qrimgBase64, qr.qrContent, Date())
+          } catch {
             await MainActor.run {
                 self.qrStatusLabel.text = "二维码生成失败，请检查网络后重试"
                 self.qrSpinner.stopAnimating()
             }
             return .fatal
         }
+        }
         if Task.isCancelled || !coordinator94.isCurrent(gen) { return .done }
         await MainActor.run {
             self.showQRImage(base64: qr.qrimgBase64, content: qr.qrContent)
+            self.qrTotal98("kugou")
             self.qrStatusLabel.text = "请用酷狗音乐 App 扫码"
             self.qrSpinner.stopAnimating()
         }

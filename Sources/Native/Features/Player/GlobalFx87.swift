@@ -653,6 +653,22 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// 动点按识别器挂到真主窗。同一宿主实例迁挂（卡片随迁
     /// 不重建），识别器随迁；落 p92 自证记宿主所在窗类名
     /// 与 level，真机日志可直接对账宿主落点。
+    /// (98) 第 2 条：梵高烟花视频层迁入主窗层级——
+    /// screenBlendMode 只能与同一窗口内的 backdrop 混合；
+    /// 视频层留在独立 Fx 窗时，黑底只与本窗透明根视图混合、
+    /// 合成结果为不透明黑，整屏看上去像进了全屏黑页。迁入
+    /// 主窗后黑底对照片墙透明，烟花直接在墙上炸开。视图本
+    /// 身 isUserInteractionEnabled=false，点按全透传下层。
+    private func relocateVg98IfNeeded() {
+        guard let vg = vgFwView97, let main = mainWindow,
+              vg.superview !== main else { return }
+        vg.removeFromSuperview()
+        vg.frame = main.bounds
+        vg.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        main.addSubview(vg)
+        Breadcrumbs.log("p98 vgfw host=main")
+    }
+
     public func attachOverlay92(to main: UIWindow) {
         mainWindow = main
         let host: FxOverlayHost91
@@ -690,6 +706,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         }
         Breadcrumbs.log("p92 fxhost win=\(String(describing: type(of: main)))"
             + " level=\(Int(main.windowLevel.rawValue))")
+        relocateVg98IfNeeded()
         installTapProbe92IfNeeded()
     }
 
@@ -1196,6 +1213,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         // (97) 第 9 条：梵高烟花视频层启停（唯一挂钩点，覆盖
         // 全部启停路径）；素材缺失/起播失败回落原生粒子路径。
         if on {
+            relocateVg98IfNeeded()
             vgFwActive97 = vgFwView97?.start97() ?? false
             Breadcrumbs.log("p97 vgfw on=\(vgFwActive97 ? 1 : 0)")
         } else {

@@ -54,6 +54,8 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     private let canvas = XmasMetalCanvas97()
     private let metal97 = XmasMetalRenderer97()
     private var frameSprites97: [XmasSpriteInstance97] = []
+    private var guardLogged98a = false
+    private var guardLogged98b = false
     private var frameTris97: [XmasSolidTri97] = []
     private var atlasReady97 = false
     private var context: LyricStageContext?
@@ -240,6 +242,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             // 卡/流畅的差异点在内存（311–345MB vs 155–197MB），
             // 往后判读须有同行协变量。
             Breadcrumbs.log("p94 xmas fps=\(String(format: "%.1f", 1.0 / avg)) avgMs=\(String(format: "%.2f", avg * 1000)) fp=\(Breadcrumbs.footprintMB97())")
+            Breadcrumbs.log("p98 xmas spr n=\(metal97.lastSprCount98) tri=\(metal97.lastTriCount98 * 3)")
             fpsAccum = 0; fpsFrames = 0; fpsWindow = 0
         }
     }
@@ -601,7 +604,12 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             Breadcrumbs.log("p94 xmas scale=\(String(format: "%.1f", UIScreen.main.scale))"
                 + " tex=\(String(format: "%.1f", textureMB94()))MB rebake=1")
         }
-        guard sprites.count > 15, !treePos.isEmpty else {
+        guard sprites.count > 15 else {
+            if !guardLogged98a { guardLogged98a = true; Breadcrumbs.log("p98 xmas guard sprites=\(sprites.count)") }
+            frameSprites97 = []; frameTris97 = []; return
+        }
+        guard !treePos.isEmpty else {
+            if !guardLogged98b { guardLogged98b = true; Breadcrumbs.log("p98 xmas guard treePos=0") }
             frameSprites97 = []; frameTris97 = []; return
         }
         frameSprites97.removeAll(keepingCapacity: true)

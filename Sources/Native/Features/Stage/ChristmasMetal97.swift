@@ -117,6 +117,9 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
     private var pipelineSprite: MTLRenderPipelineState?
     private var pipelineTri: MTLRenderPipelineState?
     private var atlasTexture: MTLTexture?
+    private(set) var lastSprCount98 = 0
+    private(set) var lastTriCount98 = 0
+    private var notexLogged98 = false
     private var uvRects: [CGRect] = []     // 精灵档下标→图集 UV
     private var instanceBuffer: MTLBuffer?
     private var triBuffer: MTLBuffer?
@@ -186,7 +189,7 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
         }
         let atlasH = y + shelfH
         guard atlasH > 0, atlasH <= 8192 else { return false }
-        // 位图上下文（预乘 BGRA）：翻转绘制使内存行 0＝图集顶行。
+        // 位图上下文（预乘 BGRA：premultipliedFirst|byteOrder32Little，(98) 修正——旧 Last|32Big 实产 RGBA 与 .bgra8Unorm 声明互换 R/B）：翻转绘制使内存行 0＝图集顶行。
         let bpr = atlasW * 4
         var raw = [UInt8](repeating: 0, count: bpr * atlasH)
         let cs = CGColorSpaceCreateDeviceRGB()
@@ -194,8 +197,8 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
             guard let ctx = CGContext(data: ptr.baseAddress, width: atlasW,
                                       height: atlasH, bitsPerComponent: 8,
                                       bytesPerRow: bpr, space: cs,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-                                        | CGBitmapInfo.byteOrder32Big.rawValue)
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                        | CGBitmapInfo.byteOrder32Little.rawValue)
             else { return false }
             ctx.translateBy(x: 0, y: CGFloat(atlasH))
             ctx.scaleBy(x: 1, y: -1)
@@ -219,6 +222,7 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
                         mipmapLevel: 0, withBytes: ptr.baseAddress!, bytesPerRow: bpr)
         }
         atlasTexture = tex
+        Breadcrumbs.log("p98 xmas uv atlasH=\(atlasH) uv13=\(placements.indices.contains(13) ? "\(placements[13])" : "na")")
         uvRects = placements.map {
             CGRect(x: $0.origin.x / CGFloat(atlasW), y: $0.origin.y / CGFloat(atlasH),
                    width: $0.width / CGFloat(atlasW), height: $0.height / CGFloat(atlasH))
@@ -277,6 +281,12 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
         }
         // 精灵实例。
         let sprCount = min(pendingSprites.count, Self.maxSprites)
+        lastSprCount98 = sprCount
+        lastTriCount98 = triCount
+        if sprCount > 0 && atlasTexture == nil && !notexLogged98 {
+            notexLogged98 = true
+            Breadcrumbs.log("p98 xmas notex n=\(sprCount)")
+        }
         if sprCount > 0, let atlasTexture {
             let ptr = instanceBuffer.contents()
                 .bindMemory(to: XmasSpriteInstance97.self, capacity: Self.maxSprites)

@@ -86,7 +86,7 @@ final class MiniBarQuickRowView: UIView {
     /// 展开高 62→72（＋16%），三宿主同源跟随；胶囊圆角
     /// 随高改 36（=高/2 的 pill 口径，三宿主 bar/blur/tint
     /// 与形态回写共 12 处已同步）。
-    static let expandedBarHeight: CGFloat = 72
+    static let expandedBarHeight: CGFloat = 84  // (98) 第 4 条：72→84，三宿主同源；圆角一律 expandedBarHeight/2 派生
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?

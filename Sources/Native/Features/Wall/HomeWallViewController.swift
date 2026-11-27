@@ -1478,7 +1478,7 @@ final class HomeWallViewController: UIViewController,
         let bar = MiniBarHitView()
         bar.backgroundColor = .clear
         // (95) 第 1 条：胶囊台高 62、bar 圆角取半高 31。
-        bar.layer.cornerRadius = 36
+        bar.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -1540,7 +1540,7 @@ final class HomeWallViewController: UIViewController,
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = 36
+        blur.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -1602,7 +1602,7 @@ final class HomeWallViewController: UIViewController,
         miniRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = 36
+        glassTint.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -1852,7 +1852,7 @@ final class HomeWallViewController: UIViewController,
         miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 3)
         Breadcrumbs.log("port89 deck=track6/time10x32 host=home")
         Breadcrumbs.log("p93 deck host=home")
-        Breadcrumbs.log("p95 deck capsule h=62 host=home")
+        Breadcrumbs.log("p98 deck cap h=\(Int(MiniBarQuickRowView.expandedBarHeight)) host=home")
         miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
         // (83) 第 5 条：收起宽 134→140（图像量测系统横线
         // 420px@3x，账见 DeckLayout82 与 (83) 报告）。

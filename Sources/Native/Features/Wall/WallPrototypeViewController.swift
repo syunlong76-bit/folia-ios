@@ -153,6 +153,8 @@ final class WallPrototypeViewController: UIViewController,
     /// （p96GuardDeferred91），数据到达重验成功互换后清零。
     private var p96LayoutRetryUsed91 = false
     private var p96GuardDeferred91 = false
+    /// (98) 第 2 条：entries 为空时切版式的待切登记旗——不互换、不回滚改键，数据到达补切一次后清旗。
+    private var pendingLayoutMode98: Int?
     /// (97) 第 11 条：排版切换计时（begin 落点 switch 入口、
     /// end 收口 p94EndWallSwitch）。
     private var p97LayoutT0: CFTimeInterval = 0
@@ -647,7 +649,7 @@ final class WallPrototypeViewController: UIViewController,
         let bar = MiniBarHitView()
         bar.backgroundColor = .clear
         // (95) 第 11 条：胶囊台身圆角 35→31（高 62 的 pill）。
-        bar.layer.cornerRadius = 36
+        bar.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -714,7 +716,7 @@ final class WallPrototypeViewController: UIViewController,
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = 36
+        blur.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -768,7 +770,7 @@ final class WallPrototypeViewController: UIViewController,
         miniRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = 36
+        glassTint.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -1185,7 +1187,7 @@ final class WallPrototypeViewController: UIViewController,
         applyMiniTheme()
         applyMiniBarSlots()
         // (95) 第 11 条构建尾自证（deck host 口径同 p93 deck 行）。
-        Breadcrumbs.log("p95 deck capsule h=62 host=wall")
+        Breadcrumbs.log("p98 deck cap h=\(Int(MiniBarQuickRowView.expandedBarHeight)) host=wall")
     }
 
     /// (74) 第 4 项本面定案：Miller (67) 录屏与 (74) 截图
@@ -3159,6 +3161,17 @@ final class WallPrototypeViewController: UIViewController,
                     if self.p96GuardDeferred91 {
                         self.applyPlaylistLayout91()
                     }
+                    // (98) 第 2 条：待切补切——数据已到，以登记
+                    // mode 收口一次并清旗，落 redo 自证。
+                    if let pend98 = self.pendingLayoutMode98 {
+                        self.pendingLayoutMode98 = nil
+                        if pend98 == self.playlistLayout91 {
+                            self.applyPlaylistLayout91()
+                        } else {
+                            self.switchPlaylistLayout93(pend98, src95: "redo98")
+                        }
+                        Breadcrumbs.log("p98 layout redo mode=\(pend98) vis=\(self.p94VisibleCount94(for: pend98))")
+                    }
                     self.centerCameraIfNeeded()
                     // (85) 第 1 条：缝计数随种子落地回填（总
                     // 数以 detail.trackCount 为准、与墙面计数
@@ -3255,6 +3268,15 @@ final class WallPrototypeViewController: UIViewController,
                         // 落点同款条件与口径）。
                         if self.p96GuardDeferred91 {
                             self.applyPlaylistLayout91()
+                        }
+                        if let pend98 = self.pendingLayoutMode98 {
+                            self.pendingLayoutMode98 = nil
+                            if pend98 == self.playlistLayout91 {
+                                self.applyPlaylistLayout91()
+                            } else {
+                                self.switchPlaylistLayout93(pend98, src95: "redo98")
+                            }
+                            Breadcrumbs.log("p98 layout redo mode=\(pend98) vis=\(self.p94VisibleCount94(for: pend98))")
                         }
                         // (83) 黑屏定案③：分页续接后新条目同
                         // 批预热（已缓存者自动跳过）。
@@ -4616,6 +4638,7 @@ final class WallPosterCell: UICollectionViewCell {
     /// port91（任务 9）：封面左下爱心——24pt 毛玻璃圆片＋
     /// 15pt 心，真接 LikesStore（与各面同一源），Pulse
     /// Heart 时序（收缩→翻色→弹簧过冲）；与右上 ➕ 错开。
+    static var heartPosLogged98 = false
     private let heartDisc91 = UIVisualEffectView(
         effect: UIBlurEffect(style: .systemThinMaterialDark))
     private let heartButton91 = UIButton(type: .custom)
@@ -5074,20 +5097,25 @@ final class WallPosterCell: UICollectionViewCell {
         let titleY = bounds.height - bottomInset - labelHeight - (hasSubtitle ? 13 : 0)
         titleLabel.frame = CGRect(
             x: 6, y: titleY,
-            width: bounds.width - 12, height: labelHeight)
+            width: bounds.width - 42, height: labelHeight)
         // port90：展开态卡底重复歌名/歌手行隐藏（封面只留顶部歌名）。
         titleLabel.isHidden = imageOnly || controlsVisible
         subtitleLabel.frame = CGRect(
             x: 6, y: bounds.height - bottomInset - 13,
-            width: bounds.width - 12, height: 12)
+            width: bounds.width - 42, height: 12)
         subtitleLabel.isHidden = imageOnly || !hasSubtitle || controlsVisible
         // port91（任务 9）：爱心钉封面左下（标题带上方 6pt；
         // 纯图档贴底 6pt），展开卡形态不挂（详情走卡内通路）。
         // (97) 第 7 条：Miller (96) 真机令爱心改右下角——x 自
         // 左 6 改右缘内 6（右上角 ➕ 日记本不动、不相撞：
         // 日记在顶行 y=6、爱心在底部标题带上方）。
-        let heartY = imageOnly ? bounds.height - 30 : titleY - 30
+        // (98) 第 5 条：heartY 两档统一底锚（卡高−30，右/底内距各 6）。
+        let heartY = bounds.height - 30
         heartDisc91.frame = CGRect(x: bounds.width - 30, y: heartY, width: 24, height: 24)
+        if !Self.heartPosLogged98 {
+            Self.heartPosLogged98 = true
+            Breadcrumbs.log("p98 heart pos host=wall r=\(Int(bounds.width - heartDisc91.frame.maxX)) b=\(Int(bounds.height - heartDisc91.frame.maxY))")
+        }
         heartButton91.frame = heartDisc91.frame
         let heartHidden91 = controlsVisible || !heartIsSong91
         heartDisc91.isHidden = heartHidden91
@@ -5945,6 +5973,20 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         // 有可见砖，验证不过即不淡化、不露黑。
         let visible = p94VisibleCount94(for: mode)
         Breadcrumbs.log("p94 wall sw show visible=\(visible) src=\(src95)")
+        // (98) 第 2 条：entries 为空时 visible 恒 0 是数据未到、
+        // 不是版式坏——不淡化到空视图、不回滚改键：视图状态
+        // 留在旧 mode（持久化键已在函数头写为用户点选），登记
+        // pending 待数据到达补切。
+        if visible == 0, entries.isEmpty {
+            newView.isHidden = true
+            newView.alpha = 1
+            playlistLayout91 = oldMode
+            playlistSeam85?.layoutMode93 = oldMode
+            pendingLayoutMode98 = mode
+            Breadcrumbs.log("p98 layout pend mode=\(mode) entries=0")
+            p94EndWallSwitch()
+            return
+        }
         if visible == 0, !entries.isEmpty {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
@@ -5959,8 +6001,11 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
                     newView.alpha = 1
                     self.playlistLayout91 = oldMode
                     self.playlistSeam85?.layoutMode93 = oldMode
-                    UserDefaults.standard.set(oldMode,
-                        forKey: "foliaPlaylistLayout91")
+                    // (98) 第 2 条：回滚只回滚视图，不许改写持久化
+                    // 键（键保留用户点选）；改登记 pending，数据/
+                    // 布局就绪后由落点补切到用户选的 mode。
+                    self.pendingLayoutMode98 = mode
+                    Breadcrumbs.log("p98 layout pend mode=\(mode) entries=\(self.entries.count)")
                     self.p94EndWallSwitch()
                     Breadcrumbs.log("p94 wall sw abort mode=\(mode) back=\(oldMode) src=\(src95)")
                 }
@@ -6207,6 +6252,23 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         Breadcrumbs.log("p97 layout apply mode=\(mode) vis=\(vis)"
             + " entries=\(entries.count)"
             + " ms=\(Int((CACurrentMediaTime() - p97ApplyT0) * 1000))")
+        // (98) 第 2 条：entries 为空时不做 isHidden 互换（互换只会
+        // 亮出空布局）；目标 mode 与当前挂载 mode 不同则登记
+        // pending，保持现视图不动，数据到达由落点补切。
+        if entries.isEmpty {
+            let mounted98 = !collectionView.isHidden ? 0
+                : (magazineTable91?.isHidden == false ? 1
+                : (shelfView91?.isHidden == false ? 2 : mode))
+            if mode != mounted98 {
+                pendingLayoutMode98 = mode
+                Breadcrumbs.log("p98 layout pend mode=\(mode) entries=0")
+            }
+            if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
+            if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
+            p96LayoutRetryUsed91 = false
+            syncPlaylistSeamHighlightToMountedView91()
+            return
+        }
         collectionView.isHidden = mode != 0
         magazineTable91?.isHidden = mode != 1
         shelfView91?.isHidden = mode != 2
@@ -6559,6 +6621,7 @@ final class PlaylistShelfCell91: UICollectionViewCell {
     private let coverView = UIImageView()
     private let titleLabel = UILabel()
     private let artistLabel = UILabel()
+    static var heartPosLogged98 = false
     private let heartDisc91 = UIView()
     private let heartButton91 = UIButton(type: .custom)
     private let diaryButton91 = DiaryAddButton90.make()
@@ -6618,8 +6681,12 @@ final class PlaylistShelfCell91: UICollectionViewCell {
         playingBadge91.frame = CGRect(x: 6, y: 6, width: 18, height: 18)
         diaryButton91.frame = CGRect(x: 120, y: 6, width: 24, height: 24)
         // (97) 第 7 条：爱心改右下角（原左下 (6,124)）。
-        heartDisc91.frame = CGRect(x: 126, y: 124, width: 18, height: 18)
+        heartDisc91.frame = CGRect(x: 126, y: 126, width: 18, height: 18)
         heartButton91.frame = heartDisc91.frame
+        if !Self.heartPosLogged98 {
+            Self.heartPosLogged98 = true
+            Breadcrumbs.log("p98 heart pos host=shelf r=\(Int(150 - heartDisc91.frame.maxX)) b=\(Int(150 - heartDisc91.frame.maxY))")
+        }
         titleLabel.frame = CGRect(x: 0, y: 156, width: 150, height: 17)
         artistLabel.frame = CGRect(x: 0, y: 175, width: 150, height: 14)
     }

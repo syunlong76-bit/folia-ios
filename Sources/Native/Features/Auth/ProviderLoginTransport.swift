@@ -55,6 +55,9 @@ enum ProviderLoginTransport {
     /// GET JSON（主备两节点依次尝试）。cookie 非 nil 时按
     /// provider 载体规则附带会话；timestamp 防缓存（网页版
     /// 两家 transport 均带）。
+    /// (98) 第 5 条：最近一次成功命中的节点序（0=Netlify 主、1=EdgeOne 备），供 p98 qr seg 对读。
+    static var lastNodeIndex98 = -1
+
     static func getJSON(
         provider: NativeSessionStore.Provider,
         path: String,
@@ -62,7 +65,7 @@ enum ProviderLoginTransport {
         cookie: String? = nil
     ) async throws -> Response {
         var lastError: Error = TransportError.transport
-        for base in bases(for: provider) {
+        for (nodeIdx, base) in bases(for: provider).enumerated() {
             do {
                 var components = URLComponents(
                     url: base.appendingPathComponent(path),
@@ -95,6 +98,7 @@ enum ProviderLoginTransport {
                       let dict = object as? [String: Any] else {
                     throw TransportError.malformed
                 }
+                lastNodeIndex98 = nodeIdx
                 return Response(root: dict, httpStatus: http.statusCode)
             } catch {
                 lastError = error
@@ -115,7 +119,7 @@ enum ProviderLoginTransport {
         cookie: String? = nil
     ) async throws -> Response {
         var lastError: Error = TransportError.transport
-        for base in bases(for: provider) {
+        for (nodeIdx, base) in bases(for: provider).enumerated() {
             do {
                 var components = URLComponents(
                     url: base.appendingPathComponent(path),
@@ -152,6 +156,7 @@ enum ProviderLoginTransport {
                       let dict = object as? [String: Any] else {
                     throw TransportError.malformed
                 }
+                lastNodeIndex98 = nodeIdx
                 return Response(root: dict, httpStatus: http.statusCode)
             } catch {
                 lastError = error

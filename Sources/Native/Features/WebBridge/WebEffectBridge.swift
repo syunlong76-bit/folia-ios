@@ -695,6 +695,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
           // 补派）仍直通不合并。report 时把合并掉的条数以 coal
           // 字段带回原生自证。
           var coal97 = 0, rzTimer97 = 0;
+          // (98) 第 8 条：死锁判读字段（DS 对账）——pend＝新
+          // resize 到达时是否已有合并计时在挂；rst＝链重启
+          // 次数（seq）；rty＝verifyBuffer 自派发重试次数；
+          // sup＝被合并吞掉的外部 resize 总数（随 report 出）。
+          var pend98 = 0, rty98 = 0;
           function post(msg) {
             try {
               var h = window.webkit && window.webkit.messageHandlers
@@ -737,7 +742,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             info.type = 'p94Web';
             info.kind = kind;
             info.coal = coal97;
+            info.pend = pend98;
+            info.rst = seq;
+            info.rty = rty98;
+            info.sup = coal97;
             coal97 = 0;
+            pend98 = 0;
             post(info);
             return info;
           }
@@ -745,6 +755,7 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             var info = snapshot();
             if (!bufferMatches(info) && !selfDispatch) {
               selfDispatch = true;
+              rty98 += 1;
               window.dispatchEvent(new Event('resize'));
             }
             return info;
@@ -754,11 +765,14 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             // 自派发路径不重跑 verifyBuffer（旧语义：防自派发递归）。
             if (selfDispatch) { selfDispatch = false; runResizeChain97(false); return; }
             coal97 += 1;
-            if (rzTimer97) clearTimeout(rzTimer97);
+            if (rzTimer97) { clearTimeout(rzTimer97); pend98 = 1; }
+            // (98) 第 8 条：静默合并窗 120ms 归零——同拍连发
+            // 仍合并为一记（防中间尺寸反复重建），但下一拍
+            // 即跑完整链，冻结拍的目标尺寸重建不等 landed。
             rzTimer97 = setTimeout(function () {
               rzTimer97 = 0;
               runResizeChain97(true);
-            }, 120);
+            }, 0);
           }
           function runResizeChain97(doVerify) {
             if (doVerify) verifyBuffer();
@@ -780,11 +794,13 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
               if (!resizeDoneSent && bufferMatches(info)) {
                 resizeDoneSent = true;
                 info.type = 'stageResizeDone';
+                info.rty = rty98;
                 post(info);
               }
               if (stable >= 2) {
                 var done = verifyBuffer();
                 done.type = 'stageReady';
+                done.rty = rty98;
                 post(done);
                 return;
               }
@@ -1571,7 +1587,9 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             Breadcrumbs.log("p92 resize dispatch")
         }
         resizeNudgeWork92 = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
+        // (98) 第 8 条：0.12s 防抖摘除——冻结拍即刻派发，
+        // 网页层重建与系统转场并行（JS 侧同拍合并兜底）。
+        DispatchQueue.main.async(execute: work)
     }
 
     /// (94) 94-6 旋转前清理：舞台旋转 alongside 里调——清
@@ -2176,6 +2194,14 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             Breadcrumbs.log("p94 web dpr=\(dpr) canvas=\(cw)x\(ch)"
                 + " client=\(vw)x\(vh) buf=\(bw)x\(bh) kind=\(kind)"
                 + " coal=\(coal)")
+            // (98) 第 8 条：死锁判读（DS 对账）——合并链的
+            // pending/reset/suppression 三值独立落行。
+            if kind == "resize" {
+                let pend = (body["pend"] as? NSNumber)?.intValue ?? 0
+                let rst = (body["rst"] as? NSNumber)?.intValue ?? 0
+                let sup = (body["sup"] as? NSNumber)?.intValue ?? 0
+                Breadcrumbs.log("p98 rot coal pend=\(pend) rst=\(rst) sup=\(sup)")
+            }
             // contentsScale 纪律：不许被改成 1（或任何非屏幕值），
             // 发现即复原并在同一行留痕。
             let screenScale = UIScreen.main.scale
@@ -2192,6 +2218,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             let bh = (body["bufH"] as? NSNumber)?.intValue ?? 0
             let dpr = (body["dpr"] as? NSNumber)?.doubleValue ?? -1
             Breadcrumbs.log("p94 rot web resize css=\(vw)x\(vh) buf=\(bw)x\(bh) dpr=\(dpr)")
+            // (98) 第 8 条：buffer 判读（DS 对账）——期望值
+            // （clientW×DPR）/实测 buffer/重试次数独立落行。
+            let expW = Int((Double((body["clientW"] as? NSNumber)?.intValue ?? 0) * dpr).rounded())
+            let rty = (body["rty"] as? NSNumber)?.intValue ?? 0
+            Breadcrumbs.log("p98 rot buf exp=\(expW) act=\(bw) dpr=\(dpr) rty=\(rty)")
             onP94RotSignal?("resized", body)
         case "stageReady":
             // (94) 94-6：JS 回 stage.ready（连续 2 个稳定帧后）——
