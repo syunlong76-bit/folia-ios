@@ -988,7 +988,8 @@ final class SeamMaster: UIView {
         qrStatusLabel.text = "正在生成二维码…"
         qrSpinner.startAnimating()
         let task = Task { [weak self] in
-            await self?.runQRFlow(provider: provider, gen: gen)
+            guard let self else { return }
+            await self.runQRFlow(provider: provider, gen: gen)
         }
         coordinator94.attach(task, generation: gen)
     }
