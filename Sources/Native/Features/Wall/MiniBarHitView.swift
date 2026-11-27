@@ -270,3 +270,24 @@ final class MiniBarRootTap78: NSObject {
         expand()
     }
 }
+
+/// (96) C 项：台面 40pt 钮的不可见命中扩张——视觉 frame
+/// 不动，point(inside:) 四向各外扩 hitExpansion96（缺省
+/// 2pt），命中 44×44（系统下限）。只用于 prev/next/
+/// console 三钮（播放钮 46×46 已足 44，不用）。钮间隙 8pt，
+/// 各扩 2pt 后仍余 4pt 间隙、不串钮；钮面居中、上下各余
+/// 11pt，外扩不越台界。UIButton(type:) 按接收者类建实例，
+/// 子类可用同式创建（见三宿主构建处）。
+final class DeckHitButton96: UIButton {
+
+    /// 单侧外扩量（pt）；40 钮 → 44。
+    var hitExpansion96: CGFloat = 2
+
+    override func point(inside point: CGPoint, with event: UIEvent?) -> Bool {
+        guard hitExpansion96 > 0 else {
+            return super.point(inside: point, with: event)
+        }
+        return bounds.insetBy(dx: -hitExpansion96, dy: -hitExpansion96)
+            .contains(point)
+    }
+}

@@ -372,7 +372,10 @@ final class PolaroidCard90: UIControl {
         layer.shadowOpacity = 0.45
         layer.shadowRadius = 11
         layer.shadowOffset = CGSize(width: 0, height: 6)
-
+        // (96) D：题注裁卡内——题注两行帧宽已按卡宽收
+        // insets（歌名/歌手行同宽、尾截断），不再冲出卡界；
+        // 本卡不设 clipsToBounds（会裁掉卡自身的 layer 阴
+        // 影——拍立得的投影是外观的一部分）。
         imageView.contentMode = .scaleAspectFill
         imageView.clipsToBounds = true
         imageView.layer.cornerRadius = 2
@@ -382,11 +385,13 @@ final class PolaroidCard90: UIControl {
         titleLabel.font = .systemFont(ofSize: 11, weight: .medium)
         titleLabel.textColor = UIColor(red: 0.20, green: 0.19, blue: 0.16, alpha: 1)
         titleLabel.lineBreakMode = .byTruncatingTail
+        titleLabel.numberOfLines = 1
         addSubview(titleLabel)
         // port91（任务 7）：歌手字号 8.5 → 9.5（样板 11/9.5 等比口径）。
         artistLabel.font = .systemFont(ofSize: 9.5)
         artistLabel.textColor = UIColor(red: 0.60, green: 0.57, blue: 0.49, alpha: 1)
         artistLabel.lineBreakMode = .byTruncatingTail
+        artistLabel.numberOfLines = 1
         addSubview(artistLabel)
 
         addButton.addTarget(self, action: #selector(addTapped), for: .touchUpInside)
@@ -419,10 +424,14 @@ final class PolaroidCard90: UIControl {
         imageView.frame = CGRect(x: pad, y: imgTop,
                                  width: bounds.width - pad * 2, height: imgH)
         addButton.frame = CGRect(x: bounds.width - 26, y: 2, width: 24, height: 24)
-        let capY = bounds.height - captionH + 3
-        bookButton.frame = CGRect(x: bounds.width - pad - 20, y: capY - 1, width: 20, height: 20)
+        // (96) D：题注按卡宽收 insets——歌手行宽同歌名行
+        // 收 22（避开右端日记本小钮，旧式全宽会从钮下穿
+        // 过）；题注块顶对齐 30 区顶，歌手行底边距卡底
+        // 5pt（旧式仅 2pt），文字离卡界更远。
+        let capY = bounds.height - captionH
+        bookButton.frame = CGRect(x: bounds.width - pad - 20, y: capY, width: 20, height: 20)
         titleLabel.frame = CGRect(x: pad, y: capY, width: bounds.width - pad * 2 - 22, height: 13)
-        artistLabel.frame = CGRect(x: pad, y: capY + 14, width: bounds.width - pad * 2, height: 11)
+        artistLabel.frame = CGRect(x: pad, y: capY + 14, width: bounds.width - pad * 2 - 22, height: 11)
     }
 
     func configure(track: FoliaTrack) {

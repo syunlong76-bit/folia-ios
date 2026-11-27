@@ -92,6 +92,12 @@ final class ConsolePanel82: UIViewController,
     /// viewDidAppear 时赋值、viewWillDisappear 清 nil），供 Fx
     /// 覆层推荐卡对齐消费；本组只暴露、不消费。
     static var presentedCardFrame: CGRect?
+    /// (96) D/E：防控制台叠 present——同一时刻在屏的控
+    /// 制台实例只许一个（present(from:) 入口守门、
+    /// viewWillDisappear 清 guard）；重复点开直接忽略，
+    /// 不建第二实例另洗一池推荐卡（S2-2 前后两组卡不是
+    /// 同一批的成因之一）。弱引用，不延长实例寿命。
+    private static weak var livePanel96: ConsolePanel82?
     /// (95) 任务 1：静态登记——呈现期间登记四特效钮
     /// （键 fw/ln/sn/wd）与点外 dim 区的窗口坐标帧，呈现/
     /// 布局变化时由 updateFxRegistry95 更新、dismiss 时
@@ -139,6 +145,10 @@ final class ConsolePanel82: UIViewController,
     private var skeleton94: UIView?
     private var p94ContentBuilt94 = false
     private var p94StagesStarted94 = false
+    /// (96) D/E：推荐卡打印已踢过标记——beginIfNeeded 每
+    /// 次呈现只许踢一次（重踢会重启打印、打断正在进行
+    /// 的逐张过程）；段 B 未落位时不踢，由布局补踢。
+    private var p96PrintKicked96 = false
     private var p94Stages94: [() -> Void] = []
     private var p94StageIndex94 = 0
     /// 条带分片装载代次（队列回刷时递增，旧分片自动作废）。
@@ -177,6 +187,13 @@ final class ConsolePanel82: UIViewController,
     private var consoleLandscape86: Bool?
 
     static func present(from host: UIViewController) {
+        // (96) D/E：同一时刻只许一个控制台在屏——已有实
+        // 例在 window 上时重复点开直接忽略，不建第二实
+        // 例另洗一池推荐卡（S2-2 前后两组卡不是同一批）。
+        if let live = livePanel96, live.view.window != nil {
+            Breadcrumbs.log("console96 present dup ignored")
+            return
+        }
         let panel = ConsolePanel82()
         if let stage = host as? StageViewController {
             panel.onEffects = { [weak stage] in stage?.openStylePicker82() }
@@ -232,6 +249,7 @@ final class ConsolePanel82: UIViewController,
         panel.p94Tap94 = panel.p93PopStart93
         Breadcrumbs.log("console82 present host=\(type(of: host))")
         Breadcrumbs.log("console85 present form=card")
+        livePanel96 = panel
         host.present(panel, animated: true)
         // (94) 94-2：present 段＝present 调用返回时刻（转场
         // 本身异步进行、不在此等待）。
@@ -861,6 +879,13 @@ final class ConsolePanel82: UIViewController,
         // (94) 94-1 几何自证：四数同行、变化才落（见 p94LogGeo94）。
         p94LastCalc94 = CGSize(width: cardW, height: cardH)
         p94LogGeo94(calc: p94LastCalc94)
+        // (96) D/E：推荐卡打印补踢——段 B 到达时区若未落
+        // 位（宽为 0）则未踢，首遍布局落位后在此补踢一次
+        // （p96PrintKick96 内守未踢过＋宽>0 两门）；分段
+        // 装载未启动前（骨架期）不踢。
+        if !p96PrintKicked96, p94StagesStarted94 {
+            p96PrintKick96()
+        }
     }
 
     /// (95) 任务 1：登记更新——四特效钮（fxButtons87 的
@@ -976,6 +1001,11 @@ final class ConsolePanel82: UIViewController,
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         Self.presentedCardFrame = nil
+        // (96) D/E：消失时清叠 present guard（日记本全屏
+        // 盖在控制台上时本回调同样触发，清 guard 后再开
+        // 不受影响；重复点开的守门只针对控制台自身在屏
+        // 的时段）。
+        Self.livePanel96 = nil
         // (95) 任务 1：dismiss 注销登记与兜底关闭观察。
         Self.fxFrames95 = [:]
         Self.dimFrame95 = nil
@@ -1116,12 +1146,11 @@ final class ConsolePanel82: UIViewController,
             },
             { [weak self] in
                 guard let self else { return }
-                // (95) 任务 4：拍立得打印调用点起止打点（seg
-                // 的 print 段＝beginIfNeeded 发起调用全程）。
-                self.p95PrintStart95 = CACurrentMediaTime()
-                self.polaroidZone90.beginIfNeeded()
-                self.p95PrintDone95 = CACurrentMediaTime()
-                self.p95TryEmitSeg95()
+                // (96) D/E：打印触发改单次门控踢印（见
+                // p96PrintKick96）——段 B 只在区已落位时踢，
+                // 未落位时由 viewDidLayoutSubviews 首遍落位
+                // 补踢；打点仍按 beginIfNeeded 发起调用全程。
+                self.p96PrintKick96()
             },
         ]
         p94StageIndex94 = 0
@@ -1139,6 +1168,30 @@ final class ConsolePanel82: UIViewController,
             stage()
             self?.runNextStage94()
         }
+    }
+
+    /// (96) D/E：推荐卡打印单次触发——控制台打开后推荐卡
+    /// 按打印机逐张打印落位的前提：beginIfNeeded 必须在
+    /// 拍立得区已落位（bounds.width>0）后恰好调用一次。
+    /// 旧式段 B 无条件直调：段 B 与布局同处转场后异步队
+    /// 列，布局未跑时区宽为 0，Polaroid90.startPrinting
+    /// 因宽为 0 静默返回且永不重踢，卡只剩 zone 的
+    /// layoutSubviews 整排直摆（S2-2：约 2 秒全空＋五张
+    /// 整排同现、无逐张打印过程）；重调则重启打印（代
+    /// 次作废旧批次、卡回出纸口），呈现中途换池即由此
+    /// 类重复触发而来。本函数只在区已落位且未踢过时踢
+    /// 一次；未落位时不踢，由 viewDidLayoutSubviews 首
+    /// 遍落位时补踢。触发口径不变（控制台打开即印，不
+    /// 依赖特效时间轴）；卡宽仍由 presentedCardFrame
+    /// 同宽口径决定（本函数不碰宽度）。
+    private func p96PrintKick96() {
+        guard !p96PrintKicked96 else { return }
+        guard polaroidZone90.bounds.width > 0 else { return }
+        p96PrintKicked96 = true
+        p95PrintStart95 = CACurrentMediaTime()
+        polaroidZone90.beginIfNeeded()
+        p95PrintDone95 = CACurrentMediaTime()
+        p95TryEmitSeg95()
     }
 
     /// 骨架撤下：真内容已在下层建成，骨架只淡出不位移——

@@ -97,9 +97,12 @@ enum DeckGlyph82 {
     /// port91 A4 visionOS 定版：几何逐字形照 gen2.py 的 A4
     /// 定义（原 48 画布坐标 ÷2 落 24 画布）：play＝三角描边
     /// （线宽 1.7、round join、无填充）；pause＝双圆角矩形
-    /// 填充（x 8.85/12.65、y 7.8、w 2.5、h 8.4、rx 1.25）；
+    /// 描边（线宽 1.7、不填充；兜底才填旧双条 x 8.85/
+    /// 12.65、y 7.8、w 2.5、h 8.4、rx 1.25）；
     /// prev＝左竖条圆角矩形（x 6.8、w 2.2）＋尖朝左三角描
-    /// 边（线宽 1.4）；next 镜像。list 无 A4 原定义，按同
+    /// 边（线宽 1.7）；next 镜像。(96) C 项：四字形描边线
+    /// 宽统一 1.7，实测 cov（21pt 栅格估算，千分值）play
+    /// ≈56、pause ≈68、prev/next ≈91，同量级。list 无 A4 原定义，按同
     /// 语言补：三横细线（线宽 1.4、round cap）＋三实心圆点。
     private static var loggedIconA4 = false
     /// (93) B1：中央钮字形自证落痕去重（play/pause 各一次）。
@@ -134,6 +137,17 @@ enum DeckGlyph82 {
                     x: x * scale, y: y * scale, width: w * scale, height: h * scale),
                     cornerRadius: r * scale).fill()
             }
+            // (96) C 项：圆角矩形描边（与 triStroke 同语言，
+            // 线宽由调用方给 1.7；不填充）。
+            func rrectStroke(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat,
+                             r: CGFloat, lw: CGFloat) {
+                let path = UIBezierPath(roundedRect: CGRect(
+                    x: x * scale, y: y * scale, width: w * scale, height: h * scale),
+                    cornerRadius: r * scale)
+                path.lineWidth = lw * scale
+                path.lineJoinStyle = .round
+                path.stroke()
+            }
             switch kind {
             case .play:
                 // A4 play（gen2 48 画布 M20,16.2 L34.6,24 L20,31.8 ÷2）。
@@ -150,17 +164,28 @@ enum DeckGlyph82 {
                     triStroke([(10, 8.1), (17.3, 12), (10, 15.9)], w: 1.7)
                 }
             case .pause:
-                // A4 pause：双圆角矩形填充。
-                rrect(8.85, 7.8, 2.5, 8.4, r: 1.25)
-                rrect(12.65, 7.8, 2.5, 8.4, r: 1.25)
+                // (96) C 项：双圆角矩形描边（线宽 1.7、不填
+                // 充）——与 play/prev/next 同描边语言，全填
+                // 充双条退役。矩形居中于旧填充条中心（x 中心
+                // 9.9/14.1、h 8.4 不变），宽 1.7：描边外扩后
+                // 外宽 3.4、两条间隙 0.8pt 不并条；兜底
+                // （filledPlay）仍填旧双条（x 8.85/12.65、
+                // w 2.5），见下文 cov 注释。
+                if filledPlay {
+                    rrect(8.85, 7.8, 2.5, 8.4, r: 1.25)
+                    rrect(12.65, 7.8, 2.5, 8.4, r: 1.25)
+                } else {
+                    rrectStroke(9.05, 7.8, 1.7, 8.4, r: 0.85, lw: 1.7)
+                    rrectStroke(13.25, 7.8, 1.7, 8.4, r: 0.85, lw: 1.7)
+                }
             case .prev:
                 // A4 prev：竖条（x13.6 w4.4 @48 ÷2）＋尖朝左三角描边。
                 rrect(6.8, 8.2, 2.2, 7.6, r: 1.1)
-                triStroke([(16.9, 8.2), (10.6, 12), (16.9, 15.8)], w: 1.4)
+                triStroke([(16.9, 8.2), (10.6, 12), (16.9, 15.8)], w: 1.7)
             case .next:
                 // A4 next：prev 的水平镜像。
                 rrect(15, 8.2, 2.2, 7.6, r: 1.1)
-                triStroke([(7.1, 8.2), (13.4, 12), (7.1, 15.8)], w: 1.4)
+                triStroke([(7.1, 8.2), (13.4, 12), (7.1, 15.8)], w: 1.7)
             case .list:
                 // A4 语言补形：三横细线＋三圆点（与 sliders 同族）。
                 for y in [7.6, 12, 16.4] as [CGFloat] {
@@ -187,11 +212,14 @@ enum DeckGlyph82 {
             // 实测 alpha 覆盖率：cov 以千分值落痕（每字形
             // 每进程一次）；play 覆盖率 <2% 判描边丢失、
             // 当场改填充三角重渲兜底（fb=1），下轮日志据
-            // cov/fb 裁决丢失环。pause 本为填充、cov 应 ≈73。
+            // cov/fb 裁决丢失环。(96) C 项：pause 改描边双
+            // 条后 cov ≈68（旧填充 ≈73，21pt 栅格估算）；
+            // play ≈56、prev/next ≈91，四字形同量级。
             // (94) 94-3：兜底扩到 pause——(93) fb 只对 play
             // 生效是放大因素（DS 对账 B1）；pause cov 过低
             // 同样当场以填充双条重渲（render93(true) 的
-            // pause 分支即填充双圆角矩形，与常规路径同形）。
+            // pause 分支即旧填充双圆角矩形，只作兜底、与常
+            // 规描边路径异形）。
             // 注：本处仍只是工厂出口自证，按钮最终渲染层的
             // cov 自证在 HomeWallViewController 的 p94 deck
             // render（94-3 主仪器），两层分工不混。

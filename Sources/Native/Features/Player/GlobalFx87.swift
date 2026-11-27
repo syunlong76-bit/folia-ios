@@ -388,6 +388,71 @@ private let FX_BLESSINGS: [String] = [
 
 // MARK: - 根视图（透明、纯显示层）
 
+/// (96) 96-1：特效绘制窗透传——UIWindow 自身默认可交互；
+/// 只把根视图 isUserInteractionEnabled=false 并不能让窗透传：
+/// window.hitTest 会先问子视图（根视图已禁交互→nil），再
+/// 回落到 window 自身（在界内且可交互→返回 window 本体），
+/// level 1500 又在主窗之上，于是特效一开整窗吞点按——主窗
+/// 探针 raw、控制台钮、dim 全收不到触摸（(93)(94)(95) 三包
+/// 同型故障的根因候选）。本类对触摸一律返回 nil，点按落
+/// 到下层主窗；绘制本身不受影响。
+final class FxPassthroughWindow96: UIWindow {
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        nil
+    }
+}
+
+/// (96) 96-2：独立退出路——特效开启期间挂一个高于特效窗
+/// （level 1600）的小窗，只露一个 × 关闭钮；除钮帧外
+/// hitTest 一律 nil 透传，不挡控制台与墙面点按。钮直接调
+/// 幂等 forceStopAllFx96，不经控制台 handler 链、不走
+/// toggle 翻转（超时与 handler 晚到并发会双翻转）。
+final class FxPanicWindow96: UIWindow {
+    weak var engine: GlobalFx87?
+    private let closeButton = UIButton(type: .system)
+
+    override init(windowScene: UIWindowScene) {
+        super.init(windowScene: windowScene)
+        windowLevel = UIWindow.Level(rawValue: 1600)
+        backgroundColor = .clear
+        isOpaque = false
+        isHidden = true
+        let vc = UIViewController()
+        vc.view.backgroundColor = .clear
+        rootViewController = vc
+        closeButton.translatesAutoresizingMaskIntoConstraints = false
+        closeButton.backgroundColor = UIColor.black.withAlphaComponent(0.45)
+        closeButton.layer.cornerRadius = 22
+        closeButton.clipsToBounds = true
+        closeButton.setImage(UIImage(systemName: "xmark"), for: .normal)
+        closeButton.tintColor = .white
+        closeButton.accessibilityLabel = "关闭特效"
+        closeButton.addTarget(self, action: #selector(panicClose96), for: .touchUpInside)
+        vc.view.addSubview(closeButton)
+        NSLayoutConstraint.activate([
+            closeButton.widthAnchor.constraint(equalToConstant: 44),
+            closeButton.heightAnchor.constraint(equalToConstant: 44),
+            closeButton.topAnchor.constraint(
+                equalTo: vc.view.safeAreaLayoutGuide.topAnchor, constant: 12),
+            closeButton.trailingAnchor.constraint(
+                equalTo: vc.view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+        ])
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+
+    @objc private func panicClose96() {
+        engine?.forceStopAllFx96(src: "panic96")
+    }
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        guard !isHidden else { return nil }
+        let p = convert(point, to: closeButton)
+        return closeButton.bounds.contains(p) ? closeButton : nil
+    }
+}
+
 final class Fx87RootView: UIView {
     weak var engine: GlobalFx87?
 
@@ -467,6 +532,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private var window: UIWindow?
     private var rootView: Fx87RootView?
     private weak var mainWindow: UIWindow?
+    /// (96) 96-2：独立退出窗（level 1600，平时隐藏）。
+    private var panicWindow96: FxPanicWindow96?
     /// port91（任务 1）：主窗浮层宿主（祝福卡/写灯钮/推荐卡的新家）。
     private var overlayHost91: FxOverlayHost91?
     /// (92) 任务 1：被动点按识别器（随宿主迁窗，见 attachOverlay92）。
@@ -537,10 +604,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if window != nil { return }
         W = Double(scene.screen.bounds.width)
         H = Double(scene.screen.bounds.height)
-        let win = UIWindow(windowScene: scene)
+        let win = FxPassthroughWindow96(windowScene: scene)
         win.windowLevel = UIWindow.Level(rawValue: 1500)
         win.backgroundColor = .clear
         win.isOpaque = false
+        // (96) 96-1：窗级再关一道交互——hitTest override 已
+        // 保证透传；isUserInteractionEnabled=false 作双保险，
+        // 任一层失效仍不吞点按。
+        win.isUserInteractionEnabled = false
         let vc = Fx87ViewController()
         vc.view.backgroundColor = .clear
         win.rootViewController = vc
@@ -555,6 +626,12 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             buildFlash91(in: rv)
         }
         win.isHidden = true
+
+        // (96) 96-2：独立退出窗与特效窗同 scene 建，平时隐藏，
+        // 任一特效开启边沿才现身（见 refreshTapProbe92）。
+        let panic = FxPanicWindow96(windowScene: scene)
+        panic.engine = self
+        panicWindow96 = panic
 
         // (88) 工坊 fx 定案落值见证（FxTuning88）。
         Breadcrumbs.log("port88 fx=fw.85/1.1/1.7g ln1.25r snPale")
@@ -635,6 +712,22 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// (95) 任务 1：结构兜底看门狗在途标记（350ms 窗内只
     /// 挂一笔，防同窗多点重复兜底）。
     private var probeGuardPending95 = false
+    /// (96) 96-2/96-3：特效状态代次——每次 forceStopAllFx96
+    /// ＋1；旧 start 回调/旧看门狗超时凭代次过期失效，不许
+    /// 把已关的状态翻回开。只在主线程读写。
+    private var fxGeneration96 = 0
+    /// (96) 96-3：独立看门狗——专用串行队列定时器（不走主
+    /// 队列），主线程 heartbeat 由 CADisplayLink tick 喂。
+    private let wdQueue96 = DispatchQueue(label: "fx.wd96", qos: .utility)
+    private var wdTimer96: DispatchSourceTimer?
+    private var wdLastBeat96 = 0
+    private var wdLastBeatAt96: CFTimeInterval = 0
+    private let beatLock96 = NSLock()
+    private var mainBeat96 = 0
+    /// (96) 96-3：待确认的关闭请求（generation＋发起时间）；
+    /// 超时未确认即在主线程重发一次幂等 forceStop。
+    private var closeReq96: (gen: Int, at: CFTimeInterval)?
+    private var closeReqReissued96 = -1
 
     private func installTapProbe92IfNeeded() {
         guard tapProbe92 == nil, let main = mainWindow else { return }
@@ -687,6 +780,16 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 } else {
                     Breadcrumbs.log("p95 probe arm view=nil peers=none")
                 }
+                // (96) 96-1/96-2/96-3：arm 边沿三件套——panic
+                // 窗现身、独立看门狗武装、孤儿 active 标记同
+                // 步写盘；另做一次 hitTest 快照（特效窗应对控
+                // 制台钮中心返回 nil、主窗应返回 UIControl）。
+                panicWindow96?.isHidden = false
+                startWd96()
+                let activeNames = names.joined(separator: "+")
+                FxEventLog96.markActive(code: activeNames, gen: fxGeneration96)
+                FxEventLog96.record("arm fx=\(activeNames) gen=\(fxGeneration96)")
+                fxArmHitAudit96()
                 // (95) 任务 3：推荐卡触发统一到开启边沿——与
                 // p94 fx arm 同点调用呈现判断（会话内只呈一
                 // 次，recShown 在全关时复位，见 disarm 边沿）。
@@ -696,6 +799,12 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 // (95) 任务 3：fx 会话结束（任一特效开→全关）
                 // ——推荐卡呈现额度复位，下一会话可再呈一次。
                 recShown = false
+                // (96) 96-2/96-3：全关收口——panic 窗藏起、
+                // 看门狗停表、孤儿标记清除。
+                panicWindow96?.isHidden = true
+                stopWd96()
+                FxEventLog96.markCleared()
+                FxEventLog96.record("off gen=\(fxGeneration96)")
             }
         }
     }
@@ -840,8 +949,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         guard hitFx != nil || hitDim else { return }
         probeGuardPending95 = true
         let trace0 = ConsolePanel82.handlerTrace95
+        let gen0 = fxGeneration96
         let hit = hitFx != nil ? "fx" : "dim"
-        let fxKey = hitFx
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
             guard let self else { return }
             self.probeGuardPending95 = false
@@ -849,21 +958,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 Breadcrumbs.log("p95 probe guard hit=\(hit) fired=0")
                 return
             }
-            if let fxKey {
-                switch fxKey {
-                case "fw":
-                    if self.isFireworks { self.stopFw(src: "probe95") }
-                    else { self.startFw(src: "probe95") }
-                case "ln":
-                    if self.isLanterns { self.stopLantern(hard: true, src: "probe95") }
-                    else { self.startLantern(src: "probe95") }
-                case "sn":
-                    if self.isSnow { self.stopSnow(hard: true, src: "probe95") }
-                    else { self.startSnow(src: "probe95") }
-                default:
-                    if self.isWind { self.stopWind(src: "probe95") }
-                    else { self.startWind(src: "probe95") }
-                }
+            guard gen0 == self.fxGeneration96 else {
+                Breadcrumbs.log("p96 probe guard hit=\(hit) fired=skip-gen")
+                return
+            }
+            if hitFx != nil {
+                // (96) 96-2：兜底只做幂等 forceStop，禁用旧
+                // toggle（超时与 handler 晚到并发会双翻转回开）。
+                self.forceStopAllFx96(src: "probe96")
             } else {
                 NotificationCenter.default.post(
                     name: .foliaConsoleDismiss95, object: nil)
@@ -912,6 +1014,115 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             node = v.superview
         }
         return false
+    }
+
+    /// (96) 96-2：幂等强制全关——panic 钮/看门狗/超时重发的
+    /// 唯一出口。各 stop 内部 setX 有 guard，重复调无副作
+    /// 用；代次＋1 使旧 start 回调/旧看门狗超时过期失效。
+    /// 只在主线程调用。随后发通知请控制台 dismiss。
+    public func forceStopAllFx96(src: String) {
+        fxGeneration96 += 1
+        let gen = fxGeneration96
+        closeReq96 = (gen: gen, at: CACurrentMediaTime())
+        stopFw(src: src)
+        stopLantern(hard: true, src: src)
+        stopSnow(hard: true, src: src)
+        stopWind(src: src)
+        hideBless()
+        hideRecCard()
+        let still = isFireworks || isLanterns || isSnow || isWind
+        Breadcrumbs.logSync("p96 forceStop gen=\(gen) src=\(src) still=\(still ? 1 : 0)")
+        FxEventLog96.record("forceStop gen=\(gen) src=\(src) still=\(still ? 1 : 0)")
+        FxEventLog96.markCleared()
+        NotificationCenter.default.post(name: .foliaConsoleDismiss95, object: nil)
+    }
+
+    /// (96) 96-3：独立看门狗——专用队列每 1s 检查主线程
+    /// heartbeat。heartbeat 停 2s 以上＝主线程卡死：只落
+    /// 盘，不尝试跨线程动 UIKit（无合法姿势）。heartbeat
+    /// 正常则在主线程跑一次关闭通路审计；有待确认的关闭
+    /// 请求超时未确认时，重发一次幂等 forceStop。
+    private func startWd96() {
+        guard wdTimer96 == nil else { return }
+        wdLastBeatAt96 = CACurrentMediaTime()
+        let t = DispatchSource.makeTimerSource(queue: wdQueue96)
+        t.schedule(deadline: .now() + 1, repeating: 1.0)
+        t.setEventHandler { [weak self] in self?.wdTick96() }
+        t.resume()
+        wdTimer96 = t
+    }
+
+    private func stopWd96() {
+        wdTimer96?.cancel()
+        wdTimer96 = nil
+        closeReq96 = nil
+    }
+
+    private func wdTick96() {
+        beatLock96.lock()
+        let beat = mainBeat96
+        beatLock96.unlock()
+        let now = CACurrentMediaTime()
+        if beat == wdLastBeat96 {
+            if now - wdLastBeatAt96 >= 2 {
+                FxEventLog96.record("wd main-stalled beat=\(beat)")
+                Breadcrumbs.log("p96 wd main-stalled beat=\(beat)")
+                wdLastBeatAt96 = now
+            }
+            return
+        }
+        wdLastBeat96 = beat
+        wdLastBeatAt96 = now
+        DispatchQueue.main.async { [weak self] in self?.wdCloseAudit96() }
+    }
+
+    /// (96) 96-1：arm 边沿 hitTest 快照——取控制台登记的
+    /// 特效钮中心：特效窗必须返回 nil（透传），主窗必须返
+    /// 回 UIControl。只在主线程跑（非主线程时派发）。
+    private func fxArmHitAudit96() {
+        guard Thread.isMainThread else {
+            DispatchQueue.main.async { [weak self] in self?.fxArmHitAudit96() }
+            return
+        }
+        guard let first = ConsolePanel82.fxFrames95.values.first else { return }
+        let center = CGPoint(x: first.midX, y: first.midY)
+        let fxHit = window?.hitTest(center, with: nil)
+        let fxName = fxHit.map { String(describing: type(of: $0)) } ?? "nil"
+        let mainHit = mainWindow?.hitTest(center, with: nil)
+        let mainName = mainHit.map { String(describing: type(of: $0)) } ?? "nil"
+        Breadcrumbs.log("p96 fx audit fxWinHit=\(fxName) mainHit=\(mainName)")
+        FxEventLog96.record("arm audit fxWinHit=\(fxName) mainHit=\(mainName)")
+    }
+
+    /// (96) 96-3：主线程关闭通路审计——控制台钮中心与 dim
+    /// 中心分别问特效窗与主窗 hitTest：特效窗必须返回 nil，
+    /// 主窗必须返回 UIControl。异常只落一行（首见/变化时）。
+    private func wdCloseAudit96() {
+        guard isFireworks || isLanterns || isSnow || isWind else { return }
+        var points: [CGPoint] = ConsolePanel82.fxFrames95.values.map {
+            CGPoint(x: $0.midX, y: $0.midY)
+        }
+        if let dim = ConsolePanel82.dimFrame95 {
+            points.append(CGPoint(x: dim.midX, y: dim.midY))
+        }
+        guard let first = points.first else { return }
+        let fxHit = window?.hitTest(first, with: nil)
+        let fxName = fxHit.map { String(describing: type(of: $0)) } ?? "nil"
+        let mainHit = mainWindow?.hitTest(first, with: nil)
+        let mainName = mainHit.map { String(describing: type(of: $0)) } ?? "nil"
+        let fxOK = fxHit == nil
+        let mainOK = mainHit is UIControl
+        if !fxOK || !mainOK {
+            Breadcrumbs.log("p96 wd audit fxWinHit=\(fxName) mainHit=\(mainName)")
+            FxEventLog96.record("wd audit fxWinHit=\(fxName) mainHit=\(mainName)")
+        }
+        // 待确认的关闭请求：超时 0.5s 仍有特效在，重发一次。
+        if let req = closeReq96, req.gen != closeReqReissued96,
+           nowMsNow() / 1000 - req.at >= 0.5,
+           isFireworks || isLanterns || isSnow || isWind {
+            closeReqReissued96 = req.gen
+            forceStopAllFx96(src: "wd96")
+        }
     }
 
     // MARK: 公开开关（返回新状态）
@@ -974,7 +1185,13 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     }
 
     private func setFw(_ on: Bool, src: String = "auto") {
-        guard isFireworks != on else { return }
+        // (96) 96-4：setX 入口落痕在 guard 前——区分「没进
+        // setX」与「进了但 guard 跳过」；guard 跳过另落原因。
+        Breadcrumbs.log("p96 setx enter fx=fw on=\(on ? 1 : 0) src=\(src) stateBefore=\(isFireworks ? 1 : 0)")
+        guard isFireworks != on else {
+            Breadcrumbs.log("p96 setx guard-skip fx=fw on=\(on ? 1 : 0) src=\(src) state=\(isFireworks ? 1 : 0)")
+            return
+        }
         isFireworks = on
         Breadcrumbs.log(on ? "fx87 fw=1" : "fx87 fw=0")
         Breadcrumbs.log("p94 fx sw fx=fw on=\(on ? 1 : 0) src=\(src) state=\(isFireworks ? 1 : 0)")
@@ -987,7 +1204,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if !on { Breadcrumbs.log("p95 fx clear fx=fw src=\(src)") }
     }
     private func setLantern(_ on: Bool, src: String = "auto") {
-        guard isLanterns != on else { return }
+        Breadcrumbs.log("p96 setx enter fx=ln on=\(on ? 1 : 0) src=\(src) stateBefore=\(isLanterns ? 1 : 0)")
+        guard isLanterns != on else {
+            Breadcrumbs.log("p96 setx guard-skip fx=ln on=\(on ? 1 : 0) src=\(src) state=\(isLanterns ? 1 : 0)")
+            return
+        }
         isLanterns = on
         Breadcrumbs.log(on ? "fx87 ln=1" : "fx87 ln=0")
         Breadcrumbs.log("p94 fx sw fx=ln on=\(on ? 1 : 0) src=\(src) state=\(isLanterns ? 1 : 0)")
@@ -1001,7 +1222,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if !on { Breadcrumbs.log("p95 fx clear fx=ln src=\(src)") }
     }
     private func setSnow(_ on: Bool, src: String = "auto") {
-        guard isSnow != on else { return }
+        Breadcrumbs.log("p96 setx enter fx=sn on=\(on ? 1 : 0) src=\(src) stateBefore=\(isSnow ? 1 : 0)")
+        guard isSnow != on else {
+            Breadcrumbs.log("p96 setx guard-skip fx=sn on=\(on ? 1 : 0) src=\(src) state=\(isSnow ? 1 : 0)")
+            return
+        }
         isSnow = on
         Breadcrumbs.log(on ? "fx87 sn=1" : "fx87 sn=0")
         Breadcrumbs.log("p94 fx sw fx=sn on=\(on ? 1 : 0) src=\(src) state=\(isSnow ? 1 : 0)")
@@ -1014,7 +1239,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if !on { Breadcrumbs.log("p95 fx clear fx=sn src=\(src)") }
     }
     private func setWind(_ on: Bool, src: String = "auto") {
-        guard isWind != on else { return }
+        Breadcrumbs.log("p96 setx enter fx=wd on=\(on ? 1 : 0) src=\(src) stateBefore=\(isWind ? 1 : 0)")
+        guard isWind != on else {
+            Breadcrumbs.log("p96 setx guard-skip fx=wd on=\(on ? 1 : 0) src=\(src) state=\(isWind ? 1 : 0)")
+            return
+        }
         isWind = on
         Breadcrumbs.log(on ? "fx87 wd=1" : "fx87 wd=0")
         Breadcrumbs.log("p94 fx sw fx=wd on=\(on ? 1 : 0) src=\(src) state=\(isWind ? 1 : 0)")
@@ -1158,6 +1387,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     }
 
     @objc private func tick(_ link: CADisplayLink) {
+        // (96) 96-3：主线程 heartbeat——看门狗凭此判断主线程
+        // 是否还在转（卡死则 heartbeat 停）。
+        beatLock96.lock()
+        mainBeat96 += 1
+        beatLock96.unlock()
         if lastTick == 0 { lastTick = link.timestamp }
         rootView?.setNeedsDisplay()
     }

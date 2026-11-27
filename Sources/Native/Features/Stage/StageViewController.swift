@@ -105,16 +105,18 @@ final class StageViewController: UIViewController {
     private var stageSeekHit: UIView?
     private let currentTimeLabel = UILabel()
     private let totalTimeLabel = UILabel()
-    private let prevButton = UIButton(type: .system)
+    // (96) C 项：prev/next/console 三钮改 DeckHitButton96
+    // （40pt 视觉不动、命中扩到 44）；播放钮 46 不用。
+    private let prevButton = DeckHitButton96(type: .system)
     private let playButton = UIButton(type: .system)
-    private let nextButton = UIButton(type: .system)
+    private let nextButton = DeckHitButton96(type: .system)
     /// (87) 主题四圆点（台面右上，与两面墙同件同位）。
     // port90（任务 13）：主题四圆点已撤除（长按台面循环主题手势保留）。
     /// (82) 第 7/8 条：E 极简台补件——台内封面/歌名/歌手
     /// （与两面墙同位同尺寸）＋控制台入口圆钮。旧模式钮/
     /// 爪印/槽位钮保留对象但不再上台（职能进控制台），
     /// 既有回刷代码对未上台视图无副作用。
-    private let stageConsoleButton82 = UIButton(type: .system)
+    private let stageConsoleButton82 = DeckHitButton96(type: .system)
     private let stageCover82 = UIImageView()
     private let stageTitle82 = UILabel()
     private let stageArtist82 = UILabel()
@@ -176,6 +178,10 @@ final class StageViewController: UIViewController {
     /// (78) 第 8 条：播放条根级认领（见 MiniBarRootTap78）。
     private var stageBarRootTap78: MiniBarRootTap78?
     private var stageBarPresented = false
+    /// (96) C 项：台钮最终渲染自证去重键（同主页墙 probeDeckRender94 口径）。
+    private var deckRenderProbed94 = Set<String>()
+    /// (96) C 项：deck 探针守卫自证去重键（同主页墙）。
+    private var deckGuardLogged95 = Set<String>()
     private var stageSeekDragging = false
     /// seek 落点保持窗（3.7 (70) B4）：.ended 发 seek 后、
     /// 驱动重锚收敛前冻结驱动写点，免落点回跳；目标秒数
@@ -1133,19 +1139,31 @@ final class StageViewController: UIViewController {
     /// 判读推测四齐门不验「已按新尺寸重排」、pending 未
     /// 置位时可零重排揭盖。不等时释放前无条件补一轮
     /// layoutStage（既有入口，排后 pushSnapshot，与
-    /// alongside/completion 补轮同式）、更新已排尺寸，
-    /// 再递归重走一遍全部门判定，不许跳过其余四门。
+    /// alongside/completion 补轮同式）、laid 回读补排后
+    /// 实测的 view.bounds.size（(96) E 项，不许直接盖章
+    /// = target）；实测与目标差 <0.5pt 即认已排、递归重
+    /// 走全部门判定，仍差 ≥0.5 即返、等下一稳定帧再结算
+    /// （不递归，bounds 不变时递归必空转；3 秒 tmo94 安
+    /// 全网不动）。
     private func p94RotMaybeRelease() {
         guard p94RotAwaiting, p94RotNativeLanded,
               p94RotStableFrames >= 2 else { return }
         if webEmbedStyleId != nil {
             guard p94RotWebResized, p94RotStageReady else { return }
         }
-        if stageRotLaidSize86 != p94RotTargetSize {
+        // (96) E 项：比对按 0.5pt 容差（与 p94RotFrameTick
+        // 的 sizeOK 同口径）。注：alongside :995 写的是转
+        // 场 size 参数（即目标本身），非排版后回读；此处
+        // view.bounds.size 才是补排实际用的几何。
+        if abs(stageRotLaidSize86.width - p94RotTargetSize.width) >= 0.5
+            || abs(stageRotLaidSize86.height - p94RotTargetSize.height) >= 0.5 {
             stageLayoutPending = false
             layoutStage()
             pushSnapshot()
-            stageRotLaidSize86 = p94RotTargetSize
+            stageRotLaidSize86 = view.bounds.size
+            stageRotLaidInsets86 = view.safeAreaInsets
+            guard abs(stageRotLaidSize86.width - p94RotTargetSize.width) < 0.5,
+                  abs(stageRotLaidSize86.height - p94RotTargetSize.height) < 0.5 else { return }
             p94RotMaybeRelease()
             return
         }
@@ -1380,6 +1398,8 @@ final class StageViewController: UIViewController {
             lastLayoutSize = view.bounds.size
             if !stageRotationFrozen { pushSnapshot() }
         }
+        // (96) C 项：布局收口后做台钮最终渲染自证（同主页墙 probeDeckRender94 口径，内部去重）。
+        probeDeckRender94()
     }
 
     private func teardown() {
@@ -2365,10 +2385,13 @@ final class StageViewController: UIViewController {
 
     private func refreshPlayButton() {
         // (82) 第 7 条：字形走 DeckGlyph82（与两面墙同套）。
-        // (95) 第 11 条：播放字形 pointSize 21→19。
+        // (96) C 项：播放字形 pointSize 回 21（控制台口径）；
+        // setImage 后补 A4Chrome91.rehangGlyph（同两面墙
+        // 94-3 口径——舞台回刷此前只换图、不重申字形层 z 序）。
         playButton.setImage(
-            DeckGlyph82.image(engine.isPlaying ? .pause : .play, pointSize: 19),
+            DeckGlyph82.image(engine.isPlaying ? .pause : .play, pointSize: 21),
             for: .normal)
+        A4Chrome91.rehangGlyph(of: playButton)
     }
 
     /// (82) 第 7 条：台面字形回刷——仅播/停态（上下曲字
@@ -2377,6 +2400,67 @@ final class StageViewController: UIViewController {
         refreshPlayButton()
         // (83) 第 6 条：模式钮（stageModeButton83）随同点回刷。
         refreshStageModeButton83()
+    }
+
+    /// (96) C 项：cov 自证＋p95 deck guard 由主页墙原样移植
+    /// （host 标识改成本宿主 stage；串名 p94 deck render /
+    /// p95 deck guard 不变）。其余实现与 HomeWall probeDeck-
+    /// Render94 / probeDeckButton94 逐行同构，见彼处注释；
+    /// 播/停态取 engine.isPlaying（舞台既有口径）。
+    private func probeDeckRender94() {
+        let deckWin95 = playButton.window != nil
+        guard stageBarPresented, !stageBarCollapsed,
+              playButton.window != nil,
+              playButton.bounds.width > 0 else {
+            let pres95 = stageBarPresented ? 1 : 0
+            let coll95 = stageBarCollapsed ? 1 : 0
+            let win95 = deckWin95 ? 1 : 0
+            let combo95 = "\(pres95),\(coll95),\(win95)"
+            if !deckGuardLogged95.contains(combo95) {
+                deckGuardLogged95.insert(combo95)
+                Breadcrumbs.log("p95 deck guard pres=\(pres95)"
+                    + " coll=\(coll95) win=\(win95) host=stage")
+            }
+            return
+        }
+        let playing = engine.isPlaying
+        probeDeckButton94(playButton, btn: "play",
+                          glyph: playing ? "pause" : "play",
+                          kind: playing ? .pause : .play)
+        probeDeckButton94(prevButton, btn: "prev", glyph: "prev", kind: nil)
+        probeDeckButton94(nextButton, btn: "next", glyph: "next", kind: nil)
+        probeDeckButton94(stageConsoleButton82, btn: "console", glyph: "console", kind: nil)
+    }
+
+    private func probeDeckButton94(_ button: UIButton?, btn: String,
+                                   glyph: String, kind: DeckGlyph82.Kind?) {
+        guard let button, button.bounds.width > 0 else { return }
+        let key = "\(btn):\(glyph)"
+        guard !deckRenderProbed94.contains(key) else { return }
+        deckRenderProbed94.insert(key)
+        let ivTop = button.imageView.map {
+            button.subviews.last === $0
+        } ?? false
+        A4Chrome91.rehangGlyph(of: button)
+        button.layoutIfNeeded()
+        let imgNil = button.image(for: .normal) == nil
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        let snapshot = UIGraphicsImageRenderer(
+            bounds: button.bounds, format: format).image { _ in
+            button.drawHierarchy(in: button.bounds, afterScreenUpdates: false)
+        }
+        let cov = DeckGlyph82.snapshotCenterCoverage(snapshot)
+        var fb = 0
+        if let kind, cov < 0.005,
+           let filled = DeckGlyph82.filledFallbackImage(kind, pointSize: 21) {
+            button.setImage(filled, for: .normal)
+            A4Chrome91.rehangGlyph(of: button)
+            fb = 1
+        }
+        Breadcrumbs.log("p94 deck render btn=\(btn) cov=\(Int(cov * 1000))"
+            + " img=\(imgNil ? "nil" : "ok") sub=\(button.subviews.count)"
+            + " ivtop=\(ivTop ? 1 : 0) fb=\(fb) host=stage")
     }
 
     /// (83) 第 6 条：实际上台模式钮的字形＋菜单回刷——与
@@ -3409,21 +3493,9 @@ final class StageViewController: UIViewController {
         playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
         playButton.addTarget(self, action: #selector(stagePlayDown84), for: .touchDown)
         bar.addSubview(playButton)
-        // port90（任务 14）：播放钮改圆形毛玻璃（系统材质、透出台面底色），
-        // 尺寸/位置/字形不变；blur 子视图不接手势、置字形之下。
-        let stagePlayBlur90 = UIVisualEffectView(
-            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        stagePlayBlur90.isUserInteractionEnabled = false
-        stagePlayBlur90.clipsToBounds = true
-        stagePlayBlur90.layer.cornerRadius = 23
-        stagePlayBlur90.translatesAutoresizingMaskIntoConstraints = false
-        playButton.insertSubview(stagePlayBlur90, at: 0)
-        NSLayoutConstraint.activate([
-            stagePlayBlur90.leadingAnchor.constraint(equalTo: playButton.leadingAnchor),
-            stagePlayBlur90.trailingAnchor.constraint(equalTo: playButton.trailingAnchor),
-            stagePlayBlur90.topAnchor.constraint(equalTo: playButton.topAnchor),
-            stagePlayBlur90.bottomAnchor.constraint(equalTo: playButton.bottomAnchor),
-        ])
+        // (96) C 项：播放钮整钮毛玻璃盘撤除（port90 任务 14
+        // 旧制）——与 prev/next/console 三钮统一为 A4 渐变面；
+        // A4Chrome91 渐变层保留（下行 apply 处）。
         // (82) 第 7 条：字形走 DeckGlyph82 独立绘制函数。
         prevButton.setImage(DeckGlyph82.image(.prev, pointSize: 19), for: .normal)
         nextButton.setImage(DeckGlyph82.image(.next, pointSize: 19), for: .normal)
@@ -3497,9 +3569,11 @@ final class StageViewController: UIViewController {
         // (84) 第 1 条：列表钮撤下台面（队列由控制台承
         // 接）——不 addSubview、约束不装配。
         // (95) 第 11 条：控制台钮 40 圆、圆角 20。
+        // (96) C 项：控制台入口字形 20→19，全行字号收为
+        // 播放 21 / 其余 19 两档。
         stageConsoleButton82.backgroundColor = UIColor.white.withAlphaComponent(0.13)
         stageConsoleButton82.layer.cornerRadius = 20
-        stageConsoleButton82.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 20), for: .normal)
+        stageConsoleButton82.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 19), for: .normal)
         stageConsoleButton82.tintColor = .white
         stageConsoleButton82.accessibilityLabel = "控制台"
         stageConsoleButton82.translatesAutoresizingMaskIntoConstraints = false
@@ -3523,6 +3597,8 @@ final class StageViewController: UIViewController {
         seekHit.backgroundColor = .clear
         seekHit.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(seekHit)
+        // (96) E 项：seek 带降到钮下（同主页墙口径，见该处注释）。
+        bar.insertSubview(seekHit, aboveSubview: progressTrack)
         stageSeekHit = seekHit
         let seekPan = UIPanGestureRecognizer(target: self, action: #selector(stageSeekPanned(_:)))
         seekHit.addGestureRecognizer(seekPan)
@@ -3541,9 +3617,11 @@ final class StageViewController: UIViewController {
         stageBarHeightConstraint?.isActive = true
         // (74) 轨道约束存引用（收起态换居中 134×5 小横线）。
         // (95) 第 11 条：展开态轨道脱离时间标签夹锚、改锚
-        // 台身两端 +20/−20，高 6→3。
-        stageTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20)
-        stageTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20)
+        // 台身两端，高 6→3。
+        // (96) E 项：轨两端按胶囊圆角内收 ±24（旧 ±20 在轨
+        // 底 y 处恰顶圆弧边界，见 S4-1；24 留 ≈4pt 余量）。
+        stageTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 24)
+        stageTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -24)
         stageTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 3)
         Breadcrumbs.log("port89 deck=track6/time10x32 host=stage")
         stageTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
@@ -3585,7 +3663,11 @@ final class StageViewController: UIViewController {
             fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
             fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
 
-            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            // (96) E 项：把手纵向钳制——中心锚台底 −8（14pt
+            // 把手底边 = 台底 −1，不露胶囊下沿；旧锚轨心时
+            // 底边出台底 3.5pt，见 S4-1）。收起态台高 16 时
+            // 中心同为 8，与轨心重合、无形态差。
+            knob.centerYAnchor.constraint(equalTo: bar.bottomAnchor, constant: -8),
             knob.widthAnchor.constraint(equalToConstant: 14),
             knob.heightAnchor.constraint(equalToConstant: 14),
 
@@ -3634,11 +3716,14 @@ final class StageViewController: UIViewController {
             stageConsoleButton82.widthAnchor.constraint(equalToConstant: 40),
             stageConsoleButton82.heightAnchor.constraint(equalToConstant: 40),
 
-            // (95) 第 11 条：seek 命中带改锚轨道区（top =
-            // 轨 top −10、bottom = 台底），seek 行为不动。
-            seekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
-            seekHit.trailingAnchor.constraint(equalTo: bar.trailingAnchor),
-            seekHit.topAnchor.constraint(equalTo: progressTrack.topAnchor, constant: -10),
+            // (95) 第 11 条：seek 命中带改锚轨道区（bottom =
+            // 台底），seek 行为不动。
+            // (96) E 项：命中带顶改轨顶 −22、横向随轨道（与
+            // 轨同锚）；实高 27pt（22＋轨 3＋轨底 2），恢复
+            // (82) 的 27pt 下限。
+            seekHit.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
+            seekHit.trailingAnchor.constraint(equalTo: progressTrack.trailingAnchor),
+            seekHit.topAnchor.constraint(equalTo: progressTrack.topAnchor, constant: -22),
             seekHit.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
         stageKnobLeading = knob.leadingAnchor.constraint(
@@ -4192,7 +4277,8 @@ final class StageViewController: UIViewController {
         stageTrackBottomConstraint?.constant = collapsed ? -5.5 : -2
         // (81) 第 1 条两态口径（盖过 (79) 的恒 134，与两
         // 面墙台同账）：收起态居中 134×5 短轨；展开态还
-        // 原台内全宽长 seek 轨（lead/trail ±20、高 4、圆
+        // 原台内全宽长 seek 轨（lead/trail ±24（(96) E 项
+        // 由 ±20 内收）、高 4、圆
         // 角 2，装配原值）。注：舞台展开首呈现走装配默认
         // 即全宽、本就正确（(79) 判读坐实），本函数被调
         // 用时按两态收口即可，不另加开台补调。

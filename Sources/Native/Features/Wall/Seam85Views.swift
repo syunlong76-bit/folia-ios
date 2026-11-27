@@ -728,10 +728,12 @@ final class SeamMaster: UIView {
             let button = UIButton(type: .system)
             button.setTitle(title, for: .normal)
             button.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
-            // (95) 6c：缩字号保护——先缩到 0.66（12pt 下限
-            // ≈8pt）再允许尾截断，不许截到只剩一个点。
+            // (96) D：缩字号保护——先缩到 0.85（12pt 下限
+            // ≈10.2pt）再允许尾截断，不许截到只剩一个点；
+            // 0.66 档曾跌破可读下限（≈8pt），见 audit-95
+            // §二.2 存疑项。
             button.titleLabel?.adjustsFontSizeToFitWidth = true
-            button.titleLabel?.minimumScaleFactor = 0.66
+            button.titleLabel?.minimumScaleFactor = 0.85
             button.titleLabel?.lineBreakMode = .byTruncatingTail
             button.accessibilityLabel = title
             button.tag = index
@@ -1502,27 +1504,49 @@ final class SeamMaster: UIView {
         avatarPlaceholderIcon.frame = CGRect(
             x: 6, y: 6, width: 22, height: 22)
 
-        // 缝底两排：工具排（窄缝 2 行/宽档 1 行）＋播放区 44。
+        // 缝底两排：工具排（窄缝 2 行/宽档 1 行）＋播放区
+        // （窄档纵排 102 / 宽档横排 44）。
         let toolRows = contentW < 100 ? 2 : 1
         let toolsH: CGFloat = toolRows == 2 ? 56 : 30
-        let footerH = toolsH + 6 + 44
+        // (96) D：窄档（contentW<100，如主页缝 64）播放区
+        // 改纵排专属形态——三钮 30×30、间距 6、纵向总高
+        // 3*30+2*6=102，居中于 centerX；footerH 相应改
+        // toolsH+6+102。宽档保持现行 span95 公式不动。
+        let narrowTransport96 = contentW < 100
+        let transportH96: CGFloat = narrowTransport96 ? 102 : 44
+        let footerH = toolsH + 6 + transportH96
         let footerY = H - footerH
         layoutTools(contentX: contentX, contentW: contentW,
                     y: footerY, height: toolsH, rows: toolRows)
         let transportY = footerY + toolsH + 6
         let centerX = W / 2
-        // (95) 6d：三钮跨度随缝内容宽自适应（旧固定总跨
-        // 120 在 64 窄缝双侧各出界 28pt）；play 居中 38 不
-        // 变，prev/next 中心 = centerX ∓ (span/2 − 19)，
-        // 宽档（contentW≥120）时 span=120 与旧视觉一致。
-        let span95 = min(120, contentW - 8)
-        let side95 = span95 / 2 - 19
-        prevButton.frame = CGRect(x: centerX - side95 - 19, y: transportY + 3,
-                                  width: 38, height: 38)
-        playButton.frame = CGRect(x: centerX - 19, y: transportY + 3,
-                                  width: 38, height: 38)
-        nextButton.frame = CGRect(x: centerX + side95 - 19, y: transportY + 3,
-                                  width: 38, height: 38)
+        if narrowTransport96 {
+            // 纵排几何（64 档复算）：钮 x∈[centerX−15,
+            // centerX+15]⊂缝界；y 段 [transportY,
+            // transportY+30] / [+36,+66] / [+72,+102]，
+            // 间距 6 互不重叠，总高 102＝footerH 余量，
+            // 末钮底边恰为内容区底边。
+            let bx96 = centerX - 15
+            prevButton.frame = CGRect(x: bx96, y: transportY,
+                                      width: 30, height: 30)
+            playButton.frame = CGRect(x: bx96, y: transportY + 36,
+                                      width: 30, height: 30)
+            nextButton.frame = CGRect(x: bx96, y: transportY + 72,
+                                      width: 30, height: 30)
+        } else {
+            // (95) 6d：三钮跨度随缝内容宽自适应（旧固定总跨
+            // 120 在 64 窄缝双侧各出界 28pt）；play 居中 38 不
+            // 变，prev/next 中心 = centerX ∓ (span/2 − 19)，
+            // 宽档（contentW≥120）时 span=120 与旧视觉一致。
+            let span95 = min(120, contentW - 8)
+            let side95 = span95 / 2 - 19
+            prevButton.frame = CGRect(x: centerX - side95 - 19, y: transportY + 3,
+                                      width: 38, height: 38)
+            playButton.frame = CGRect(x: centerX - 19, y: transportY + 3,
+                                      width: 38, height: 38)
+            nextButton.frame = CGRect(x: centerX + side95 - 19, y: transportY + 3,
+                                      width: 38, height: 38)
+        }
 
         // 主区/二维码区共用同一矩形（原地切换）。
         let mainY: CGFloat = 40

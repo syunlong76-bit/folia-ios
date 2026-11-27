@@ -510,7 +510,8 @@ struct SearchWorkspaceView: View {
                 .padding(.top, 10)
 
             // 题注区：歌名（衬线粗 15）/ 歌手·专辑（灰褐 12）/
-            // 时长 + 动作排（旧行尾三钮通路原样保留，命中框收至 30）。
+            // 时长 + 动作排（旧行尾三钮通路原样保留；(96) D：
+            // 命中框由 30 扩到 44，视觉字形仍 14 不变）。
             VStack(alignment: .leading, spacing: 3) {
                 Text(track.title)
                     .font(.system(size: 15, weight: .bold, design: .serif))
@@ -537,7 +538,7 @@ struct SearchWorkspaceView: View {
                         Image(systemName: inSketchbook ? "checkmark.circle.fill" : "note.text")
                             .font(.system(size: 14))
                             .foregroundColor(inSketchbook ? cardInk : cardSub)
-                            .frame(width: 30, height: 30)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -551,7 +552,7 @@ struct SearchWorkspaceView: View {
                         Image(systemName: starred ? "star.fill" : "star")
                             .font(.system(size: 14))
                             .foregroundColor(starred ? cardInk : cardSub)
-                            .frame(width: 30, height: 30)
+                            .frame(width: 44, height: 44)
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
@@ -561,7 +562,7 @@ struct SearchWorkspaceView: View {
                     Image(systemName: "plus")
                         .font(.system(size: 14))
                         .foregroundColor(cardInk)
-                        .frame(width: 30, height: 30)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                         .onTapGesture {
                             Breadcrumbs.log("search.row.addtoplaylist id=\(track.id)")

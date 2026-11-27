@@ -154,6 +154,15 @@ final class FoliaBridgeLogStore {
     private static let indexDefaultsKey = "folia.log.index"
     private var currentFileIndex: Int
 
+    /// (96) 96-4：本会话启动 UUID（session begin 行分段用）。
+    static let sessionID96 = String(UUID().uuidString.prefix(8))
+
+    /// (96) 96-4：高频聚合节流状态（只在 ioQueue 上读写）。
+    private static let aggPrefixes96 = ["wall.cache", "pf83", "cvr.stat",
+                                        "wall.dec78", "p94 web resize"]
+    private var aggCounts96: [String: Int] = [:]
+    private var aggWindowStart96: Date?
+
     private init() {
         currentFileIndex = UserDefaults.standard.integer(
             forKey: Self.indexDefaultsKey)
@@ -161,6 +170,10 @@ final class FoliaBridgeLogStore {
         // 任何 appendToFile 之前执行一次（单例 init 即首访
         // 问点，本进程只跑一次）。
         preservePreviousSessionTail()
+        // (96) 96-4：本会话开始标记（带启动 UUID），使两份
+        // 轮换文件内的多会话可用 session begin 行分段。
+        writeSync(level: "info", module: "crumb",
+                  message: "p96 session begin id=\(Self.sessionID96)")
     }
 
     /// 上一会话尾巴转存：读两份轮换文件（按修改时间拼接、
@@ -187,6 +200,15 @@ final class FoliaBridgeLogStore {
             .appendingPathComponent("folia-prev-tail.log")
         let body = tail.isEmpty ? "" : tail.joined(separator: "\n") + "\n"
         try? body.write(to: tailURL, atomically: true, encoding: .utf8)
+        // (96) 96-4：上一会话全量快照——200 行尾巴之外，把
+        // 两份轮换文件完整内容（截后 4MB）另存一份，不参与
+        // 轮换；被卡会话不再因尾巴只有 200 行而丢出窗口。
+        let fullURL = logDirectory
+            .appendingPathComponent("folia-prev-session-full.log")
+        let fullBody = lines.joined(separator: "\n")
+        let capped = fullBody.count > 4 * 1024 * 1024
+            ? String(fullBody.suffix(4 * 1024 * 1024)) : fullBody
+        try? (capped + "\n").write(to: fullURL, atomically: true, encoding: .utf8)
         writeSync(level: "info", module: "crumb",
                   message: "prevtail.save n=\(tail.count)")
     }
@@ -251,6 +273,15 @@ final class FoliaBridgeLogStore {
         // 完全不记录（控制台与落盘都停），与「写入本地文件」
         // 子开关分层——采集关则子开关无意义。
         guard SettingsStore.logCaptureEnabled62 else { return }
+        // (96) 96-4：墙面高频行同秒合并节流——wall.cache /
+        // pf83 / cvr.stat / wall.dec78 / p94 web resize 每秒
+        // 只落一条聚合计数行，不再逐行吃掉 2MB 轮换窗口；
+        // fx 类事件（fx sw/arm/clear、probe、setx）永不节流。
+        if let prefix = Self.aggPrefixes96.first(where: { message.hasPrefix($0) }) {
+            guard SettingsStore.bridgeLogWriteEnabled62 else { return }
+            ioQueue.async { [weak self] in self?.aggregate96(prefix: prefix) }
+            return
+        }
         let clean = sanitize(message)
         let line = "\(iso8601(Date())) [\(level.uppercased())][\(module)] \(clean)\n"
         // Xcode Console 与沙盒日志同步。
@@ -284,6 +315,21 @@ final class FoliaBridgeLogStore {
     /// 后才返回（供关键点后补一手 flush 用）。
     func flush() {
         ioQueue.sync {}
+    }
+
+    /// (96) 96-4：高频行按秒聚合——窗口滚动时先把上一秒各
+    /// 前缀计数落成一行，再计本秒。只许在 ioQueue 上调。
+    private func aggregate96(prefix: String) {
+        let now = Date()
+        if let start = aggWindowStart96, now.timeIntervalSince(start) < 1.0 {
+            aggCounts96[prefix, default: 0] += 1
+            return
+        }
+        for (p, n) in aggCounts96 where n > 0 {
+            appendToFile("\(iso8601(now)) [INFO][crumb] \(p) agg n=\(n)\n")
+        }
+        aggCounts96 = [prefix: 1]
+        aggWindowStart96 = now
     }
 
     /// 实际追加写文件（2MB 双文件轮换）。只许在 ioQueue 上调。
@@ -369,6 +415,89 @@ final class FoliaBridgeLogStore {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime,.withFractionalSeconds]
         return formatter.string(from: date)
+    }
+}
+
+/// (96) 96-4：fx 关键事件独立落盘——与主日志分离的
+/// append-only 文件（folia-fx-events.log），关键事件同步
+/// fsync 后返回；另有孤儿 active 标记（arm 时写、全关时
+/// 清），下次启动发现未清即证上一会话特效开着被杀。本文件
+/// 不走主日志的采集门控与轮换（取证通道独立于用户设置）。
+enum FxEventLog96 {
+    private static let fileName = "folia-fx-events.log"
+    private static let oldFileName = "folia-fx-events.old.log"
+    private static let markerName = "folia-fx-active.json"
+    private static let maxBytes = 512 * 1024
+    private static let ioQueue = DispatchQueue(label: "fx.events96")
+
+    private static var logDirectory: URL {
+        let dir = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("folia-logs", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    private static func iso8601(_ date: Date) -> String {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.string(from: date)
+    }
+
+    /// 同步落盘一条 fx 事件（fsync 后返回）。只供低频关键
+    /// 事件调用（arm/off/forceStop/看门狗/审计异常）。
+    static func record(_ event: String) {
+        ioQueue.sync {
+            let line = "\(iso8601(Date())) \(event)\n"
+            guard let data = line.data(using: .utf8) else { return }
+            let url = logDirectory.appendingPathComponent(fileName)
+            if let size = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? NSNumber,
+               size.intValue >= maxBytes {
+                let old = logDirectory.appendingPathComponent(oldFileName)
+                try? FileManager.default.removeItem(at: old)
+                try? FileManager.default.moveItem(at: url, to: old)
+            }
+            if !FileManager.default.fileExists(atPath: url.path) {
+                FileManager.default.createFile(atPath: url.path, contents: nil)
+            }
+            guard let handle = try? FileHandle(forWritingTo: url) else { return }
+            defer { try? handle.close() }
+            do {
+                try handle.seekToEnd()
+                try handle.write(contentsOf: data)
+                try handle.synchronize()
+            } catch { }
+        }
+    }
+
+    /// arm 时同步写 active 标记（原子写）；全关时清。
+    static func markActive(code: String, gen: Int) {
+        ioQueue.sync {
+            let body = "{\"active\":1,\"code\":\"\(code)\",\"gen\":\(gen),\"ts\":\"\(iso8601(Date()))\"}"
+            let url = logDirectory.appendingPathComponent(markerName)
+            try? body.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    static func markCleared() {
+        ioQueue.sync {
+            let body = "{\"active\":0,\"ts\":\"\(iso8601(Date()))\"}"
+            let url = logDirectory.appendingPathComponent(markerName)
+            try? body.write(to: url, atomically: true, encoding: .utf8)
+        }
+    }
+
+    /// 启动时检查孤儿标记：上一会话特效开着未正常清场即落
+    /// 行。由 Breadcrumbs.witnessBoot94 在启动见证时调用
+    /// （此时日志仓单例已初始化完成）。
+    static func checkOrphanOnLaunch() {
+        let url = logDirectory.appendingPathComponent(markerName)
+        guard let data = try? Data(contentsOf: url),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              (obj["active"] as? Int) == 1 else { return }
+        let code = obj["code"] as? String ?? "?"
+        let gen = obj["gen"] as? Int ?? -1
+        record("prev-session-active code=\(code) gen=\(gen)")
+        Breadcrumbs.log("p96 orphan active code=\(code) gen=\(gen)")
     }
 }
 

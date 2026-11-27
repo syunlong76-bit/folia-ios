@@ -165,6 +165,10 @@ enum Breadcrumbs {
     static func witnessBoot94() {
         log("p94 wit geo=1 seg=1 deck=1 seam=1 wall=1 rot=1"
             + " fx=1 xmas=1 web=1 mem=1")
+        // (96) 96-4：启动见证——fx 独立落盘通道在册＋孤儿
+        // active 扫描（上一会话特效开着被杀时落行）。
+        log("p96 wit fx=1 wd=1 panic=1 log=1")
+        FxEventLog96.checkOrphanOnLaunch()
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。

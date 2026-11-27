@@ -49,9 +49,9 @@ targets:
       # 且版本号被写成 1.0/1）。下面与仓库 Info.plist 的定制内容保持一致。
       properties:
         CFBundleDevelopmentRegion: zh-Hans
-        CFBundleDisplayName: Folia
+        CFBundleDisplayName: Virelai
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "95"
+        CFBundleVersion: "96"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -125,7 +125,7 @@ targets:
       properties:
         CFBundleDisplayName: FoliaWidgets
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "95"
+        CFBundleVersion: "96"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

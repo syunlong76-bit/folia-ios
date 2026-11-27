@@ -142,6 +142,12 @@ final class WallPrototypeViewController: UIViewController,
     /// 不加任何拦截层，本标志只防切换重入，结束即复原 bounce。
     private var p94WallSwitchInFlight = false
     private var p94SavedBounces: [(UIScrollView, Bool)] = []
+    /// (96) B：版式互换守卫的单次重试与延期标志——重试只许一
+    /// 次（p96LayoutRetryUsed91，本轮内有效，成功互换或最终
+    /// 守卫 return 时清零）；守卫曾拦下目标视图时置位
+    /// （p96GuardDeferred91），数据到达重验成功互换后清零。
+    private var p96LayoutRetryUsed91 = false
+    private var p96GuardDeferred91 = false
     /// port91 顶部段控成员（layoutSwitch91/layoutSwitchButtons91）
     /// 已随 (92) 任务 11 撤除：版式切换移主页缝，见 installPlaylistLayout91。
     private var magazineTable91: UITableView?
@@ -261,6 +267,10 @@ final class WallPrototypeViewController: UIViewController,
     private var miniPlayButton: UIButton!
     private var miniPrevButton: UIButton!
     private var miniNextButton: UIButton!
+    /// (96) C 项：台钮最终渲染自证去重键（同主页墙 probeDeckRender94 口径）。
+    private var deckRenderProbed94 = Set<String>()
+    /// (96) C 项：deck 探针守卫自证去重键（同主页墙）。
+    private var deckGuardLogged95 = Set<String>()
     /// (87) 主题四圆点（台面右上，与主页墙同件同位）。
     // port90（任务 13）：主题四圆点已撤除（长按台面循环主题手势保留）。
     /// (82) 第 7/8 条：控制台入口圆钮＋双时间标签（E 极简
@@ -866,33 +876,24 @@ final class WallPrototypeViewController: UIViewController,
         // (93) B1：钮径 42→38、圆角随之 21→19。
         miniPlayButton.tintColor = .white
         miniPlayButton.backgroundColor = .clear
-        // (95) 第 11 条：播放钮 46×46、圆角 23、字形 19。
+        // (95) 第 11 条：播放钮 46×46、圆角 23。
+        // (96) C 项：字形 19→21（回控制台传输行口径）。
         miniPlayButton.layer.cornerRadius = 23
-        miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 19), for: .normal)
+        miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 21), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
         miniPlayButton.addTarget(self, action: #selector(miniPlayDown84), for: .touchDown)
         bar.addSubview(miniPlayButton)
-        // port90（任务 14）：播放钮改圆形毛玻璃（系统材质、透出台面底色），
-        // 尺寸/位置/字形不变；blur 子视图不接手势、置字形之下。
-        let miniPlayBlur90 = UIVisualEffectView(
-            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        miniPlayBlur90.isUserInteractionEnabled = false
-        miniPlayBlur90.clipsToBounds = true
-        miniPlayBlur90.layer.cornerRadius = 23
-        miniPlayBlur90.translatesAutoresizingMaskIntoConstraints = false
-        miniPlayButton.insertSubview(miniPlayBlur90, at: 0)
-        NSLayoutConstraint.activate([
-            miniPlayBlur90.leadingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor),
-            miniPlayBlur90.trailingAnchor.constraint(equalTo: miniPlayButton.trailingAnchor),
-            miniPlayBlur90.topAnchor.constraint(equalTo: miniPlayButton.topAnchor),
-            miniPlayBlur90.bottomAnchor.constraint(equalTo: miniPlayButton.bottomAnchor),
-        ])
+        // (96) C 项：播放钮整钮毛玻璃盘撤除（port90 任务 14
+        // 旧制）——与 prev/next/console 三钮统一为 A4 渐变面；
+        // A4Chrome91 渐变层保留（下行）。
         // port91（任务 3）：台面播放/控制台钮换 A4 玻璃面。
         // (95) 第 11 条：A4 面圆角随钮同步 23。
         A4Chrome91.apply(to: miniPlayButton, cornerRadius: 23)
 
-        miniPrevButton = UIButton(type: .system)
+        // (96) C 项：prev/next/console 三钮改 DeckHitButton96
+        // （40pt 视觉不动、命中扩到 44）；播放钮 46 不用。
+        miniPrevButton = DeckHitButton96(type: .system)
         miniPrevButton.tintColor = .white
         // (95) 第 11 条：上一曲补 A4 玻璃面（圆角 20）、字形维持 19。
         miniPrevButton.layer.cornerRadius = 20
@@ -903,7 +904,7 @@ final class WallPrototypeViewController: UIViewController,
         bar.addSubview(miniPrevButton)
         A4Chrome91.apply(to: miniPrevButton, cornerRadius: 20)
 
-        miniNextButton = UIButton(type: .system)
+        miniNextButton = DeckHitButton96(type: .system)
         miniNextButton.tintColor = .white
         // (95) 第 11 条：下一曲补 A4 玻璃面（圆角 20）、字形维持 19。
         miniNextButton.layer.cornerRadius = 20
@@ -921,13 +922,15 @@ final class WallPrototypeViewController: UIViewController,
         // (82) 第 7/8 条：控制台入口（纯图标圆钮）＋双时
         // 间标签。(83) 第 6 条：入口移进度行右端、收小
         // 为 30 圆钮（同主页墙）。
-        miniConsoleButton = UIButton(type: .system)
+        miniConsoleButton = DeckHitButton96(type: .system)
         // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
         // (93) B1：钮径 42→38、圆角随之 21→19。
         miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
         // (95) 第 11 条：控制台钮 40×40、圆角 20。
+        // (96) C 项：控制台入口字形 20→19，全行字号收为
+        // 播放 21 / 其余 19 两档。
         miniConsoleButton.layer.cornerRadius = 20
-        miniConsoleButton.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 20), for: .normal)
+        miniConsoleButton.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 19), for: .normal)
         miniConsoleButton.tintColor = .white
         miniConsoleButton.accessibilityLabel = "控制台"
         miniConsoleButton.translatesAutoresizingMaskIntoConstraints = false
@@ -971,6 +974,8 @@ final class WallPrototypeViewController: UIViewController,
         seekHit.backgroundColor = .clear
         seekHit.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(seekHit)
+        // (96) E 项：seek 带降到钮下（同主页墙口径，见该处注释）。
+        bar.insertSubview(seekHit, aboveSubview: progressTrack)
         miniSeekHit = seekHit
         let seekPan = UIPanGestureRecognizer(target: self, action: #selector(miniSeekPanned(_:)))
         seekHit.addGestureRecognizer(seekPan)
@@ -993,10 +998,12 @@ final class WallPrototypeViewController: UIViewController,
         // (74) 轨道约束存引用（收起态换居中小横线，同主页墙）。
         // (82) 第 7 条：展开态轨道夹在双时间标签之间。
         // (95) 第 11 条：展开轨脱离时间标签夹锚、改锚台身
-        // 两端 +20/−20；展开高 6→3（收起态由 setMiniBarForm
+        // 两端；展开高 6→3（收起态由 setMiniBarForm
         // 切回居中短轨、原值不动）。
-        miniTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 20)
-        miniTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -20)
+        // (96) E 项：轨两端按胶囊圆角内收 ±24（旧 ±20 在轨
+        // 底 y 处恰顶圆弧边界，见 S4-1；24 留 ≈4pt 余量）。
+        miniTrackLeadC = progressTrack.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 24)
+        miniTrackTrailC = progressTrack.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -24)
         miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 3)
         Breadcrumbs.log("port89 deck=track6/time10x32 host=wall")
         Breadcrumbs.log("p93 deck host=wall")
@@ -1023,7 +1030,11 @@ final class WallPrototypeViewController: UIViewController,
             fill.bottomAnchor.constraint(equalTo: progressTrack.bottomAnchor),
             fill.widthAnchor.constraint(equalTo: progressTrack.widthAnchor),
 
-            knob.centerYAnchor.constraint(equalTo: progressTrack.centerYAnchor),
+            // (96) E 项：把手纵向钳制——中心锚台底 −8（14pt
+            // 把手底边 = 台底 −1，不露胶囊下沿；旧锚轨心时
+            // 底边出台底 3.5pt，见 S4-1）。收起态台高 16 时
+            // 中心同为 8，与轨心重合、无形态差。
+            knob.centerYAnchor.constraint(equalTo: bar.bottomAnchor, constant: -8),
             knob.widthAnchor.constraint(equalToConstant: 14),
             knob.heightAnchor.constraint(equalToConstant: 14),
 
@@ -1073,11 +1084,12 @@ final class WallPrototypeViewController: UIViewController,
             miniTimeDuration.widthAnchor.constraint(equalToConstant: 32),
 
             // (95) 第 11 条：seek 命中带改锚轨道区——左右
-            // 随轨道两端、top=轨 top −10、bottom=台底（seek
-            // 行为不动）。
+            // 随轨道两端、bottom=台底（seek 行为不动）。
+            // (96) E 项：命中带顶改轨顶 −22；实高 27pt
+            // （22＋轨 3＋轨底 2），恢复 (82) 的 27pt 下限。
             miniSeekHit.leadingAnchor.constraint(equalTo: progressTrack.leadingAnchor),
             miniSeekHit.trailingAnchor.constraint(equalTo: progressTrack.trailingAnchor),
-            miniSeekHit.topAnchor.constraint(equalTo: progressTrack.topAnchor, constant: -10),
+            miniSeekHit.topAnchor.constraint(equalTo: progressTrack.topAnchor, constant: -22),
             miniSeekHit.bottomAnchor.constraint(equalTo: bar.bottomAnchor),
         ])
         // (95) 第 11 条：把手 leading 常量随半径 14/2 → −7
@@ -1257,11 +1269,71 @@ final class WallPrototypeViewController: UIViewController,
         miniPlayButton.setImage(
             DeckGlyph82.image(
                 PlaybackEngine.shared.playbackState == .playing ? .pause : .play,
-                // (95) 第 11 条：播放字形回刷同步 19（原 21）。
-                pointSize: 19),
+                // (96) C 项：播放字形回刷同步 21（回控制台口径，(95) 曾改 19）。
+                pointSize: 21),
             for: .normal)
         A4Chrome91.rehangGlyph(of: miniPlayButton)
         // (84) 第 1 条：模式钮已撤下台面（同主页墙）。
+    }
+
+    /// (96) C 项：cov 自证＋p95 deck guard 由主页墙原样移植
+    /// （host 标识改成本宿主 wallproto；串名 p94 deck render /
+    /// p95 deck guard 不变）。其余实现与 HomeWall probeDeck-
+    /// Render94 / probeDeckButton94 逐行同构，见彼处注释。
+    private func probeDeckRender94() {
+        let deckWin95 = miniPlayButton?.window != nil
+        guard miniBarPresented, !miniBarCollapsed,
+              miniPlayButton != nil, miniPlayButton.window != nil,
+              miniPlayButton.bounds.width > 0 else {
+            let pres95 = miniBarPresented ? 1 : 0
+            let coll95 = miniBarCollapsed ? 1 : 0
+            let win95 = deckWin95 ? 1 : 0
+            let combo95 = "\(pres95),\(coll95),\(win95)"
+            if !deckGuardLogged95.contains(combo95) {
+                deckGuardLogged95.insert(combo95)
+                Breadcrumbs.log("p95 deck guard pres=\(pres95)"
+                    + " coll=\(coll95) win=\(win95) host=wallproto")
+            }
+            return
+        }
+        let playing = PlaybackEngine.shared.playbackState == .playing
+        probeDeckButton94(miniPlayButton, btn: "play",
+                          glyph: playing ? "pause" : "play",
+                          kind: playing ? .pause : .play)
+        probeDeckButton94(miniPrevButton, btn: "prev", glyph: "prev", kind: nil)
+        probeDeckButton94(miniNextButton, btn: "next", glyph: "next", kind: nil)
+        probeDeckButton94(miniConsoleButton, btn: "console", glyph: "console", kind: nil)
+    }
+
+    private func probeDeckButton94(_ button: UIButton?, btn: String,
+                                   glyph: String, kind: DeckGlyph82.Kind?) {
+        guard let button, button.bounds.width > 0 else { return }
+        let key = "\(btn):\(glyph)"
+        guard !deckRenderProbed94.contains(key) else { return }
+        deckRenderProbed94.insert(key)
+        let ivTop = button.imageView.map {
+            button.subviews.last === $0
+        } ?? false
+        A4Chrome91.rehangGlyph(of: button)
+        button.layoutIfNeeded()
+        let imgNil = button.image(for: .normal) == nil
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        let snapshot = UIGraphicsImageRenderer(
+            bounds: button.bounds, format: format).image { _ in
+            button.drawHierarchy(in: button.bounds, afterScreenUpdates: false)
+        }
+        let cov = DeckGlyph82.snapshotCenterCoverage(snapshot)
+        var fb = 0
+        if let kind, cov < 0.005,
+           let filled = DeckGlyph82.filledFallbackImage(kind, pointSize: 21) {
+            button.setImage(filled, for: .normal)
+            A4Chrome91.rehangGlyph(of: button)
+            fb = 1
+        }
+        Breadcrumbs.log("p94 deck render btn=\(btn) cov=\(Int(cov * 1000))"
+            + " img=\(imgNil ? "nil" : "ok") sub=\(button.subviews.count)"
+            + " ivtop=\(ivTop ? 1 : 0) fb=\(fb) host=wallproto")
     }
 
     // (84) 第 1 条：refreshMiniModeButton83 与 miniListTapped83 已删（同主页墙）。
@@ -1591,7 +1663,7 @@ final class WallPrototypeViewController: UIViewController,
         }
         guard miniSeekHit != nil, miniBar != nil else { return }
         let engine = PlaybackEngine.shared
-        // 比例按轨道实际帧算（13.3）：轨道左右各内缩 20pt，按整条
+        // 比例按轨道实际帧算（13.3）：轨道左右各内缩 24pt（(96) E 项由 20 内收），按整条
         // 台面宽算会让拖动位置与填充对不上。轨道尚未布局（宽为 0）
         // 时整体不处理：算不出比例硬走流程会把填充清零、松手把歌
         // 跳回开头（13.3 独立审查低-1）；终结态仍先复位拖动标记。
@@ -1895,7 +1967,8 @@ final class WallPrototypeViewController: UIViewController,
         miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -2
         // (81) 第 1 条两态口径（盖过 (79) 的恒 134，与主
         // 页墙同账）：收起态居中 134×5 短轨；展开态还原
-        // 台内全宽长 seek 轨（lead/trail ±20、高 6、圆角
+        // 台内全宽长 seek 轨（lead/trail ±24（(96) E 项
+        // 由 ±20 内收）、高 6、圆角
         // 3，(89) 对齐网页轨道高）。花朵圆点把手两态恒在场。
         if collapsed {
             miniTrackLeadC?.isActive = false
@@ -2334,11 +2407,11 @@ final class WallPrototypeViewController: UIViewController,
         miniArtist.text = track.artist
         miniPlayButton.setImage(
             DeckGlyph82.image(engine.playbackState == .playing ? .pause : .play,
-                              // (95) 第 11 条：播放字形同步 19（原 21）。
-                              pointSize: 19),
+                              // (96) C 项：播放字形同步 21（回控制台口径，(95) 曾改 19）。
+                              pointSize: 21),
             for: .normal)
-        // (95) 第 11 条：setImage 后字形层重挂回 A4/毛玻璃
-        // 子层之上（94-3 同款定向修法）。
+        // (95) 第 11 条：setImage 后字形层重挂回 A4 子层
+        // 之上（94-3 同款定向修法；(96) C 项 blur 盘已撤）。
         A4Chrome91.rehangGlyph(of: miniPlayButton)
         if let art = engine.currentArtwork {
             miniCover.image = art
@@ -3035,6 +3108,14 @@ final class WallPrototypeViewController: UIViewController,
                     self.wallLayout.refreshInstances()
                     self.collectionView.reloadData()
                     self.reloadAltPlaylist91()
+                    // (96) B-2：数据到达后重验——守卫曾因 vis==0
+                    // 拦下目标视图时（p96GuardDeferred91），晚到
+                    // 的数据须把列表点亮：整函数重跑验证＋互换；
+                    // 未曾被守卫拦下时不重跑（装配期空表由本次
+                    // reloadAltPlaylist91 的 reloadData 直接填）。
+                    if self.p96GuardDeferred91 {
+                        self.applyPlaylistLayout91()
+                    }
                     self.centerCameraIfNeeded()
                     // (85) 第 1 条：缝计数随种子落地回填（总
                     // 数以 detail.trackCount 为准、与墙面计数
@@ -3110,6 +3191,12 @@ final class WallPrototypeViewController: UIViewController,
                         // 照常推进，只刷新墙面，不再上屏计数。
                         self.collectionView.reloadData()
                         self.reloadAltPlaylist91()
+                        // (96) B-2：分页续接同理——守卫曾拦下目标
+                        // 时，新到的数据页也触发一次重验（见种子
+                        // 落点同款条件与口径）。
+                        if self.p96GuardDeferred91 {
+                            self.applyPlaylistLayout91()
+                        }
                         // (83) 黑屏定案③：分页续接后新条目同
                         // 批预热（已缓存者自动跳过）。
                         self.prefetchWall83(dirX: 0, dirY: 0, source: "warm")
@@ -3179,6 +3266,8 @@ final class WallPrototypeViewController: UIViewController,
         }
         // 贴纸层（3.7 (24)，纯新增）：失败/空态/缓冲贴纸定位。
         stickerLayoutOverlays()
+        // (96) C 项：布局收口后做台钮最终渲染自证（同主页墙 probeDeckRender94 口径，内部去重）。
+        probeDeckRender94()
     }
 
     /// 相机增量折叠（3.7 (2) 修复）：3.7 (1) 的整格绕回模型有个致命
@@ -5908,16 +5997,41 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
                 view.layoutIfNeeded()
                 vis = p94VisibleCount94(for: mode)
             }
-            targetView.alpha = savedAlpha
             if vis == 0, !entries.isEmpty {
+                // (96) B-1：同步两次计数均为 0——先不判死刑：
+                // 布局刚落地时 cell 尚未完成首次排布是已知抖动，
+                // 主线程下一轮 runloop 再跑一次装载＋计数（整函
+                // 数重验），只重试一次；仍为 0 才按现行守卫隐藏
+                // 并 return，不把黑底空表亮给用户。本轮先按旧守
+                // 卫原样复原（alpha 复原＋目标隐藏），重验由重入
+                // 的本函数全权接管，不留 alpha=0 的悬空态。
+                if !p96LayoutRetryUsed91 {
+                    p96LayoutRetryUsed91 = true
+                    p96GuardDeferred91 = true
+                    Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis) entries=\(entries.count) retry=1")
+                    targetView.alpha = savedAlpha
+                    targetView.isHidden = true
+                    DispatchQueue.main.async { [weak self] in
+                        self?.applyPlaylistLayout91()
+                    }
+                    if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
+                    if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
+                    syncPlaylistSeamHighlightToMountedView91()
+                    return
+                }
+                targetView.alpha = savedAlpha
                 targetView.isHidden = true
-                Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis)")
+                p96GuardDeferred91 = true
+                Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis) entries=\(entries.count)")
                 if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
                 if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
+                p96LayoutRetryUsed91 = false
+                syncPlaylistSeamHighlightToMountedView91()
                 return
             }
+            targetView.alpha = savedAlpha
         }
-        Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis)")
+        Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis) entries=\(entries.count)")
         collectionView.isHidden = mode != 0
         magazineTable91?.isHidden = mode != 1
         shelfView91?.isHidden = mode != 2
@@ -5926,6 +6040,34 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         // 已撤，不再有切换钮提序与段控态回刷。）
         if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
         if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
+        p96GuardDeferred91 = false
+        p96LayoutRetryUsed91 = false
+        syncPlaylistSeamHighlightToMountedView91()
+    }
+
+    /// (96) B-3：缝胶囊高亮单一出处——高亮只认实际挂上的视图，
+    /// 不认请求中的 playlistLayout91。判定用「未隐藏且 alpha>0」
+    ///（验证期 alpha=0 的临时解隐不算挂上；交叉淡化中的半透明
+    /// 态不经本函数判定）；无一视图在位时不改高亮、不撒谎，等
+    /// 数据到达重验后再由本函数回写。写 layoutMode93 只经其
+    /// didSet 重刷胶囊（notify:false），不回写持久化键、不触发
+    /// onLayoutMode93 回调、不改 playlistLayout91——守卫只是暂
+    /// 缓互换，不是废弃用户选的版式。
+    private func syncPlaylistSeamHighlightToMountedView91() {
+        let mounted: Int?
+        if !collectionView.isHidden, collectionView.alpha > 0 {
+            mounted = 0
+        } else if magazineTable91?.isHidden == false, (magazineTable91?.alpha ?? 0) > 0 {
+            mounted = 1
+        } else if shelfView91?.isHidden == false, (shelfView91?.alpha ?? 0) > 0 {
+            mounted = 2
+        } else {
+            mounted = nil
+        }
+        guard let mounted, let seam = playlistSeam85,
+              seam.layoutMode93 != mounted else { return }
+        seam.layoutMode93 = mounted
+        Breadcrumbs.log("p96 seam mounted=\(mounted) req=\(playlistLayout91) entries=\(entries.count)")
     }
 
     fileprivate func reloadAltPlaylist91() {
