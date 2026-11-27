@@ -24,6 +24,12 @@ final class PolaroidZone90View: UIView {
     private var pool: [FoliaTrack] = []
     private var printed = false
     private var printing = false
+    /// (93) A3：分帧打印状态——批次游标（每批至多 2 张）、
+    /// 打印代次（换一批/重打时旧批次作废）、打印起点时刻
+    /// （各张延迟按绝对时刻对齐、视觉 stagger 与旧式一致）。
+    private var printBatch93 = 0
+    private var printGen93 = 0
+    private var printStart93: CFTimeInterval = 0
 
     /// 舞台区高度（头部行之外）：竖屏 232/横屏 150 由宿主约束
     /// 给定总高，本视图内部按 head 40 + 其余为舞台排布。
@@ -184,6 +190,10 @@ final class PolaroidZone90View: UIView {
 
     /// 逐张打印：每张从打印机出纸口滑出、弹簧落到槽位；
     /// 全部打完后打印机淡出上移消失（样片同序）。
+    /// (93) A3：打印改分帧——旧式在一次调用里同步搭起全部
+    /// 10 张动画（与控制台弹出同秒、实锤 606ms 帧间隔）；现
+    /// 每主队列周期至多搭 2 张，各张延迟按 printStart93 绝
+    /// 对时刻对齐旧 stagger（0.15＋张序×0.42），视觉时序不变。
     private func startPrinting() {
         guard !cards.isEmpty, bounds.width > 0 else { return }
         printing = true
@@ -191,40 +201,73 @@ final class PolaroidZone90View: UIView {
         printer.alpha = 1
         printer.isHidden = false
         printer.setLED(on: true)
-        let stage = stageView.bounds
-        let startFrame = CGRect(x: stage.width / 2 - 30, y: printer.frame.maxY - 26,
-                                width: 60, height: 76)
-        for (index, card) in cards.enumerated() {
-            let target = frameForSlot(index, stage: stage)
-            let slot = Self.slots[index % Self.slots.count]
-            card.frame = startFrame
-            card.transform = .identity
-            card.alpha = 0
-            stageView.bringSubviewToFront(card)
-            UIView.animate(withDuration: 0.55, delay: 0.15 + Double(index) * 0.42,
-                           usingSpringWithDamping: 0.72, initialSpringVelocity: 0.4,
-                           options: [.allowUserInteraction]) {
-                card.alpha = 1
-                card.frame = target
-                card.transform = CGAffineTransform(rotationAngle: slot.rot * .pi / 180)
+        printGen93 += 1
+        printBatch93 = 0
+        printStart93 = CACurrentMediaTime()
+        Breadcrumbs.log("port90 polaroid print n=\(cards.count)")
+        schedulePrintBatch93(gen: printGen93)
+    }
+
+    /// (93) A3：分帧批次——每批至多 2 张，批间让出主队列
+    /// 一周期；末批后按旧总时长安排打印机淡出。
+    private func schedulePrintBatch93(gen: Int) {
+        DispatchQueue.main.async { [weak self] in
+            guard let self, gen == self.printGen93, self.printing else { return }
+            let stage = self.stageView.bounds
+            guard stage.width > 0 else {
+                // 舞台帧未就位：隔一周期重试同批，不丢打印。
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+                    self?.schedulePrintBatch93(gen: gen)
+                }
+                return
+            }
+            let startFrame = CGRect(x: stage.width / 2 - 30, y: self.printer.frame.maxY - 26,
+                                    width: 60, height: 76)
+            let lo = self.printBatch93 * 2
+            let hi = min(lo + 2, self.cards.count)
+            guard lo < hi else { return }
+            for index in lo..<hi {
+                let card = self.cards[index]
+                let target = self.frameForSlot(index, stage: stage)
+                let slot = Self.slots[index % Self.slots.count]
+                card.frame = startFrame
+                card.transform = .identity
+                card.alpha = 0
+                self.stageView.bringSubviewToFront(card)
+                // 延迟按绝对时刻对齐：本张应在 printStart93＋
+                // 0.15＋index×0.42 起跳，已过点即 0（不追赶叠加）。
+                let due = self.printStart93 + 0.15 + Double(index) * 0.42
+                let delay = max(0, due - CACurrentMediaTime())
+                UIView.animate(withDuration: 0.55, delay: delay,
+                               usingSpringWithDamping: 0.72, initialSpringVelocity: 0.4,
+                               options: [.allowUserInteraction]) {
+                    card.alpha = 1
+                    card.frame = target
+                    card.transform = CGAffineTransform(rotationAngle: slot.rot * .pi / 180)
+                }
+            }
+            self.printBatch93 += 1
+            if hi < self.cards.count {
+                self.schedulePrintBatch93(gen: gen)
+            } else {
+                let total = 0.15 + Double(self.cards.count) * 0.42 + 0.6
+                let remain = max(0, self.printStart93 + total - CACurrentMediaTime())
+                DispatchQueue.main.asyncAfter(deadline: .now() + remain) { [weak self] in
+                    guard let self, gen == self.printGen93 else { return }
+                    self.printer.setLED(on: false)
+                    UIView.animate(withDuration: 0.5, animations: {
+                        self.printer.alpha = 0
+                        self.printer.transform = CGAffineTransform(translationX: 0, y: -14)
+                            .scaledBy(x: 0.9, y: 0.9)
+                    }, completion: { _ in
+                        self.printer.isHidden = true
+                        self.printer.transform = .identity
+                        self.printing = false
+                        self.printed = true
+                    })
+                }
             }
         }
-        let total = 0.15 + Double(cards.count) * 0.42 + 0.6
-        DispatchQueue.main.asyncAfter(deadline: .now() + total) { [weak self] in
-            guard let self else { return }
-            self.printer.setLED(on: false)
-            UIView.animate(withDuration: 0.5, animations: {
-                self.printer.alpha = 0
-                self.printer.transform = CGAffineTransform(translationX: 0, y: -14)
-                    .scaledBy(x: 0.9, y: 0.9)
-            }, completion: { _ in
-                self.printer.isHidden = true
-                self.printer.transform = .identity
-                self.printing = false
-                self.printed = true
-            })
-        }
-        Breadcrumbs.log("port90 polaroid print n=\(cards.count)")
     }
 }
 

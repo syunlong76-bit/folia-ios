@@ -68,13 +68,20 @@ struct MiniPlayerView: View {
 
     var body: some View {
         if let track = engine.currentTrack {
+            // (93) B1：本组件尺寸随台面同比例收一档（钮面
+            // 44→40、封面 40→36、字形 17/16/20/24→15/14/
+            // 18/22、内边距 12/6→11/5、行间距 8/12→7/11）；
+            // 构成与行数不增不减，标签/歌手字号守可读下限
+            // 不动。本组件现无宿主（见文件头集成缺口），真
+            // 机台面尺寸由 MiniBarQuickRowView.expandedBar-
+            // Height 124→112 收口，本处为同口径同步。
             VStack(spacing: 2) {
                 quickActionsRow(track: track)
                 mainRow(track: track)
                 progressRow
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
+            .padding(.horizontal, 11)
+            .padding(.vertical, 5)
             .background {
                 ZStack {
                     Rectangle().fill(.ultraThinMaterial)
@@ -87,7 +94,7 @@ struct MiniPlayerView: View {
                 RoundedRectangle(cornerRadius: 16, style: .continuous)
                     .stroke(Color.white.opacity(0.10), lineWidth: 1))
             .shadow(color: .black.opacity(0.25), radius: 12, x: 0, y: 4)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 11)
             .onAppear { refreshLike(trackId: track.id); refreshSleep() }
             .onChange(of: track.id) { _, newId in refreshLike(trackId: newId) }
             .onReceive(NotificationCenter.default.publisher(
@@ -111,13 +118,13 @@ struct MiniPlayerView: View {
                 toggleLike(track: track)
             } label: {
                 Image(systemName: isLiked ? "heart.fill" : "heart")
-                    .font(.system(size: 17))
+                    .font(.system(size: 15))
                     // (68) A1 状态强可视化：已喜欢 = 整钮填充
                     // 喜欢色＋白心；未喜欢维持现行（白 75%、无填充）。
                     .foregroundColor(isLiked
                         ? .white
                         : .white.opacity(0.75))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .background(
                         RoundedRectangle(cornerRadius: 12, style: .continuous)
                             .fill(isLiked
@@ -135,9 +142,9 @@ struct MiniPlayerView: View {
                 queueManager.shuffleQueue()
             } label: {
                 Image(systemName: "shuffle")
-                    .font(.system(size: 16))
+                    .font(.system(size: 14))
                     .foregroundColor(.white.opacity(0.75))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -154,10 +161,10 @@ struct MiniPlayerView: View {
                 cyclePlayMode()
             } label: {
                 Image(systemName: playModeSymbol)
-                    .font(.system(size: 16))
+                    .font(.system(size: 14))
                     .foregroundColor(queueManager.playMode == .off
                         ? .white.opacity(0.45) : .white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -170,9 +177,9 @@ struct MiniPlayerView: View {
                 cycleSleepTimer()
             } label: {
                 Image(systemName: "timer")
-                    .font(.system(size: 16))
+                    .font(.system(size: 14))
                     .foregroundColor(sleepActive ? .white : .white.opacity(0.75))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -186,9 +193,9 @@ struct MiniPlayerView: View {
                 openSettings()
             } label: {
                 Image(systemName: "gearshape")
-                    .font(.system(size: 16))
+                    .font(.system(size: 14))
                     .foregroundColor(.white.opacity(0.75))
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -205,14 +212,14 @@ struct MiniPlayerView: View {
         _ = slotsVersion
         let showPrev = MiniBarSlotSettings.showPrev
         let showNext = MiniBarSlotSettings.showNext
-        return HStack(spacing: 8) {
+        return HStack(spacing: 7) {
             // 封面＋标题区：点按展开播放页（原 onTapExpand 语义收窄
             // 到本区，避免上/下排按钮点按被容器手势连带触发展开；
             // 原实现为整条 onTapGesture，按钮与展开双触发）。
-            HStack(spacing: 12) {
+            HStack(spacing: 11) {
                 ZStack {
                     MiniCoverView(artworkURL: track.artworkURL)
-                        .frame(width: 40, height: 40)
+                        .frame(width: 36, height: 36)
                         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                     if engine.playbackState == .waiting {
                         ProgressView()
@@ -281,9 +288,9 @@ struct MiniPlayerView: View {
                     QueueManager.shared.playPrevious()
                 } label: {
                     Image(systemName: "backward.end.fill")
-                        .font(.system(size: 20))
+                        .font(.system(size: 18))
                         .foregroundColor(.white.opacity(0.8))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -294,9 +301,9 @@ struct MiniPlayerView: View {
                 engine.togglePlayPause()
             } label: {
                 Image(systemName: engine.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.system(size: 24))
+                    .font(.system(size: 22))
                     .foregroundColor(.white)
-                    .frame(width: 44, height: 44)
+                    .frame(width: 40, height: 40)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
@@ -307,9 +314,9 @@ struct MiniPlayerView: View {
                     QueueManager.shared.playNext(manual: true)
                 } label: {
                     Image(systemName: "forward.end.fill")
-                        .font(.system(size: 20))
+                        .font(.system(size: 18))
                         .foregroundColor(.white.opacity(0.8))
-                        .frame(width: 44, height: 44)
+                        .frame(width: 40, height: 40)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)

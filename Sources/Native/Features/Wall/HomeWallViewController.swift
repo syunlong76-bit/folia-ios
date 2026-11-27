@@ -636,6 +636,14 @@ final class HomeWallViewController: UIViewController,
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // (93) C3：版式单一状态回显——歌单页缝胶囊可能已
+        // 改 foliaPlaylistLayout91，主页缝开关出现时重读
+        // 回刷（此前主页缝无此重读、两页会脱同步）。
+        if let seam = homeSeam85 {
+            let mode93 = UserDefaults.standard.integer(
+                forKey: "foliaPlaylistLayout91")
+            if seam.layoutMode92 != mode93 { seam.layoutMode92 = mode93 }
+        }
         // (72) 单宿主认领：本页在前时迷你台形态归本宿主；
         // 形态与共享旗标不一致时无动画对齐一次（交接不跳变）。
         MiniBarSingleHost.shared.claim("homewall")
@@ -1643,6 +1651,7 @@ final class HomeWallViewController: UIViewController,
         miniCover.contentMode = .scaleAspectFill
         miniCover.clipsToBounds = true
         // (87) 样片台：封面 42 圆角方（10）代 44 圆。
+        // (93) B1：封面边长 42→38（台高 112 减一号 0.90）。
         miniCover.layer.cornerRadius = 10
         miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         miniCover.translatesAutoresizingMaskIntoConstraints = false
@@ -1671,9 +1680,10 @@ final class HomeWallViewController: UIViewController,
         // 圆底（(83) 白色大圆随紧凑台退役）；字形仍走
         // DeckGlyph82 现行临时套（J/K/L/M 未定版）。
         // (87) 样片台：播放钮改 42 圆玻璃底（白 0.13）。
+        // (93) B1：钮径 42→38、圆角随之 21→19。
         miniPlayButton.tintColor = .white
         miniPlayButton.backgroundColor = .clear
-        miniPlayButton.layer.cornerRadius = 21
+        miniPlayButton.layer.cornerRadius = 19
         miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 20), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
@@ -1685,7 +1695,7 @@ final class HomeWallViewController: UIViewController,
             effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         miniPlayBlur90.isUserInteractionEnabled = false
         miniPlayBlur90.clipsToBounds = true
-        miniPlayBlur90.layer.cornerRadius = 21
+        miniPlayBlur90.layer.cornerRadius = 19
         miniPlayBlur90.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.insertSubview(miniPlayBlur90, at: 0)
         NSLayoutConstraint.activate([
@@ -1695,7 +1705,7 @@ final class HomeWallViewController: UIViewController,
             miniPlayBlur90.bottomAnchor.constraint(equalTo: miniPlayButton.bottomAnchor),
         ])
         // port91（任务 3）：台面播放/控制台钮换 A4 玻璃面。
-        A4Chrome91.apply(to: miniPlayButton, cornerRadius: 21)
+        A4Chrome91.apply(to: miniPlayButton, cornerRadius: 19)
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
@@ -1722,8 +1732,9 @@ final class HomeWallViewController: UIViewController,
         // 式右端簇位），30 圆钮视觉不变。
         miniConsoleButton = UIButton(type: .system)
         // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
+        // (93) B1：钮径 42→38、圆角随之 21→19。
         miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
-        miniConsoleButton.layer.cornerRadius = 21
+        miniConsoleButton.layer.cornerRadius = 19
         miniConsoleButton.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 20), for: .normal)
         miniConsoleButton.tintColor = .white
         miniConsoleButton.accessibilityLabel = "控制台"
@@ -1733,7 +1744,7 @@ final class HomeWallViewController: UIViewController,
         bar.addSubview(miniConsoleButton)
         // port91（任务 3）：控制台入口钮 A4 玻璃面（字形已换
         // gen3 双音符上下对称，见 DeckGlyph82.consoleNotes）。
-        A4Chrome91.apply(to: miniConsoleButton, cornerRadius: 21)
+        A4Chrome91.apply(to: miniConsoleButton, cornerRadius: 19)
 
         // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
@@ -1786,6 +1797,7 @@ final class HomeWallViewController: UIViewController,
         // (89) §3-4：展开态轨道高 4 → 6（网页 ProgressBar h-1.5）。
         miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 6)
         Breadcrumbs.log("port89 deck=track6/time10x32 host=home")
+        Breadcrumbs.log("p93 deck host=home")
         miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
         // (83) 第 5 条：收起宽 134→140（图像量测系统横线
         // 420px@3x，账见 DeckLayout82 与 (83) 报告）。
@@ -1815,8 +1827,8 @@ final class HomeWallViewController: UIViewController,
             knob.heightAnchor.constraint(equalToConstant: 9),
 
             miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            miniCover.widthAnchor.constraint(equalToConstant: 42),
-            miniCover.heightAnchor.constraint(equalToConstant: 42),
+            miniCover.widthAnchor.constraint(equalToConstant: 38),
+            miniCover.heightAnchor.constraint(equalToConstant: 38),
 
             // (84) 第 1 条：标题复原 (80) 锚法——封面右侧起、
             // 顶随封面 +5、右界让给主排钮簇。
@@ -1833,16 +1845,16 @@ final class HomeWallViewController: UIViewController,
             // 次下一曲/播放/上一曲（间隙 2、纵向由
             // miniMainCenterY 组统一 −5）。
             miniConsoleButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
-            miniConsoleButton.widthAnchor.constraint(equalToConstant: 42),
-            miniConsoleButton.heightAnchor.constraint(equalToConstant: 42),
+            miniConsoleButton.widthAnchor.constraint(equalToConstant: 38),
+            miniConsoleButton.heightAnchor.constraint(equalToConstant: 38),
 
             miniNextButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            miniPlayButton.widthAnchor.constraint(equalToConstant: 42),
-            miniPlayButton.heightAnchor.constraint(equalToConstant: 42),
+            miniPlayButton.widthAnchor.constraint(equalToConstant: 38),
+            miniPlayButton.heightAnchor.constraint(equalToConstant: 38),
 
             miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
@@ -1876,12 +1888,14 @@ final class HomeWallViewController: UIViewController,
         // 写 −5）。
         // (87) 样片台两行版式：主行上移（台高 84、主行
         // 42 居上部），进度行独立成行于台底。
-        // port91（任务 4）：三行构成——封面顶行 −30、控制钮
-        // 中行 ＋20（数组序与 setMiniBarForm 逐项回写对应）。
+        // port91（任务 4）：三行构成——封面顶行、控制钮中行。
+        // (93) B1：台高 112 重排偏移 −30/＋20 → −28/＋17
+        // （顶留 9、行间隔 6/7、钮→轨 6；数组序与
+        // setMiniBarForm 逐项回写对应）。
         miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton,
                            miniNextButton, miniConsoleButton].enumerated().map {
             $0.element.centerYAnchor.constraint(
-                equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -30 : 20)
+                equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -28 : 17)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // (82) 第 7 条：轨道纵向锚制——展开态一锚在场、收
@@ -2687,9 +2701,9 @@ final class HomeWallViewController: UIViewController,
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (84) 第 1 条：主排纵向复原 (80)——两形态恒同值。
         // (87) 样片台两行版式：恒 −14（台高 84 的主行位）。
-        // port91（任务 4）：三行位恒定（首项顶行 −30、余项中行 ＋20）。
+        // port91（任务 4）：三行位恒定。(93) B1：偏移 −28/＋17。
         for (index, constraint) in miniMainCenterY.enumerated() {
-            constraint.constant = index == 0 ? -30 : 20
+            constraint.constant = index == 0 ? -28 : 17
         }
         // (74) 第 5 项小横线：收起态轨道不再整宽——换居中
         // 134×5 圆角小横线（Home 指示条量级），进度填充仍在
@@ -4084,6 +4098,21 @@ extension HomeWallViewController {
         seam.onLayoutMode92 = { mode in
             UserDefaults.standard.set(mode, forKey: "foliaPlaylistLayout91")
             Breadcrumbs.log("p92 plist mode=\(mode) src=seam")
+            Breadcrumbs.log("p93 layout sw=\(SeamGlyph93.layoutName93(mode))")
+        }
+        // (93) C1：缝底控制台入口——与台面控制台钮同一落
+        // 点（ConsolePanel82.present）。
+        seam.onConsole93 = { [weak self] in
+            guard let self else { return }
+            ConsolePanel82.present(from: self)
+        }
+        // (93) C2：缝内日记本入口——DiaryViewController90
+        // 无挂歌打开（tagged: nil），与控制台日记本钮同页。
+        seam.onDiary93 = { [weak self] in
+            guard let self else { return }
+            let diary = DiaryViewController90(tagged: nil)
+            diary.modalPresentationStyle = .fullScreen
+            self.present(diary, animated: true)
         }
         homeSeam85 = seam
         let tab = SeamEdgeTab85View()

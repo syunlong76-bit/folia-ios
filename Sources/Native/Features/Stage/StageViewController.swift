@@ -3377,8 +3377,10 @@ final class StageViewController: UIViewController {
             // (84) 第 1 条：封面/标题复原 (80) 锚法（封面左
             // 置 44、标题贴封面右）。
             stageCover82.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            stageCover82.widthAnchor.constraint(equalToConstant: 42),
-            stageCover82.heightAnchor.constraint(equalToConstant: 42),
+            // (93) B1 宿主配套：封面 42→38 与两面墙台同
+            // 比例减一号（台高与行位为舞台独立口径、不动）。
+            stageCover82.widthAnchor.constraint(equalToConstant: 38),
+            stageCover82.heightAnchor.constraint(equalToConstant: 38),
             stageTitle82.leadingAnchor.constraint(equalTo: stageCover82.trailingAnchor, constant: 12),
             stageTitle82.trailingAnchor.constraint(lessThanOrEqualTo: bar.trailingAnchor, constant: -14),
             stageTitle82.topAnchor.constraint(equalTo: stageCover82.topAnchor, constant: 5),
@@ -3395,8 +3397,9 @@ final class StageViewController: UIViewController {
             // 墙同链：控制台最右、次/播/上一曲向左排布）；
             // prev/next 恒隐藏宽 0（藏进控制台），链锚保留。
             playButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            playButton.widthAnchor.constraint(equalToConstant: 42),
-            playButton.heightAnchor.constraint(equalToConstant: 42),
+            // (93) B1 宿主配套：播放钮 42→38 同比例减一号。
+            playButton.widthAnchor.constraint(equalToConstant: 38),
+            playButton.heightAnchor.constraint(equalToConstant: 38),
             prevButton.trailingAnchor.constraint(equalTo: playButton.leadingAnchor, constant: -2),
             prevButton.widthAnchor.constraint(equalToConstant: 34),
             prevButton.heightAnchor.constraint(equalToConstant: 40),
@@ -3412,8 +3415,9 @@ final class StageViewController: UIViewController {
             // 不必随收起组换位；恒定约束免收起态纵向无约束）。
             // (87) 样片台：控制台钮并入主行组 −14、42 圆。
             stageConsoleButton82.centerYAnchor.constraint(equalTo: bar.centerYAnchor, constant: 20),
-            stageConsoleButton82.widthAnchor.constraint(equalToConstant: 42),
-            stageConsoleButton82.heightAnchor.constraint(equalToConstant: 42),
+            // (93) B1 宿主配套：控制台钮 42→38 同比例减一号。
+            stageConsoleButton82.widthAnchor.constraint(equalToConstant: 38),
+            stageConsoleButton82.heightAnchor.constraint(equalToConstant: 38),
 
             // (82) 第 7 条：seek 命中带改锚进度行。
             seekHit.leadingAnchor.constraint(equalTo: bar.leadingAnchor),
@@ -3448,6 +3452,8 @@ final class StageViewController: UIViewController {
                 equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -30 : 20)
         }
         NSLayoutConstraint.activate(stageMainCenterY)
+        // (93) B1 宿主配套自证：舞台台面三件 42→38 已落。
+        Breadcrumbs.log("p93 deck host=stage")
         // (83) 双击闪退定行删除：原「模式钮纵向跟随主排」
         // 约束块（stageModeButton/stagePawButton 锚主排）
         // 整段已删——(82) 提交 90aa29c1 删两钮 addSubview

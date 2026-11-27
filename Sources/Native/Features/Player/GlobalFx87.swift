@@ -100,6 +100,70 @@ private let fxRocketGlow92: CGImage? = {
     return image.cgImage
 }()
 
+/// (93) A4：雪粒共享精灵图（预渲染一次、全程复用）——旧
+/// 实现 mid/far 雪粒逐粒逐帧走 fxFillRadial 径向渐变填
+/// 充（每帧百余次渐变绘制＋签名计算），是雪开启窗内存/
+/// CPU 增量的主构成。改：淡蓝雪色径向软点精灵一张，
+/// draw 时按粒径贴图＋setAlpha 控透明，零逐帧分配。
+private let fxSnowDot93: CGImage? = {
+    let side: CGFloat = 36
+    let renderer = UIGraphicsImageRenderer(
+        size: CGSize(width: side, height: side))
+    let image = renderer.image { ctx in
+        let st = (198.0, 226.0, 255.0)   // FxTuning88.snowTint 同值
+        let colors = [fxRGB(st.0, st.1, st.2, 0.95),
+                      fxRGB(st.0, st.1, st.2, 0.95),
+                      fxRGB(st.0, st.1, st.2, 0)] as CFArray
+        if let grad = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: colors, locations: [0, 0.62, 1]) {
+            let center = CGPoint(x: side / 2, y: side / 2)
+            ctx.cgContext.drawRadialGradient(
+                grad, startCenter: center, startRadius: 0,
+                endCenter: center, endRadius: side / 2, options: [])
+        }
+    }
+    return image.cgImage
+}()
+
+/// (93) E：烟花星粒精灵图集（按花色烘焙、懒加载缓存）——
+/// 旧实现逐粒走 hist 轨迹逐段 stroke（≤16 段/粒）＋双
+/// stroke 拖尾＋逐帧路径构建，1400 粒上限下是烟花卡的
+/// 结构主因。改：每种花色烘焙一张径向精灵（中心提亮同
+/// 旧 headPal 口径 s−30/l＋18、边缘归透明），draw 时在
+/// plusLighter 下贴图，前一帧位置补一张低 alpha 小精灵
+/// 作运动残影——零 stroke、零逐帧路径。签名集有界（调
+/// 色板＋花心色），容量 64 满即清。
+private var fxSparkSprites93: [String: CGImage] = [:]
+
+private func fxSparkSprite93(_ pal: FxHSL) -> CGImage? {
+    let key = "\(Int(pal.h))|\(Int(pal.s))|\(Int(pal.l))"
+    if let cached = fxSparkSprites93[key] { return cached }
+    var head = pal
+    head.s = max(30, head.s - 30)
+    head.l = min(92, head.l + 18)
+    let side: CGFloat = 36
+    let renderer = UIGraphicsImageRenderer(
+        size: CGSize(width: side, height: side))
+    let image = renderer.image { ctx in
+        let colors = [fxCGColor(head, alpha: 1),
+                      fxCGColor(pal, alpha: 0.85),
+                      fxCGColor(pal, alpha: 0)] as CFArray
+        if let grad = CGGradient(
+            colorsSpace: CGColorSpaceCreateDeviceRGB(),
+            colors: colors, locations: [0, 0.4, 1]) {
+            let center = CGPoint(x: side / 2, y: side / 2)
+            ctx.cgContext.drawRadialGradient(
+                grad, startCenter: center, startRadius: 0,
+                endCenter: center, endRadius: side / 2, options: [])
+        }
+    }
+    guard let cg = image.cgImage else { return nil }
+    if fxSparkSprites93.count > 64 { fxSparkSprites93.removeAll() }
+    fxSparkSprites93[key] = cg
+    return cg
+}
+
 /// 径向渐变填充矩形区（stops 为 (location, color)；调用方按需先设 clip）。
 private func fxFillRadial(_ ctx: CGContext, center: CGPoint, r0: CGFloat, r1: CGFloat,
                           stops: [(CGFloat, CGColor)], rect: CGRect) {
@@ -344,9 +408,17 @@ final class Fx87RootView: UIView {
 /// （卡/钮）帧内才交回系统命中，其余整屏穿透回主窗。
 final class FxOverlayHost91: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        for sub in subviews where !sub.isHidden && sub.alpha > 0.01 {
+        // (93) A1 复核：原实现有一条例外路径——点落在某子视
+        // 图帧内、但该子视图自身不可交互（或其 hitTest 返
+        // nil）时，super.hitTest 会回落返回宿主自身，整屏
+        // 拦截点按。修：仅当命中结果确实是子视图（非宿主
+        // 自身）才交回，子视图须可见且可交互；其余一律
+        // nil 穿透回主窗（特效开＋控制台在场时同纪律）。
+        for sub in subviews where !sub.isHidden && sub.alpha > 0.01
+            && sub.isUserInteractionEnabled {
             if sub.frame.contains(point) {
-                return super.hitTest(point, with: event)
+                let hit = super.hitTest(point, with: event)
+                return hit === self ? nil : hit
             }
         }
         return nil
@@ -409,6 +481,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private var recCover: UIImageView?
     private var recTitle: UILabel?
     private var recArtist: UILabel?
+    /// (93) C4：推荐卡默认落位约束（底部 −46/宽 ≤340/居中，
+    /// 控制台不在场时用）与控制台对齐动态约束（在场时用，
+    /// show 时按 presentedCardFrame 现建、hide/换态时拆）。
+    private var recDefaultPos93: [NSLayoutConstraint] = []
+    private var recDynPos93: [NSLayoutConstraint] = []
+    /// (93) C4：推荐卡 12 秒自动轮换计时器（卡可见＋任一
+    /// 特效开启时才转，关卡即停）。
+    private var recRotateTimer93: Timer?
 
     // 帧状态（now 为毫秒，与样片 performance.now() 同口径）
     private var nowMs: Double = 0
@@ -551,10 +631,44 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         probe.isEnabled = isFireworks || isLanterns || isSnow || isWind
         main.addGestureRecognizer(probe)
         tapProbe92 = probe
+        refreshTapProbe92()   // (93) A5：装配即对齐 arm 自证状态
     }
 
+    /// (93) A5：探针 arm 自证状态——(92) 日志判读定案：探
+    /// 针无 arm/disarm 面包屑时，其沉默无法自证在岗。
+    private var probeArmed93 = false
+
     private func refreshTapProbe92() {
-        tapProbe92?.isEnabled = isFireworks || isLanterns || isSnow || isWind
+        let armed = isFireworks || isLanterns || isSnow || isWind
+        tapProbe92?.isEnabled = armed
+        // (93) A5：arm/off 边沿各落一条（fx 名取当前开启集）。
+        if armed != probeArmed93 {
+            probeArmed93 = armed
+            if armed {
+                var names: [String] = []
+                if isFireworks { names.append("fw") }
+                if isLanterns { names.append("ln") }
+                if isSnow { names.append("sn") }
+                if isWind { names.append("wd") }
+                Breadcrumbs.log("p93 probe arm fx=\(names.joined(separator: "+"))")
+            } else {
+                Breadcrumbs.log("p93 probe off")
+            }
+        }
+    }
+
+    /// (93) A5：点按归属——card＝落在覆层可见卡片/钮帧内；
+    /// host＝在覆层宿主范围内但卡外（宿主全窗铺满、该区
+    /// hitTest 恒穿透，归属记 host 以别于无宿主时）；none
+    /// ＝宿主不在场/点在宿主外。坐标以窗口系为准（宿主钉
+    /// 满主窗，宿主系＝窗口系）。
+    private func tapOwn93(at p: CGPoint) -> String {
+        guard let host = overlayHost91, host.window != nil else { return "none" }
+        for sub in [recCard, blessCard, wishButton] {
+            guard let sub = sub, !sub.isHidden, sub.alpha > 0.01 else { continue }
+            if sub.frame.contains(p) { return "card" }
+        }
+        return host.bounds.contains(p) ? "host" : "none"
     }
 
     @objc private func handleTapProbe92(_ gr: UITapGestureRecognizer) {
@@ -571,6 +685,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         let zx = p.x < w / 3 ? "l" : (p.x < w * 2 / 3 ? "c" : "r")
         let zy = p.y < h / 3 ? "t" : (p.y < h * 2 / 3 ? "m" : "b")
         Breadcrumbs.log("p92 tap ok zone=\(zx)\(zy)")
+        // (93) A5：归属行（节流与 p92 行共用计数，每秒≤2 条）。
+        Breadcrumbs.log("p93 tap own=\(tapOwn93(at: p)) zone=\(zx)\(zy)")
     }
 
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
@@ -638,7 +754,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     @discardableResult
     public func toggleWind() -> Bool {
-        if isWind { stopWind() } else { startWind() }
+        if isWind { stopWind(src93: "manual") } else { startWind() }
         return isWind
     }
 
@@ -655,10 +771,29 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     // MARK: 状态切换（互斥规则照样片 start/stop 函数）
 
+    /// (93) C4：特效开启次序（最近开启者在尾），推荐卡入
+    /// 场动画按最近开启的活跃特效选形态时读。
+    private var fxOnOrder93: [String] = []
+
+    private func noteFxOrder93(_ fx: String, _ on: Bool) {
+        fxOnOrder93.removeAll { $0 == fx }
+        if on { fxOnOrder93.append(fx) }
+    }
+
+    /// (93) A4：四特效各自启/停落内存对账行——MB 走仓内既
+    /// 有 footprint 口径（StageStyleStore.physFootprintMB，
+    /// 与 Breadcrumbs 尾巴 footprintMB 同源同值，双写互证）。
+    private func memLog93(_ fx: String, _ on: Bool) {
+        Breadcrumbs.log("p93 mem fx=\(fx) on=\(on ? 1 : 0)"
+            + " mb=\(StageStyleStore.physFootprintMB())")
+    }
+
     private func setFw(_ on: Bool) {
         guard isFireworks != on else { return }
         isFireworks = on
         Breadcrumbs.log(on ? "fx87 fw=1" : "fx87 fw=0")
+        noteFxOrder93("fw", on)
+        memLog93("fw", on)
         onStateChanged?()
         refreshTapProbe92()
     }
@@ -666,6 +801,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         guard isLanterns != on else { return }
         isLanterns = on
         Breadcrumbs.log(on ? "fx87 ln=1" : "fx87 ln=0")
+        noteFxOrder93("ln", on)
+        memLog93("ln", on)
         onStateChanged?()
         refreshTapProbe92()
         refreshWishButton()
@@ -674,6 +811,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         guard isSnow != on else { return }
         isSnow = on
         Breadcrumbs.log(on ? "fx87 sn=1" : "fx87 sn=0")
+        noteFxOrder93("sn", on)
+        memLog93("sn", on)
         onStateChanged?()
         refreshTapProbe92()
     }
@@ -681,6 +820,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         guard isWind != on else { return }
         isWind = on
         Breadcrumbs.log(on ? "fx87 wd=1" : "fx87 wd=0")
+        noteFxOrder93("wd", on)
+        memLog93("wd", on)
         onStateChanged?()
         refreshTapProbe92()
     }
@@ -695,9 +836,11 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     private func startFw() {
         refreshSizeFromRootView()
-        stopLantern(hard: true); stopSnow(hard: true); stopWind()
+        stopLantern(hard: true); stopSnow(hard: true); stopWind(src93: "mutex")
         recShown = false; fwStep = 0; rains = []
         fwStart = nowMsNow()
+        // (93) E：dt 采样窗自本场烟花起算。
+        fwDtSum93 = 0; fwDtN93 = 0; fwDtLogAt93 = fwStart
         hideRecCard()
         setFw(true)
         ensureLoop()
@@ -748,7 +891,15 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         ensureLoop()
     }
 
-    private func stopWind() {
+    /// (93) A2：风的关闭来源入参化——manual＝用户手动关
+    /// （toggleWind）；mutex＝开烟花时的互斥清场（既有行
+    /// 为不动）；其余任何来源（未来新增的自动关）一律以
+    /// 非 manual 落 p93 fxauto 自证，不许再出现无来源的
+    /// 静默自关（(92) 日志实锤：旧 5 秒自关无点按无落痕）。
+    private func stopWind(src93: String = "auto") {
+        if isWind && src93 != "manual" {
+            Breadcrumbs.log("p93 fxauto fx=wd src=\(src93)")
+        }
         windPow = 0
         // port90: 旧实现只归零风力，streaks/leaves 残留继续渲染、anyFx 恒真、窗不隐。
         streaks = []; leaves = []
@@ -806,6 +957,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         rootView?.setNeedsDisplay()
     }
 
+    /// (93) E：最近一帧真实 dt（ms），frameFactor 顺手记
+    /// 录，供烟花 dt 面包屑取平均（不另开计时）。
+    private var lastDtMs93: Double = 0
+    /// (93) E：烟花 dt 采样累加器（约 2 秒落一条）。
+    private var fwDtSum93: Double = 0
+    private var fwDtN93 = 0
+    private var fwDtLogAt93: Double = 0
+
     /// 按 dt*60 归一的帧系数（120Hz 下约 0.5、60Hz 下约 1）。
     private func frameFactor() -> Double {
         let now = CACurrentMediaTime()
@@ -813,6 +972,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         if lastTick == 0 { return 1 }
         let dt = now - lastTick
         if dt <= 0 { return 1 }
+        lastDtMs93 = dt * 1000
         return min(3, max(0.1, dt * 60))
     }
 
@@ -942,6 +1102,18 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     }
 
     private func stepFireworks(_ ctx: CGContext, f: Double) {
+        // (93) E：烟花活跃期 dt 自证——约每 2 秒落一条平均
+        // dt（ms）＋当前粒子总量（星粒＋火箭＋金雨），供下
+        // 包判烟花卡是否收敛（(92) 日志因烟花未开无从判）。
+        if isFireworks && lastDtMs93 > 0 {
+            fwDtSum93 += lastDtMs93
+            fwDtN93 += 1
+            if nowMs - fwDtLogAt93 >= 2000 && fwDtN93 > 0 {
+                Breadcrumbs.log("p93 fw dt=\(Int((fwDtSum93 / Double(fwDtN93)).rounded()))"
+                    + " n=\(sparks.count + rockets.count + rains.count)")
+                fwDtSum93 = 0; fwDtN93 = 0; fwDtLogAt93 = nowMs
+            }
+        }
         // 时间轴（ms，照样片；launch 在爆点前约 1s 由火箭上升耗时形成）
         if isFireworks {
             let t = nowMs - fwStart
@@ -1050,8 +1222,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             p.life -= p.decay * f
             p.tw += 0.3 * f
             if p.life <= 0 { return false }
-            p.hist.append(CGPoint(x: p.x, y: p.y))
-            if p.hist.count > p.histN { p.hist.removeFirst(p.hist.count - p.histN) }
+            // (93) E：星粒 hist 轨迹数组退役（精灵残影替代，
+            // 见下方绘制段）——逐帧 append/裁剪一并省掉。
             if p.cr && p.life < 0.5 && chance(0.18, f) {
                 if crackles.count < 120 { crackles.append(FxCrackle(x: p.x, y: p.y)) }
                 p.cr = false
@@ -1077,34 +1249,28 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             }
             let tw = p.trail ? 1 : (0.72 + 0.28 * sin(p.tw + p.seed)) * strobe
             let a = max(0, p.life * tw)
-            // 历史轨迹长曝光光轨：尾细暗、头亮
-            if p.hist.count > 2 {
-                ctx.setLineCap(.round)
-                for thi in 1..<p.hist.count {
-                    let tf = Double(thi) / Double(p.hist.count)
-                    ctx.beginPath()
-                    ctx.move(to: p.hist[thi - 1])
-                    ctx.addLine(to: p.hist[thi])
-                    ctx.setStrokeColor(fxCGColor(p.pal, alpha: a * tf * tf * 0.45))
-                    ctx.setLineWidth(CGFloat(0.4 + p.size * tf))
-                    ctx.strokePath()
+            // (93) E 结构修：星粒改预渲染精灵贴图（fxSpark-
+            // Sprite93 按花色烘焙，本段已在 plusLighter 下）
+            // ——旧 hist 逐段 stroke 长曝光光轨＋px→x 双
+            // stroke 拖尾＋逐帧椭圆路径全数退役。残影由前
+            // 一帧位置一张小精灵（alpha×0.35）承担，视觉
+            // 拖尾保留、逐粒路径构建归零。粒径口径：精灵
+            // 边长＝size×6.5（涵盖旧辉光 stroke 宽 size×
+            // 3.6 的光晕范围），下限 7pt 防小粒消失。
+            if let img = fxSparkSprite93(p.pal) {
+                let side = CGFloat(max(7, p.size * 6.5))
+                let moved = hypot(p.x - p.px, p.y - p.py)
+                if moved > 1 {
+                    let s2 = side * 0.62
+                    ctx.setAlpha(CGFloat(min(1, a * 0.35)))
+                    ctx.draw(img, in: CGRect(x: p.px - s2 / 2, y: p.py - s2 / 2,
+                                             width: s2, height: s2))
                 }
+                ctx.setAlpha(CGFloat(min(1, a)))
+                ctx.draw(img, in: CGRect(x: p.x - side / 2, y: p.y - side / 2,
+                                         width: side, height: side))
+                ctx.setAlpha(1)
             }
-            ctx.setLineCap(.round)
-            ctx.beginPath(); ctx.move(to: CGPoint(x: p.px, y: p.py)); ctx.addLine(to: CGPoint(x: p.x, y: p.y))
-            ctx.setStrokeColor(fxCGColor(p.pal, alpha: a * 0.16))
-            ctx.setLineWidth(CGFloat(p.size * 3.6))
-            ctx.strokePath()
-            ctx.beginPath(); ctx.move(to: CGPoint(x: p.px, y: p.py)); ctx.addLine(to: CGPoint(x: p.x, y: p.y))
-            ctx.setStrokeColor(fxCGColor(p.pal, alpha: a * 0.9))
-            ctx.setLineWidth(CGFloat(p.size))
-            ctx.strokePath()
-            var headPal = p.pal
-            headPal.s = max(30, headPal.s - 30)
-            headPal.l = min(92, headPal.l + 18)
-            ctx.setFillColor(fxCGColor(headPal, alpha: a))
-            ctx.fillEllipse(in: CGRect(x: p.x - p.size * 0.6, y: p.y - p.size * 0.6,
-                                       width: p.size * 1.2, height: p.size * 1.2))
             return true
         }
         if !splitQueue.isEmpty {
@@ -1444,16 +1610,19 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             if fl.near {
                 drawCrystal(ctx, fl)
             } else {
-                // mid/far：失焦圆（径向渐变近似模糊）；(88) 雪色
-                // 淡蓝 FxTuning88.snowTint（原纯白）
-                let st = FxTuning88.snowTint
-                fxFillRadial(ctx, center: CGPoint(x: fl.x, y: fl.y), r0: 0,
-                             r1: CGFloat(fl.r * 1.6),
-                             stops: [(0, fxRGB(st.0, st.1, st.2, fl.o * snMelt)),
-                                     (0.62, fxRGB(st.0, st.1, st.2, fl.o * snMelt)),
-                                     (1, fxRGB(st.0, st.1, st.2, 0))],
-                             rect: CGRect(x: fl.x - fl.r * 1.6, y: fl.y - fl.r * 1.6,
-                                          width: fl.r * 3.2, height: fl.r * 3.2))
+                // mid/far：失焦圆。(93) A4 改共享精灵贴图
+                // （fxSnowDot93，雪色淡蓝同 FxTuning88.
+                // snowTint）——旧逐粒径向渐变填充退役，粒
+                // 径/透明口径与旧式一致（半径 r×1.6、alpha
+                // ＝o×snMelt），零逐帧渐变分配。
+                if let dot = fxSnowDot93 {
+                    let d = CGFloat(fl.r * 3.2)
+                    ctx.saveGState()
+                    ctx.setAlpha(CGFloat(max(0, min(1, fl.o * snMelt))))
+                    ctx.draw(dot, in: CGRect(x: fl.x - d / 2, y: fl.y - d / 2,
+                                             width: d, height: d))
+                    ctx.restoreGState()
+                }
             }
             return true
         }
@@ -1512,12 +1681,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     private func stepWind(_ ctx: CGContext, f: Double) {
         if isWind {
-            if nowMs - wdStart > 5000 {
-                stopWind()   // 5 秒自动停
-            } else {
-                if chance(0.55, f) { spawnStreak() }
-                if chance(0.30, f) { spawnLeaf() }
-            }
+            // (93) A2：5 秒自动停退役——(92) 日志实锤风开启
+            // 后 +5.002s/+5.008s 两次无点按自关（来源即此
+            // 硬编码超时，与雪 12 秒自融不同、风无自融语
+            // 义）。风只许手动关（toggleWind）或互斥清场
+            // （startFw）才关，与烟花/孔明灯同口径；生成
+            // 节奏（streak/leaf 概率）一字不动。
+            if chance(0.55, f) { spawnStreak() }
+            if chance(0.30, f) { spawnLeaf() }
         }
         streaks = streaks.filter { s in
             let ang = flowAngle(x: s.x, y: s.y, now: nowMs + s.seed * 40)
@@ -1767,10 +1938,14 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         later.addTarget(self, action: #selector(hideRecCard), for: .touchUpInside)
         rec.addSubview(later)
         rv.addSubview(rec)
+        // (93) C4：定位三约束单独持有（默认落位），show 时
+        // 可整组停用换动态对齐约束；边距守卫约束恒在。
+        let recCenterX93 = rec.centerXAnchor.constraint(equalTo: rv.centerXAnchor)
+        let recBottom93 = rec.bottomAnchor.constraint(equalTo: rv.bottomAnchor, constant: -46)
+        let recWidth93 = rec.widthAnchor.constraint(lessThanOrEqualToConstant: 340)
+        recDefaultPos93 = [recCenterX93, recBottom93, recWidth93]
         NSLayoutConstraint.activate([
-            rec.centerXAnchor.constraint(equalTo: rv.centerXAnchor),
-            rec.bottomAnchor.constraint(equalTo: rv.bottomAnchor, constant: -46),
-            rec.widthAnchor.constraint(lessThanOrEqualToConstant: 340),
+            recCenterX93, recBottom93, recWidth93,
             rec.leadingAnchor.constraint(greaterThanOrEqualTo: rv.leadingAnchor, constant: 20),
             rec.trailingAnchor.constraint(lessThanOrEqualTo: rv.trailingAnchor, constant: -20),
             cover.leadingAnchor.constraint(equalTo: rec.leadingAnchor, constant: 15),
@@ -1875,6 +2050,41 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         blessCard?.isHidden = true
     }
 
+    /// (93) C4：推荐卡落位——控制台在场（ConsolePanel82.
+    /// presentedCardFrame 非 nil，窗口坐标；宿主钉满主窗
+    /// 故宿主系＝窗口系）时：卡宽＝该帧宽、x 与该帧对齐、
+    /// y＝该帧 maxY＋8；算出卡底超出宿主高则改贴底收口。
+    /// 控制台不在场：恢复默认落位（底部 −46/宽 ≤340）。
+    private func layoutRecCard93(_ card: UIView) {
+        NSLayoutConstraint.deactivate(recDynPos93)
+        recDynPos93 = []
+        guard let host = overlayHost91,
+              let frame = ConsolePanel82.presentedCardFrame else {
+            NSLayoutConstraint.activate(recDefaultPos93)
+            return
+        }
+        NSLayoutConstraint.deactivate(recDefaultPos93)
+        let top = card.topAnchor.constraint(
+            equalTo: host.topAnchor, constant: frame.maxY + 8)
+        recDynPos93 = [
+            card.leadingAnchor.constraint(
+                equalTo: host.leadingAnchor, constant: frame.minX),
+            card.widthAnchor.constraint(equalToConstant: frame.width),
+            top,
+        ]
+        NSLayoutConstraint.activate(recDynPos93)
+        host.layoutIfNeeded()
+        if card.frame.maxY > host.bounds.height {
+            // 贴底收口：拆 top 换底锚（宿主底 −8）。
+            NSLayoutConstraint.deactivate([top])
+            let bottom = card.bottomAnchor.constraint(
+                equalTo: host.bottomAnchor, constant: -8)
+            recDynPos93[2] = bottom
+            NSLayoutConstraint.activate([bottom])
+            host.layoutIfNeeded()
+        }
+    }
+
     private func showRecCard() {
         guard let provider = recommendationProvider, let rec = provider(),
               let card = recCard else { return }
@@ -1883,17 +2093,59 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         recCover?.image = rec.cover
         Breadcrumbs.log("fx87 rec")
         card.isHidden = false
-        card.transform = CGAffineTransform(translationX: 0, y: 30)
+        layoutRecCard93(card)
+        startRecRotate93()
+        // (93) C4：入场按当前活跃特效区分（多特效同开取最
+        // 近开启者 fxOnOrder93 尾元且仍活跃者）；无特效/
+        // 无记录走旧通用入场（上移 30 淡入）。
+        let fx = fxOnOrder93.last(where: {
+            ($0 == "fw" && isFireworks) || ($0 == "ln" && isLanterns)
+                || ($0 == "sn" && isSnow) || ($0 == "wd" && isWind)
+        })
         card.alpha = 0
+        var damping: CGFloat = 0.7
+        switch fx {
+        case "fw":   // 烟花：0.7 缩放绽开
+            card.transform = CGAffineTransform(scaleX: 0.7, y: 0.7)
+        case "ln":   // 孔明灯：自下方 26pt 升起
+            card.transform = CGAffineTransform(translationX: 0, y: 26)
+        case "sn":   // 下雪：自上方 14pt 落定（回弹弹簧）
+            card.transform = CGAffineTransform(translationX: 0, y: -14)
+            damping = 0.55
+        case "wd":   // 风：自侧方 30pt 掠入
+            card.transform = CGAffineTransform(translationX: 30, y: 0)
+        default:
+            card.transform = CGAffineTransform(translationX: 0, y: 30)
+        }
         UIView.animate(withDuration: 0.5, delay: 0,
-                       usingSpringWithDamping: 0.7, initialSpringVelocity: 0.3,
+                       usingSpringWithDamping: damping, initialSpringVelocity: 0.3,
                        options: [.allowUserInteraction]) {
             card.transform = .identity
             card.alpha = 1
         }
     }
 
+    /// (93) C4：12 秒轮换——卡可见且任一特效开启时换下一
+    /// 首推荐（走既有 recommendationProvider 通路，播放
+    /// 仍走 onPlayRecommendation，点卡切歌通路不动）。
+    private func startRecRotate93() {
+        recRotateTimer93?.invalidate()
+        recRotateTimer93 = Timer.scheduledTimer(
+            withTimeInterval: 12, repeats: true) { [weak self] _ in
+            guard let self,
+                  self.isFireworks || self.isLanterns || self.isSnow || self.isWind,
+                  let card = self.recCard, !card.isHidden,
+                  let provider = self.recommendationProvider,
+                  let rec = provider() else { return }
+            self.recTitle?.text = rec.title
+            self.recArtist?.text = rec.artist
+            self.recCover?.image = rec.cover
+        }
+    }
+
     @objc private func hideRecCard() {
+        recRotateTimer93?.invalidate()
+        recRotateTimer93 = nil
         recCard?.isHidden = true
     }
 

@@ -45,6 +45,11 @@ enum DeckGlyph82 {
             return slidersGlyph91(pointSize: pointSize)
         case .consoleNotes:
             return notesGlyph91(pointSize: pointSize)
+        case .shuffle:
+            // (93) B2：shuffle 改手绘路径字形（SF "shuffle"
+            // 与同行 A4 手绘字形重量不一致、真机被点名），
+            // 与 .list 同画布同线宽；mode 三字形仍走 SF 不动。
+            return shuffleGlyph93(pointSize: pointSize)
         case .paw, .heart, .heartFill, .star, .starFill, .command:
             // (92) 任务 4：状态字形换 A4 手绘（SF pawprint/
             // heart/star/command 退役），与核心字形同语言
@@ -68,7 +73,6 @@ enum DeckGlyph82 {
             case .modeRepeat: name = "repeat"
             case .modeRepeatOne: name = "repeat.1"
             case .modeSequence: name = "list.bullet"
-            case .shuffle: name = "shuffle"
             case .sparkles: name = "sparkles"
             case .paw: name = "pawprint.fill"
             case .heart: name = "heart"
@@ -98,6 +102,8 @@ enum DeckGlyph82 {
     /// 边（线宽 1.4）；next 镜像。list 无 A4 原定义，按同
     /// 语言补：三横细线（线宽 1.4、round cap）＋三实心圆点。
     private static var loggedIconA4 = false
+    /// (93) B1：中央钮字形自证落痕去重（play/pause 各一次）。
+    private static var loggedGlyph93 = Set<String>()
 
     private static func coreGlyph(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
         if !loggedIconA4 {
@@ -108,7 +114,8 @@ enum DeckGlyph82 {
         let scale = pointSize / canvas
         let size = CGSize(width: pointSize, height: pointSize)
         let renderer = UIGraphicsImageRenderer(size: size)
-        let image = renderer.image { _ in
+        func render93(_ filledPlay: Bool) -> UIImage {
+        renderer.image { _ in
             UIColor.white.setFill()
             UIColor.white.setStroke()
             func triStroke(_ points: [(CGFloat, CGFloat)], w: CGFloat) {
@@ -130,7 +137,18 @@ enum DeckGlyph82 {
             switch kind {
             case .play:
                 // A4 play（gen2 48 画布 M20,16.2 L34.6,24 L20,31.8 ÷2）。
-                triStroke([(10, 8.1), (17.3, 12), (10, 15.9)], w: 1.7)
+                if filledPlay {
+                    // (93) B1 兜底：描边渲染覆盖率过低时改填
+                    // 充三角，保证中央钮字形不空（自证见下）。
+                    let tri = UIBezierPath()
+                    tri.move(to: CGPoint(x: 10 * scale, y: 8.1 * scale))
+                    tri.addLine(to: CGPoint(x: 17.3 * scale, y: 12 * scale))
+                    tri.addLine(to: CGPoint(x: 10 * scale, y: 15.9 * scale))
+                    tri.close()
+                    tri.fill()
+                } else {
+                    triStroke([(10, 8.1), (17.3, 12), (10, 15.9)], w: 1.7)
+                }
             case .pause:
                 // A4 pause：双圆角矩形填充。
                 rrect(8.85, 7.8, 2.5, 8.4, r: 1.25)
@@ -159,6 +177,89 @@ enum DeckGlyph82 {
             default:
                 break
             }
+        }
+        }
+        var image = render93(false)
+        if kind == .play || kind == .pause {
+            // (93) B1 中央钮无字形自证：图一实锤中央钮只剩
+            // 毛玻璃空圆——字形丢失点在「工厂渲染→宿主
+            // setImage」链上无任何落痕可判。本处在工厂出口
+            // 实测 alpha 覆盖率：cov 以千分值落痕（每字形
+            // 每进程一次）；play 覆盖率 <2% 判描边丢失、
+            // 当场改填充三角重渲兜底（fb=1），下轮日志据
+            // cov/fb 裁决丢失环。pause 本为填充、cov 应 ≈73。
+            let cov = glyphCoverage93(image)
+            var fb = 0
+            if cov < 0.02, kind == .play {
+                image = render93(true)
+                fb = 1
+            }
+            let name = kind == .play ? "play" : "pause"
+            if !loggedGlyph93.contains(name) {
+                loggedGlyph93.insert(name)
+                Breadcrumbs.log("p93 deck glyph=\(name)"
+                    + " cov=\(Int(cov * 1000)) fb=\(fb)")
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// (93) B1：字形 alpha 覆盖率实测（0–1）：模板图画进
+    /// 位图上下文、数 alpha>8 的像素占比，供中央钮自证。
+    private static func glyphCoverage93(_ image: UIImage) -> Double {
+        guard let cg = image.cgImage, cg.width > 0, cg.height > 0
+        else { return 0 }
+        let w = cg.width, h = cg.height
+        var data = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(
+            data: &data, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return 0 }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        var hit = 0
+        for i in stride(from: 3, to: data.count, by: 4) where data[i] > 8 {
+            hit += 1
+        }
+        return Double(hit) / Double(w * h)
+    }
+
+    /// (93) B2：shuffle 手绘路径字形（24 画布、模板图）：
+    /// 两条贝塞尔股线中心交叉、各右端带箭头（经典 shuffle
+    /// 形）；线宽 1.4 与 .list 实查对齐（coreGlyph list 横
+    /// 线 1.4）、圆头线帽＋圆连接，与同行 A4 手绘同重量。
+    /// modeRepeat/modeRepeatOne/modeSequence 仍走 SF 不动。
+    private static func shuffleGlyph93(pointSize: CGFloat) -> UIImage? {
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { _ in
+            UIColor.white.setStroke()
+            func pt(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: x * scale, y: y * scale)
+            }
+            func strand(_ y0: CGFloat, _ y1: CGFloat) {
+                let p = UIBezierPath()
+                p.move(to: pt(3.8, y0))
+                p.addCurve(to: pt(20.2, y1),
+                           controlPoint1: pt(9.5, y0),
+                           controlPoint2: pt(14.5, y1))
+                p.lineWidth = 1.4 * scale
+                p.lineCapStyle = .round
+                p.stroke()
+                // 箭头：尖端 (20.2, y1)＋两翼回折（股线末端
+                // 切线近水平、两翼上下对称）。
+                let head = UIBezierPath()
+                head.move(to: pt(16.9, y1 - 2.9))
+                head.addLine(to: pt(20.2, y1))
+                head.addLine(to: pt(16.9, y1 + 2.9))
+                head.lineWidth = 1.4 * scale
+                head.lineCapStyle = .round
+                head.lineJoinStyle = .round
+                head.stroke()
+            }
+            strand(6.8, 17.2)   // 左上股 → 右下
+            strand(17.2, 6.8)   // 左下股 → 右上（中心交叉）
         }
         return image.withRenderingMode(.alwaysTemplate)
     }

@@ -346,9 +346,22 @@ final class FxLinkage91 {
 
     // MARK: 雪
 
+    /// (93) A4：联动雪檐/雪堆常驻上限——旧实现开雪时给每
+    /// 块已注册砖＋每只宠物各建一只 UIView 全量常驻（墙
+    /// 砖可达数百），是雪开启窗增量的联动侧构成。改：雪
+    /// 檐全局 ≤120、雪堆 ≤24，超出不再新建（联动观感由
+    /// 在场砖/宠承担）；停雪回收走既有 clear 路径（0.5s
+    /// 淡出后 removeFromSuperview，rec.cap/pile 置 nil）。
+    private static let snowCapLimit93 = 120
+    private static let snowPileLimit93 = 24
+
     private func growSnowTile(_ rec: TileRec) {
         guard let cover = rec.cover, let container = rec.container,
               rec.cap == nil else { return }
+        // (93) A4：不在窗的砖（已回收/未挂载）不建檐＋上限。
+        guard cover.window != nil else { return }
+        guard tiles.values.filter({ $0.cap != nil }).count
+                < FxLinkage91.snowCapLimit93 else { return }
         proof92(fx: "snow", surface: rec.surface)
         let cap = UIView()
         cap.backgroundColor = UIColor.white.withAlphaComponent(0.95)
@@ -382,6 +395,9 @@ final class FxLinkage91 {
 
     private func growSnowPet(_ rec: PetRec) {
         guard let v = rec.view, rec.pile == nil else { return }
+        // (93) A4：雪堆全局上限（见 snowCapLimit93 注释）。
+        guard pets.values.filter({ $0.pile != nil }).count
+                < FxLinkage91.snowPileLimit93 else { return }
         proof92(fx: "snow", surface: rec.surface)
         let pile = UIView()
         pile.backgroundColor = UIColor.white.withAlphaComponent(0.96)

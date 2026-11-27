@@ -55,7 +55,9 @@ final class MiniBarQuickRowView: UIView {
     /// 上排自身高度：图标 17pt＋图标/标签间距 2＋标签 10pt
     /// 行高约 12＋上下内距 5×2 ≈ 41，取 48 留呼吸。宿主给
     /// 本排的 heightAnchor 应改读本值（现写死 44）。
-    static let rowHeight: CGFloat = 48
+    /// (93) B1：随台面同比例收一档 48→43（×0.896）：图标
+    /// 15＋间距 2＋标签行高 12＋上下内距 4×2 ≈ 37，取 43。
+    static let rowHeight: CGFloat = 43
 
     /// 展开态点播台总高（唯一出处）：(82) 第 7 条 E 极简
     /// 台定版改 132；(83) 第 6 条按网页版紧凑台重做改 106
@@ -70,7 +72,12 @@ final class MiniBarQuickRowView: UIView {
     /// （顶行封面＋歌名＋歌手名／中行控制钮／进度条压最下
     /// 沿），展开高 84→124（账：顶留 11＋顶行 42＋间 8＋中
     /// 行 42＋进度行约 21）；收起态/5 秒收细条口径不动。
-    static let expandedBarHeight: CGFloat = 124
+    /// (93) B1：Miller (92) 图一令展开台整体收一档，本常
+    /// 量 124→112（×0.903，三宿主同源跟随）。宿主内部行
+    /// 偏移（顶行 −30／中行 ＋20／轨底锚 −7）在宿主文件、
+    /// 本轮未动；按新高验算：顶行约 5–47／中行 56–98／
+    /// 轨顶约 99——不重叠、间隙收紧（见 (93) 回报存疑项）。
+    static let expandedBarHeight: CGFloat = 112
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?
@@ -109,23 +116,26 @@ final class MiniBarQuickRowView: UIView {
     }
 
     private func buildButtons() {
-        configure(likeButton, symbol: "heart", pointSize: 17,
+        // (93) B1：钮字形点数随台面同比例收（17→15、16→14，
+        // 装配占位值；实显以 themeChanged81/refresh* 的
+        // DeckGlyph82 点数为准、同批已收）。
+        configure(likeButton, symbol: "heart", pointSize: 15,
                   title: "喜欢", accessibility: "喜欢",
                   action: #selector(likeTapped))
-        configure(starButton, symbol: "star", pointSize: 16,
+        configure(starButton, symbol: "star", pointSize: 14,
                   title: "星标", accessibility: "星标",
                   action: #selector(starTapped))
-        configure(pawButton, symbol: "pawprint.fill", pointSize: 16,
+        configure(pawButton, symbol: "pawprint.fill", pointSize: 14,
                   title: "宠物", accessibility: "宠物开关",
                   action: #selector(pawTapped))
         // (81) 第 10 条：长按识别器整套摘除（长按语义退
         // 役），单击切换；按下即回调宿主续命浮层闲置钟。
         pawButton.addTarget(self, action: #selector(pawTouchDown),
                             for: .touchDown)
-        configure(panelButton, symbol: "square.grid.2x2", pointSize: 16,
+        configure(panelButton, symbol: "square.grid.2x2", pointSize: 14,
                   title: "面板", accessibility: "面板",
                   action: #selector(panelTapped))
-        configure(commandButton, symbol: "command", pointSize: 16,
+        configure(commandButton, symbol: "command", pointSize: 14,
                   title: "命令", accessibility: "命令",
                   action: #selector(commandTapped))
 
@@ -178,6 +188,8 @@ final class MiniBarQuickRowView: UIView {
             A4Chrome91.apply(to: button, cornerRadius: 10)
         }
         Breadcrumbs.log("p92 quickrow chrome=A4")
+        // (93) B1 自证：台高/行高收一档后的现值落痕。
+        Breadcrumbs.log("p93 deck size=112/43")
     }
 
     /// 图标在上、标签在下的双通道钮（UIButton.Configuration，
@@ -195,8 +207,9 @@ final class MiniBarQuickRowView: UIView {
         config.imagePadding = 2
         config.title = title
         config.baseForegroundColor = UIColor.white.withAlphaComponent(0.75)
+        // (93) B1：上下内距 5→4 随台面收一档（左右 2 不动）。
         config.contentInsets = NSDirectionalEdgeInsets(
-            top: 5, leading: 2, bottom: 5, trailing: 2)
+            top: 4, leading: 2, bottom: 4, trailing: 2)
         config.titleTextAttributesTransformer =
             UIConfigurationTextAttributesTransformer { incoming in
                 var outgoing = incoming
@@ -258,14 +271,15 @@ final class MiniBarQuickRowView: UIView {
         theme81 = MiniPlayerTheme.effective
         refreshLike()
         refreshStar()
+        // (93) B1：实显字形点数 17→15 随台面收一档。
         setButtonState(pawButton,
-            image: DeckGlyph82.image(.paw, pointSize: 17) ?? UIImage(),
+            image: DeckGlyph82.image(.paw, pointSize: 15) ?? UIImage(),
             color: UIColor.white.withAlphaComponent(0.75))
         setButtonState(panelButton,
-            image: DeckGlyph82.image(.sliders, pointSize: 17) ?? UIImage(),
+            image: DeckGlyph82.image(.sliders, pointSize: 15) ?? UIImage(),
             color: UIColor.white.withAlphaComponent(0.75))
         setButtonState(commandButton,
-            image: DeckGlyph82.image(.command, pointSize: 17) ?? UIImage(),
+            image: DeckGlyph82.image(.command, pointSize: 15) ?? UIImage(),
             color: UIColor.white.withAlphaComponent(0.75))
     }
 
@@ -307,7 +321,7 @@ final class MiniBarQuickRowView: UIView {
         // 未喜欢维持现行（白 75% 前景、无填充）。
         likeFilled = liked
         setButtonState(likeButton,
-            image: DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 17) ?? UIImage(),
+            image: DeckGlyph82.image(liked ? .heartFill : .heart, pointSize: 15) ?? UIImage(),
             color: liked
                 ? .white
                 : UIColor.white.withAlphaComponent(0.75))
@@ -319,7 +333,7 @@ final class MiniBarQuickRowView: UIView {
         let starred = PlaybackEngine.shared.currentTrack
             .map { StarStore.shared.isStarred($0.id) } ?? false
         setButtonState(starButton,
-            image: DeckGlyph82.image(starred ? .starFill : .star, pointSize: 16) ?? UIImage(),
+            image: DeckGlyph82.image(starred ? .starFill : .star, pointSize: 14) ?? UIImage(),
             color: starred
                 ? UIColor(red: 1, green: 0.8, blue: 0.25, alpha: 1)
                 : UIColor.white.withAlphaComponent(0.75))
@@ -689,7 +703,8 @@ final class DeckPawButton79: UIButton {
     /// 字形（当前主题套）＋明暗（宠物开=亮白、关=灰 0.45，
     /// 即 (79) 真机所见灰态的语义，保留作状态信号）。
     @objc private func refreshFace81() {
-        setImage(DeckGlyph82.image(.paw, pointSize: 16),
+        // (93) B1：台面爪印字形 16→14 随台面收一档。
+        setImage(DeckGlyph82.image(.paw, pointSize: 14),
                  for: .normal)
         tintColor = StickerSettings.miniPetsEnabled
             ? .white : UIColor.white.withAlphaComponent(0.45)

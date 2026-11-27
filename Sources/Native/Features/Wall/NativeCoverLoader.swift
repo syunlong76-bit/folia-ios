@@ -177,7 +177,14 @@ final class NativeCoverLoader {
         // （墙缓存 LRU ≤120–180MB）提到 160MB，且成本改按
         // 解码后像素字节计（旧口径用压缩字节 data.count，
         // 低估真实占用约 10 倍、LRU 淘汰节奏失真）。
-        cache.totalCostLimit = 160 * 1024 * 1024
+        // (93) A4：(92) 真机日志实锤 footprint 峰值 515MB
+        // 越 450MB 硬线（log-92-verdict 第五节）——墙缓存
+        // 160MB 与雪开启 +45MB 叠加是越线主构成。缓存收至
+        // 128MB（仍在 120–180MB 口径内、靠低端），与特效侧
+        // 雪精灵共享＋停雪回收（GlobalFx87 (93)）合力把峰
+        // 值压回线内；命中率若真机回退，此行即唯一旋钮。
+        cache.totalCostLimit = 128 * 1024 * 1024
+        Breadcrumbs.log("p93 wallcache mb=128")
         let config = URLSessionConfiguration.default
         config.httpShouldSetCookies = false
         config.httpCookieStorage = nil

@@ -39,7 +39,8 @@ import Combine
 /// 卡几何沿 (86)：贴底 −90、竖单列/横双列紧凑卡。
 final class ConsolePanel82: UIViewController,
                             UITableViewDataSource,
-                            UITableViewDelegate {
+                            UITableViewDelegate,
+                            UIGestureRecognizerDelegate {
 
     private var onEffects: (() -> Void)?
     private var onSketchbook: (() -> Void)?
@@ -79,6 +80,16 @@ final class ConsolePanel82: UIViewController,
     private let settingsButton89 = UIButton(type: .system)
     private let lightSwitch = LightSwitch82()
     private var fxButtons87: [UIButton] = []
+
+    /// (93) A2 契约：卡在 window 中的帧（viewDidLayoutSubviews/
+    /// viewDidAppear 时赋值、viewWillDisappear 清 nil），供 Fx
+    /// 覆层推荐卡对齐消费；本组只暴露、不消费。
+    static var presentedCardFrame: CGRect?
+    /// (93) A3：present 起点时刻（present(from:) 注入），
+    /// viewDidAppear 算弹出间隔落 p93 pop 自证。
+    private var p93PopStart93: CFTimeInterval = 0
+    /// (93) A1：关闭原因已落痕标记（多入口去重＋宿主消失兜底判读）。
+    private var p93DismissReason93: String?
 
     /// (87) 主视图（条带＋钮排＋功能行＋音量＋图层＋灯）
     /// 与队列网格视图（卡内切换、弹簧交叉）。
@@ -162,9 +173,18 @@ final class ConsolePanel82: UIViewController,
         // pageSheet 55% detent。
         panel.modalPresentationStyle = .overFullScreen
         panel.modalTransitionStyle = .crossDissolve
+        // (93) A3：弹出起点打点（首帧渲染后在 viewDidAppear 对账）。
+        panel.p93PopStart93 = CACurrentMediaTime()
         Breadcrumbs.log("console82 present host=\(type(of: host))")
         Breadcrumbs.log("console85 present form=card")
         host.present(panel, animated: true)
+    }
+
+    /// (93) A1：根视图用 ConsoleDimRoot93——hitTest 对卡外点
+    /// 直接认领根视图本身，卡内子视图（滚动容器/拍立得卡/特效
+    /// 点缀层）无论哪层越界或吞点，都挡不住卡外点按到达 dim。
+    override func loadView() {
+        view = ConsoleDimRoot93()
     }
 
     override func viewDidLoad() {
@@ -174,7 +194,15 @@ final class ConsolePanel82: UIViewController,
         // 毛玻璃＋描边）。
         view.backgroundColor = UIColor.black.withAlphaComponent(0.45)
         let dimTap = UITapGestureRecognizer(target: self, action: #selector(dimTapped85(_:)))
+        // (93) A1：识别器只收卡外点（delegate 按点位放行），免被
+        // 卡内识别器竞争吞掉；另有根视图 touchesEnded 第二路兜底
+        // （ConsoleDimRoot93.onDimTouch93），两路同入 dismissConsole93 去重。
+        dimTap.delegate = self
+        dimTap.cancelsTouchesInView = false
         view.addGestureRecognizer(dimTap)
+        (view as? ConsoleDimRoot93)?.onDimTouch93 = { [weak self] in
+            self?.dismissConsole93(reason: "dim")
+        }
         card85.backgroundColor = .clear
         // (89) §4：卡圆角 28 → 24（网页 WallTools 面板圆角 24）。
         // port91（任务 5）：样板控制台定版圆角 20，改从样板
@@ -188,6 +216,7 @@ final class ConsolePanel82: UIViewController,
         card85.transform = CGAffineTransform(scaleX: 0.94, y: 0.94)
             .translatedBy(x: 0, y: 10)
         view.addSubview(card85)
+        (view as? ConsoleDimRoot93)?.cardView93 = card85
         cardHeight85 = card85.heightAnchor.constraint(equalToConstant: 658)
         cardWidth85 = card85.widthAnchor.constraint(equalToConstant: 322)
         // (86) 第 7 条：底部锚定——卡底＝安全区底 −90（账：
@@ -269,7 +298,7 @@ final class ConsolePanel82: UIViewController,
                     [track] + QueueManager.shared.queue, startingAt: 0, source: "polaroid90")
             }
             Breadcrumbs.log("port90 polaroid play id=\(track.id)")
-            self.dismiss(animated: true)
+            self.dismissConsole93(reason: "action")
         }
         polaroidZone90.onOpenDiary = { [weak self] track in
             guard let self else { return }
@@ -709,10 +738,13 @@ final class ConsolePanel82: UIViewController,
                 landscape ? landscapeConstraints85 : portraitConstraints85)
             Breadcrumbs.log("console86 land=\(landscape ? 1 : 0)")
         }
-        // (89) §4：竖屏卡宽对齐网页面板 min(296, 屏宽−32)；
-        // 横屏双列 640 系 (86) 定案，不在本次对齐面。
-        let cardW = landscape ? min(bounds.width * 0.86, 640)
-                              : min(296, bounds.width - 32)
+        // (93) C4②：卡宽改对齐特效改版样片口径——样片 .stack
+        // 宽 min(620px, 100vw−20px)、控制台与之同宽，即宽/视口
+        // 宽＝min(620, 屏宽−20)/屏宽（竖屏 390 宽时 370/390≈
+        // 0.949、横屏 844 宽时 620/844≈0.735）。横竖同式：
+        // min(620, 屏宽−20)；(89) 竖 min(296, 屏宽−32) 与
+        // (86) 横 min(0.86×屏宽, 640) 均与样片比例不一致，退役。
+        let cardW = min(620, bounds.width - 20)
         if let cardWidth85, abs(cardWidth85.constant - cardW) > 0.5 {
             cardWidth85.constant = cardW
         }
@@ -730,32 +762,82 @@ final class ConsolePanel82: UIViewController,
         if let cardHeight85, abs(cardHeight85.constant - cardH) > 0.5 {
             cardHeight85.constant = cardH
         }
+        // (93) A2：布局后回写卡帧（window 未挂时保留旧值不造数）。
+        if let win = view.window {
+            Self.presentedCardFrame = card85.convert(card85.bounds, to: win)
+        }
     }
 
     /// (85) 第 7 条：入场——卡弹簧缩放＋淡入（iOS 系统
     /// 弹簧口径，禁线性）。
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (93) A3 自证：弹出起点→首帧渲染后间隔（目标 <50ms；
+        // 拍立得打印已移出本路径，见下方动画 completion）。
+        if p93PopStart93 > 0 {
+            let gap = (CACurrentMediaTime() - p93PopStart93) * 1000
+            Breadcrumbs.log("p93 pop gap=\(Int(gap.rounded()))ms")
+            p93PopStart93 = 0
+        }
+        // (93) A2：出现后回写卡帧（此刻 window 必在）。
+        if let win = view.window {
+            Self.presentedCardFrame = card85.convert(card85.bounds, to: win)
+        }
         UIView.animate(withDuration: 0.5, delay: 0,
                        usingSpringWithDamping: 0.82,
                        initialSpringVelocity: 0.4,
                        options: [.allowUserInteraction]) {
             self.card85.alpha = 1
             self.card85.transform = .identity
+        } completion: { [weak self] _ in
+            // (93) A3：拍立得备池＋打印移出弹出关键路径——入场
+            // 动画完成后才启动（打印本身在 Polaroid90 内再分帧）。
+            self?.polaroidZone90.beginIfNeeded()
         }
         refreshTrans87()
-        // port90（任务 21）：控制台落位后备池并启动逐张打印。
-        polaroidZone90.beginIfNeeded()
+    }
+
+    /// (93) A1/A2：消失时清契约帧；若本次消失未经任一已落痕
+    /// 入口（宿主被关/被系统摘除等），以 hostgone 兜底落痕。
+    override func viewWillDisappear(_ animated: Bool) {
+        super.viewWillDisappear(animated)
+        Self.presentedCardFrame = nil
+        if isBeingDismissed, p93DismissReason93 == nil {
+            p93DismissReason93 = "hostgone"
+            Breadcrumbs.log("p93 dismiss r=hostgone")
+        }
+    }
+
+    /// (93) A1：全入口统一关闭口——落 p93 dismiss 痕（reason=
+    /// dim/button/action/hostgone）后关台；重复调用只落一次痕。
+    private func dismissConsole93(reason: String,
+                                  completion: (() -> Void)? = nil) {
+        if p93DismissReason93 == nil {
+            p93DismissReason93 = reason
+            Breadcrumbs.log("p93 dismiss r=\(reason)")
+        }
+        dismiss(animated: true, completion: completion)
+    }
+
+    /// (93) A1：dim 识别器只收卡外点——点位换算走 convert＋
+    /// bounds（不读 card85.frame，免入场 transform 期帧账偏差
+    /// 把卡外点误判成卡内提前 return，旧 dimTapped85 的隐患）。
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                           shouldReceive touch: UITouch) -> Bool {
+        let point = touch.location(in: view)
+        return !card85.bounds.contains(card85.convert(point, from: view))
     }
 
     /// (85) 第 7 条：点卡外（压暗区）关闭。
     @objc private func dimTapped85(_ recognizer: UITapGestureRecognizer) {
-        guard recognizer.view === view,
-              !card85.frame.contains(recognizer.location(in: view)) else { return }
+        // (93) A1：点位判定改 convert＋bounds（旧 frame 判定在
+        // transform/布局未稳时可误判）；关台走统一口落 reason。
+        let point = recognizer.location(in: view)
+        guard !card85.bounds.contains(card85.convert(point, from: view)) else { return }
         Breadcrumbs.log("console85 tap el=outside")
         // port91（任务 1）自证：点外关闭同入 p91 tap 口径。
         Breadcrumbs.log("p91 tap zone=outside")
-        dismiss(animated: true)
+        dismissConsole93(reason: "dim")
     }
 
     private func bindState() {
@@ -830,7 +912,7 @@ final class ConsolePanel82: UIViewController,
         ConsoleFX85.tap(sender, el: "queue")
         Breadcrumbs.log("console87 strip play idx=\(sender.tag)")
         QueueManager.shared.playAtIndex(sender.tag)
-        dismiss(animated: true)
+        dismissConsole93(reason: "action")
     }
 
     @objc private func listTapped87(_ sender: UIButton) {
@@ -892,7 +974,7 @@ final class ConsolePanel82: UIViewController,
         tableView.deselectRow(at: indexPath, animated: true)
         Breadcrumbs.log("port90 console row play idx=\(indexPath.row)")
         QueueManager.shared.playAtIndex(indexPath.row)
-        dismiss(animated: true)
+        dismissConsole93(reason: "action")
     }
 
     // MARK: 功能行装配
@@ -1126,7 +1208,7 @@ final class ConsolePanel82: UIViewController,
         DeckTap82.log(host: "console", zone: "fx", view: sender)
         ConsoleFX85.tap(sender, el: "fx")
         if let onEffects {
-            dismiss(animated: true) { onEffects() }
+            dismissConsole93(reason: "action") { onEffects() }
             return
         }
         // 通用宿主（墙）：选择器写同一 StageStyleStore，
@@ -1194,7 +1276,7 @@ final class ConsolePanel82: UIViewController,
         DeckTap82.log(host: "console", zone: "sketch", view: sender)
         ConsoleFX85.tap(sender, el: "sketch")
         if let onSketchbook {
-            dismiss(animated: true) { onSketchbook() }
+            dismissConsole93(reason: "action") { onSketchbook() }
         } else {
             NativePlaybackFailureToast.show(message: "日记本在主页墙左缘打开")
             Breadcrumbs.log("console82 sketch host=unsupported")
@@ -1247,7 +1329,7 @@ final class ConsolePanel82: UIViewController,
         ConsoleFX85.tap(sender, el: "dest")
         guard let onDestination89 else { return }
         Breadcrumbs.log("port89 console dest")
-        dismiss(animated: true) { onDestination89() }
+        dismissConsole93(reason: "action") { onDestination89() }
     }
 
     /// (89)B 播放器格：进播放页（原生舞台）。
@@ -1256,7 +1338,7 @@ final class ConsolePanel82: UIViewController,
         ConsoleFX85.tap(sender, el: "player")
         guard let onPlayer89 else { return }
         Breadcrumbs.log("port89 console player")
-        dismiss(animated: true) { onPlayer89() }
+        dismissConsole93(reason: "action") { onPlayer89() }
     }
 
     /// (89)B 设置格：打开设置页（全宿主通用装配）。
@@ -1265,7 +1347,7 @@ final class ConsolePanel82: UIViewController,
         ConsoleFX85.tap(sender, el: "settings")
         guard let onSettings89 else { return }
         Breadcrumbs.log("port89 console settings")
-        dismiss(animated: true) { onSettings89() }
+        dismissConsole93(reason: "action") { onSettings89() }
     }
 
     @objc private func helpTapped(_ sender: UIButton) {
@@ -1282,6 +1364,35 @@ final class ConsolePanel82: UIViewController,
             preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "好", style: .default))
         present(alert, animated: true)
+    }
+}
+
+/// (93) A1：控制台根视图（压暗层本体）——hitTest 对卡外点
+/// 直接返回自身：卡内任何子视图（滚动容器/拍立得舞台/打印
+/// 中的卡/点按特效层）即使帧越界或带识别器，也无从吞掉卡
+/// 外点按；touchesEnded 再作第二路把卡外点直送关闭口（与
+/// dim 手势识别器互为兜底、同入 dismissConsole93 去重）。
+final class ConsoleDimRoot93: UIView {
+
+    weak var cardView93: UIView?
+    var onDimTouch93: (() -> Void)?
+
+    override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
+        if let card = cardView93,
+           card.bounds.contains(card.convert(point, from: self)) {
+            return super.hitTest(point, with: event)
+        }
+        return self
+    }
+
+    override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
+        super.touchesEnded(touches, with: event)
+        // 卡内点按会沿响应链冒泡到此——必须按点位复核卡外才关，
+        // 只认 hitTest 已直认的 dim 点与真正落在卡外的冒泡点。
+        guard let touch = touches.first, let card = cardView93,
+              !card.bounds.contains(card.convert(touch.location(in: self), from: self))
+        else { return }
+        onDimTouch93?()
     }
 }
 

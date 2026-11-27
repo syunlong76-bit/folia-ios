@@ -815,6 +815,7 @@ final class WallPrototypeViewController: UIViewController,
         miniCover.contentMode = .scaleAspectFill
         miniCover.clipsToBounds = true
         // (87) 样片台：封面 42 圆角方（10）代 44 圆。
+        // (93) B1：封面边长 42→38（台高 112 减一号 0.90）。
         miniCover.layer.cornerRadius = 10
         miniCover.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         miniCover.translatesAutoresizingMaskIntoConstraints = false
@@ -840,9 +841,10 @@ final class WallPrototypeViewController: UIViewController,
         // (84) 第 1 条：播放钮复原 (80) 形态（白字形、无圆
         // 底）；字形仍走 DeckGlyph82 现行临时套。
         // (87) 样片台：播放钮改 42 圆玻璃底（白 0.13）。
+        // (93) B1：钮径 42→38、圆角随之 21→19。
         miniPlayButton.tintColor = .white
         miniPlayButton.backgroundColor = .clear
-        miniPlayButton.layer.cornerRadius = 21
+        miniPlayButton.layer.cornerRadius = 19
         miniPlayButton.setImage(DeckGlyph82.image(.play, pointSize: 20), for: .normal)
         miniPlayButton.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.addTarget(self, action: #selector(miniPlayTapped), for: .touchUpInside)
@@ -854,7 +856,7 @@ final class WallPrototypeViewController: UIViewController,
             effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         miniPlayBlur90.isUserInteractionEnabled = false
         miniPlayBlur90.clipsToBounds = true
-        miniPlayBlur90.layer.cornerRadius = 21
+        miniPlayBlur90.layer.cornerRadius = 19
         miniPlayBlur90.translatesAutoresizingMaskIntoConstraints = false
         miniPlayButton.insertSubview(miniPlayBlur90, at: 0)
         NSLayoutConstraint.activate([
@@ -864,7 +866,7 @@ final class WallPrototypeViewController: UIViewController,
             miniPlayBlur90.bottomAnchor.constraint(equalTo: miniPlayButton.bottomAnchor),
         ])
         // port91（任务 3）：台面播放/控制台钮换 A4 玻璃面。
-        A4Chrome91.apply(to: miniPlayButton, cornerRadius: 21)
+        A4Chrome91.apply(to: miniPlayButton, cornerRadius: 19)
 
         miniPrevButton = UIButton(type: .system)
         miniPrevButton.tintColor = .white
@@ -891,8 +893,9 @@ final class WallPrototypeViewController: UIViewController,
         // 为 30 圆钮（同主页墙）。
         miniConsoleButton = UIButton(type: .system)
         // (87) 样片台：控制台钮与播放钮同式 42 圆玻璃底。
+        // (93) B1：钮径 42→38、圆角随之 21→19。
         miniConsoleButton.backgroundColor = UIColor.white.withAlphaComponent(0.13)
-        miniConsoleButton.layer.cornerRadius = 21
+        miniConsoleButton.layer.cornerRadius = 19
         miniConsoleButton.setImage(DeckGlyph82.image(.consoleNotes, pointSize: 20), for: .normal)
         miniConsoleButton.tintColor = .white
         miniConsoleButton.accessibilityLabel = "控制台"
@@ -902,7 +905,7 @@ final class WallPrototypeViewController: UIViewController,
         bar.addSubview(miniConsoleButton)
         // port91（任务 3）：控制台入口钮 A4 玻璃面（字形已换
         // gen3 双音符上下对称，见 DeckGlyph82.consoleNotes）。
-        A4Chrome91.apply(to: miniConsoleButton, cornerRadius: 21)
+        A4Chrome91.apply(to: miniConsoleButton, cornerRadius: 19)
 
         // port90：主题四圆点整件撤除，台面右上不再显示主题点。
 
@@ -958,6 +961,7 @@ final class WallPrototypeViewController: UIViewController,
         // (89) §3-4：展开态轨道高 4 → 6（网页 ProgressBar h-1.5）。
         miniTrackHeightC = progressTrack.heightAnchor.constraint(equalToConstant: 6)
         Breadcrumbs.log("port89 deck=track6/time10x32 host=wall")
+        Breadcrumbs.log("p93 deck host=wall")
         miniTrackCenterXC = progressTrack.centerXAnchor.constraint(equalTo: bar.centerXAnchor)
         // (83) 第 5 条：收起宽 134→140（量测对齐，同主页墙）。
         miniTrackWidthC = progressTrack.widthAnchor.constraint(equalToConstant: 140)
@@ -986,8 +990,8 @@ final class WallPrototypeViewController: UIViewController,
             knob.heightAnchor.constraint(equalToConstant: 9),
 
             miniCover.leadingAnchor.constraint(equalTo: bar.leadingAnchor, constant: 14),
-            miniCover.widthAnchor.constraint(equalToConstant: 42),
-            miniCover.heightAnchor.constraint(equalToConstant: 42),
+            miniCover.widthAnchor.constraint(equalToConstant: 38),
+            miniCover.heightAnchor.constraint(equalToConstant: 38),
 
             // (84) 第 1 条：标题复原 (80) 锚法（同主页墙）。
             miniTitle.leadingAnchor.constraint(equalTo: miniCover.trailingAnchor, constant: 12),
@@ -1001,16 +1005,16 @@ final class WallPrototypeViewController: UIViewController,
             // (84) 第 1 条：主排右端簇复原 (80) 链式锚（同
             // 主页墙）：控制台居最右，向左次/播/上一曲。
             miniConsoleButton.trailingAnchor.constraint(equalTo: bar.trailingAnchor, constant: -12),
-            miniConsoleButton.widthAnchor.constraint(equalToConstant: 42),
-            miniConsoleButton.heightAnchor.constraint(equalToConstant: 42),
+            miniConsoleButton.widthAnchor.constraint(equalToConstant: 38),
+            miniConsoleButton.heightAnchor.constraint(equalToConstant: 38),
 
             miniNextButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
             miniNextButton.widthAnchor.constraint(equalToConstant: 34),
             miniNextButton.heightAnchor.constraint(equalToConstant: 40),
 
             miniPlayButton.centerXAnchor.constraint(equalTo: bar.centerXAnchor),
-            miniPlayButton.widthAnchor.constraint(equalToConstant: 42),
-            miniPlayButton.heightAnchor.constraint(equalToConstant: 42),
+            miniPlayButton.widthAnchor.constraint(equalToConstant: 38),
+            miniPlayButton.heightAnchor.constraint(equalToConstant: 38),
 
             miniPrevButton.trailingAnchor.constraint(equalTo: miniPlayButton.leadingAnchor, constant: -2),
             miniPrevButton.widthAnchor.constraint(equalToConstant: 34),
@@ -1038,13 +1042,14 @@ final class WallPrototypeViewController: UIViewController,
         // (84) 第 1 条：主排纵向复原 (80)——封面与四钮同组
         // 居台中心 −5，两形态同值。
         // (87) 样片台两行版式：主行恒 −14（台高 84）。
-        // port91（任务 4）：三行构成——封面走顶行（centerY
-        // −30）、控制钮走中行（＋20），数组序与 setMiniBarForm
-        // 的逐项回写一一对应（首项封面、余项中行）。
+        // port91（任务 4）：三行构成——封面走顶行、控制钮
+        // 走中行。(93) B1：台高 112 重排偏移 −30/＋20 →
+        // −28/＋17（顶留 9、行间隔 6/7、钮→轨 6），数组
+        // 序与 setMiniBarForm 的逐项回写一一对应。
         miniMainCenterY = [miniCover, miniPlayButton, miniPrevButton,
                            miniNextButton, miniConsoleButton].enumerated().map {
             $0.element.centerYAnchor.constraint(
-                equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -30 : 20)
+                equalTo: bar.centerYAnchor, constant: $0.offset == 0 ? -28 : 17)
         }
         NSLayoutConstraint.activate(miniMainCenterY)
         // (82) 第 7 条：轨道纵锚制（展开）/底锚（收起）由
@@ -1818,9 +1823,9 @@ final class WallPrototypeViewController: UIViewController,
         miniBarHeightConstraint?.constant = collapsed ? 16 : MiniBarQuickRowView.expandedBarHeight
         // (84) 第 1 条：主排纵向复原 (80)——两形态恒同值。
         // (87) 样片台两行版式：恒 −14（台高 84）。
-        // port91（任务 4）：三行位恒定（首项顶行 −30、余项中行 ＋20）。
+        // port91（任务 4）：三行位恒定。(93) B1：偏移 −28/＋17。
         for (index, constraint) in miniMainCenterY.enumerated() {
-            constraint.constant = index == 0 ? -30 : 20
+            constraint.constant = index == 0 ? -28 : 17
         }
         // (74) 第 5 项小横线（同主页墙口径）：收起态轨道换
         // 居中 134×5 小横线、圆点收起；台体容器与命中带不
@@ -1963,6 +1968,17 @@ final class WallPrototypeViewController: UIViewController,
         seam.onAppendQueue = { [weak self] in self?.appendPlaylistToQueue85() }
         seam.onExpandChange = { [weak self] expanded in
             self?.setPlaylistSeamExpanded85(expanded)
+        }
+        // (93) C3：歌单缝三段胶囊——写同一持久化键＋走交
+        // 叉淡化切换（switchPlaylistLayout93，不整墙重刷）。
+        seam.onLayoutMode93 = { [weak self] mode in
+            self?.switchPlaylistLayout93(mode)
+        }
+        // (93) C1：歌单缝展开档控制台入口——与台面控制台
+        // 钮同一落点（ConsolePanel82.present）。
+        seam.onConsole93 = { [weak self] in
+            guard let self else { return }
+            ConsolePanel82.present(from: self)
         }
         // port88：缝头像绑定位（(86) 第 3 条）＋账户同源回
         // 填随书脊头像摘除一并退役，本缝无头像位。
@@ -5480,12 +5496,54 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
 
     /// (92) 任务 11：主页缝开关写键后，本页出现时重读对齐
     /// （同页内无其他改键入口）。
+    /// (93) C3：本页缝胶囊选中态同步回刷（同值时也对齐）。
     fileprivate func refreshPlaylistLayoutFromDefaults92() {
         let mode = UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91")
+        if playlistSeam85?.layoutMode93 != mode {
+            playlistSeam85?.layoutMode93 = mode
+        }
         guard mode != playlistLayout91 else { return }
         playlistLayout91 = mode
         applyPlaylistLayout91()
         Breadcrumbs.log("p92 plist mode=\(mode) src=appear")
+    }
+
+    /// (93) C3：歌单缝胶囊切换——写 foliaPlaylistLayout91
+    /// 单一状态（主页缝 viewWillAppear 重读回显），切换走
+    /// 交叉淡化：新版式视图先在旧视图之上备好数据（alt 走
+    /// reloadAltPlaylist91、现行墙内容本就在位）再 0.25s
+    /// 淡入、落定才隐藏旧视图——不走整墙 reloadData、不
+    /// 露黑底。A/B 本体行为（定点刷新等）不动。
+    fileprivate func switchPlaylistLayout93(_ mode: Int) {
+        UserDefaults.standard.set(mode, forKey: "foliaPlaylistLayout91")
+        Breadcrumbs.log("p93 layout sw=\(SeamGlyph93.layoutName93(mode))")
+        guard mode != playlistLayout91 else { return }
+        let oldView: UIView? = playlistLayout91 == 0 ? collectionView
+            : playlistLayout91 == 1 ? magazineTable91 : shelfView91
+        let newView: UIView? = mode == 0 ? collectionView
+            : mode == 1 ? magazineTable91 : shelfView91
+        playlistLayout91 = mode
+        playlistSeam85?.layoutMode93 = mode
+        guard let oldView, let newView, oldView !== newView else {
+            applyPlaylistLayout91()
+            return
+        }
+        // 新视图原地备数据＋首帧（不动 z 序：缝/台/歌词层
+        // 的既有层级不许被版式切换打乱），旧视图全程在场
+        // 承托，双向 alpha 交叉淡化后才隐藏旧视图。
+        reloadAltPlaylist91()
+        newView.isHidden = false
+        newView.alpha = 0
+        view.layoutIfNeeded()
+        UIView.animate(withDuration: 0.25, delay: 0,
+                       options: [.allowUserInteraction, .beginFromCurrentState]) {
+            newView.alpha = 1
+            oldView.alpha = 0
+        } completion: { _ in
+            oldView.isHidden = true
+            oldView.alpha = 1
+            newView.alpha = 1
+        }
     }
 
     fileprivate func applyPlaylistLayout91() {

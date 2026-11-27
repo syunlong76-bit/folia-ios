@@ -98,6 +98,7 @@ enum StageStylePoolStore {
         case "corridor": return "perspective"
         case "afterglow": return "sunset"
         case "petconcert": return "pawprint"
+        case "christmas": return "tree"
         default: return "sparkle"
         }
     }

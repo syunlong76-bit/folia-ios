@@ -446,6 +446,21 @@ final class SceneDelegate: UIResponder, UIWindowSceneDelegate {
             verifyPresentedStage(generation: generation)
             return
         }
+        // (93) A1：顶层是控制台（瞬时面板）时不再重试到
+        // giveup——(92) 日志实锤：ConsolePanel82 自弹出后
+        // 长期占顶，route 以 modal-presented 重试 6 次后
+        // giveup（gen=4 attempts=6）。改：armed 路由先无
+        // 动画 dismiss 控制台、落痕后同代际续步路由；其
+        // 它模态（设置页等）仍走下方短重试口径不动。
+        if let console = top as? ConsolePanel82 {
+            Breadcrumbs.log("p93 route thru gen=\(generation)")
+            console.dismiss(animated: false) { [weak self] in
+                guard let self, self.routeState == .routing,
+                      self.routeGeneration == generation else { return }
+                self.routeStep()
+            }
+            return
+        }
         // 顶层被其它模态（设置页等）占着：不粗暴打断，短重试
         // 等其散场，窗尽 giveup（modal-presented）。
         routeRetryOrGiveUp(generation: generation, reason: "modal-presented")

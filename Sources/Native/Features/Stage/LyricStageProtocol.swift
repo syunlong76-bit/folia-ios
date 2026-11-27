@@ -260,7 +260,7 @@ struct LyricStageStyleInfo {
     /// (70) 起 17 式的原生移植渲染已整删、运行位切换退役：
     /// hasWebRuntime 为真即恒网页运行（StageRuntimeStore）。
     var hasWebRuntime: Bool {
-        !["tuning", "corridor", "afterglow", "petconcert"].contains(id)
+        !["tuning", "corridor", "afterglow", "petconcert", "christmas"].contains(id)
     }
 
     /// 本台可呈现（3.7 (70)，只增计算属性）：有原生渲染器
@@ -337,6 +337,11 @@ enum LyricStageRegistry {
         // v3 贴纸风幕布；样式生效期间迷你台/灵动岛宠物迁移回舞台）。
         .init(id: "petconcert", displayName: "汪汪队开大会", order: 170, styleVersion: 1, isNativeAvailable: true,
               factory: { PetConcertStageRenderer() }),
+        // (93) 圣诞树：粒子圣诞树＋歌词聚字原生样式（样片
+        // sheng-dan-ge-ci-te-xiao-yang-pian 口径移植）；无网页
+        // 运行（hasWebRuntime 排除名单已加 christmas）。
+        .init(id: "christmas", displayName: "圣诞树", order: 180, styleVersion: 1, isNativeAvailable: true,
+              factory: { ChristmasTreeStageRenderer() }),
     ]
 
     static func info(for styleId: String) -> LyricStageStyleInfo? {

@@ -86,6 +86,227 @@ enum SeamThemeCycle86 {
     }
 }
 
+/// (93) C1/C2/C3 共享字形工厂：样片定版细线字形本地描画
+/// （24 画布、统一线宽 1.7、圆头端点/圆角连接、光学尺寸
+/// 约 16px；不走 SF Symbols、不改 Deck82）。路径逐字形按
+/// 样片 SVG 换算（搜索/齿轮/列表/更多/双音符/爱心/云/书
+/// 本/服务器/展开角）；齿轮为标准齿轮形（8 齿＋环身＋中
+/// 心孔，填充剪影＋孔洞挖空）；排版三段字形（砖墙格/列
+/// 表/专辑）与样片 .layoutseg/.ab 同源：字形 15–17.5px、
+/// 砖墙格光学再 ×0.86（绘制时绕中心缩放）。
+enum SeamGlyph93 {
+
+    enum Kind {
+        case search, gear, list, more, consoleNotes
+        case heart, cloud, book, server, expandCorners
+        case layoutGrid, layoutList, layoutAlbum
+    }
+
+    static func image(_ kind: Kind, pointSize: CGFloat = 16) -> UIImage? {
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let renderer = UIGraphicsImageRenderer(size: size)
+        let image = renderer.image { context in
+            let cg = context.cgContext
+            UIColor.white.setStroke()
+            UIColor.white.setFill()
+            func p(_ x: CGFloat, _ y: CGFloat) -> CGPoint {
+                CGPoint(x: x * scale, y: y * scale)
+            }
+            func stroke(_ path: UIBezierPath, w: CGFloat = 1.7) {
+                path.lineWidth = w * scale
+                path.lineCapStyle = .round
+                path.lineJoinStyle = .round
+                path.stroke()
+            }
+            func line(_ x1: CGFloat, _ y1: CGFloat, _ x2: CGFloat, _ y2: CGFloat,
+                      w: CGFloat = 1.7) {
+                let path = UIBezierPath()
+                path.move(to: p(x1, y1))
+                path.addLine(to: p(x2, y2))
+                stroke(path, w: w)
+            }
+            func dot(_ x: CGFloat, _ y: CGFloat, _ r: CGFloat) {
+                UIBezierPath(ovalIn: CGRect(
+                    x: (x - r) * scale, y: (y - r) * scale,
+                    width: 2 * r * scale, height: 2 * r * scale)).fill()
+            }
+            func rrect(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat,
+                       _ r: CGFloat) -> UIBezierPath {
+                UIBezierPath(roundedRect: CGRect(
+                    x: x * scale, y: y * scale,
+                    width: w * scale, height: h * scale),
+                    cornerRadius: r * scale)
+            }
+            switch kind {
+            case .search:
+                stroke(UIBezierPath(ovalIn: CGRect(
+                    x: 4.6 * scale, y: 4.6 * scale,
+                    width: 12.8 * scale, height: 12.8 * scale)))
+                line(15.7, 15.7, 20.1, 20.1)
+            case .gear:
+                // (93) 标准齿轮：8 齿（圆角齿片绕心 45° 步进）
+                // ＋环身圆盘填充，中心孔以 clear 挖空成形。
+                for i in 0..<8 {
+                    let tooth = UIBezierPath(roundedRect: CGRect(
+                        x: -1.3 * scale, y: -9.7 * scale,
+                        width: 2.6 * scale, height: 3.8 * scale),
+                        cornerRadius: 0.9 * scale)
+                    cg.saveGState()
+                    cg.translateBy(x: 12 * scale, y: 12 * scale)
+                    cg.rotate(by: CGFloat(i) * .pi / 4)
+                    tooth.fill()
+                    cg.restoreGState()
+                }
+                UIBezierPath(ovalIn: CGRect(
+                    x: 5 * scale, y: 5 * scale,
+                    width: 14 * scale, height: 14 * scale)).fill()
+                cg.saveGState()
+                cg.setBlendMode(.clear)
+                UIBezierPath(ovalIn: CGRect(
+                    x: 8.9 * scale, y: 8.9 * scale,
+                    width: 6.2 * scale, height: 6.2 * scale)).fill()
+                cg.restoreGState()
+            case .list:
+                line(8.7, 6.4, 19.4, 6.4)
+                line(8.7, 12, 19.4, 12)
+                line(8.7, 17.6, 19.4, 17.6)
+                dot(4.7, 6.4, 1.3)
+                dot(4.7, 12, 1.3)
+                dot(4.7, 17.6, 1.3)
+            case .more:
+                dot(5, 12, 1.5)
+                dot(12, 12, 1.5)
+                dot(19, 12, 1.5)
+            case .consoleNotes:
+                // 样片双音符（上下对称）：两椭圆音头＋音杆＋弧梁。
+                UIBezierPath(ovalIn: CGRect(
+                    x: 12.65 * scale, y: 7.15 * scale,
+                    width: 4.7 * scale, height: 3.7 * scale)).fill()
+                UIBezierPath(ovalIn: CGRect(
+                    x: 6.65 * scale, y: 13.15 * scale,
+                    width: 4.7 * scale, height: 3.7 * scale)).fill()
+                let stem1 = UIBezierPath()
+                stem1.move(to: p(17.3, 8.7))
+                stem1.addLine(to: p(17.3, 3.8))
+                stem1.addCurve(to: p(21, 6.7),
+                               controlPoint1: p(19.1, 4.1),
+                               controlPoint2: p(20.3, 5.2))
+                stroke(stem1, w: 1.6)
+                let stem2 = UIBezierPath()
+                stem2.move(to: p(6.7, 15.3))
+                stem2.addLine(to: p(6.7, 20.2))
+                stem2.addCurve(to: p(3, 17.3),
+                               controlPoint1: p(4.9, 19.9),
+                               controlPoint2: p(3.7, 18.8))
+                stroke(stem2, w: 1.6)
+            case .heart:
+                let path = UIBezierPath()
+                path.move(to: p(12, 20.3))
+                path.addCurve(to: p(3, 9.9),
+                              controlPoint1: p(6.4, 16.9),
+                              controlPoint2: p(3, 13.6))
+                path.addCurve(to: p(7.7, 5),
+                              controlPoint1: p(3, 7.2),
+                              controlPoint2: p(5.1, 5))
+                path.addCurve(to: p(12, 7.4),
+                              controlPoint1: p(9.4, 5),
+                              controlPoint2: p(11, 5.9))
+                path.addCurve(to: p(16.3, 5),
+                              controlPoint1: p(13, 5.9),
+                              controlPoint2: p(14.6, 5))
+                path.addCurve(to: p(21, 9.9),
+                              controlPoint1: p(18.9, 5),
+                              controlPoint2: p(21, 7.2))
+                path.addCurve(to: p(12, 20.3),
+                              controlPoint1: p(21, 13.6),
+                              controlPoint2: p(17.6, 16.9))
+                path.close()
+                stroke(path)
+            case .cloud:
+                let path = UIBezierPath()
+                path.move(to: p(6.6, 18.4))
+                path.addLine(to: p(17.3, 18.4))
+                path.addCurve(to: p(18.1, 10.8),
+                              controlPoint1: p(20.9, 17.8),
+                              controlPoint2: p(21.1, 12.6))
+                path.addCurve(to: p(7.3, 11.85),
+                              controlPoint1: p(16.8, 6.4),
+                              controlPoint2: p(9.6, 5.7))
+                path.addCurve(to: p(6.6, 18.4),
+                              controlPoint1: p(4.7, 12.7),
+                              controlPoint2: p(4.9, 17.3))
+                path.close()
+                stroke(path)
+            case .book:
+                let path = UIBezierPath()
+                path.move(to: p(12, 6.4))
+                path.addCurve(to: p(4.6, 4.5),
+                              controlPoint1: p(10.3, 4.9),
+                              controlPoint2: p(7.9, 4.3))
+                path.addLine(to: p(4.6, 17.7))
+                path.addCurve(to: p(12, 19.6),
+                              controlPoint1: p(7.9, 17.5),
+                              controlPoint2: p(10.3, 18.1))
+                path.addCurve(to: p(19.4, 17.7),
+                              controlPoint1: p(13.7, 18.1),
+                              controlPoint2: p(16.1, 17.5))
+                path.addLine(to: p(19.4, 4.5))
+                path.addCurve(to: p(12, 6.4),
+                              controlPoint1: p(16.1, 4.3),
+                              controlPoint2: p(13.7, 4.9))
+                path.close()
+                stroke(path)
+                line(12, 6.4, 12, 19.6)
+            case .server:
+                stroke(rrect(4, 4.2, 16, 6.3, 1.8))
+                stroke(rrect(4, 13.5, 16, 6.3, 1.8))
+                dot(7.6, 7.35, 1.05)
+                dot(7.6, 16.65, 1.05)
+            case .expandCorners:
+                for (pts) in [[(9.4, 4.8), (4.8, 4.8), (4.8, 9.4)],
+                              [(14.6, 4.8), (19.2, 4.8), (19.2, 9.4)],
+                              [(9.4, 19.2), (4.8, 19.2), (4.8, 14.6)],
+                              [(14.6, 19.2), (19.2, 19.2), (19.2, 14.6)]]
+                    as [[(CGFloat, CGFloat)]] {
+                    let path = UIBezierPath()
+                    path.move(to: p(pts[0].0, pts[0].1))
+                    path.addLine(to: p(pts[1].0, pts[1].1))
+                    path.addLine(to: p(pts[2].0, pts[2].1))
+                    stroke(path)
+                }
+            case .layoutGrid:
+                // (93) 砖墙格：四实心圆角方，光学 ×0.86 绕心缩。
+                cg.saveGState()
+                cg.translateBy(x: 12 * scale, y: 12 * scale)
+                cg.scaleBy(x: 0.86, y: 0.86)
+                cg.translateBy(x: -12 * scale, y: -12 * scale)
+                rrect(4, 4, 7.2, 7.2, 1.8).fill()
+                rrect(12.8, 4, 7.2, 7.2, 1.8).fill()
+                rrect(4, 12.8, 7.2, 7.2, 1.8).fill()
+                rrect(12.8, 12.8, 7.2, 7.2, 1.8).fill()
+                cg.restoreGState()
+            case .layoutList:
+                rrect(4, 5, 4.6, 4.6, 1.2).fill()
+                rrect(10.6, 6.15, 9.4, 2.3, 1.15).fill()
+                rrect(4, 14.4, 4.6, 4.6, 1.2).fill()
+                rrect(10.6, 15.55, 9.4, 2.3, 1.15).fill()
+            case .layoutAlbum:
+                stroke(rrect(4.2, 4.2, 15.6, 15.6, 3.4), w: 1.9)
+                stroke(UIBezierPath(ovalIn: CGRect(
+                    x: 8.9 * scale, y: 8.9 * scale,
+                    width: 6.2 * scale, height: 6.2 * scale)), w: 1.9)
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
+    }
+
+    /// (93) C3 排版名（面包屑 p93 layout sw= 插值用）。
+    static func layoutName93(_ mode: Int) -> String {
+        ["wall", "magazine", "shelf"][max(0, min(2, mode))]
+    }
+}
+
 /// 缝宿主侧边竖标签（网页 BRAVAIS_EDGE_TAB）：缝折叠或被
 /// 平移挤出视口时出现在屏幕侧边，点它在当前视口重新裂开。
 final class SeamEdgeTab85View: UIView {
@@ -152,6 +373,13 @@ final class HomeSeam85View: UIView {
     var onSettings: (() -> Void)?
     var onQueue: (() -> Void)?
     var onMore: (() -> Void)?
+    /// (93) C1：缝底工具排补控制台入口（样片 lib-tools 第
+    /// 五枚），宿主接 ConsolePanel82.present（与台面控制台
+    /// 钮同一落点）。
+    var onConsole93: (() -> Void)?
+    /// (93) C2：四入口图标行补日记本（喜欢/云盘/Navidrome
+    /// 复用既有 onLiked/onCloud/onNavidrome 闭包不动）。
+    var onDiary93: (() -> Void)?
 
     /// (92) 任务 11：版式切换（现行/A/B）——Miller 令「页面
     /// 展示 ab 做到主页中间的缝」：开关落缝内原账户空区
@@ -201,6 +429,9 @@ final class HomeSeam85View: UIView {
     private var tabButtons: [UIButton] = []
     private let likedButton = UIButton(type: .system)
     private let cloudButton = UIButton(type: .system)
+    /// (93) C2：四入口图标行新增两枚（日记本/服务器）。
+    private let diaryButton93 = UIButton(type: .system)
+    private let naviButton93 = UIButton(type: .system)
     private var toolButtons: [UIButton] = []
 
     override init(frame: CGRect) {
@@ -267,19 +498,20 @@ final class HomeSeam85View: UIView {
         }
         refreshTabSelection()
 
-        // 中段直达（网页：双列竖排小字、white/55、无分隔
-        // 线）——我喜欢的音乐＋云盘，两列顶对齐。
-        for (button, title, action) in [
-            (likedButton, "我喜欢的音乐", #selector(likedTapped)),
-            (cloudButton, "云盘", #selector(cloudTapped)),
-        ] as [(UIButton, String, Selector)] {
-            button.setTitle(Seam85Text.vertical(title), for: .normal)
-            button.titleLabel?.numberOfLines = 0
-            button.titleLabel?.font = .systemFont(ofSize: 11)
-            button.titleLabel?.textAlignment = .center
-            button.setTitleColor(UIColor.white.withAlphaComponent(0.55), for: .normal)
-            button.contentVerticalAlignment = .top
-            button.contentEdgeInsets = UIEdgeInsets(top: 2, left: 0, bottom: 0, right: 0)
+        // (93) C2：中段直达改四入口图标行（样片 .lib-icons
+        // 定版）：爱心＝我喜欢的音乐、云＝云盘、书本＝日记
+        // 本、服务器＝Navidrome，与缝底工具排同一套细线字
+        // 形（SeamGlyph93、1.7 线宽、16px）。喜欢/云盘钮本
+        // 体与既有 action 不动、只换字形面；排布见
+        // layoutSubviews（窄档 2×2、宽档一行四枚）。
+        for (button, glyph, title, action) in [
+            (likedButton, SeamGlyph93.Kind.heart, "我喜欢的音乐", #selector(likedTapped)),
+            (cloudButton, SeamGlyph93.Kind.cloud, "云盘", #selector(cloudTapped)),
+            (diaryButton93, SeamGlyph93.Kind.book, "日记本", #selector(diaryTapped93)),
+            (naviButton93, SeamGlyph93.Kind.server, "Navidrome", #selector(naviIconTapped93)),
+        ] as [(UIButton, SeamGlyph93.Kind, String, Selector)] {
+            button.setImage(SeamGlyph93.image(glyph), for: .normal)
+            button.tintColor = UIColor.white.withAlphaComponent(0.62)
             button.accessibilityLabel = title
             button.addTarget(self, action: action, for: .touchUpInside)
             contentView.addSubview(button)
@@ -288,14 +520,19 @@ final class HomeSeam85View: UIView {
         // port88：头像钮已摘除——本缝自上而下为书库行→折
         // 叠钮→页签→直达双列→工具格，无账户位。
 
+        // (93) C1：缝底工具排重画——五枚全走 SeamGlyph93
+        // （统一 1.7 线宽/圆头/16px 光学尺寸；设置＝标准齿
+        // 轮形，SF gearshape 退役）；既有四钮 action 不动，
+        // 第五枚控制台为新增闭包 onConsole93。
         for (glyph, label, action) in [
-            ("magnifyingglass", "搜索", #selector(searchTapped)),
-            ("gearshape", "设置", #selector(settingsTapped)),
-            ("list.bullet", "队列", #selector(queueTapped)),
-            ("ellipsis", "更多", #selector(moreTapped)),
-        ] as [(String, String, Selector)] {
+            (SeamGlyph93.Kind.search, "搜索", #selector(searchTapped)),
+            (SeamGlyph93.Kind.gear, "设置", #selector(settingsTapped)),
+            (SeamGlyph93.Kind.list, "队列", #selector(queueTapped)),
+            (SeamGlyph93.Kind.more, "更多", #selector(moreTapped)),
+            (SeamGlyph93.Kind.consoleNotes, "控制台", #selector(consoleTapped93)),
+        ] as [(SeamGlyph93.Kind, String, Selector)] {
             let button = UIButton(type: .system)
-            button.setImage(UIImage(systemName: glyph), for: .normal)
+            button.setImage(SeamGlyph93.image(glyph), for: .normal)
             // (86) 第 1 条：工具格去芯片底（网页裸图标
             // white/70、无底衬无圆角）。
             button.tintColor = UIColor.white.withAlphaComponent(0.7)
@@ -314,11 +551,13 @@ final class HomeSeam85View: UIView {
         layoutSwitch92.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
         layoutSwitch92.layer.cornerRadius = 18
         contentView.addSubview(layoutSwitch92)
-        let layoutGlyphs92: [DeckGlyph82.Kind] = [.layoutWall92, .layoutMag92, .layoutShelf92]
+        // (93) C3：胶囊字形换 SeamGlyph93 共享工厂（样片
+        // 砖墙格/列表/专辑，16px、砖墙格 ×0.86 在工厂内）。
+        let layoutGlyphs93: [SeamGlyph93.Kind] = [.layoutGrid, .layoutList, .layoutAlbum]
         let layoutNames92 = ["现行版式", "杂志式", "唱片架式"]
-        for (index, glyph) in layoutGlyphs92.enumerated() {
+        for (index, glyph) in layoutGlyphs93.enumerated() {
             let button = UIButton(type: .system)
-            button.setImage(DeckGlyph82.image(glyph, pointSize: 14), for: .normal)
+            button.setImage(SeamGlyph93.image(glyph, pointSize: 16), for: .normal)
             button.layer.cornerRadius = 15
             button.tag = index
             button.accessibilityLabel = layoutNames92[index]
@@ -355,10 +594,18 @@ final class HomeSeam85View: UIView {
     /// 空带居中（窄档横胶囊 58 宽、宽档整行宽）；带高不足
     /// 40（横屏内容高被压扁、与缝内既有元素同级退化）时
     /// 隐藏，版式仍可经宽档/竖屏缝切换、歌单页重读生效。
+    /// (93) C1：工具区几何单源（窄档五钮 2 列 3 行须更高
+    /// 区、宽档一行五枚走旧 0.08H 区），胶囊带底与工具排
+    /// 帧共用此数、不许两处各算。
+    private func toolsZone93(H: CGFloat) -> (top: CGFloat, height: CGFloat) {
+        let height = displayWide89 ? 0.08 * H : 0.135 * H
+        return (H - 0.025 * H - height, height)
+    }
+
     private func layoutLayoutSwitch92(H: CGFloat, cx: CGFloat,
                                       contentW: CGFloat,
                                       shortcutsBottom: CGFloat) {
-        let toolsTop = H - 0.025 * H - 0.08 * H
+        let toolsTop = toolsZone93(H: H).top
         let bandTop = shortcutsBottom + 4
         let bandBottom = toolsTop - 4
         guard bandBottom - bandTop >= 40 else {
@@ -366,7 +613,7 @@ final class HomeSeam85View: UIView {
             return
         }
         layoutSwitch92.isHidden = false
-        let width: CGFloat = displayWide89 ? contentW - 20 : 58
+        let width: CGFloat = displayWide89 ? contentW - 20 : 62
         let height: CGFloat = 36
         let x: CGFloat = displayWide89 ? 10 : cx - width / 2
         let y = (bandTop + bandBottom) / 2 - height / 2
@@ -411,15 +658,8 @@ final class HomeSeam85View: UIView {
             button.contentEdgeInsets = displayWide89
                 ? UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 0) : .zero
         }
-        likedButton.setTitle(displayWide89
-            ? "我喜欢的音乐" : Seam85Text.vertical("我喜欢的音乐"), for: .normal)
-        cloudButton.setTitle(displayWide89
-            ? "云盘" : Seam85Text.vertical("云盘"), for: .normal)
-        for button in [likedButton, cloudButton] {
-            button.titleLabel?.font = .systemFont(ofSize: displayWide89 ? 12 : 11)
-            button.contentHorizontalAlignment = displayWide89 ? .left : .center
-            button.contentVerticalAlignment = displayWide89 ? .center : .top
-        }
+        // (93) C2：喜欢/云盘已图标化，两档同为图标面、无
+        // 标题切换（字形/回调不变，仅重排，见 layoutSubviews）。
         libraryLabel.textAlignment = displayWide89 ? .left : .center
         setNeedsLayout()
     }
@@ -462,21 +702,28 @@ final class HomeSeam85View: UIView {
                 button.layer.cornerRadius = 18
                 button.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
             }
-            likedButton.frame = CGRect(
-                x: 10, y: 0.64 * H, width: contentW - 20, height: 30)
-            cloudButton.frame = CGRect(
-                x: 10, y: 0.64 * H + 34, width: contentW - 20, height: 30)
-            let toolsH = 0.08 * H
-            let toolsTop = H - 0.025 * H - toolsH
-            let toolStep = (contentW - 20) / 4
+            // (93) C2 宽档：四入口一行四枚等距（样片
+            // .lib-icons 同式），行高 34、起位仍 0.64H。
+            let entryStep = (contentW - 20) / 4
+            for (index, button) in [likedButton, cloudButton,
+                                    diaryButton93, naviButton93].enumerated() {
+                button.frame = CGRect(
+                    x: 10 + entryStep * CGFloat(index), y: 0.64 * H,
+                    width: entryStep, height: 34)
+            }
+            // (93) C1 宽档：工具排一行五枚等距（样片
+            // .lib-tools 同式）。
+            let zone = toolsZone93(H: H)
+            let toolStep = (contentW - 20) / 5
             for (index, button) in toolButtons.enumerated() {
                 button.frame = CGRect(
-                    x: 10 + toolStep * CGFloat(index) + (toolStep - 28) / 2,
-                    y: toolsTop + (toolsH - 28) / 2, width: 28, height: 28)
+                    x: 10 + toolStep * CGFloat(index),
+                    y: zone.top + (zone.height - 28) / 2,
+                    width: toolStep, height: 28)
             }
-            // (92) 任务 11：宽档版式开关（直达两行底＝0.64H＋64）。
+            // (92) 任务 11＋(93) C2：宽档版式开关（入口行底＝0.64H＋34）。
             layoutLayoutSwitch92(H: H, cx: cx, contentW: contentW,
-                                 shortcutsBottom: 0.64 * H + 64)
+                                 shortcutsBottom: 0.64 * H + 34)
             return
         }
         // port90 页签自适应排版：旧固定步距 0.07H/高 0.062H 下
@@ -501,32 +748,31 @@ final class HomeSeam85View: UIView {
                     ofSize: tabH >= 36 ? 14 : 12, weight: .bold)
             }
         }
-        // 中段直达：双列、top 0.64H（网页同位）；列宽 28、
-        // 两列内沿距中线 4（列间隙 ≈ 网页 12% 口径）。列
-        // 高 84＝6 字竖排实需（11pt 行高 ≈13.4×6＋inset），
-        // 止于 0.64H＋84 < 工具格区，下方原账户区（0.782H）
-        // 已随 port88 头像摘除留空。
-        // port90：两列左沿与下方工具格两列（cx−30 起、列宽 32）同沿对齐。
-        let shortcutH: CGFloat = 84
-        likedButton.frame = CGRect(
-            x: cx - 30, y: 0.64 * H, width: 28, height: shortcutH)
-        cloudButton.frame = CGRect(
-            x: cx + 2, y: 0.64 * H, width: 28, height: shortcutH)
-        // 工具格：贴底（底距 0.025H）、区高 0.08H、两行
-        // 两列裸图标（28×28 在格内居中、无底衬）。
-        let toolsH = 0.08 * H
-        let toolsTop = H - 0.025 * H - toolsH
+        // (93) C2 窄档：四入口 2×2（缝宽 64 装不下一行四
+        // 枚 28 命中格，折两行；列沿与工具格两列同沿
+        // cx−30 起、列宽 32），区位仍 0.64H 起、高 62。
+        let entryH: CGFloat = 62
+        for (index, button) in [likedButton, cloudButton,
+                                diaryButton93, naviButton93].enumerated() {
+            let col = CGFloat(index % 2), row = CGFloat(index / 2)
+            button.frame = CGRect(
+                x: cx - 30 + col * 32, y: 0.64 * H + row * 31,
+                width: 30, height: 30)
+        }
+        // (93) C1 窄档：工具格五钮 2 列 3 行（末行控制台
+        // 居左列），区高走 toolsZone93、裸图标无底衬。
+        let zone = toolsZone93(H: H)
         for (index, button) in toolButtons.enumerated() {
             let col = CGFloat(index % 2), row = CGFloat(index / 2)
-            let cellH = toolsH / 2
+            let cellH = zone.height / 3
             button.frame = CGRect(
-                x: cx - 30 + col * 32,
-                y: toolsTop + row * cellH + (cellH - 28) / 2,
-                width: 28, height: 28)
+                x: cx - 30 + col * 32 + 2,
+                y: zone.top + row * cellH + (cellH - 26) / 2,
+                width: 26, height: 26)
         }
-        // (92) 任务 11：窄档版式开关（直达双列底＝0.64H＋84）。
+        // (92) 任务 11：窄档版式开关（入口区底＝0.64H＋62）。
         layoutLayoutSwitch92(H: H, cx: cx, contentW: contentW,
-                             shortcutsBottom: 0.64 * H + shortcutH)
+                             shortcutsBottom: 0.64 * H + entryH)
     }
 
     // MARK: 命中纪律（只认按钮本体，其余穿透给墙面）
@@ -591,12 +837,33 @@ final class HomeSeam85View: UIView {
 
     @objc private func likedTapped() {
         Breadcrumbs.log("sidebar85 tap dest=liked")
+        Breadcrumbs.log("p93 seam ent=liked")
         onLiked?()
     }
 
     @objc private func cloudTapped() {
         Breadcrumbs.log("sidebar85 tap dest=cloud")
+        Breadcrumbs.log("p93 seam ent=cloud")
         onCloud?()
+    }
+
+    /// (93) C2：日记本入口（宿主接 DiaryViewController90）。
+    @objc private func diaryTapped93() {
+        Breadcrumbs.log("p93 seam ent=diary")
+        onDiary93?()
+    }
+
+    /// (93) C2：Navidrome 图标入口（复用既有 onNavidrome
+    /// 页签落点，不新造通路）。
+    @objc private func naviIconTapped93() {
+        Breadcrumbs.log("p93 seam ent=navidrome")
+        onNavidrome?()
+    }
+
+    /// (93) C1：控制台入口（宿主接 ConsolePanel82）。
+    @objc private func consoleTapped93() {
+        Breadcrumbs.log("sidebar85 tap dest=console")
+        onConsole93?()
     }
 
     @objc private func searchTapped() {
@@ -632,6 +899,17 @@ final class PlaylistSeam85View: UIView {
     var onPlayAll: (() -> Void)?
     var onAppendQueue: (() -> Void)?
     var onExpandChange: ((Bool) -> Void)?
+    /// (93) C3：歌单缝同款三段胶囊（与主页缝共享
+    /// SeamGlyph93 工厂与 foliaPlaylistLayout91 单一状态，
+    /// 宿主经此回调写键＋切换版式）。
+    var onLayoutMode93: ((Int) -> Void)?
+    var layoutMode93: Int =
+        UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91") {
+        didSet { refreshLayoutSwitch93() }
+    }
+    /// (93) C1：展开档补控制台入口（宿主接 ConsolePanel82，
+    /// 与台面控制台钮同一落点；书脊档空间不足不装）。
+    var onConsole93: (() -> Void)?
 
     var contentTopInset: CGFloat = 108
     var contentBottomInset: CGFloat = 132
@@ -654,6 +932,11 @@ final class PlaylistSeam85View: UIView {
     private let countLabel = UILabel()
     private let playButton = UIButton(type: .system)
     private let expandButton = UIButton(type: .system)
+    /// (93) C3：书脊三段胶囊（竖排，样片 .ab 同式）。
+    private let layoutSwitch93 = UIView()
+    private var layoutButtons93: [UIButton] = []
+    /// (93) C1：展开档控制台钮（与播放全部/加入队列同式）。
+    private let fullConsoleButton93 = UIButton(type: .system)
     // 展开档
     private let fullBackButton = UIButton(type: .system)
     private let fullTitleLabel = UILabel()
@@ -712,12 +995,35 @@ final class PlaylistSeam85View: UIView {
         spineContent.addSubview(playButton)
         // port88：书脊头像（(86) 第 3 条常驻位）整件摘除，
         // 计数与播放钮之间的 0.70H 段留空。
-        expandButton.setImage(
-            UIImage(systemName: "arrow.up.left.and.arrow.down.right"), for: .normal)
+        // (93) C1：展开钮字形换 SeamGlyph93 四角（1.7 线宽，
+        // SF arrow.up.left.and.arrow.down.right 退役）。
+        expandButton.setImage(SeamGlyph93.image(.expandCorners), for: .normal)
         expandButton.tintColor = UIColor.white.withAlphaComponent(0.85)
         expandButton.accessibilityLabel = "展开信息条"
         expandButton.addTarget(self, action: #selector(expandTapped), for: .touchUpInside)
         spineContent.addSubview(expandButton)
+        // (93) C3：书脊三段胶囊——玻璃竖胶囊＋三枚字形钮
+        // （与主页缝同一 SeamGlyph93 工厂、同一选中语言：
+        // 白 pill＋深字形）；帧位见 layoutSubviews。
+        layoutSwitch93.backgroundColor = UIColor.white.withAlphaComponent(0.07)
+        layoutSwitch93.layer.borderWidth = 0.5
+        layoutSwitch93.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
+        layoutSwitch93.layer.cornerRadius = 25
+        spineContent.addSubview(layoutSwitch93)
+        let layoutGlyphs93: [SeamGlyph93.Kind] = [.layoutGrid, .layoutList, .layoutAlbum]
+        let layoutNames93 = ["现行版式", "杂志式", "唱片架式"]
+        for (index, glyph) in layoutGlyphs93.enumerated() {
+            let button = UIButton(type: .system)
+            button.setImage(SeamGlyph93.image(glyph, pointSize: 16), for: .normal)
+            button.layer.cornerRadius = 15
+            button.tag = index
+            button.accessibilityLabel = layoutNames93[index]
+            button.addTarget(self, action: #selector(layoutModeTapped93(_:)),
+                             for: .touchUpInside)
+            layoutSwitch93.addSubview(button)
+            layoutButtons93.append(button)
+        }
+        refreshLayoutSwitch93()
 
         fullBackButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
         fullBackButton.tintColor = .white
@@ -754,6 +1060,21 @@ final class PlaylistSeam85View: UIView {
         fullFoldButton.accessibilityLabel = "收起信息条"
         fullFoldButton.addTarget(self, action: #selector(expandTapped), for: .touchUpInside)
         fullContent.addSubview(fullFoldButton)
+        // (93) C1：展开档控制台钮（同排钮式：字形＋标题＋
+        // 白 0.10 底），字形走 SeamGlyph93 双音符。
+        fullConsoleButton93.setImage(SeamGlyph93.image(.consoleNotes), for: .normal)
+        fullConsoleButton93.setTitle("  控制台", for: .normal)
+        fullConsoleButton93.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
+        fullConsoleButton93.tintColor = .white
+        fullConsoleButton93.setTitleColor(.white, for: .normal)
+        fullConsoleButton93.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        fullConsoleButton93.layer.cornerRadius = 12
+        fullConsoleButton93.contentHorizontalAlignment = .left
+        fullConsoleButton93.contentEdgeInsets = UIEdgeInsets(top: 0, left: 14, bottom: 0, right: 0)
+        fullConsoleButton93.accessibilityLabel = "控制台"
+        fullConsoleButton93.addTarget(self, action: #selector(consoleTapped93),
+                                      for: .touchUpInside)
+        fullContent.addSubview(fullConsoleButton93)
         // port88 见证：歌单缝建成即无头像位（站点存活自证）。
         Breadcrumbs.log("port88 seam=avatarless host=wall")
     }
@@ -771,6 +1092,30 @@ final class PlaylistSeam85View: UIView {
         spineContent.isHidden = expanded
         fullContent.isHidden = !expanded
         setNeedsLayout()
+    }
+
+    /// (93) C3：胶囊选中态回刷（与主页缝同一语言）。
+    private func refreshLayoutSwitch93() {
+        for (index, button) in layoutButtons93.enumerated() {
+            let selected = index == layoutMode93
+            button.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.9) : .clear
+            button.tintColor = selected
+                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                          blue: 27.0 / 255, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.62)
+        }
+    }
+
+    @objc private func layoutModeTapped93(_ sender: UIButton) {
+        layoutMode93 = sender.tag
+        onLayoutMode93?(sender.tag)
+    }
+
+    /// (93) C1：展开档控制台点按。
+    @objc private func consoleTapped93() {
+        Breadcrumbs.log("sidebar85 tap dest=console")
+        onConsole93?()
     }
 
     // port88：书脊头像回填（setAccount85）随头像摘除整组退役。
@@ -809,6 +1154,21 @@ final class PlaylistSeam85View: UIView {
         playButton.frame = CGRect(x: cx - 18, y: 0.84 * H, width: 36, height: 36)
         // (89) §5-7：展开钮 28 → 36（网页缝图标钮 36×36）。
         expandButton.frame = CGRect(x: cx - 18, y: 0.905 * H, width: 36, height: 36)
+        // (93) C3：三段胶囊居计数（止 0.56H＋18）与播放
+        // （起 0.84H）之间空段：宽 50、三钮 44×29＋间 2、
+        // 总高 97；空段不足 97 时隐藏（版式仍可经主页缝切）。
+        let capsuleY = 0.56 * H + 22
+        let capsuleH: CGFloat = 97
+        layoutSwitch93.isHidden = (0.84 * H - capsuleY) < capsuleH
+        if !layoutSwitch93.isHidden {
+            layoutSwitch93.frame = CGRect(
+                x: cx - 25, y: capsuleY, width: 50, height: capsuleH)
+            for (index, button) in layoutButtons93.enumerated() {
+                button.frame = CGRect(
+                    x: 3, y: 3 + CGFloat(index) * 31,
+                    width: 44, height: 29)
+            }
+        }
         // 展开档内容（300 宽居中、左对齐排版）。
         fullContent.frame = CGRect(
             x: (areaW - 300) / 2, y: top, width: 300, height: contentH)
@@ -819,6 +1179,8 @@ final class PlaylistSeam85View: UIView {
         fullPlayButton.frame = CGRect(x: 16, y: 84, width: 268, height: 44)
         fullAppendButton.frame = CGRect(x: 16, y: 136, width: 268, height: 44)
         fullFoldButton.frame = CGRect(x: 16, y: 188, width: 60, height: 28)
+        // (93) C1：展开档控制台钮（收起行之下、同排钮宽）。
+        fullConsoleButton93.frame = CGRect(x: 16, y: 224, width: 268, height: 44)
     }
 
     // MARK: 命中纪律（只认按钮本体，其余穿透给墙面）
