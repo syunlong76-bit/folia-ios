@@ -77,7 +77,12 @@ final class MiniBarQuickRowView: UIView {
     /// 偏移（顶行 −30／中行 ＋20／轨底锚 −7）在宿主文件、
     /// 本轮未动；按新高验算：顶行约 5–47／中行 56–98／
     /// 轨顶约 99——不重叠、间隙收紧（见 (93) 回报存疑项）。
-    static let expandedBarHeight: CGFloat = 112
+    /// (95) 第 11 条：Miller 12:09 令播放台改胶囊形态——
+    /// 大卡片台退役，展开高 112→62（悬浮 pill、单行构成：
+    /// 圆封面＋歌名/歌手＋四钮一行＋进度细轨贴下沿），三
+    /// 宿主同源跟随、本常量仍是唯一出处；宿主内部构成按
+    /// (95) 第 11 条统一规格在各宿主文件重排。
+    static let expandedBarHeight: CGFloat = 62
 
     var onUserInteraction: (() -> Void)?
     var onLikeStateChanged: (() -> Void)?
@@ -189,7 +194,8 @@ final class MiniBarQuickRowView: UIView {
         }
         Breadcrumbs.log("p92 quickrow chrome=A4")
         // (93) B1 自证：台高/行高收一档后的现值落痕。
-        Breadcrumbs.log("p93 deck size=112/43")
+        // (95) 第 11 条：展开高改胶囊 62，现值随常量落痕。
+        Breadcrumbs.log("p95 deck size=\(Int(Self.expandedBarHeight))/\(Int(Self.rowHeight))")
     }
 
     /// 图标在上、标签在下的双通道钮（UIButton.Configuration，
