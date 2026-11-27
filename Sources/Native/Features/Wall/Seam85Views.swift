@@ -466,6 +466,15 @@ final class SeamMaster: UIView {
     private let coordinator94 = PollingCoordinator.shared
     private var qrFlowActive = false
 
+    // (95) 10：二维码图后台预生成缓存（按 payload 失效）
+    // 与切换动画帧间隔自证探针。
+    private var qrCachedImage95: UIImage?
+    private var qrCachedKey95: String?
+    private var qrAnimLink95: CADisplayLink?
+    private var qrAnimLast95: CFTimeInterval = 0
+    private var qrAnimMaxGap95: Double = 0
+    private var qrAnimFrames95: Int = 0
+
     init(host: String) {
         host94 = host
         super.init(frame: .zero)
@@ -479,6 +488,7 @@ final class SeamMaster: UIView {
 
     deinit {
         playingCancellable?.cancel()
+        qrAnimLink95?.invalidate()
         if qrFlowActive { coordinator94.cancelActive(reason: "seam94-deinit") }
     }
 
@@ -600,7 +610,9 @@ final class SeamMaster: UIView {
         for (index, glyph) in capsuleGlyphs.enumerated() {
             let button = UIButton(type: .system)
             button.setImage(SeamGlyph93.image(glyph, pointSize: 16), for: .normal)
-            button.layer.cornerRadius = 15
+            // (95) 6b：写死 cornerRadius=15 废除——窄档钮宽
+            // ≈17pt 时半径大于宽/2 被 CALayer 渲染成尖叶形；
+            // 改在 layoutMainContent 按实际帧钳制为全圆角。
             button.tag = index
             button.accessibilityLabel = capsuleNames[index]
             button.addTarget(self, action: #selector(capsuleTapped(_:)),
@@ -716,6 +728,10 @@ final class SeamMaster: UIView {
             let button = UIButton(type: .system)
             button.setTitle(title, for: .normal)
             button.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
+            // (95) 6c：缩字号保护——先缩到 0.66（12pt 下限
+            // ≈8pt）再允许尾截断，不许截到只剩一个点。
+            button.titleLabel?.adjustsFontSizeToFitWidth = true
+            button.titleLabel?.minimumScaleFactor = 0.66
             button.titleLabel?.lineBreakMode = .byTruncatingTail
             button.accessibilityLabel = title
             button.tag = index
@@ -937,9 +953,74 @@ final class SeamMaster: UIView {
 
     private func applyQRVisibility() {
         let open = SeamState85.qrOpen94
-        qrPanel.isHidden = !open
-        mainScroll.isHidden = open
         if open { refreshQRTabs() }
+        let incoming: UIView = open ? qrPanel : mainScroll
+        let outgoing: UIView = open ? mainScroll : qrPanel
+        // 未入窗（装配期）或已在终态：直接落终态，不播动画。
+        guard window != nil,
+              incoming.isHidden || incoming.alpha < 1 else {
+            incoming.isHidden = false
+            incoming.alpha = 1
+            incoming.transform = .identity
+            outgoing.isHidden = true
+            outgoing.alpha = 1
+            outgoing.transform = .identity
+            return
+        }
+        // (95) 10：iOS 系统弹簧交叉淡化＋入场区轻位移
+        // （4pt→0）；动画完成才置 outgoing 的 isHidden 终
+        // 态，期间 .allowUserInteraction 不阻塞点按。
+        startQRAnimProbe95()
+        incoming.isHidden = false
+        incoming.alpha = 0
+        incoming.transform = CGAffineTransform(translationX: 0, y: 4)
+        outgoing.isHidden = false
+        outgoing.alpha = 1
+        UIView.animate(withDuration: 0.45, delay: 0,
+                       usingSpringWithDamping: 0.86,
+                       initialSpringVelocity: 0.6,
+                       options: [.allowUserInteraction,
+                                 .beginFromCurrentState]) {
+            incoming.alpha = 1
+            incoming.transform = .identity
+            outgoing.alpha = 0
+        } completion: { [weak self] _ in
+            outgoing.isHidden = true
+            outgoing.alpha = 1
+            outgoing.transform = .identity
+            incoming.alpha = 1
+            incoming.transform = .identity
+            self?.stopQRAnimProbe95()
+        }
+    }
+
+    // (95) 10：帧间隔自证——CADisplayLink 记最大帧间隔，
+    // 动画结束落一行 p95 seam qr anim。
+    private func startQRAnimProbe95() {
+        qrAnimLink95?.invalidate()
+        qrAnimLast95 = 0
+        qrAnimMaxGap95 = 0
+        qrAnimFrames95 = 0
+        let link = CADisplayLink(target: self,
+                                 selector: #selector(qrAnimTick95(_:)))
+        link.add(to: .main, forMode: .common)
+        qrAnimLink95 = link
+    }
+
+    @objc private func qrAnimTick95(_ link: CADisplayLink) {
+        if qrAnimLast95 > 0 {
+            let gap = (link.timestamp - qrAnimLast95) * 1000
+            if gap > qrAnimMaxGap95 { qrAnimMaxGap95 = gap }
+        }
+        qrAnimLast95 = link.timestamp
+        qrAnimFrames95 += 1
+    }
+
+    private func stopQRAnimProbe95() {
+        qrAnimLink95?.invalidate()
+        qrAnimLink95 = nil
+        let maxgap = Int(qrAnimMaxGap95.rounded())
+        Breadcrumbs.log("p95 seam qr anim maxgap=\(maxgap) frames=\(qrAnimFrames95)")
     }
 
     private func refreshQRTabs() {
@@ -984,6 +1065,9 @@ final class SeamMaster: UIView {
         let provider = qrProvider
         let gen = coordinator94.begin(provider: provider)
         qrFlowActive = true
+        // (95) 10：新一轮取码使旧 payload 缓存失效。
+        qrCachedKey95 = nil
+        qrCachedImage95 = nil
         qrImageView.image = nil
         qrStatusLabel.text = "正在生成二维码…"
         qrSpinner.startAnimating()
@@ -1258,17 +1342,37 @@ final class SeamMaster: UIView {
 
     /// 二维码图（LoginViewController 同式：base64 优先，缺
     /// 图用内容串本地生成；白瓷砖垫边统一在此）。
+    /// (95) 10：解码＋tile 合成＋CIContext 出图全移后台队
+    /// 列预生成、结果按 payload 缓存到实例属性；主线程只
+    /// 赋值 imageView.image，不再卡切换关键路径。
     private func showQRImage(base64: String?, content: String?) {
-        if let raw = base64, !raw.isEmpty {
-            let body = raw.contains(",")
-                ? String(raw.split(separator: ",", maxSplits: 1).last ?? "") : raw
-            if let data = Data(base64Encoded: body), let image = UIImage(data: data) {
-                qrImageView.image = Self.tileQR94(image)
-                return
-            }
+        let key95 = (base64 ?? "") + "\u{1}" + (content ?? "")
+        if qrCachedKey95 == key95, let cached = qrCachedImage95 {
+            qrImageView.image = cached
+            return
         }
-        if let content, let image = Self.makeQR94(text: content) {
-            qrImageView.image = Self.tileQR94(image)
+        qrCachedKey95 = key95
+        qrCachedImage95 = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var result: UIImage?
+            if let raw = base64, !raw.isEmpty {
+                let body = raw.contains(",")
+                    ? String(raw.split(separator: ",", maxSplits: 1).last ?? "") : raw
+                if let data = Data(base64Encoded: body),
+                   let image = UIImage(data: data) {
+                    result = Self.tileQR94(image)
+                }
+            }
+            if result == nil, let content,
+               let image = Self.makeQR94(text: content) {
+                result = Self.tileQR94(image)
+            }
+            guard let result else { return }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.qrCachedKey95 == key95 else { return }
+                self.qrCachedImage95 = result
+                self.qrImageView.image = result
+            }
         }
     }
 
@@ -1407,11 +1511,17 @@ final class SeamMaster: UIView {
                     y: footerY, height: toolsH, rows: toolRows)
         let transportY = footerY + toolsH + 6
         let centerX = W / 2
-        prevButton.frame = CGRect(x: centerX - 60, y: transportY + 3,
+        // (95) 6d：三钮跨度随缝内容宽自适应（旧固定总跨
+        // 120 在 64 窄缝双侧各出界 28pt）；play 居中 38 不
+        // 变，prev/next 中心 = centerX ∓ (span/2 − 19)，
+        // 宽档（contentW≥120）时 span=120 与旧视觉一致。
+        let span95 = min(120, contentW - 8)
+        let side95 = span95 / 2 - 19
+        prevButton.frame = CGRect(x: centerX - side95 - 19, y: transportY + 3,
                                   width: 38, height: 38)
         playButton.frame = CGRect(x: centerX - 19, y: transportY + 3,
                                   width: 38, height: 38)
-        nextButton.frame = CGRect(x: centerX + 22, y: transportY + 3,
+        nextButton.frame = CGRect(x: centerX + side95 - 19, y: transportY + 3,
                                   width: 38, height: 38)
 
         // 主区/二维码区共用同一矩形（原地切换）。
@@ -1506,6 +1616,10 @@ final class SeamMaster: UIView {
             button.frame = CGRect(
                 x: 3 + CGFloat(index) * (buttonW + 2), y: 3,
                 width: buttonW, height: 30)
+            // (95) 6b：全圆角 pill——半径按实际尺寸钳制，
+            // 帧（宽档/窄档）变化时随布局更新。
+            button.layer.cornerRadius =
+                min(button.frame.width, button.frame.height) / 2
         }
         y += 36
         return y

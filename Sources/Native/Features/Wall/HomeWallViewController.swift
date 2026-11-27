@@ -123,6 +123,10 @@ final class HomeWallViewController: UIViewController,
     /// 布局稳定后每字形状态只测一次，播/停切换换键重测；
     /// 不逐布局落行、不逐帧渲染（见 probeDeckRender94）。
     private var deckRenderProbed94 = Set<String>()
+    /// (95) deck 探针守卫自证去重键（"pres,coll,win" 组
+    /// 合）：守卫未命中时每会话每种组合只落一行 p95 deck
+    /// guard，不逐布局落行（见 probeDeckRender94）。
+    private var deckGuardLogged95 = Set<String>()
     /// (87) 主题四圆点（台面右上，样片 .tdots）：四套油画
     /// 主题点选切换；收起态随内容组淡出（见
     /// setMiniBarContentsAlpha）。
@@ -2102,9 +2106,28 @@ final class HomeWallViewController: UIViewController,
     /// 以填充路径字形（DeckGlyph82.filledFallbackImage）
     /// 替换钮图并在同行落 fb=1。
     private func probeDeckRender94() {
+        // (95) 守卫自证：(94) 日志 p94 deck render 全 0 条
+        // 且守卫是否满足无从对账——未命中时按三值组合落
+        // 一行低频自证（每会话每组合只落一次），下份日志
+        // 能分开「台没展开/已收起/钮不在窗上」与「探针没
+        // 跑」。守卫满足并采样（下方 p94 deck render 行）
+        // 时不落 guard 行；采样点仍在 viewDidLayoutSubviews
+        // 收口、不新增定时器。
+        let deckWin95 = miniPlayButton?.window != nil
         guard miniBarPresented, !miniBarCollapsed,
               miniPlayButton != nil, miniPlayButton.window != nil,
-              miniPlayButton.bounds.width > 0 else { return }
+              miniPlayButton.bounds.width > 0 else {
+            let pres95 = miniBarPresented ? 1 : 0
+            let coll95 = miniBarCollapsed ? 1 : 0
+            let win95 = deckWin95 ? 1 : 0
+            let combo95 = "\(pres95),\(coll95),\(win95)"
+            if !deckGuardLogged95.contains(combo95) {
+                deckGuardLogged95.insert(combo95)
+                Breadcrumbs.log("p95 deck guard pres=\(pres95)"
+                    + " coll=\(coll95) win=\(win95)")
+            }
+            return
+        }
         let playing = PlaybackEngine.shared.playbackState == .playing
         probeDeckButton94(miniPlayButton, btn: "play",
                           glyph: playing ? "pause" : "play",

@@ -1,6 +1,13 @@
 import UIKit
 import Combine
 
+extension Notification.Name {
+    /// (95) 任务 1：结构兜底关闭请求——GlobalFx87 探针看
+    /// 门狗命中 dim 登记帧且控制台 handler 链无落痕时发此
+    /// 通知，ConsolePanel82 呈现期注册观察、dismiss 注销。
+    static let foliaConsoleDismiss95 = Notification.Name("foliaConsoleDismiss95")
+}
+
 /// (85) 第 7 条改版（Miller 22:44 定）：(82) 的 55% 高底
 /// 部 sheet 改为紧凑悬浮毛玻璃卡——宽 82% 屏宽、高按内
 /// 容（≤62% 屏高）、大圆角、居中浮在墙面上、点卡外关
@@ -85,6 +92,19 @@ final class ConsolePanel82: UIViewController,
     /// viewDidAppear 时赋值、viewWillDisappear 清 nil），供 Fx
     /// 覆层推荐卡对齐消费；本组只暴露、不消费。
     static var presentedCardFrame: CGRect?
+    /// (95) 任务 1：静态登记——呈现期间登记四特效钮
+    /// （键 fw/ln/sn/wd）与点外 dim 区的窗口坐标帧，呈现/
+    /// 布局变化时由 updateFxRegistry95 更新、dismiss 时
+    /// 注销；GlobalFx87 探针看门狗据此做命中判定。
+    static var fxFrames95: [String: CGRect] = [:]
+    static var dimFrame95: CGRect?
+    /// (95) 任务 1：handler 到达计数——在 console85 tap 与
+    /// dismissConsole93 两处落痕同点递增，供探针看门狗判
+    /// 「350ms 内有无对应 handler 落痕新行」。
+    static var handlerTrace95 = 0
+    /// (95) 任务 1：foliaConsoleDismiss95 观察者（呈现期
+    /// 注册、dismiss 注销）。
+    private var dismissObserver95: NSObjectProtocol?
     /// (93) A3：present 起点时刻（present(from:) 注入），
     /// viewDidAppear 算弹出间隔落 p93 pop 自证。
     private var p93PopStart93: CFTimeInterval = 0
@@ -94,7 +114,7 @@ final class ConsolePanel82: UIViewController,
     // MARK: (94) 94-1/94-2 仪器与分段装载状态
     /// 94-2 分段计时：tap 为零点（present(from:) 注入，与
     /// p93PopStart93 同刻），其余为各段完成时刻（CACurrent-
-    /// MediaTime），齐后由 p94TryEmitSeg94 一行落盘。
+    /// MediaTime），齐后由 p95TryEmitSeg95 一行落盘。
     private var p94Tap94: CFTimeInterval = 0
     private var p94PresentDone94: CFTimeInterval = 0
     private var p94LoadDone94: CFTimeInterval = 0
@@ -102,6 +122,13 @@ final class ConsolePanel82: UIViewController,
     private var p94First94: CFTimeInterval = 0
     private var p94Inter94: CFTimeInterval = 0
     private var p94SegEmitted94 = false
+    /// (95) 任务 4：seg 扩面新增段——首轮内容装载段
+    /// （buildFullContent94）起止与拍立得打印调用
+    /// （polaroidZone90.beginIfNeeded 发起处）起止时刻。
+    private var p95LoadStart95: CFTimeInterval = 0
+    private var p95LoadDone95: CFTimeInterval = 0
+    private var p95PrintStart95: CFTimeInterval = 0
+    private var p95PrintDone95: CFTimeInterval = 0
     private var p94DisplayLink94: CADisplayLink?
     /// 94-1 几何自证去重：上一行 geo 串（scr/bounds/calc/
     /// frame 任一变化才再落一行）。
@@ -824,6 +851,8 @@ final class ConsolePanel82: UIViewController,
         // (93) A2：布局后回写卡帧（window 未挂时保留旧值不造数）。
         if let win = view.window {
             Self.presentedCardFrame = card85.convert(card85.bounds, to: win)
+            // (95) 任务 1：布局变化时同步更新特效钮/dim 登记帧。
+            updateFxRegistry95()
         }
         // (94) 94-2：首次布局完成打点（seg 的 layout 段）。
         if p94LayoutDone94 == 0 {
@@ -832,6 +861,23 @@ final class ConsolePanel82: UIViewController,
         // (94) 94-1 几何自证：四数同行、变化才落（见 p94LogGeo94）。
         p94LastCalc94 = CGSize(width: cardW, height: cardH)
         p94LogGeo94(calc: p94LastCalc94)
+    }
+
+    /// (95) 任务 1：登记更新——四特效钮（fxButtons87 的
+    /// tag 序 0=fw/1=ln/2=sn/3=wd，与 fxKindTapped87 同
+    /// 序）与 dim 区（根视图全帧，卡内排除由消费方结合
+    /// presentedCardFrame 判定）的窗口坐标帧写入静态登
+    /// 记；钮尚未建成（骨架期）时只登记 dim、不造假帧。
+    private func updateFxRegistry95() {
+        guard let win = view.window else { return }
+        Self.dimFrame95 = view.convert(view.bounds, to: win)
+        guard !fxButtons87.isEmpty else { return }
+        let keys95 = ["fw", "ln", "sn", "wd"]
+        var frames95: [String: CGRect] = [:]
+        for (index, button) in fxButtons87.enumerated() where index < keys95.count {
+            frames95[keys95[index]] = button.convert(button.bounds, to: win)
+        }
+        Self.fxFrames95 = frames95
     }
 
     /// (94) 94-1 几何自证面包屑：`p94 console geo scr=WxH
@@ -857,10 +903,19 @@ final class ConsolePanel82: UIViewController,
 
     /// (94) 94-2：首帧 commit 量测——装一次性 CADisplayLink，
     /// 其首个回调近似首帧已提交显示的时刻（seg 的 first 段
-    /// 取此值；取不到时 p94TryEmitSeg94 以 viewDidAppear 时
-    /// 刻兜底，见彼处注释）。
+    /// 取此值；取不到时 p95TryEmitSeg95 以调用时刻兜底，
+    /// 见彼处注释）。
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        // (95) 任务 1：呈现期注册兜底关闭观察（dismiss 时
+        // 于 viewWillDisappear 注销）；reason=probe95 落痕。
+        if dismissObserver95 == nil {
+            dismissObserver95 = NotificationCenter.default.addObserver(
+                forName: .foliaConsoleDismiss95, object: nil,
+                queue: .main) { [weak self] _ in
+                self?.dismissConsole93(reason: "probe95")
+            }
+        }
         if p94First94 == 0, p94DisplayLink94 == nil {
             let link = CADisplayLink(target: self,
                                      selector: #selector(p94FirstFrame94(_:)))
@@ -875,7 +930,7 @@ final class ConsolePanel82: UIViewController,
         }
         link.invalidate()
         p94DisplayLink94 = nil
-        p94TryEmitSeg94()
+        p95TryEmitSeg95()
     }
 
     /// (85) 第 7 条：入场——卡弹簧缩放＋淡入（iOS 系统
@@ -898,6 +953,8 @@ final class ConsolePanel82: UIViewController,
         // (93) A2：出现后回写卡帧（此刻 window 必在）。
         if let win = view.window {
             Self.presentedCardFrame = card85.convert(card85.bounds, to: win)
+            // (95) 任务 1：呈现落定后更新特效钮/dim 登记帧。
+            updateFxRegistry95()
         }
         UIView.animate(withDuration: 0.5, delay: 0,
                        usingSpringWithDamping: 0.82,
@@ -919,6 +976,13 @@ final class ConsolePanel82: UIViewController,
     override func viewWillDisappear(_ animated: Bool) {
         super.viewWillDisappear(animated)
         Self.presentedCardFrame = nil
+        // (95) 任务 1：dismiss 注销登记与兜底关闭观察。
+        Self.fxFrames95 = [:]
+        Self.dimFrame95 = nil
+        if let dismissObserver95 {
+            NotificationCenter.default.removeObserver(dismissObserver95)
+            self.dismissObserver95 = nil
+        }
         if isBeingDismissed, p93DismissReason93 == nil {
             p93DismissReason93 = "hostgone"
             Breadcrumbs.log("p93 dismiss r=hostgone")
@@ -929,6 +993,9 @@ final class ConsolePanel82: UIViewController,
     /// dim/button/action/hostgone）后关台；重复调用只落一次痕。
     private func dismissConsole93(reason: String,
                                   completion: (() -> Void)? = nil) {
+        // (95) 任务 1：handler 到达计数与本函数落痕同点递增
+        // （探针看门狗的 handler 在场判据之一）。
+        Self.handlerTrace95 += 1
         if p93DismissReason93 == nil {
             p93DismissReason93 = reason
             Breadcrumbs.log("p93 dismiss r=\(reason)")
@@ -947,6 +1014,11 @@ final class ConsolePanel82: UIViewController,
 
     /// (85) 第 7 条：点卡外（压暗区）关闭。
     @objc private func dimTapped85(_ recognizer: UITapGestureRecognizer) {
+        // (95) 任务 2：关闭尝试面包屑——识别器回调入口即落
+        // 行（本识别器经 delegate 只收卡外点）；不只记成功
+        // 路径：后续点位复核 return 或 dismissConsole93 内
+        // dedup 拦截都算一次尝试，日志先于一切判定落盘。
+        Breadcrumbs.log("p95 dismiss try src=dimgesture")
         // (93) A1：点位判定改 convert＋bounds（旧 frame 判定在
         // transform/布局未稳时可误判）；关台走统一口落 reason。
         let point = recognizer.location(in: view)
@@ -1029,14 +1101,27 @@ final class ConsolePanel82: UIViewController,
         p94Stages94 = [
             { [weak self] in
                 guard let self else { return }
+                // (95) 任务 4：首轮内容装载段起止打点（seg 的
+                // load 段＝buildFullContent94 全程）。
+                self.p95LoadStart95 = CACurrentMediaTime()
                 self.buildFullContent94()
+                self.p95LoadDone95 = CACurrentMediaTime()
+                // (95) 任务 1：钮建成后立即刷新登记帧（布局
+                // 回调后续仍会持续更新）。
+                self.updateFxRegistry95()
                 // inter 段＝核心控件建成、骨架撤下、可交互时刻。
                 self.p94Inter94 = CACurrentMediaTime()
                 self.liftSkeleton94()
-                self.p94TryEmitSeg94()
+                self.p95TryEmitSeg95()
             },
             { [weak self] in
-                self?.polaroidZone90.beginIfNeeded()
+                guard let self else { return }
+                // (95) 任务 4：拍立得打印调用点起止打点（seg
+                // 的 print 段＝beginIfNeeded 发起调用全程）。
+                self.p95PrintStart95 = CACurrentMediaTime()
+                self.polaroidZone90.beginIfNeeded()
+                self.p95PrintDone95 = CACurrentMediaTime()
+                self.p95TryEmitSeg95()
             },
         ]
         p94StageIndex94 = 0
@@ -1069,26 +1154,39 @@ final class ConsolePanel82: UIViewController,
         }
     }
 
-    /// (94) 94-2 分段计时落盘：`p94 pop seg tap=0 present=..
-    /// load=.. layout=.. first=.. inter=..`（相对 tap 的累计
-    /// ms、一行）。first 取 CADisplayLink 首回调（见
-    /// viewWillAppear 装载处）；若 seg 齐时 link 尚未回调，
-    /// 以 viewDidAppear 时刻兜底（本函数在 viewDidAppear 后
-    /// 的段 A 完成时调用、届时已出现）。
+    /// (95) 任务 4 分段计时落盘（(94) p94 pop seg 退役、二
+    /// 选一不双行）：`p95 pop seg tap=0 present=.. load=..
+    /// layout=.. print=.. first=.. inter=.. rest=..`（除
+    /// rest 外均为相对 tap 的累计 ms、一行）。load＝首轮
+    /// 内容装载段（buildFullContent94）完成时刻；print＝
+    /// 拍立得打印调用（beginIfNeeded 发起）完成时刻；
+    /// first 取 CADisplayLink 首回调（见 viewWillAppear
+    /// 装载处），seg 齐时 link 尚未回调则以当前时刻兜底。
+    /// rest＝inter −（present/load/layout/print/first 中可
+    /// 归属段的最大累计值），口径以「inter 全程可归属」
+    /// 为准：print 发起完成若越出 inter 窗（段 B 在段 A
+    /// 之后派发），其累计值按 inter 上界截断计入，不让窗
+    /// 外毫秒污染 rest。
     /// 目标口径：tap→首帧 commit ≤ 转场时长＋50ms——达标
     /// 与否以本行真机数据裁，此处不宣称已达标。
-    private func p94TryEmitSeg94() {
+    private func p95TryEmitSeg95() {
         guard !p94SegEmitted94, p94Tap94 > 0, p94PresentDone94 > 0,
-              p94LoadDone94 > 0, p94LayoutDone94 > 0, p94Inter94 > 0
+              p95LoadDone95 > 0, p94LayoutDone94 > 0, p94Inter94 > 0,
+              p95PrintDone95 > 0
         else { return }
         let first = p94First94 > 0 ? p94First94 : CACurrentMediaTime()
         p94SegEmitted94 = true
         func ms(_ t: CFTimeInterval) -> Int {
             Int(((t - p94Tap94) * 1000).rounded())
         }
-        Breadcrumbs.log("p94 pop seg tap=0 present=\(ms(p94PresentDone94))"
-            + " load=\(ms(p94LoadDone94)) layout=\(ms(p94LayoutDone94))"
-            + " first=\(ms(first)) inter=\(ms(p94Inter94))")
+        let inter = ms(p94Inter94)
+        let attributed = max(ms(p94PresentDone94), ms(p95LoadDone95),
+                             ms(p94LayoutDone94), ms(first),
+                             min(ms(p95PrintDone95), inter))
+        Breadcrumbs.log("p95 pop seg tap=0 present=\(ms(p94PresentDone94))"
+            + " load=\(ms(p95LoadDone95)) layout=\(ms(p94LayoutDone94))"
+            + " print=\(ms(p95PrintDone95)) first=\(ms(first))"
+            + " inter=\(inter) rest=\(inter - attributed)")
     }
 
     private func bindState() {
@@ -1672,6 +1770,10 @@ final class ConsoleDimRoot93: UIView {
         guard let touch = touches.first, let card = cardView93,
               !card.bounds.contains(card.convert(touch.location(in: self), from: self))
         else { return }
+        // (95) 任务 2：关闭尝试面包屑——卡外复核通过、进入
+        // dismissConsole93 之前落行；dismiss 内部 dedup 拦
+        // 截也算尝试，故落点在本路回调内而非成功路径上。
+        Breadcrumbs.log("p95 dismiss try src=dimroot")
         onDimTouch93?()
     }
 }
@@ -1751,6 +1853,9 @@ final class CapsuleToggle89: UIView {
 enum ConsoleFX85 {
     static func tap(_ target: UIView, el: String, pulse: Bool = true) {
         Breadcrumbs.log("console85 tap el=\(el)")
+        // (95) 任务 1：handler 到达计数与 console85 tap 落痕
+        // 同点递增（探针看门狗的 handler 在场判据之一）。
+        ConsolePanel82.handlerTrace95 += 1
         // port91（任务 1）自证：控制台任一点按到达——特效开着
         // 时本行须照常出现（与 p91 lamp hit 对位判读点按链）。
         Breadcrumbs.log("p91 tap zone=\(el)")

@@ -2029,13 +2029,14 @@ final class WallPrototypeViewController: UIViewController,
         Breadcrumbs.log("seam85 on host=wall hidden=\(SeamState85.levelHidden ? 1 : 0)")
     }
 
-    /// 展开档切换：开口目标 64↔300 补间（0.36s），内容
+    /// 展开档切换：开口目标 120↔300 补间（0.36s），内容
     /// 套随之换（书脊/完整条）；相机让位按新开口重规划
-    /// （preferX 保锚、只让相机）。
+    /// （preferX 保锚、只让相机）。（(95) 6a：基础档随
+    /// 歌单缝宽 64→120 同步。）
     private func setPlaylistSeamExpanded85(_ expanded: Bool) {
         seamExpanded85 = expanded
         playlistSeam85?.setExpanded85(expanded)
-        let target: CGFloat = expanded ? 300 : 64
+        let target: CGFloat = expanded ? 300 : 120
         var originX: CGFloat?
         if let anchor = wallLayout.seamAnchorX85 {
             originX = wallLayout.seamPlan85(openWidth: target, preferX: anchor).originX
@@ -2100,10 +2101,13 @@ final class WallPrototypeViewController: UIViewController,
             updatePlaylistSeam85Frame()
             return
         }
-        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        // (95) 6a：歌单宿主缝宽 64→120（Miller 批准适度加宽，
+        // 与主页母版宽档同值）——歌单名完整显示、工具排成
+        // 行、播放区不出界；只改歌单宿主调用点，主页不动。
+        let plan = wallLayout.seamPlan85(openWidth: 120, preferX: nil)
         wallLayout.seamAnchorX85 = plan.anchor
         wallLayout.worldOrigin.x = plan.originX
-        wallLayout.seamOpenWidth85 = 64
+        wallLayout.seamOpenWidth85 = 120
         _ = wallLayout.refreshInstances()
         collectionView.reloadData()
         updatePlaylistSeam85Frame()
@@ -2122,10 +2126,11 @@ final class WallPrototypeViewController: UIViewController,
 
     private func reopenPlaylistSeam85() {
         SeamState85.levelHidden = false
-        let plan = wallLayout.seamPlan85(openWidth: 64, preferX: nil)
+        // (95) 6a：重开同走 120 宽档，与首规划同值不回窄。
+        let plan = wallLayout.seamPlan85(openWidth: 120, preferX: nil)
         wallLayout.seamAnchorX85 = plan.anchor
         seamPlanned85 = true
-        startSeamTween85(toWidth: 64, toOriginX: plan.originX)
+        startSeamTween85(toWidth: 120, toOriginX: plan.originX)
         Breadcrumbs.log("seam85 reopen host=wall anchor=\(Int(plan.anchor))")
     }
 
@@ -2179,7 +2184,7 @@ final class WallPrototypeViewController: UIViewController,
             seam.contentTopInset = view.safeAreaInsets.top + 56
             seam.contentBottomInset = view.safeAreaInsets.bottom + 116
             seam.contentOpacity = SeamState85.contentOpacity(
-                rendered: geo.width, content: seamExpanded85 ? 300 : 64)
+                rendered: geo.width, content: seamExpanded85 ? 300 : 120)
         }
         guard let tab = seamEdgeTab85 else { return }
         // 首规划未成（数据未到）前不显侧边标签，免加载
@@ -5534,7 +5539,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         flow.scrollDirection = .horizontal
         flow.itemSize = CGSize(width: 150, height: 198)
         flow.minimumLineSpacing = 14
-        flow.sectionInset = UIEdgeInsets(top: 0, left: 64, bottom: 0, right: 24)
+        flow.sectionInset = UIEdgeInsets(top: 0, left: 120, bottom: 0, right: 24)   // (95) 避缝起点随缝宽 120
         let shelfCV = UICollectionView(frame: .zero, collectionViewLayout: flow)
         shelfCV.backgroundColor = .clear
         shelfCV.showsHorizontalScrollIndicator = false
@@ -5554,7 +5559,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
             shelf.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             shelf.topAnchor.constraint(equalTo: view.topAnchor),
             shelf.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            headTitle.leadingAnchor.constraint(equalTo: shelf.leadingAnchor, constant: 64),
+            headTitle.leadingAnchor.constraint(equalTo: shelf.leadingAnchor, constant: 120),   // (95) 避缝起点随缝宽 120
             headTitle.topAnchor.constraint(equalTo: shelf.safeAreaLayoutGuide.topAnchor, constant: 52),
             headCount.trailingAnchor.constraint(equalTo: shelf.trailingAnchor, constant: -20),
             headCount.centerYAnchor.constraint(equalTo: headTitle.centerYAnchor),
@@ -5576,9 +5581,12 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
             playlistSeam85?.layoutMode93 = mode
         }
         guard mode != playlistLayout91 else { return }
-        playlistLayout91 = mode
-        applyPlaylistLayout91()
-        Breadcrumbs.log("p92 plist mode=\(mode) src=appear")
+        // (95) 5：appear 旁路并轨——键值与当前模式不一致时
+        // 不再走 applyPlaylistLayout91 直切（无停惯性/无重锚/
+        // 无 visible 验证/无面包屑的黑屏旁路），改走与页内
+        // 胶囊同一条 switchPlaylistLayout93 三步序实现，
+        // 全套 p94 落行加 src=appear 字段自证来源。
+        switchPlaylistLayout93(mode, src95: "appear")
     }
 
     /// (93) C3：歌单缝胶囊切换——写 foliaPlaylistLayout91
@@ -5587,7 +5595,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
     /// reloadAltPlaylist91、现行墙内容本就在位）再 0.25s
     /// 淡入、落定才隐藏旧视图——不走整墙 reloadData、不
     /// 露黑底。A/B 本体行为（定点刷新等）不动。
-    fileprivate func switchPlaylistLayout93(_ mode: Int) {
+    fileprivate func switchPlaylistLayout93(_ mode: Int, src95: String = "seam") {
         UserDefaults.standard.set(mode, forKey: "foliaPlaylistLayout91")
         Breadcrumbs.log("p93 layout sw=\(SeamGlyph93.layoutName93(mode))")
         guard mode != playlistLayout91 else { return }
@@ -5598,7 +5606,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         // origin 跑到负百万＋render.audit visible=0）指向：
         // 惯性未停时在旧虚拟坐标上继续滑，origin 被推出合
         // 法域——先停、再锚、验可见才淡化（见 p94 三步序）。
-        let ctx94 = p94BeginWallSwitch(from: oldMode, to: mode)
+        let ctx94 = p94BeginWallSwitch(from: oldMode, to: mode, src95: src95)
         let oldView: UIView? = oldMode == 0 ? collectionView
             : oldMode == 1 ? magazineTable91 : shelfView91
         let newView: UIView? = mode == 0 ? collectionView
@@ -5627,14 +5635,14 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         // visible 不得连续 2 次为 0——重锚保证模式 0 落地即
         // 有可见砖，验证不过即不淡化、不露黑。
         let visible = p94VisibleCount94(for: mode)
-        Breadcrumbs.log("p94 wall sw show visible=\(visible)")
+        Breadcrumbs.log("p94 wall sw show visible=\(visible) src=\(src95)")
         if visible == 0, !entries.isEmpty {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.p94ReanchorWall(ctx94)
                 self.view.layoutIfNeeded()
                 let retry = self.p94VisibleCount94(for: mode)
-                Breadcrumbs.log("p94 wall sw show visible=\(retry) retry=1")
+                Breadcrumbs.log("p94 wall sw show visible=\(retry) retry=1 src=\(src95)")
                 if retry > 0 {
                     self.p94CrossfadeWallSwitch(oldView: oldView, newView: newView)
                 } else {
@@ -5645,7 +5653,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
                     UserDefaults.standard.set(oldMode,
                         forKey: "foliaPlaylistLayout91")
                     self.p94EndWallSwitch()
-                    Breadcrumbs.log("p94 wall sw abort mode=\(mode) back=\(oldMode)")
+                    Breadcrumbs.log("p94 wall sw abort mode=\(mode) back=\(oldMode) src=\(src95)")
                 }
             }
             return
@@ -5671,16 +5679,19 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         let anchorId: String?
         let anchorCenter: CGPoint?
         let before: CGPoint
+        // (95) 5：切换来源（seam＝页内胶囊／appear＝主页缝写键
+        // 后本页出现重读），全套 p94 落行带 src 字段。
+        let src95: String
     }
 
     /// 94-5 ①停机＋锚点捕获：三版式滚动面全停、定位/缝补间
     /// 两条 CADisplayLink 取消、bounce 暂关（结束复原）。
-    private func p94BeginWallSwitch(from: Int, to: Int) -> P94WallSwitch {
+    private func p94BeginWallSwitch(from: Int, to: Int, src95: String = "seam") -> P94WallSwitch {
         let start = CACurrentMediaTime()
         let vel = collectionView.panGestureRecognizer.velocity(in: view)
         let speed = Int(hypot(vel.x, vel.y).rounded())
         let fling = collectionView.isDecelerating ? 1 : 0
-        Breadcrumbs.log("p94 wall sw begin mode=\(from)->\(to) vel=\(speed) fling=\(fling)")
+        Breadcrumbs.log("p94 wall sw begin mode=\(from)->\(to) vel=\(speed) fling=\(fling) src=\(src95)")
         p94WallSwitchInFlight = true
         var scrolls: [UIScrollView] = [collectionView]
         if let table = magazineTable91 { scrolls.append(table) }
@@ -5694,7 +5705,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         p94SavedBounces = scrolls.map { ($0, $0.bounces) }
         for (sv, _) in p94SavedBounces { sv.bounces = false }
         let dt = Int((CACurrentMediaTime() - start) * 1000)
-        Breadcrumbs.log("p94 wall sw stop dt=\(dt)")
+        Breadcrumbs.log("p94 wall sw stop dt=\(dt) src=\(src95)")
         // 锚点：视口中心世界点命中的实例；无命中取中心距最近者。
         var anchorId: String?
         var anchorCenter: CGPoint?
@@ -5725,7 +5736,8 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         }
         return P94WallSwitch(from: from, to: to, anchorId: anchorId,
                              anchorCenter: anchorCenter,
-                             before: wallLayout.worldOrigin)
+                             before: wallLayout.worldOrigin,
+                             src95: src95)
     }
 
     /// 94-5 ②重锚：先与滚动回调同路结算 identity/reload
@@ -5743,7 +5755,8 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
               !wallLayout.instances.isEmpty else {
             Breadcrumbs.log("p94 wall reanchor anchor=\(ctx.anchorId ?? "-")"
                 + " before=\(Int(ctx.before.x)),\(Int(ctx.before.y))"
-                + " after=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y)) clamped=0")
+                + " after=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y)) clamped=0"
+                + " src=\(ctx.src95)")
             return
         }
         let scale = Double(wallLayout.cameraScale)
@@ -5774,7 +5787,8 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         wallLayout.invalidateLayout()
         Breadcrumbs.log("p94 wall reanchor anchor=\(ctx.anchorId ?? "-")"
             + " before=\(Int(ctx.before.x)),\(Int(ctx.before.y))"
-            + " after=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y)) clamped=\(clamped)")
+            + " after=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y)) clamped=\(clamped)"
+            + " src=\(ctx.src95)")
     }
 
     /// 94-5 ③的可见计数：按目标版式取各自的可见 cell 数。
@@ -5809,6 +5823,38 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
 
     fileprivate func applyPlaylistLayout91() {
         let mode = playlistLayout91
+        // (95) 5：互换顺序改「先装载→验证→再互换」——旧序
+        // 先揭目标视图（mode 1 为纯黑底 table）再 reload，
+        // 数据未就位时整屏黑底直显。现先在目标仍隐藏时
+        // reloadAltPlaylist91 装载，再以 alpha=0 临时解隐
+        // 目标视图强制布局、数可见 cell 自证；验证不过且
+        // 有数据时不揭目标（保持隐藏、alpha 复原），不许
+        // 把黑底空表亮给用户。装配期（entries 为空）照常
+        // 互换，与既有初始态一致。
+        reloadAltPlaylist91()
+        let targetView: UIView? = mode == 0 ? collectionView
+            : mode == 1 ? magazineTable91 : shelfView91
+        var vis = 0
+        if let targetView {
+            let savedAlpha = targetView.alpha
+            targetView.isHidden = false
+            targetView.alpha = 0
+            view.layoutIfNeeded()
+            vis = p94VisibleCount94(for: mode)
+            if vis == 0, !entries.isEmpty {
+                view.layoutIfNeeded()
+                vis = p94VisibleCount94(for: mode)
+            }
+            targetView.alpha = savedAlpha
+            if vis == 0, !entries.isEmpty {
+                targetView.isHidden = true
+                Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis)")
+                if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
+                if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
+                return
+            }
+        }
+        Breadcrumbs.log("p95 wall bypass mode=\(mode) vis=\(vis)")
         collectionView.isHidden = mode != 0
         magazineTable91?.isHidden = mode != 1
         shelfView91?.isHidden = mode != 2
@@ -5817,7 +5863,6 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         // 已撤，不再有切换钮提序与段控态回刷。）
         if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
         if let toolbar = playlistSeamToolbar { view.bringSubviewToFront(toolbar) }
-        reloadAltPlaylist91()
     }
 
     fileprivate func reloadAltPlaylist91() {
@@ -5899,17 +5944,19 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         title.textColor = .white
         title.numberOfLines = 2
         title.lineBreakMode = .byTruncatingTail
-        title.frame = CGRect(x: 64, y: 16, width: width - 84, height: 64)
+        // (95) 第 6 条集成调整：歌单缝 64→120 加宽后，A/B 内容避缝
+        // 起点同步 64→120（右缘留 20 不变），防标题钻到缝下。
+        title.frame = CGRect(x: 120, y: 16, width: width - 140, height: 64)
         header.addSubview(title)
         let sub = UILabel()
         sub.text = "\(entries.count) 首 · 歌单"
         sub.font = .systemFont(ofSize: 12.5)
         sub.textColor = UIColor.white.withAlphaComponent(0.5)
-        sub.frame = CGRect(x: 64, y: 84, width: width - 84, height: 16)
+        sub.frame = CGRect(x: 120, y: 84, width: width - 140, height: 16)
         header.addSubview(sub)
         let rule = UIView()
         rule.backgroundColor = UIColor.white.withAlphaComponent(0.08)
-        rule.frame = CGRect(x: 64, y: 110, width: width - 84, height: 0.5)
+        rule.frame = CGRect(x: 120, y: 110, width: width - 140, height: 0.5)
         header.addSubview(rule)
         return header
     }
@@ -6005,12 +6052,14 @@ final class PlaylistMagazineCell91: UITableViewCell {
         super.layoutSubviews()
         let w = contentView.bounds.width, h = contentView.bounds.height
         accentBar.frame = CGRect(x: 0, y: 14, width: 3, height: h - 28)
-        numberLabel.frame = CGRect(x: 64, y: 0, width: 26, height: h)
-        coverView.frame = CGRect(x: 100, y: (h - 44) / 2, width: 44, height: 44)
+        // (95) 第 6 条集成调整：缝 64→120 后整行内容右移 56 保原内部
+        // 间距（编号起点原贴缝缘 64），防编号/封面被缝盖住。
+        numberLabel.frame = CGRect(x: 120, y: 0, width: 26, height: h)
+        coverView.frame = CGRect(x: 156, y: (h - 44) / 2, width: 44, height: 44)
         diaryButton91.frame = CGRect(x: w - 44, y: (h - 24) / 2, width: 24, height: 24)
         heartDisc91.frame = CGRect(x: w - 76, y: (h - 18) / 2, width: 18, height: 18)
         heartButton91.frame = heartDisc91.frame
-        let textX: CGFloat = 156
+        let textX: CGFloat = 212
         titleLabel.frame = CGRect(x: textX, y: h / 2 - 17,
                                   width: w - textX - 88, height: 17)
         artistLabel.frame = CGRect(x: textX, y: h / 2 + 2,

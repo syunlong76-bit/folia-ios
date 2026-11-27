@@ -1125,11 +1125,26 @@ final class StageViewController: UIViewController {
     /// stage.ready＋连续 2 稳定帧全齐才解冻并揭盖；歌词行
     /// 新几何同点落行（JS 主画布客户区优先，否则按舞台左
     /// 右安全边距推算——歌词行不许出界）。
+    /// (95) 第五门：四齐之外还须 stageRotLaidSize86 已等
+    /// 于本次目标尺寸——(94) 真机横屏后只剩顶部一条带，
+    /// 判读推测四齐门不验「已按新尺寸重排」、pending 未
+    /// 置位时可零重排揭盖。不等时释放前无条件补一轮
+    /// layoutStage（既有入口，排后 pushSnapshot，与
+    /// alongside/completion 补轮同式）、更新已排尺寸，
+    /// 再递归重走一遍全部门判定，不许跳过其余四门。
     private func p94RotMaybeRelease() {
         guard p94RotAwaiting, p94RotNativeLanded,
               p94RotStableFrames >= 2 else { return }
         if webEmbedStyleId != nil {
             guard p94RotWebResized, p94RotStageReady else { return }
+        }
+        if stageRotLaidSize86 != p94RotTargetSize {
+            stageLayoutPending = false
+            layoutStage()
+            pushSnapshot()
+            stageRotLaidSize86 = p94RotTargetSize
+            p94RotMaybeRelease()
+            return
         }
         p94RotAwaiting = false
         p94RotLink?.invalidate()
@@ -1139,7 +1154,9 @@ final class StageViewController: UIViewController {
         stageRotationFrozen = false
         p94RotCatchUpLayout()
         let dt = Int((CACurrentMediaTime() - p94RotStart) * 1000)
-        Breadcrumbs.log("p94 rot ready dt=\(dt) frames=2")
+        Breadcrumbs.log("p94 rot ready dt=\(dt) frames=2"
+            + " laid=\(Int(stageRotLaidSize86.width))x\(Int(stageRotLaidSize86.height))"
+            + " target=\(Int(p94RotTargetSize.width))x\(Int(p94RotTargetSize.height))")
         if let geo = p94RotLyricGeo {
             Breadcrumbs.log("p94 rot lyric x=\(geo.x) w=\(geo.w)")
         } else {

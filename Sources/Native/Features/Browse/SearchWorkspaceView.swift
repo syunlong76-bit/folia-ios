@@ -24,11 +24,14 @@ struct SearchCollection: Identifiable {
 
 /// 搜索页（SearchWorkspace）原生移植（移植规格 port-spec-search-player.md 第一节）。
 ///
-/// 形态照 folia-major 源码（SearchWorkspace / SearchTabs / SearchResultRow /
-/// SearchCollectionRow / search.css）：全屏覆盖层（dark rgba(8,8,10,0.94) + blur 24）、
-/// 无边框仅底部 2px 线的搜索框、来源排、种类排、状态行、结果行、底部加载更多。
-/// 本轮只有网易云可达（QQ search 接口回 400、酷狗形状未核对，见 EdgeOneAPIClient 注释），
-/// 来源排只列网易云。专辑 / 歌单走代理 /search 的 type=10 / 1000（实测支持，见交付报告）。
+/// 形态（2026-11-27 换设计 A 拍立得版，Miller 点选
+/// design-samples-92/search-design-a.png）：暖黑底、圆角填充搜索框、
+/// 平台胶囊排（选中奶油填充）、文字页签 + 金色短下划线、结果为
+/// 2–4 列错落拍立得卡（奶油白边卡面 + 封面 + 题注区歌名/歌手、
+/// 轻微不规则倾斜、第二列下沉）。功能通路与旧排版完全一致：
+/// 三平台勾选、单曲/专辑/歌单三页签、请求与数据流、点卡播放/
+/// 开集合均不变（锚点见各段注释）。专辑 / 歌单走代理 /search
+/// 的 type=10 / 1000（实测支持，见交付报告）。
 /// 点单曲行 = 以当前结果整列为队列播放该曲：默认实现直接调 QueueManager（沿现有
 /// 搜索页 SearchView 的接法），协调者也可注入 onPlaySong 覆盖。
 struct SearchWorkspaceView: View {
@@ -99,8 +102,6 @@ struct SearchWorkspaceView: View {
     /// 「收藏到歌单」弹层的目标歌曲（(55) 工作流 F）：加号点按
     /// 置入后由 sheet 呈 AddToPlaylistViewController。
     @State private var addTarget: SongItem?
-    /// 搜索框前置小方块的旋转角（搜索中旋转成菱形代替 spinner）。
-    @State private var markRotation: Double = 0
     /// (62) §3 来源范围：网易云恒开，QQ/酷狗为多选开关
     /// （SettingsStore62D 两键持久化）。
     @State private var qqEnabled62 = SettingsStore.searchProviderQQEnabled62
@@ -115,12 +116,18 @@ struct SearchWorkspaceView: View {
 
     private let pageSize = 30
 
-    // 搜索令牌（search.css）：ink = 主色、accent = 强调色（Midnight 下同为 #f4f4f5）、
-    // paper dark = #08080a、发丝线 = ink 9%。
+    // 设计 A 色令牌：paper = 暖黑底 #171310、cardCream = 拍立得
+    // 卡面奶油白 #F6F0E1、cardInk / cardSub = 卡面题注深字 / 灰褐
+    // 副字、gold = 页签下划线与封面角标的金 #D9A441；ink 仍走
+    // FoliaTheme.primary（深底文字）、accent 归金（加载形/空态斜杠）。
     private var ink: Color { FoliaTheme.primary }
-    private var accent: Color { FoliaTheme.primary }
-    private var paper: Color { Color(red: 0x08 / 255, green: 0x08 / 255, blue: 0x0A / 255) }
+    private var accent: Color { gold }
+    private var paper: Color { Color(red: 0x17 / 255, green: 0x13 / 255, blue: 0x10 / 255) }
     private var hairline: Color { ink.opacity(0.09) }
+    private var cardCream: Color { Color(red: 0xF6 / 255, green: 0xF0 / 255, blue: 0xE1 / 255) }
+    private var cardInk: Color { Color(red: 0x21 / 255, green: 0x1D / 255, blue: 0x18 / 255) }
+    private var cardSub: Color { Color(red: 0x8A / 255, green: 0x7D / 255, blue: 0x6B / 255) }
+    private var gold: Color { Color(red: 0xD9 / 255, green: 0xA4 / 255, blue: 0x41 / 255) }
 
     var body: some View {
         ZStack {
@@ -129,12 +136,14 @@ struct SearchWorkspaceView: View {
 
             VStack(spacing: 0) {
                 header
-                    .padding(.horizontal, 16)
-                    .padding(.top, 20)
+                    .padding(.horizontal, 20)
+                    .padding(.top, 16)
 
-                resultsArea
-                    .padding(.horizontal, 16)
-                    .padding(.top, 12)
+                GeometryReader { geo in
+                    resultsArea(columnCount: columnCount(for: geo.size.width))
+                }
+                .padding(.horizontal, 20)
+                .padding(.top, 14)
             }
 
             // (62) §7 多选底栏：收进日记本（addBatch）/ 加入
@@ -192,98 +201,80 @@ struct SearchWorkspaceView: View {
             AddToPlaylistSheet(track: item.track)
         }
         .onAppear { fieldFocused = true }
-        .onChange(of: isSearching) { _, busy in
-            // 前置方块：搜索中 1100ms 一周旋转（search.css search-mark-busy 的近似）。
-            if busy {
-                withAnimation(.linear(duration: 1.1).repeatForever(autoreverses: false)) {
-                    markRotation = 180
-                }
-            } else {
-                withAnimation(.easeOut(duration: 0.4)) { markRotation = 0 }
-            }
-        }
     }
 
-    /// (62) 来源多选片：勾选态以方块+下划线示之（与来源排同语言）。
-    private func providerToggle62(title: String, isOn: Bool,
-                                  action: @escaping () -> Void) -> some View {
+    /// (62) 来源多选胶囊（设计 A）：选中 = 奶油填充深字，未选 =
+    /// 发丝描边胶囊灰字；点按切换 + SettingsStore 持久化 + 已搜
+    /// 重搜的通路与旧开关完全一致。
+    private func providerPill62(title: String, isOn: Bool,
+                                action: @escaping () -> Void) -> some View {
         Button(action: action) {
-            VStack(spacing: 6) {
-                HStack(spacing: 5) {
-                    Image(systemName: isOn ? "checkmark.square.fill" : "square")
-                        .font(.system(size: 12))
-                    Text(title)
-                        .font(.system(size: 13, weight: .bold))
-                        .tracking(13 * 0.06)
-                }
-                .foregroundColor(isOn ? ink : FoliaTheme.secondary)
-                Rectangle().fill(isOn ? accent : Color.clear).frame(height: 3)
-            }
-            .fixedSize()
+            Text(title)
+                .font(.system(size: 14, weight: isOn ? .bold : .regular))
+                .foregroundColor(isOn ? cardInk : FoliaTheme.secondary)
+                .padding(.horizontal, 16)
+                .frame(height: 34)
+                .background(Capsule().fill(isOn ? cardCream : Color.clear))
+                .overlay(Capsule().stroke(Color.white.opacity(isOn ? 0 : 0.25), lineWidth: 1))
         }
         .buttonStyle(.plain)
     }
 
-    // MARK: - 头部（搜索框 + 来源排 + 种类排 + 状态行，gap 20）
+    // MARK: - 头部（面包屑 + 圆形关闭钮 / 圆角搜索框 / 平台胶囊排 / 页签排 / 状态行）
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            // (62) §3 面包屑行（网页同位）。
-            Text("书库 › 搜索")
-                .font(.system(size: 12, weight: .medium))
-                .foregroundColor(FoliaTheme.secondary)
-            // (62) §3 说明文案（底账 §3 网页原话）。
-            Text("联网搜索…结果在搜索页打开、不会收窄当前墙")
-                .font(.system(size: 12))
-                .foregroundColor(FoliaTheme.secondary)
-            // 搜索框行：方块 + 输入（22px/700、仅底部 2px ink 线）+ 关闭 X（44×44、1.5px ink 边）。
-            HStack(spacing: 16) {
-                VStack(spacing: 0) {
-                    HStack(spacing: 14) {
-                        Rectangle()
-                            .fill(accent)
-                            .frame(width: 12, height: 12)
-                            .rotationEffect(.degrees(markRotation))
-                        TextField(kind.placeholder, text: $query)
-                            .font(.system(size: 22, weight: .bold))
-                            .foregroundColor(ink)
-                            .focused($fieldFocused)
-                            .submitLabel(.search)
-                            .autocorrectionDisabled()
-                            .onSubmit { submitSearch() }
-                    }
-                    .padding(.bottom, 10)
-                    Rectangle().fill(ink).frame(height: 2)
-                }
-
+        VStack(alignment: .leading, spacing: 16) {
+            // 面包屑行：左「书库 › 搜索」，右圆形关闭钮（设计 A 同位）；
+            // 关闭通路 onClose 不变。旧版的说明文案行按设计 A 撤除
+            // （语义由 SearchHostPresenter 呈现层保证，不靠文案）。
+            HStack(alignment: .center) {
+                Text("书库 › 搜索")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundColor(FoliaTheme.secondary)
+                Spacer()
                 Button { onClose() } label: {
                     Image(systemName: "xmark")
-                        .font(.system(size: 20))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(ink)
-                        .frame(width: 44, height: 44)
-                        .background(paper)
-                        .overlay(Rectangle().stroke(ink, lineWidth: 1.5))
+                        .frame(width: 36, height: 36)
+                        .background(Circle().fill(Color.white.opacity(0.08)))
                 }
                 .buttonStyle(.plain)
             }
 
-            // 来源排（13px/700/字距 0.06em，选中底部 3px 强调条）：
-            // (62) §3 改多选——网易云恒开，QQ/酷狗可勾选聚合。
-            HStack(spacing: 22) {
-                VStack(spacing: 6) {
-                    Text("网易云")
-                        .font(.system(size: 13, weight: .bold))
-                        .tracking(13 * 0.06)
-                        .foregroundColor(ink)
-                    Rectangle().fill(accent).frame(height: 3)
-                }
-                .fixedSize()
-                providerToggle62(title: "QQ 音乐", isOn: qqEnabled62) {
+            // 搜索框（设计 A）：圆角 14 填充面 + 放大镜 + 输入；
+            // 焦点/提交/占位随页签切换的通路不变。
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .font(.system(size: 16, weight: .medium))
+                    .foregroundColor(FoliaTheme.secondary)
+                TextField(kind.placeholder, text: $query)
+                    .font(.system(size: 16))
+                    .foregroundColor(ink)
+                    .focused($fieldFocused)
+                    .submitLabel(.search)
+                    .autocorrectionDisabled()
+                    .onSubmit { submitSearch() }
+            }
+            .padding(.horizontal, 16)
+            .frame(height: 52)
+            .background(RoundedRectangle(cornerRadius: 14).fill(FoliaTheme.field))
+
+            // 平台排（设计 A 胶囊）：网易云恒开 = 选中态奶油胶囊
+            // （静态、无点按）；QQ/酷狗走 providerPill62 多选通路。
+            HStack(spacing: 10) {
+                Text("网易云")
+                    .font(.system(size: 14, weight: .bold))
+                    .foregroundColor(cardInk)
+                    .padding(.horizontal, 16)
+                    .frame(height: 34)
+                    .background(Capsule().fill(cardCream))
+                providerPill62(title: "QQ音乐", isOn: qqEnabled62) {
                     qqEnabled62.toggle()
                     SettingsStore.searchProviderQQEnabled62 = qqEnabled62
                     if !submittedQuery.isEmpty { submitSearch() }
                 }
-                providerToggle62(title: "酷狗", isOn: kugouEnabled62) {
+                providerPill62(title: "酷狗", isOn: kugouEnabled62) {
                     kugouEnabled62.toggle()
                     SettingsStore.searchProviderKugouEnabled62 = kugouEnabled62
                     if !submittedQuery.isEmpty { submitSearch() }
@@ -295,34 +286,29 @@ struct SearchWorkspaceView: View {
                     .foregroundColor(FoliaTheme.secondary)
             }
 
-            // 种类排（序号 11px 等宽 + 标签 22px/900，选中前 11×11 强调方块）。
-            // (89) §10-1：种类签间距对齐网页 28。
-            HStack(spacing: 28) {
-                ForEach(Array(SearchKind.allCases.enumerated()), id: \.offset) { index, item in
+            // 页签排（设计 A）：文字签 + 选中金色短下划线；
+            // 切换 kind + 已搜重搜的通路不变。
+            HStack(spacing: 30) {
+                ForEach(SearchKind.allCases, id: \.self) { item in
                     Button {
                         guard item != kind else { return }
                         kind = item
                         if !submittedQuery.isEmpty { submitSearch() }
                     } label: {
-                        HStack(spacing: 8) {
-                            if item == kind {
-                                Rectangle().fill(accent).frame(width: 11, height: 11)
-                            }
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(String(format: "%02d", index + 1))
-                                    .font(.system(size: 11, design: .monospaced))
-                                    .foregroundColor(FoliaTheme.secondary)
-                                Text(item.label)
-                                    .font(.system(size: 22, weight: .black))
-                            }
+                        VStack(spacing: 6) {
+                            Text(item.label)
+                                .font(.system(size: 17, weight: item == kind ? .bold : .regular))
+                            RoundedRectangle(cornerRadius: 1.5)
+                                .fill(item == kind ? gold : Color.clear)
+                                .frame(width: 24, height: 3)
                         }
-                        .foregroundColor(item == kind ? ink : ink.opacity(0.38))
+                        .foregroundColor(item == kind ? ink : FoliaTheme.secondary)
                     }
                     .buttonStyle(.plain)
                 }
             }
 
-            // 状态行（11px 等宽 600、字距 0.1em：来源名 + 结果数 + 发丝线延伸）。
+            // 状态行（11px 等宽：来源名 + 结果数 + 发丝线延伸，信息保留）。
             HStack(spacing: 12) {
                 Text("网易云")
                     .font(.system(size: 11, weight: .semibold, design: .monospaced))
@@ -340,37 +326,78 @@ struct SearchWorkspaceView: View {
 
     // MARK: - 结果区
 
+    /// 结果列数（横竖屏自适应）：窄屏 2 列（设计 A 竖屏口径）、
+    /// 中屏 3 列、宽屏 4 列。
+    private func columnCount(for width: CGFloat) -> Int {
+        if width >= 900 { return 4 }
+        if width >= 560 { return 3 }
+        return 2
+    }
+
+    /// 拍立得卡的不规则倾斜角（按结果序循环取，-1.8°…+1.5°，设计 A 口径）。
+    private func cardTilt(_ index: Int) -> Double {
+        let tilts: [Double] = [-1.4, 0.9, -0.7, 1.2, -1.0, 0.6, -1.8, 1.5]
+        return tilts[index % tilts.count]
+    }
+
     @ViewBuilder
-    private var resultsArea: some View {
+    private func resultsArea(columnCount: Int) -> some View {
         if isSearching {
-            // 搜索中：加载动画整体替换列表（源码分支 isSearching 优先于结果判断；
+            // 搜索中：加载动画整体替换列表（分支优先级与旧版一致；
             // 加载更多不置 isSearching，不受影响）。
             SearchLoaderShapes(ink: ink, accent: accent)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if searchFailed && currentResultCount == 0 {
             voidState(text: "搜索失败，请重试。", showRetry: true)
         } else if currentResultCount == 0 {
-            // 含未搜初始态：源码分支即 resultCount == 0 → 空态（home.noResults）。
-            // 贴纸层（3.7 (24)，纯新增）：真搜过且无结果时出猫
-            // 贴纸，未搜初始态不出（sticker 传 hasSearched）。
+            // 含未搜初始态：空态（贴纸口径不变：真搜过无结果才出猫）。
             voidState(text: "未找到相关结果", showRetry: false, sticker: hasSearched)
         } else {
             ScrollView {
-                LazyVStack(spacing: 0) {
+                VStack(spacing: 10) {
                     if kind == .song {
-                        ForEach(Array(songs.enumerated()), id: \.element.id) { index, item in
-                            songRow(index: index, item: item)
-                        }
+                        songColumns(columnCount)
                     } else {
-                        ForEach(Array(collections.enumerated()), id: \.element.id) { index, item in
-                            collectionRow(index: index, item: item)
-                        }
+                        collectionColumns(columnCount)
                     }
 
                     if canLoadMore {
                         loadMoreButton
                     }
                 }
+                .padding(.top, 4)
+                .padding(.bottom, 28)
+            }
+        }
+    }
+
+    /// 单曲卡列阵：结果按序轮分到各列，第二列下沉 30pt（设计 A
+    /// 错落）、第三列下沉 12pt；列内纵距 18、列距 14。
+    private func songColumns(_ columnCount: Int) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            ForEach(0..<columnCount, id: \.self) { column in
+                LazyVStack(spacing: 18) {
+                    ForEach(songs.indices.filter { $0 % columnCount == column }, id: \.self) { index in
+                        songCard(index: index, item: songs[index])
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, column == 1 ? 30 : (column == 2 ? 12 : 0))
+            }
+        }
+    }
+
+    /// 集合卡列阵：与单曲同列阵口径。
+    private func collectionColumns(_ columnCount: Int) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            ForEach(0..<columnCount, id: \.self) { column in
+                LazyVStack(spacing: 18) {
+                    ForEach(collections.indices.filter { $0 % columnCount == column }, id: \.self) { index in
+                        collectionCard(index: index, item: collections[index])
+                    }
+                }
+                .frame(maxWidth: .infinity)
+                .padding(.top, column == 1 ? 30 : (column == 2 ? 12 : 0))
             }
         }
     }
@@ -401,7 +428,7 @@ struct SearchWorkspaceView: View {
             }
             .padding(.horizontal, 20)
             .frame(minHeight: 40)
-            .overlay(Rectangle().stroke(ink, lineWidth: 1.5))
+            .overlay(Capsule().stroke(ink.opacity(0.45), lineWidth: 1))
         }
         .buttonStyle(.plain)
         .frame(maxWidth: .infinity)
@@ -444,120 +471,119 @@ struct SearchWorkspaceView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
     }
 
-    // MARK: - 单曲行（高 76）
+    // MARK: - 单曲拍立得卡
 
-    private func songRow(index: Int, item: SongItem) -> some View {
-        // (62) 多选态行首选中标（渲染在行容器外层 HStack 前导）。
+    private func songCard(index: Int, item: SongItem) -> some View {
         let track = item.track
-        // 读一次星标代次，把 FoliaStarChanged 的刷新依赖挂到行渲染上。
+        // 读一次星标代次，把 FoliaStarChanged 的刷新依赖挂到卡渲染上。
         _ = starRefreshTick
-        return HStack(spacing: 14) {
-            if selecting62 {
-                Image(systemName: selectedIds62.contains(item.id)
-                      ? "checkmark.circle.fill" : "circle")
-                    .font(.system(size: 18))
-                    .foregroundColor(selectedIds62.contains(item.id)
-                                     ? ink : FoliaTheme.secondary)
-                    .frame(width: 20, alignment: .leading)
-            } else {
-                Text(String(format: "%02d", index + 1))
-                    .font(.system(size: 12, design: .monospaced))
-                    .foregroundColor(FoliaTheme.secondary)
-                    // (89) §10-2：序号列宽对齐网页 28。
-                    .frame(width: 28, alignment: .leading)
-            }
-
-            NativeCoverView(url: track.artworkURL, targetPixels: 150)
-                .frame(width: 48, height: 48)
-
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 8) {
-                    Text(track.title)
-                        .font(.system(size: 15, weight: .bold))
-                        .foregroundColor(ink)
-                        .lineLimit(1)
+        return VStack(alignment: .leading, spacing: 0) {
+            // 封面区：卡面内缩 10pt、圆角 4；右下角标承接旧行尾的
+            // MV / 已下架标签（落在设计 A 的封面角标位）；多选态
+            // 的选中标移封面左上（旧行首圆标的通路保留）。
+            NativeCoverView(url: track.artworkURL, targetPixels: 300)
+                .aspectRatio(1.22, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .overlay(alignment: .bottomTrailing) {
                     if let tag = item.isUnavailable ? "已下架" : (item.hasVideo ? "MV" : nil) {
                         Text(tag)
-                            .font(.system(size: 10, weight: .semibold))
-                            .tracking(0.5)
-                            .foregroundColor(ink)
+                            .font(.system(size: 11, weight: .bold))   // (95) 集成：字号下限 11pt 硬线，角标由 9 抬到 11
+                            .foregroundColor(gold)
                             .padding(.horizontal, 6)
-                            .padding(.vertical, 1)
-                            .overlay(Rectangle().stroke(ink.opacity(0.2), lineWidth: 1))
-                            .opacity(0.6)
+                            .padding(.vertical, 3)
+                            .background(RoundedRectangle(cornerRadius: 5)
+                                .fill(Color.black.opacity(0.72)))
+                            .padding(6)
                     }
                 }
+                .overlay(alignment: .topLeading) {
+                    if selecting62 {
+                        Image(systemName: selectedIds62.contains(item.id)
+                              ? "checkmark.circle.fill" : "circle")
+                            .font(.system(size: 20))
+                            .foregroundColor(selectedIds62.contains(item.id)
+                                             ? gold : Color.white.opacity(0.85))
+                            .padding(6)
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
+
+            // 题注区：歌名（衬线粗 15）/ 歌手·专辑（灰褐 12）/
+            // 时长 + 动作排（旧行尾三钮通路原样保留，命中框收至 30）。
+            VStack(alignment: .leading, spacing: 3) {
+                Text(track.title)
+                    .font(.system(size: 15, weight: .bold, design: .serif))
+                    .foregroundColor(cardInk)
+                    .lineLimit(1)
                 Text(track.album.isEmpty ? track.artist : "\(track.artist) / \(track.album)")
                     .font(.system(size: 12))
-                    .foregroundColor(FoliaTheme.secondary)
+                    .foregroundColor(cardSub)
                     .lineLimit(1)
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Text(searchFormatDuration(track.duration))
-                .font(.system(size: 12).monospacedDigit())
-                .foregroundColor(FoliaTheme.secondary)
-
-            // 行尾动作（命中区 40×40）：日记本已接通（(53) 工作流 D，点按收进/移出，
-            // 视觉态随已收切换，本轮只放大命中框、语义不动）；星标 (55) 工作流 F
-            // 接 StarStore 本地真源（显态随 FoliaStarChanged 刷新）；加号 (55) F
-            // 改义对齐网页版——点按开「收藏到歌单」弹层，原「追加队列」降为长按。
-            HStack(spacing: 2) {
-                let inSketchbook = sketchbookStore.contains(trackId: track.id)
-                Button {
-                    if inSketchbook {
-                        sketchbookStore.remove(trackId: track.id, source: "search")
-                    } else {
-                        sketchbookStore.add(track, source: "search")
+                HStack(spacing: 2) {
+                    Text(searchFormatDuration(track.duration))
+                        .font(.system(size: 11).monospacedDigit())
+                        .foregroundColor(cardSub)
+                    Spacer(minLength: 0)
+                    // 日记本（(53) 工作流 D）：点按收进/移出，视觉态随已收切换。
+                    let inSketchbook = sketchbookStore.contains(trackId: track.id)
+                    Button {
+                        if inSketchbook {
+                            sketchbookStore.remove(trackId: track.id, source: "search")
+                        } else {
+                            sketchbookStore.add(track, source: "search")
+                        }
+                    } label: {
+                        Image(systemName: inSketchbook ? "checkmark.circle.fill" : "note.text")
+                            .font(.system(size: 14))
+                            .foregroundColor(inSketchbook ? cardInk : cardSub)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
                     }
-                } label: {
-                    Image(systemName: inSketchbook ? "checkmark.circle.fill" : "note.text")
-                        .font(.system(size: 16))
-                        .foregroundColor(inSketchbook ? ink : FoliaTheme.secondary)
-                        .frame(width: 40, height: 40)
+                    .buttonStyle(.plain)
+
+                    // 星标（(55) 工作流 F）：StarStore 本地真源。
+                    let starred = StarStore.shared.isStarred(track.id)
+                    Button {
+                        let on = StarStore.shared.toggle(track.id)
+                        Breadcrumbs.log("search.row.star id=\(track.id) on=\(on)")
+                    } label: {
+                        Image(systemName: starred ? "star.fill" : "star")
+                            .font(.system(size: 14))
+                            .foregroundColor(starred ? cardInk : cardSub)
+                            .frame(width: 30, height: 30)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(starred ? "取消星标" : "星标")
+
+                    // 加号（(55) F）：点按开「收藏到歌单」弹层，长按追加队列。
+                    Image(systemName: "plus")
+                        .font(.system(size: 14))
+                        .foregroundColor(cardInk)
+                        .frame(width: 30, height: 30)
                         .contentShape(Rectangle())
+                        .onTapGesture {
+                            Breadcrumbs.log("search.row.addtoplaylist id=\(track.id)")
+                            addTarget = item
+                        }
+                        .onLongPressGesture(minimumDuration: 0.5) {
+                            QueueManager.shared.appendToQueue([track])
+                            Breadcrumbs.log("search.row.queue.longpress id=\(track.id)")
+                            NativePlaybackFailureToast.show(message: "已加入播放队列")
+                        }
+                        .accessibilityLabel("添加到歌单，长按加入播放队列")
+                        .accessibilityAddTraits(.isButton)
                 }
-                .buttonStyle(.plain)
-
-                let starred = StarStore.shared.isStarred(track.id)
-                Button {
-                    let on = StarStore.shared.toggle(track.id)
-                    Breadcrumbs.log("search.row.star id=\(track.id) on=\(on)")
-                } label: {
-                    Image(systemName: starred ? "star.fill" : "star")
-                        .font(.system(size: 16))
-                        .foregroundColor(starred ? ink : FoliaTheme.secondary)
-                        .frame(width: 40, height: 40)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.plain)
-                .accessibilityLabel(starred ? "取消星标" : "星标")
-
-                Image(systemName: "plus")
-                    .font(.system(size: 16))
-                    .foregroundColor(ink)
-                    .frame(width: 40, height: 40)
-                    .contentShape(Rectangle())
-                    .onTapGesture {
-                        Breadcrumbs.log("search.row.addtoplaylist id=\(track.id)")
-                        addTarget = item
-                    }
-                    .onLongPressGesture(minimumDuration: 0.5) {
-                        QueueManager.shared.appendToQueue([track])
-                        Breadcrumbs.log("search.row.queue.longpress id=\(track.id)")
-                        NativePlaybackFailureToast.show(message: "已加入播放队列")
-                    }
-                    .accessibilityLabel("添加到歌单，长按加入播放队列")
-                    .accessibilityAddTraits(.isButton)
             }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 6)
         }
-        .padding(.leading, 18)
-        .padding(.trailing, 14)
-        .frame(height: 76)
-        .background(alignment: .bottom) {
-            Rectangle().fill(hairline).frame(height: 1)
-        }
-        .contentShape(Rectangle())
+        .background(RoundedRectangle(cornerRadius: 8).fill(cardCream))
+        .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
+        .rotationEffect(.degrees(cardTilt(index)))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture {
             // (62) 多选态下点按改切换选中，不起播。
             if selecting62 {
@@ -571,7 +597,7 @@ struct SearchWorkspaceView: View {
             guard !item.isUnavailable else { return }
             onPlaySong(track, songs.map(\.track))
         }
-        // (62) §7：行长按进多选态（批量收进日记本/加入队列，
+        // (62) §7：卡长按进多选态（批量收进日记本/加入队列，
         // 底栏承接；加号钮自身的长按加队列语义不动）。
         .onLongPressGesture(minimumDuration: 0.5) {
             if !selecting62 {
@@ -580,55 +606,60 @@ struct SearchWorkspaceView: View {
                 Breadcrumbs.log("search62.multiselect enter")
             }
         }
-        .opacity(item.isUnavailable ? 0.5 : 1)
-        // 入场：(62) §3 换网页版行入场——淡入 + 上移 10pt、
-        // 按序 32ms 递延（上限 12 行）；原生左滑入退役。
+        .opacity(item.isUnavailable ? 0.55 : 1)
+        // 入场：淡入 + 上移 10pt、按序 32ms 递延（上限 12 卡）、
+        // 系统弹簧曲线（旧行 easeOut 口径按 iOS 系统动效规矩升级）。
         .opacity(entered || index >= 12 ? 1 : 0)
         .offset(y: entered || index >= 12 ? 0 : 10)
-        .animation(.easeOut(duration: 0.3).delay(Double(min(index, 12)) * 0.032), value: entered)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85)
+            .delay(Double(min(index, 12)) * 0.032), value: entered)
     }
 
-    // MARK: - 集合行（高 84）
+    // MARK: - 集合拍立得卡（专辑 / 歌单）
 
-    private func collectionRow(index: Int, item: SearchCollection) -> some View {
-        HStack(spacing: 14) {
-            NativeCoverView(url: item.coverURL, targetPixels: 200)
-                // (89) §10-3：集合行封面对齐网页 48×48。
-                .frame(width: 48, height: 48)
+    private func collectionCard(index: Int, item: SearchCollection) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            NativeCoverView(url: item.coverURL, targetPixels: 300)
+                .aspectRatio(1.22, contentMode: .fit)
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .padding(.horizontal, 10)
+                .padding(.top, 10)
 
-            VStack(alignment: .leading, spacing: 4) {
+            // 题注区：名称 / 副题（歌手·年份 或 创建者·播放量）/
+            // 曲数 + 右上箭头（旧集合行的信息与开页通路不变）。
+            VStack(alignment: .leading, spacing: 3) {
                 Text(item.name)
-                    .font(.system(size: 15, weight: .bold))
-                    .foregroundColor(ink)
+                    .font(.system(size: 15, weight: .bold, design: .serif))
+                    .foregroundColor(cardInk)
                     .lineLimit(1)
                 Text(collectionSubtitle(item))
                     .font(.system(size: 12))
-                    .foregroundColor(FoliaTheme.secondary)
+                    .foregroundColor(cardSub)
                     .lineLimit(1)
+                HStack(spacing: 4) {
+                    Text("\(item.trackCount) 首")
+                        .font(.system(size: 11))
+                        .foregroundColor(cardSub)
+                    Spacer(minLength: 0)
+                    Image(systemName: "arrow.up.right")
+                        .font(.system(size: 11))
+                        .foregroundColor(cardSub)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            HStack(spacing: 6) {
-                Text("\(item.trackCount) 首")
-                    .font(.system(size: 12))
-                    .foregroundColor(FoliaTheme.secondary)
-                Image(systemName: "arrow.up.right")
-                    .font(.system(size: 13))
-                    .foregroundColor(FoliaTheme.secondary)
-            }
+            .padding(.horizontal, 10)
+            .padding(.top, 8)
+            .padding(.bottom, 8)
         }
-        .padding(.leading, 18)
-        .padding(.trailing, 14)
-        .frame(height: 84)
-        .background(alignment: .bottom) {
-            Rectangle().fill(hairline).frame(height: 1)
-        }
-        .contentShape(Rectangle())
+        .background(RoundedRectangle(cornerRadius: 8).fill(cardCream))
+        .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
+        .rotationEffect(.degrees(cardTilt(index)))
+        .contentShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture { onOpenCollection(item) }
-        // 入场：(62) 同单曲行——淡入 + 上移 stagger。
+        // 入场：与单曲卡同口径（淡入 + 上移 stagger、系统弹簧）。
         .opacity(entered || index >= 12 ? 1 : 0)
         .offset(y: entered || index >= 12 ? 0 : 10)
-        .animation(.easeOut(duration: 0.3).delay(Double(min(index, 12)) * 0.032), value: entered)
+        .animation(.spring(response: 0.35, dampingFraction: 0.85)
+            .delay(Double(min(index, 12)) * 0.032), value: entered)
     }
 
     /// 专辑 = 「歌手 / 年份」；歌单 = 「创建者 / 播放量」。

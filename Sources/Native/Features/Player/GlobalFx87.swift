@@ -626,6 +626,15 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private var tapProbe92: UITapGestureRecognizer?
     private var tapProbeCount92 = 0
     private var tapProbeWindowStart92: CFTimeInterval = 0
+    /// (95) 任务 1：识别器级原始落痕状态——should 落痕同
+    /// 秒合并节流（probeRawLastSec95＝已落行的整秒桶）；
+    /// probeFirstPending95＝arm 后第一笔 shouldReceive 必
+    /// 落 `p95 probe first`（强在岗证明，不受节流吞没）。
+    private var probeRawLastSec95: Int = -1
+    private var probeFirstPending95 = false
+    /// (95) 任务 1：结构兜底看门狗在途标记（350ms 窗内只
+    /// 挂一笔，防同窗多点重复兜底）。
+    private var probeGuardPending95 = false
 
     private func installTapProbe92IfNeeded() {
         guard tapProbe92 == nil, let main = mainWindow else { return }
@@ -637,6 +646,10 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         main.addGestureRecognizer(probe)
         tapProbe92 = probe
         refreshTapProbe92()   // (93) A5：装配即对齐 arm 自证状态
+        // (95) 任务 1：装配时已在 arm 态（特效先于探针装配
+        // 开启）时 arm 边沿已过，补置 first 待落标记，装后
+        // 首点仍必落 `p95 probe first`。
+        if probeArmed93 { probeFirstPending95 = true }
     }
 
     /// (93) A5：探针 arm 自证状态——(92) 日志判读定案：探
@@ -660,8 +673,29 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 // 特效开启边沿各落一次，供定性覆层构成）。
                 Breadcrumbs.log("p94 fx arm fx=\(names.joined(separator: "+"))")
                 logFxLayers94()
+                // (95) 任务 1：arm 边沿自检——识别器所在视图
+                // 类名＋同窗共存识别器类名清单同行落盘，下份
+                // 日志可对账探针到底挂在哪一层、与谁共存。
+                probeFirstPending95 = true
+                if let probe = tapProbe92, let hostView = probe.view {
+                    let peers = (hostView.gestureRecognizers ?? [])
+                        .filter { $0 !== probe }
+                        .map { String(describing: type(of: $0)) }
+                    Breadcrumbs.log("p95 probe arm view="
+                        + "\(String(describing: type(of: hostView)))"
+                        + " peers=\(peers.isEmpty ? "none" : peers.joined(separator: ","))")
+                } else {
+                    Breadcrumbs.log("p95 probe arm view=nil peers=none")
+                }
+                // (95) 任务 3：推荐卡触发统一到开启边沿——与
+                // p94 fx arm 同点调用呈现判断（会话内只呈一
+                // 次，recShown 在全关时复位，见 disarm 边沿）。
+                maybeShowRec95()
             } else {
                 Breadcrumbs.log("p93 probe off")
+                // (95) 任务 3：fx 会话结束（任一特效开→全关）
+                // ——推荐卡呈现额度复位，下一会话可再呈一次。
+                recShown = false
             }
         }
     }
@@ -713,6 +747,10 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     @objc private func handleTapProbe92(_ gr: UITapGestureRecognizer) {
         guard let view = gr.view else { return }
+        let p = gr.location(in: view)
+        // (95) 任务 1：识别成功原始落痕——不受下方 p92 节流
+        // 计数吞没（识别器每点只回调一次，无连发刷屏面）。
+        Breadcrumbs.log("p95 probe raw fired pt=\(Int(p.x.rounded())),\(Int(p.y.rounded()))")
         let now = CACurrentMediaTime()
         if now - tapProbeWindowStart92 >= 1 {
             tapProbeWindowStart92 = now
@@ -720,7 +758,6 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         }
         guard tapProbeCount92 < 2 else { return }
         tapProbeCount92 += 1
-        let p = gr.location(in: view)
         let w = max(1, view.bounds.width), h = max(1, view.bounds.height)
         let zx = p.x < w / 3 ? "l" : (p.x < w * 2 / 3 ? "c" : "r")
         let zy = p.y < h / 3 ? "t" : (p.y < h * 2 / 3 ? "m" : "b")
@@ -745,12 +782,94 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// 不许旁路抢在控件之前 showBless/补放烟花。
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
                                   shouldReceive touch: UITouch) -> Bool {
+        // (95) 任务 1：探针识别器原始落痕＋结构兜底看门狗。
+        // 只观察不拦截：恒 return true、cancelsTouchesInView
+        // 维持 false，穿透语义零改动。
+        if gestureRecognizer === tapProbe92 {
+            probeRawShould95(touch)
+            return true
+        }
         if gestureRecognizer === passiveTap91,
            let card = blessCard, !card.isHidden,
            let main = mainWindow {
             if tapHitsInteractive91(at: touch.location(in: main)) { return false }
         }
         return true
+    }
+
+    /// (95) 任务 1：shouldReceive 原始落痕——touch-down 到
+    /// 达识别器层即落行（同秒合并节流）；arm 后第一笔额外
+    /// 落 `p95 probe first` 强在岗证明（不受节流吞没）。
+    /// 坐标取窗口系（与 ConsolePanel82 登记的钮帧/dim 帧
+    /// 同系，供看门狗命中判定）。
+    private func probeRawShould95(_ touch: UITouch) {
+        let armed = isFireworks || isLanterns || isSnow || isWind
+        let p = touch.location(in: mainWindow)
+        if probeFirstPending95 {
+            probeFirstPending95 = false
+            Breadcrumbs.log("p95 probe first pt=\(Int(p.x.rounded())),\(Int(p.y.rounded()))")
+        }
+        let sec = Int(CACurrentMediaTime())
+        if sec != probeRawLastSec95 {
+            probeRawLastSec95 = sec
+            Breadcrumbs.log("p95 probe raw should pt=\(Int(p.x.rounded())),\(Int(p.y.rounded()))"
+                + " armed=\(armed ? 1 : 0)")
+        }
+        probeGuardCheck95(at: p, armed: armed)
+    }
+
+    /// (95) 任务 1：结构兜底看门狗——fx 开启期点按命中控
+    /// 制台登记的特效钮帧或 dim 帧时挂 350ms 看门狗：期内
+    /// ConsolePanel82.handlerTrace95（console85 tap／
+    /// dismissConsole93 落痕同点递增）有新值＝handler 链
+    /// 活着，落 fired=0 不介入；无新值＝handler 链断裂，
+    /// probe 直接执行关闭动作（特效钮→经既有 setX 通路
+    /// toggle、src=probe95 落 p94 fx sw；dim→发
+    /// foliaConsoleDismiss95 请控制台 dismiss）。
+    private func probeGuardCheck95(at p: CGPoint, armed: Bool) {
+        guard armed, !probeGuardPending95 else { return }
+        var hitFx: String?
+        for (key, frame) in ConsolePanel82.fxFrames95 where frame.contains(p) {
+            hitFx = key
+            break
+        }
+        var hitDim = false
+        if hitFx == nil, let dim = ConsolePanel82.dimFrame95, dim.contains(p) {
+            hitDim = !(ConsolePanel82.presentedCardFrame?.contains(p) ?? false)
+        }
+        guard hitFx != nil || hitDim else { return }
+        probeGuardPending95 = true
+        let trace0 = ConsolePanel82.handlerTrace95
+        let hit = hitFx != nil ? "fx" : "dim"
+        let fxKey = hitFx
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { [weak self] in
+            guard let self else { return }
+            self.probeGuardPending95 = false
+            if ConsolePanel82.handlerTrace95 != trace0 {
+                Breadcrumbs.log("p95 probe guard hit=\(hit) fired=0")
+                return
+            }
+            if let fxKey {
+                switch fxKey {
+                case "fw":
+                    if self.isFireworks { self.stopFw(src: "probe95") }
+                    else { self.startFw(src: "probe95") }
+                case "ln":
+                    if self.isLanterns { self.stopLantern(hard: true, src: "probe95") }
+                    else { self.startLantern(src: "probe95") }
+                case "sn":
+                    if self.isSnow { self.stopSnow(hard: true, src: "probe95") }
+                    else { self.startSnow(src: "probe95") }
+                default:
+                    if self.isWind { self.stopWind(src: "probe95") }
+                    else { self.startWind(src: "probe95") }
+                }
+            } else {
+                NotificationCenter.default.post(
+                    name: .foliaConsoleDismiss95, object: nil)
+            }
+            Breadcrumbs.log("p95 probe guard hit=\(hit) fired=1")
+        }
     }
 
     @objc private func handlePassiveTap(_ gr: UITapGestureRecognizer) {
@@ -863,6 +982,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         memLog93("fw", on)
         onStateChanged?()
         refreshTapProbe92()
+        // (95) 任务 2：1→0 收尾自证——stopFw 的清场（粒子
+        // 数组清空）在本函数调用前已执行完，此行落＝清场完。
+        if !on { Breadcrumbs.log("p95 fx clear fx=fw src=\(src)") }
     }
     private func setLantern(_ on: Bool, src: String = "auto") {
         guard isLanterns != on else { return }
@@ -874,6 +996,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         onStateChanged?()
         refreshTapProbe92()
         refreshWishButton()
+        // (95) 任务 2：1→0 收尾自证（硬清时灯数组已在本函
+        // 数调用前清空；软停为渐隐语义、状态收尾在此落行）。
+        if !on { Breadcrumbs.log("p95 fx clear fx=ln src=\(src)") }
     }
     private func setSnow(_ on: Bool, src: String = "auto") {
         guard isSnow != on else { return }
@@ -884,6 +1009,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         memLog93("sn", on)
         onStateChanged?()
         refreshTapProbe92()
+        // (95) 任务 2：1→0 收尾自证（硬清时雪片数组已在本
+        // 函数调用前清空；自融软停状态收尾在此落行）。
+        if !on { Breadcrumbs.log("p95 fx clear fx=sn src=\(src)") }
     }
     private func setWind(_ on: Bool, src: String = "auto") {
         guard isWind != on else { return }
@@ -894,6 +1022,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         memLog93("wd", on)
         onStateChanged?()
         refreshTapProbe92()
+        // (95) 任务 2：1→0 收尾自证——stopWind 的清场
+        // （streaks/leaves 清空）在本函数调用前已执行完。
+        if !on { Breadcrumbs.log("p95 fx clear fx=wd src=\(src)") }
     }
 
     /// 首帧 render 前 W/H 可能未刷新：生成粒子前先按根视图 bounds 兜底。
@@ -1224,10 +1355,9 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             if t < 3000 && chance(0.10, f) {
                 spawnRain(x: fxRand(0, W), y: H * (0.7 + fxRand(0, 0.2)), riser: true)
             }
-            if t > 12600 && !recShown {
-                recShown = true
-                showRecCard()
-            }
+            // (95) 任务 3：推荐卡触发已摘除本时间轴——改由任
+            // 一特效开启边沿统一调用（refreshTapProbe92 的
+            // arm 点 → maybeShowRec95），此处不再呈现。
             if t > 15500 { setFw(false, src: "auto") }
         }
 
@@ -2166,15 +2296,41 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
+    /// (95) 任务 3：推荐卡统一开启边沿呈现判断——本 fx 会
+    /// 话（任一特效开→全关）内只呈一次；recShown 在全部特
+    /// 效关闭时于 refreshTapProbe92 的 disarm 边沿复位，
+    /// startFw 内原有的 recShown 复位保留（新一轮烟花秀
+    /// 语义与新口径一致：互斥清场先全关、复位已在彼处发
+    /// 生，此处再置 false 无副作用）。
+    private func maybeShowRec95() {
+        guard !recShown else { return }
+        recShown = true
+        showRecCard()
+    }
+
     private func showRecCard() {
-        guard let provider = recommendationProvider, let rec = provider(),
-              let card = recCard else { return }
+        // (95) 任务 3：provider 缺失不再静默——落 miss 自证。
+        guard let provider = recommendationProvider else {
+            Breadcrumbs.log("fx87 rec miss why=noprovider")
+            return
+        }
+        guard let rec = provider() else {
+            Breadcrumbs.log("fx87 rec miss why=norec")
+            return
+        }
+        guard let card = recCard else { return }
         recTitle?.text = rec.title
         recArtist?.text = rec.artist
         recCover?.image = rec.cover
         Breadcrumbs.log("fx87 rec")
         card.isHidden = false
         layoutRecCard93(card)
+        // (95) 任务 3：几何对账——卡实际落位 minX/宽与控制
+        // 台 presentedCardFrame 宽同行（无控制台时 -1）。
+        let consoleW95 = ConsolePanel82.presentedCardFrame
+            .map { Int($0.width.rounded()) } ?? -1
+        Breadcrumbs.log("p95 rec geo x=\(Int(card.frame.minX.rounded()))"
+            + " w=\(Int(card.frame.width.rounded())) console=\(consoleW95)")
         startRecRotate93()
         // (93) C4：入场按当前活跃特效区分（多特效同开取最
         // 近开启者 fxOnOrder93 尾元且仍活跃者）；无特效/
