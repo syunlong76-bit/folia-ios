@@ -64,9 +64,8 @@ final class WallPrototypeViewController: UIViewController,
     private var miniThemeLayer: MiniPlayerThemeLayer?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
-    /// (95) 第 11 条胶囊台：把手内嵌花图（DeckGlyph82.flowerImage），
-    /// refreshMiniProgressChrome 只摘 miniKnobSkin、本图恒保留并回顶层。
-    private var miniKnobFlower95: UIImageView?
+    // (99) 第 3 条③：(95) 把手内嵌花图（恒保留并回顶层、压
+    // 住逐主题皮肤）整套已摘除，圆点恢复逐主题皮肤原样。
     /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
     /// 存引用，供收起态去背景时与主题层/毛玻璃一并隐藏
     /// （3.7 (22)，见 setMiniBarForm）。
@@ -155,6 +154,12 @@ final class WallPrototypeViewController: UIViewController,
     private var p96GuardDeferred91 = false
     /// (98) 第 2 条：entries 为空时切版式的待切登记旗——不互换、不回滚改键，数据到达补切一次后清旗。
     private var pendingLayoutMode98: Int?
+    /// (99) 第 2 条：待切登记时刻（首个登记点写入、补切收口
+    /// 清零）——进页空窗计时自证（p99 lay wait），空窗大头
+    /// 是种子网络往返，本计时只量不掩。
+    private var p99LayoutPendT0: CFTimeInterval = 0
+    /// (99) 第 2 条：熔断面包屑节流时刻（delta 钳制落痕用）。
+    private var p99FuseLogAt: CFTimeInterval = 0
     /// (97) 第 11 条：排版切换计时（begin 落点 switch 入口、
     /// end 收口 p94EndWallSwitch）。
     private var p97LayoutT0: CFTimeInterval = 0
@@ -847,18 +852,8 @@ final class WallPrototypeViewController: UIViewController,
         knob.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(knob)
         miniProgressKnob = knob
-        let knobFlower95 = UIImageView(image: DeckGlyph82.flowerImage(size: 14))
-        knobFlower95.contentMode = .scaleAspectFill
-        knobFlower95.isUserInteractionEnabled = false
-        knobFlower95.translatesAutoresizingMaskIntoConstraints = false
-        knob.addSubview(knobFlower95)
-        NSLayoutConstraint.activate([
-            knobFlower95.leadingAnchor.constraint(equalTo: knob.leadingAnchor),
-            knobFlower95.trailingAnchor.constraint(equalTo: knob.trailingAnchor),
-            knobFlower95.topAnchor.constraint(equalTo: knob.topAnchor),
-            knobFlower95.bottomAnchor.constraint(equalTo: knob.bottomAnchor),
-        ])
-        miniKnobFlower95 = knobFlower95
+        // (99) 第 3 条③：(95) 内嵌花图已摘除（见属性处注），
+        // knob 只挂逐主题皮肤。
 
         miniCover = UIImageView()
         miniCover.contentMode = .scaleAspectFill
@@ -1392,12 +1387,8 @@ final class WallPrototypeViewController: UIViewController,
             miniProgressKnob.backgroundColor = .white
             miniProgressKnob.layer.shadowOpacity = 0.9
         }
-        // (95) 第 11 条：花图恒保留——本函数只摘/重挂
-        // miniKnobSkin，花图（miniKnobFlower95）不摘、且
-        // 重挂皮肤后回顶层免被 17pt 皮肤压住。
-        if let flower95 = miniKnobFlower95 {
-            miniProgressKnob.bringSubviewToFront(flower95)
-        }
+        // (99) 第 3 条③：(95) 花图恒保留＋回顶层逻辑已随花
+        // 图本体一并摘除。
         if miniBarCollapsed {
             // (82) 第 5 条：收起态改系统白系（填充纯白、
             // 轨道白 35%），对齐 home indicator 观感。
@@ -2001,8 +1992,10 @@ final class WallPrototypeViewController: UIViewController,
             miniTrackTrailC?.isActive = false
             miniTrackCenterXC?.isActive = true
             miniTrackWidthC?.isActive = true
-            miniTrackHeightC?.constant = 5
-            miniProgressTrack.layer.cornerRadius = 2.5
+            // (99) 第 3 条②：收起条几何单一常量源（同主页
+            // 墙，DeckLayout82）。
+            miniTrackHeightC?.constant = DeckLayout82.collapsedTrackHeight
+            miniProgressTrack.layer.cornerRadius = DeckLayout82.collapsedCornerRadius
             // (82) 第 7 条：收起态轨道换底锚（顶锚撤）。
             miniTrackTopC?.isActive = false
             miniTrackBottomConstraint?.isActive = true
@@ -2082,6 +2075,9 @@ final class WallPrototypeViewController: UIViewController,
             + " r=\(collapsed ? "2.5" : "2")"
             + " orient=\(fmPortrait84 ? "port" : "land")")
         refreshMiniProgressChrome()
+        // (99) 第 3 条：形态收口复断言单实例可见性（见
+        // MiniBarArbiter99）。
+        MiniBarArbiter99.shared.enforce()
     }
 
     /// (86) 第 5 条：旋转落定按新朝向重写收起轨宽（同主页
@@ -2897,6 +2893,9 @@ final class WallPrototypeViewController: UIViewController,
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (99) 第 3 条：迷你台单实例仲裁认领（见
+        // MiniBarArbiter99）——露面即成为唯一可见宿主。
+        MiniBarArbiter99.shared.claim(host: "wallproto", bar: miniBar)
         // (70) B3：布局落定后再核一次（viewWillAppear 时帧
         // 可能仍是旧值），失同步在此收口。
         resyncMiniBarFormToGeometry70()
@@ -3171,6 +3170,14 @@ final class WallPrototypeViewController: UIViewController,
                             self.switchPlaylistLayout93(pend98, src95: "redo98")
                         }
                         Breadcrumbs.log("p98 layout redo mode=\(pend98) vis=\(self.p94VisibleCount94(for: pend98))")
+                        // (99) 第 2 条：补切空窗计时收口＋坐标
+                        // 系原子结算（switch 路已在 p94EndWall-
+                        // Switch 内结算；apply 路在此补齐）。
+                        if self.p99LayoutPendT0 > 0 {
+                            Breadcrumbs.log("p99 lay wait ms=\(Int((CACurrentMediaTime() - self.p99LayoutPendT0) * 1000))")
+                            self.p99LayoutPendT0 = 0
+                        }
+                        self.p99SettleLayoutCommit("redo")
                     }
                     self.centerCameraIfNeeded()
                     // (85) 第 1 条：缝计数随种子落地回填（总
@@ -3277,6 +3284,11 @@ final class WallPrototypeViewController: UIViewController,
                                 self.switchPlaylistLayout93(pend98, src95: "redo98")
                             }
                             Breadcrumbs.log("p98 layout redo mode=\(pend98) vis=\(self.p94VisibleCount94(for: pend98))")
+                            if self.p99LayoutPendT0 > 0 {
+                                Breadcrumbs.log("p99 lay wait ms=\(Int((CACurrentMediaTime() - self.p99LayoutPendT0) * 1000))")
+                                self.p99LayoutPendT0 = 0
+                            }
+                            self.p99SettleLayoutCommit("redo")
                         }
                         // (83) 黑屏定案③：分页续接后新条目同
                         // 批预热（已缓存者自动跳过）。
@@ -3362,20 +3374,56 @@ final class WallPrototypeViewController: UIViewController,
     /// 并把 offset 拉回中心——相机连续跟手，帧公式不变即成立。
     /// 实例集身份（首/尾 id + 计数）变了才 reloadData，否则只失效布局。
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
+        // (99) 第 2 条根因修复：本 VC 同时是杂志表（mode 1）
+        // 与唱片架（mode 2 内层架）的 delegate，旧实现不分
+        // scrollView——滚 A/B 版式时把表的 contentOffset 增量
+        // （相对墙 cell 中心的巨额偏差）折进墙 worldOrigin 并
+        // 反手把表的 offset 钉回中心，表的回弹再生成新事件，
+        // origin 以约 9 万点/秒单向飞出、rebase 反馈环同秒并
+        // 发（(98) 真机日志：origin 飞到 −5,837,362、visible
+        // =0 黑屏）。墙相机只认 collectionView 本体，其余滚
+        // 动面一律不进本函数。
+        guard scrollView === collectionView else { return }
         guard !isWrapping, didCenterCamera else { return }
         let cell = wallLayout.cellViewSize
         guard cell.width > 0, cell.height > 0 else { return }
         let center = CGPoint(x: cell.width, y: cell.height)
-        let delta = CGPoint(
+        var delta = CGPoint(
             x: scrollView.contentOffset.x - center.x,
             y: scrollView.contentOffset.y - center.y)
         guard delta.x != 0 || delta.y != 0 else { return }
+        // (99) 第 2 条熔断一：单事件增量钳制——真手指/惯性单
+        // 事件位移不可能超过滚动面跨度的 2 倍；超限必是异
+        // 常事件源（如其他滚动面 offset 被钉回中心后的回弹
+        // 阶跃），钳到界内并落痕，与根因修复双保险。
+        let limX = max(scrollView.bounds.width, 1) * 2
+        let limY = max(scrollView.bounds.height, 1) * 2
+        if abs(delta.x) > limX || abs(delta.y) > limY {
+            delta = CGPoint(x: min(max(delta.x, -limX), limX),
+                            y: min(max(delta.y, -limY), limY))
+            let nowF = CACurrentMediaTime()
+            if nowF - p99FuseLogAt > 1 {
+                p99FuseLogAt = nowF
+                Breadcrumbs.log("p99 lay fuse ev=delta")
+            }
+        }
         // 滚动统计（(58) 定稿③）：本回调耗时计入逐秒 wall.scroll。
         let scrollStart = CACurrentMediaTime()
         isWrapping = true
         wallLayout.worldOrigin = CGPoint(
             x: wallLayout.worldOrigin.x + delta.x / CGFloat(wallLayout.cameraScale),
             y: wallLayout.worldOrigin.y + delta.y / CGFloat(wallLayout.cameraScale))
+        // (99) 第 2 条熔断二：origin 硬域——周期墙面合法长滚
+        // 也到不了百万量级（(98) 失控样本 −5.8M）；越界即原
+        // 地结算锚点（实例集按新锚重算在下行 refreshInstances
+        // 自然发生），把「飞出后 visible=0 持久黑屏」变成一
+        // 帧自愈。正常路径永不触发，触发即落痕。
+        if abs(wallLayout.worldOrigin.x) > 1_000_000
+            || abs(wallLayout.worldOrigin.y) > 1_000_000 {
+            Breadcrumbs.log("p99 lay fuse ev=origin"
+                + " org=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y))")
+            wallLayout.settleAnchor99()
+        }
         scrollView.contentOffset = center
         // (58)：同键滚动只平移帧、身份不变 → 不 reload；身份
         // 变化（rebase/键变）才 reload（计数入 wall.scroll）。
@@ -4282,6 +4330,9 @@ final class WallPrototypeViewController: UIViewController,
 
     /// 滚动开始即取消全部可见卡的按压态、交还滚动（(60) 第 3 条①）。
     func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        // (99) 第 2 条：同 scrollViewDidScroll 口径——本回调
+        // 只服务墙本体，A/B 版式滚动面不触发墙 cell 收尾。
+        guard scrollView === collectionView else { return }
         for cell in collectionView.visibleCells {
             (cell as? WallPosterCell)?.cancelPressForScroll()
         }
@@ -5983,6 +6034,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
             playlistLayout91 = oldMode
             playlistSeam85?.layoutMode93 = oldMode
             pendingLayoutMode98 = mode
+            if p99LayoutPendT0 == 0 { p99LayoutPendT0 = CACurrentMediaTime() }
             Breadcrumbs.log("p98 layout pend mode=\(mode) entries=0")
             p94EndWallSwitch()
             return
@@ -6005,6 +6057,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
                     // 键（键保留用户点选）；改登记 pending，数据/
                     // 布局就绪后由落点补切到用户选的 mode。
                     self.pendingLayoutMode98 = mode
+                    if self.p99LayoutPendT0 == 0 { self.p99LayoutPendT0 = CACurrentMediaTime() }
                     Breadcrumbs.log("p98 layout pend mode=\(mode) entries=\(self.entries.count)")
                     self.p94EndWallSwitch()
                     Breadcrumbs.log("p94 wall sw abort mode=\(mode) back=\(oldMode) src=\(src95)")
@@ -6173,7 +6226,27 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         }
     }
 
+    /// (99) 第 2 条：版式提交原子结算——三滚动面停机（防补
+    /// 切瞬间残余惯性把旧坐标带进新版式）＋墙坐标系锚点与
+    /// origin 一次对齐（WallLayout.settleAnchor99：drift 归
+    /// 零、待办 rebase 清零、属性帧按现原点重建），提交与
+    /// 结算同帧完成，不留「视图已换、坐标未对」的中间态。
+    /// (98) 真机 redo 后黑屏的前置条件正是补切只换了视图、
+    /// 坐标系基准未随提交对齐。
+    private func p99SettleLayoutCommit(_ src: String) {
+        var scrolls: [UIScrollView] = [collectionView]
+        if let table = magazineTable91 { scrolls.append(table) }
+        if let shelf = shelfCollection91 { scrolls.append(shelf) }
+        for sv in scrolls { Self.p94StopScrollMomentum(sv) }
+        wallLayout.settleAnchor99()
+        Breadcrumbs.log("p99 lay settle src=\(src) mode=\(playlistLayout91)"
+            + " org=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y))")
+    }
+
     private func p94EndWallSwitch() {
+        // (99) 第 2 条：切换收口同帧做坐标系原子结算（见
+        // p99SettleLayoutCommit），再走既有 bounce 复原序。
+        p99SettleLayoutCommit("switch")
         for (sv, bounces) in p94SavedBounces { sv.bounces = bounces }
         p94SavedBounces = []
         p94WallSwitchInFlight = false
@@ -6261,6 +6334,7 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
                 : (shelfView91?.isHidden == false ? 2 : mode))
             if mode != mounted98 {
                 pendingLayoutMode98 = mode
+                if p99LayoutPendT0 == 0 { p99LayoutPendT0 = CACurrentMediaTime() }
                 Breadcrumbs.log("p98 layout pend mode=\(mode) entries=0")
             }
             if let seam = playlistSeam85 { view.bringSubviewToFront(seam) }
@@ -6272,6 +6346,9 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         collectionView.isHidden = mode != 0
         magazineTable91?.isHidden = mode != 1
         shelfView91?.isHidden = mode != 2
+        // (99) 第 2 条：互换提交同帧坐标系原子结算（见
+        // p99SettleLayoutCommit）。
+        p99SettleLayoutCommit("apply")
         // 左侧缝（书脊导航）提至 A/B 视图之上，A/B 内容
         // leading 64 即为避缝留白。（(92) 任务 11：顶部段控
         // 已撤，不再有切换钮提序与段控态回刷。）

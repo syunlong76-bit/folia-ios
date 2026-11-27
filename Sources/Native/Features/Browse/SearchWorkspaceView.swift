@@ -117,6 +117,11 @@ struct SearchWorkspaceView: View {
 
     @FocusState private var fieldFocused: Bool
 
+    /// (99) 第 5 项：横屏判定（iPhone 横屏 verticalSizeClass
+    /// 为 .compact），页眉/搜索区据此收紧垂直占用。
+    @Environment(\.verticalSizeClass) private var verticalSizeClass99
+    private var isLandscape99: Bool { verticalSizeClass99 == .compact }
+
     private let pageSize = 30
 
     // 设计 A 色令牌：paper = 暖黑底 #171310、cardCream = 拍立得
@@ -134,19 +139,25 @@ struct SearchWorkspaceView: View {
 
     var body: some View {
         ZStack {
+            // (99) 第 5 项：页面背景改真毛玻璃——ultraThinMaterial
+            // 打底（与 CollectionView 同口径：material + 低透色层），
+            // 暖黑纸色层由 0.94 降到 0.55，让下层墙面模糊透出；
+            // 旧 0.94 几乎不透光、玻璃等于没生效。
             Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
-            paper.opacity(0.94).ignoresSafeArea()
+            paper.opacity(0.55).ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
                     .padding(.horizontal, 20)
-                    .padding(.top, 16)
+                    // (99) 第 5 项：横屏页眉顶部 padding 16→8。
+                    .padding(.top, isLandscape99 ? 8 : 16)
 
                 GeometryReader { geo in
                     resultsArea(columnCount: columnCount(for: geo.size.width))
                 }
                 .padding(.horizontal, 20)
-                .padding(.top, 14)
+                // (99) 第 5 项：横屏结果区顶部间距 14→8。
+                .padding(.top, isLandscape99 ? 8 : 14)
             }
 
             // (62) §7 多选底栏：收进日记本（addBatch）/ 加入
@@ -206,27 +217,73 @@ struct SearchWorkspaceView: View {
         .onAppear { fieldFocused = true }
     }
 
-    /// (62) 来源多选胶囊（设计 A）：选中 = 奶油填充深字，未选 =
-    /// 发丝描边胶囊灰字；点按切换 + SettingsStore 持久化 + 已搜
-    /// 重搜的通路与旧开关完全一致。
-    private func providerPill62(title: String, isOn: Bool,
-                                action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Text(title)
-                .font(.system(size: 14, weight: isOn ? .bold : .regular))
-                .foregroundColor(isOn ? cardInk : FoliaTheme.secondary)
-                .padding(.horizontal, 16)
-                .frame(height: 34)
-                .background(Capsule().fill(isOn ? cardCream : Color.clear))
-                .overlay(Capsule().stroke(Color.white.opacity(isOn ? 0 : 0.25), lineWidth: 1))
-        }
-        .buttonStyle(.plain)
+    /// (99) 第 5 项：平台切换收进搜索框旁的紧凑菜单（原整行
+    /// 胶囊排撤除）。网易云恒开（菜单内禁用勾选项）；QQ/酷狗
+    /// 仍是多选开关——切换 + SettingsStore 持久化 + 已搜重搜
+    /// 的通路与 (62) 胶囊完全一致，只换落点。
+    private func toggleQQ99() {
+        qqEnabled62.toggle()
+        SettingsStore.searchProviderQQEnabled62 = qqEnabled62
+        Breadcrumbs.log("p99 search prov qq=\(qqEnabled62 ? 1 : 0)")
+        if !submittedQuery.isEmpty { submitSearch() }
     }
 
-    // MARK: - 头部（面包屑 + 圆形关闭钮 / 圆角搜索框 / 平台胶囊排 / 页签排 / 状态行）
+    private func toggleKugou99() {
+        kugouEnabled62.toggle()
+        SettingsStore.searchProviderKugouEnabled62 = kugouEnabled62
+        Breadcrumbs.log("p99 search prov kg=\(kugouEnabled62 ? 1 : 0)")
+        if !submittedQuery.isEmpty { submitSearch() }
+    }
+
+    /// 菜单钮标题：当前启用平台短名（网易云恒在）。
+    private var providerSummary99: String {
+        var parts = ["网易云"]
+        if qqEnabled62 { parts.append("QQ") }
+        if kugouEnabled62 { parts.append("酷狗") }
+        return parts.joined(separator: "·")
+    }
+
+    private var providerMenu99: some View {
+        Menu {
+            Button {} label: {
+                Label("网易云", systemImage: "checkmark")
+            }
+            .disabled(true)
+            Button { toggleQQ99() } label: {
+                if qqEnabled62 {
+                    Label("QQ音乐", systemImage: "checkmark")
+                } else {
+                    Text("QQ音乐")
+                }
+            }
+            Button { toggleKugou99() } label: {
+                if kugouEnabled62 {
+                    Label("酷狗", systemImage: "checkmark")
+                } else {
+                    Text("酷狗")
+                }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Text(providerSummary99)
+                    .font(.system(size: 13, weight: .semibold))
+                    .lineLimit(1)
+                Image(systemName: "chevron.down")
+                    .font(.system(size: 10, weight: .semibold))
+            }
+            .foregroundColor(ink)
+            .padding(.horizontal, 12)
+            .frame(height: isLandscape99 ? 44 : 52)
+            .background(RoundedRectangle(cornerRadius: 14).fill(FoliaTheme.field))
+        }
+        .accessibilityLabel("搜索平台：\(providerSummary99)")
+    }
+
+    // MARK: - 头部（面包屑 + 圆形关闭钮 / 圆角搜索框 + 平台菜单(99) / 页签排 / 状态行）
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        // (99) 第 5 项：横屏时段间距 16→8，整体页眉压矮。
+        VStack(alignment: .leading, spacing: isLandscape99 ? 8 : 16) {
             // 面包屑行：左「书库 › 搜索」，右圆形关闭钮（设计 A 同位）；
             // 关闭通路 onClose 不变。旧版的说明文案行按设计 A 撤除
             // （语义由 SearchHostPresenter 呈现层保证，不靠文案）。
@@ -246,42 +303,28 @@ struct SearchWorkspaceView: View {
             }
 
             // 搜索框（设计 A）：圆角 14 填充面 + 放大镜 + 输入；
-            // 焦点/提交/占位随页签切换的通路不变。
+            // 焦点/提交/占位随页签切换的通路不变。(99) 第 5 项：
+            // 右侧并排平台菜单钮（providerMenu99），平台行不再
+            // 单独占一整行；横屏搜索框高 52→44。
             HStack(spacing: 10) {
-                Image(systemName: "magnifyingglass")
-                    .font(.system(size: 16, weight: .medium))
-                    .foregroundColor(FoliaTheme.secondary)
-                TextField(kind.placeholder, text: $query)
-                    .font(.system(size: 16))
-                    .foregroundColor(ink)
-                    .focused($fieldFocused)
-                    .submitLabel(.search)
-                    .autocorrectionDisabled()
-                    .onSubmit { submitSearch() }
-            }
-            .padding(.horizontal, 16)
-            .frame(height: 52)
-            .background(RoundedRectangle(cornerRadius: 14).fill(FoliaTheme.field))
+                HStack(spacing: 10) {
+                    Image(systemName: "magnifyingglass")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundColor(FoliaTheme.secondary)
+                    TextField(kind.placeholder, text: $query)
+                        .font(.system(size: 16))
+                        .foregroundColor(ink)
+                        .focused($fieldFocused)
+                        .submitLabel(.search)
+                        .autocorrectionDisabled()
+                        .onSubmit { submitSearch() }
+                }
+                .padding(.horizontal, 16)
+                .frame(maxWidth: .infinity)
+                .frame(height: isLandscape99 ? 44 : 52)
+                .background(RoundedRectangle(cornerRadius: 14).fill(FoliaTheme.field))
 
-            // 平台排（设计 A 胶囊）：网易云恒开 = 选中态奶油胶囊
-            // （静态、无点按）；QQ/酷狗走 providerPill62 多选通路。
-            HStack(spacing: 10) {
-                Text("网易云")
-                    .font(.system(size: 14, weight: .bold))
-                    .foregroundColor(cardInk)
-                    .padding(.horizontal, 16)
-                    .frame(height: 34)
-                    .background(Capsule().fill(cardCream))
-                providerPill62(title: "QQ音乐", isOn: qqEnabled62) {
-                    qqEnabled62.toggle()
-                    SettingsStore.searchProviderQQEnabled62 = qqEnabled62
-                    if !submittedQuery.isEmpty { submitSearch() }
-                }
-                providerPill62(title: "酷狗", isOn: kugouEnabled62) {
-                    kugouEnabled62.toggle()
-                    SettingsStore.searchProviderKugouEnabled62 = kugouEnabled62
-                    if !submittedQuery.isEmpty { submitSearch() }
-                }
+                providerMenu99
             }
             if !providerNotes62.isEmpty {
                 Text(providerNotes62.joined(separator: "；"))
@@ -376,10 +419,13 @@ struct SearchWorkspaceView: View {
 
     /// 单曲卡列阵：结果按序轮分到各列，第二列下沉 30pt（设计 A
     /// 错落）、第三列下沉 12pt；列内纵距 18、列距 14。
+    /// (99) 第 5 项：列内由 LazyVStack 改普通 VStack——懒栈对
+    /// 卡高动态变化（单击展开详情）不重排，展开卡会压住邻卡；
+    /// 普通栈里展开内容进正常布局流、把后续卡推开让位。
     private func songColumns(_ columnCount: Int) -> some View {
         HStack(alignment: .top, spacing: 14) {
             ForEach(0..<columnCount, id: \.self) { column in
-                LazyVStack(spacing: 18) {
+                VStack(spacing: 18) {
                     ForEach(songs.indices.filter { $0 % columnCount == column }, id: \.self) { index in
                         songCard(index: index, item: songs[index])
                     }
@@ -390,11 +436,12 @@ struct SearchWorkspaceView: View {
         }
     }
 
-    /// 集合卡列阵：与单曲同列阵口径。
+    /// 集合卡列阵：与单曲同列阵口径（(99) 同步改普通 VStack，
+    /// 布局流口径与单曲列一致）。
     private func collectionColumns(_ columnCount: Int) -> some View {
         HStack(alignment: .top, spacing: 14) {
             ForEach(0..<columnCount, id: \.self) { column in
-                LazyVStack(spacing: 18) {
+                VStack(spacing: 18) {
                     ForEach(collections.indices.filter { $0 % columnCount == column }, id: \.self) { index in
                         collectionCard(index: index, item: collections[index])
                     }
@@ -671,7 +718,9 @@ struct SearchWorkspaceView: View {
         }
         .background(RoundedRectangle(cornerRadius: 8).fill(cardCream))
         .shadow(color: Color.black.opacity(0.35), radius: 10, x: 0, y: 5)
-        .rotationEffect(.degrees(cardTilt(index)))
+        // (99) 第 5 项：展开态回正倾斜角——高卡带倾斜时四角
+        // 位移最大，视觉上最容易蹭到邻卡；收起恢复设计 A 倾斜。
+        .rotationEffect(.degrees(expandedId98 == item.id ? 0 : cardTilt(index)))
         .contentShape(RoundedRectangle(cornerRadius: 8))
         .onTapGesture(count: 2) {
             // (98) 第 7 条：双击＝进入详情播放页（起播＋开

@@ -99,9 +99,8 @@ final class StageViewController: UIViewController {
     private var stageProgressFill: UIView?
     private var stageProgressKnob: UIView?
     private var stageKnobSkin: UIView?
-    /// (95) 第 11 条：胶囊把手内嵌小花图（refreshStageProgress-
-    /// Chrome 重设 knob 时只摘 stageKnobSkin、本花图恒保留并提顶）。
-    private var stageKnobFlower95: UIImageView?
+    // (99) 第 3 条③：(95) 把手内嵌小花图（恒保留并提顶、压
+    // 住逐主题皮肤）整套已摘除，圆点恢复逐主题皮肤原样。
     private var stageSeekHit: UIView?
     private let currentTimeLabel = UILabel()
     private let totalTimeLabel = UILabel()
@@ -1139,6 +1138,9 @@ final class StageViewController: UIViewController {
         Breadcrumbs.log("p98 rot sig k=\(kind) dt=\(dt)")
         if kind == "resized" {
             p94RotWebResized = true
+            // (99) 第 4 条：buffer 已到目标尺寸——冻结盖换
+            // 目标构图帧（活版无盖、本调用自守卫空转）。
+            p99SwapRotCover()
         } else if kind == "ready" {
             p94RotStageReady = true
             let x = (body["x"] as? NSNumber)?.intValue ?? 0
@@ -1242,6 +1244,34 @@ final class StageViewController: UIViewController {
             self.rendererContainer.addSubview(cover)
             self.webRotCover81 = cover
             Breadcrumbs.log("webfx.rot81 freeze gen=\(generation)")
+            // (99) 第 4 条：盖面自证——盖图像素尺寸＋抓拍延
+            // 时（自旋转起点）。本盖是旋转前构图；目标构图
+            // 换盖在 p99SwapRotCover（resized 信号到达时）。
+            let covDt = Int((CACurrentMediaTime() - self.webRotStart81) * 1000)
+            Breadcrumbs.log("p99 rot cov w=\(Int(image.size.width * image.scale))"
+                + " h=\(Int(image.size.height * image.scale)) dt=\(covDt)")
+        }
+    }
+
+    /// (99) 第 4 条：冻结盖目标构图换盖——网页层 buffer 已
+    /// 到目标尺寸（resized 信号）且盖仍在场时，按当前（目
+    /// 标）bounds 重抓一帧换掉盖图：揭盖前盖面即目标构图，
+    /// 不再是旋转前构图的拉伸。换盖自证同落 p99 rot cov
+    /// （sw=1）。
+    private func p99SwapRotCover() {
+        guard webRotCover81 != nil else { return }
+        let rotGen = webRotGen81
+        let webView = WebEffectBridge.shared.webView
+        let cfg = WKSnapshotConfiguration()
+        cfg.snapshotWidth = NSNumber(value: Double(max(200, webView.bounds.width)))
+        webView.takeSnapshot(with: cfg) { [weak self] image, _ in
+            guard let self, rotGen == self.webRotGen81,
+                  let cover = self.webRotCover81, let image else { return }
+            cover.image = image
+            let covDt = Int((CACurrentMediaTime() - self.webRotStart81) * 1000)
+            Breadcrumbs.log("p99 rot cov sw=1"
+                + " w=\(Int(image.size.width * image.scale))"
+                + " h=\(Int(image.size.height * image.scale)) dt=\(covDt)")
         }
     }
 
@@ -1276,6 +1306,9 @@ final class StageViewController: UIViewController {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (99) 第 3 条：迷你台单实例仲裁认领（见
+        // MiniBarArbiter99）——露面即成为唯一可见宿主。
+        MiniBarArbiter99.shared.claim(host: "stage", bar: stageBar)
         // (75) 工具条首启定向兜底（同主页墙）。
         applySeamBandOrientation(portrait: view.bounds.width < view.bounds.height)
         // RouteGuard presented 模式（3.7 (46)）：守卫窗顺延到
@@ -3417,21 +3450,8 @@ final class StageViewController: UIViewController {
         knob.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(knob)
         stageProgressKnob = knob
-        // (95) 第 11 条：把手内嵌 DeckGlyph82 小花图铺满
-        // （独立子视图，refreshStageProgressChrome 只摘主题
-        // 皮肤 stageKnobSkin、不摘本图，见该函数提顶回写）。
-        let knobFlower95 = UIImageView(image: DeckGlyph82.flowerImage(size: 14))
-        knobFlower95.contentMode = .scaleAspectFill
-        knobFlower95.isUserInteractionEnabled = false
-        knobFlower95.translatesAutoresizingMaskIntoConstraints = false
-        knob.addSubview(knobFlower95)
-        NSLayoutConstraint.activate([
-            knobFlower95.leadingAnchor.constraint(equalTo: knob.leadingAnchor),
-            knobFlower95.trailingAnchor.constraint(equalTo: knob.trailingAnchor),
-            knobFlower95.topAnchor.constraint(equalTo: knob.topAnchor),
-            knobFlower95.bottomAnchor.constraint(equalTo: knob.bottomAnchor),
-        ])
-        stageKnobFlower95 = knobFlower95
+        // (99) 第 3 条③：(95) 内嵌小花图已摘除（见属性处
+        // 注），knob 只挂逐主题皮肤。
 
         for label in [currentTimeLabel, totalTimeLabel] {
             // (89) §3-6 对齐网页 ProgressBar：时间标签 10px 等宽。
@@ -3909,11 +3929,8 @@ final class StageViewController: UIViewController {
             stageProgressKnob?.backgroundColor = .white
             stageProgressKnob?.layer.shadowOpacity = 0.9
         }
-        // (95) 第 11 条：本函数只摘/重挂主题皮肤（stageKnob-
-        // Skin），把手内嵌小花图不摘除、重挂皮肤后提回顶层。
-        if let flower = stageKnobFlower95 {
-            stageProgressKnob?.bringSubviewToFront(flower)
-        }
+        // (99) 第 3 条③：(95) 小花图不摘除＋提顶逻辑已随花
+        // 图本体一并摘除。
         if stageBarCollapsed {
             // (82) 第 5 条：收起态改系统白系（填充纯白、
             // 轨道白 35%），对齐 home indicator 观感。
@@ -4267,8 +4284,10 @@ final class StageViewController: UIViewController {
             stageTrackTrailC?.isActive = false
             stageTrackCenterXC?.isActive = true
             stageTrackWidthC?.isActive = true
-            stageTrackHeightC?.constant = 5
-            stageProgressTrack?.layer.cornerRadius = 2.5
+            // (99) 第 3 条②：收起条几何单一常量源（同两面
+            // 墙，DeckLayout82）。
+            stageTrackHeightC?.constant = DeckLayout82.collapsedTrackHeight
+            stageProgressTrack?.layer.cornerRadius = DeckLayout82.collapsedCornerRadius
             // (82) 第 7 条：收起态轨道换底锚（顶锚撤）。
             stageTrackTopC?.isActive = false
             stageTrackBottomConstraint?.isActive = true
@@ -4339,6 +4358,9 @@ final class StageViewController: UIViewController {
             + " r=\(collapsed ? "2.5" : "2")"
             + " orient=\(fmPortrait84 ? "port" : "land")")
         refreshStageProgressChrome()
+        // (99) 第 3 条：形态收口复断言单实例可见性（见
+        // MiniBarArbiter99）。
+        MiniBarArbiter99.shared.enforce()
     }
 
     /// (86) 第 5 条：旋转落定按新朝向重写收起轨宽（同两面

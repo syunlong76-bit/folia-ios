@@ -283,11 +283,9 @@ final class HomeWallViewController: UIViewController,
     private var seamImmersiveSavedPetEnabled: Bool?
     private var miniTheme: MiniPlayerTheme = MiniPlayerTheme.effective
     private var miniKnobSkin: UIView?
-    /// (95) 第 7 条：胶囊台把手内嵌花图（DeckGlyph82.flowerImage
-    /// 14pt 铺满 knob）；refreshMiniProgressChrome 只摘
-    /// miniKnobSkin、不清 knob 子视图，本图恒在场（该函数尾
-    /// 有防摘除重挂守卫）。
-    private var miniKnobFlower95: UIImageView?
+    // (99) 第 3 条③：(95) 的把手内嵌花图（恒在场且恒提顶，
+    // 压住逐主题皮肤 → 每主题圆点都成同一朵花）整套已摘除，
+    // 圆点恢复逐主题皮肤原样（knobSkinView）。
     /// 玻璃高光两件（顶部亮线 + 极淡白罩）：buildMiniBar 建时
     /// 存引用，供收起态去背景时与主题层/毛玻璃一并隐藏
     /// （3.7 (22)，见 setMiniBarForm）。
@@ -673,6 +671,9 @@ final class HomeWallViewController: UIViewController,
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (99) 第 3 条：迷你台单实例仲裁认领（见
+        // MiniBarArbiter99）——露面即成为唯一可见宿主。
+        MiniBarArbiter99.shared.claim(host: "homewall", bar: miniBar)
         // (51) 换根后本墙可作窗口根：无呈现方时「关闭」是空操作死按钮，隐藏之；
         // 被 present 出来时照旧显示（dismiss 回呈现方）。
         rootCloseButton?.isHidden = (presentingViewController == nil && navigationController == nil)
@@ -1677,17 +1678,8 @@ final class HomeWallViewController: UIViewController,
         knob.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(knob)
         miniProgressKnob = knob
-        let knobFlower95 = UIImageView(image: DeckGlyph82.flowerImage(size: 14))
-        knobFlower95.isUserInteractionEnabled = false
-        knobFlower95.translatesAutoresizingMaskIntoConstraints = false
-        knob.addSubview(knobFlower95)
-        miniKnobFlower95 = knobFlower95
-        NSLayoutConstraint.activate([
-            knobFlower95.leadingAnchor.constraint(equalTo: knob.leadingAnchor),
-            knobFlower95.trailingAnchor.constraint(equalTo: knob.trailingAnchor),
-            knobFlower95.topAnchor.constraint(equalTo: knob.topAnchor),
-            knobFlower95.bottomAnchor.constraint(equalTo: knob.bottomAnchor),
-        ])
+        // (99) 第 3 条③：(95) 内嵌花图已摘除（见属性处注），
+        // knob 只挂逐主题皮肤。
 
         miniCover = UIImageView()
         miniCover.contentMode = .scaleAspectFill
@@ -2279,19 +2271,8 @@ final class HomeWallViewController: UIViewController,
             ])
             miniKnobSkin = skin
         }
-        // (95) 第 7 条：本函数只摘 miniKnobSkin（上方）、不
-        // 清 knob 全部子视图，花图子视图恒在场；此处仅作防
-        // 摘除重挂守卫（万一花图被其他路径摘除，在此按铺满
-        // 约束重挂；不抢主题皮肤的 z 序，皮肤在场时仍盖点）。
-        if let flower95 = miniKnobFlower95, flower95.superview == nil {
-            miniProgressKnob.addSubview(flower95)
-            NSLayoutConstraint.activate([
-                flower95.leadingAnchor.constraint(equalTo: miniProgressKnob.leadingAnchor),
-                flower95.trailingAnchor.constraint(equalTo: miniProgressKnob.trailingAnchor),
-                flower95.topAnchor.constraint(equalTo: miniProgressKnob.topAnchor),
-                flower95.bottomAnchor.constraint(equalTo: miniProgressKnob.bottomAnchor),
-            ])
-        }
+        // (99) 第 3 条③：(95) 花图防摘除重挂守卫已随花图本
+        // 体一并摘除——knob 子视图只剩逐主题皮肤。
         // (84) 第 1 条：把手复原 (80) 口径——有主题皮肤时
         // 皮肤盖点（钮身转清、关发光）；无皮肤时白色发光
         // 点兜底（构建值）。
@@ -2929,8 +2910,10 @@ final class HomeWallViewController: UIViewController,
             miniTrackTrailC?.isActive = false
             miniTrackCenterXC?.isActive = true
             miniTrackWidthC?.isActive = true
-            miniTrackHeightC?.constant = 5
-            miniProgressTrack.layer.cornerRadius = 2.5
+            // (99) 第 3 条②：收起条几何收敛为全宿主单一常
+            // 量源（DeckLayout82），不许再各写字面量分叉。
+            miniTrackHeightC?.constant = DeckLayout82.collapsedTrackHeight
+            miniProgressTrack.layer.cornerRadius = DeckLayout82.collapsedCornerRadius
             // (82) 第 7 条：收起态轨道换底锚（顶锚撤）。
             miniTrackTopC?.isActive = false
             miniTrackBottomConstraint?.isActive = true
@@ -3026,6 +3009,9 @@ final class HomeWallViewController: UIViewController,
             + " r=\(collapsed ? "2.5" : "2")"
             + " orient=\(fmPortrait84 ? "port" : "land")")
         refreshMiniProgressChrome()
+        // (99) 第 3 条：形态收口复断言单实例可见性（非当
+        // 前宿主的台保持整台隐藏，见 MiniBarArbiter99）。
+        MiniBarArbiter99.shared.enforce()
     }
 
     /// (86) 第 5 条：旋转落定按新朝向重写收起轨宽。轨宽
@@ -4327,11 +4313,12 @@ extension HomeWallViewController {
             guard let self else { return }
             ConsolePanel82.present(from: self)
         }
-        // (93) C2：缝内日记本入口——DiaryViewController90
-        // 无挂歌打开（tagged: nil），与控制台日记本钮同页。
+        // (93) C2：缝内日记本入口——(99) 第 7 项起改开 P0 新版
+        // DiaryBookViewController99（开场视频＋隐私锁＋书主页）；
+        // DiaryViewController90 保留供控制台/拍立得旧入口使用。
         seam.onDiary93 = { [weak self] in
             guard let self else { return }
-            let diary = DiaryViewController90(tagged: nil)
+            let diary = DiaryBookViewController99(tagged: nil)
             diary.modalPresentationStyle = .fullScreen
             self.present(diary, animated: true)
         }

@@ -46,6 +46,11 @@ targets:
       # folder reference，运行时定位 "FxMedia/vangogh-fireworks.mp4"）
       - path: Resources/FxMedia
         type: folder
+      # (99) 第 7 项：音乐日记本 P0 资源（开场视频＋Fluent 3D
+      # 贴纸 37 张，folder reference，运行时定位
+      # "Diary/diary-opening.mp4" 与 "Diary/Stickers/<类>/<名>.png"）
+      - path: Resources/Diary
+        type: folder
     info:
       path: Info.plist
       # 注意：XcodeGen 在 generate 时按这里的 properties 重写 Info.plist，
@@ -55,7 +60,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Virelai
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "98"
+        CFBundleVersion: "99"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -129,7 +134,7 @@ targets:
       properties:
         CFBundleDisplayName: FoliaWidgets
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "98"
+        CFBundleVersion: "99"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

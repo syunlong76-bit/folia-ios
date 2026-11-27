@@ -570,6 +570,22 @@ final class WallLayout: UICollectionViewLayout {
     /// 重算、零身份变化）。数据源计数与实例集的同步由 VC 在
     /// 身份变化点调 reloadData 保证。
     @discardableResult
+    /// (99) 第 2 条：版式补切/互换提交时的坐标系原子结算——
+    /// 锚点原点与当前 worldOrigin 一次对齐（drift 归零）、待办
+    /// rebase 清零并取消其 flush 任务、按当前原点重建属性帧。
+    /// 补切后第一下滚动不再从「实例集锚在旧原点、相机已在新
+    /// 原点」的错位态起步（(98) 真机 redo 后 origin 失控飞出
+    /// 的前置条件之一）。只移锚点基准、不动实例集身份，调用
+    /// 方不得据此 reloadData。
+    func settleAnchor99() {
+        rebaseFlushWork?.cancel()
+        rebaseFlushWork = nil
+        pendingRebase = false
+        anchorOrigin = worldOrigin
+        rebuildAttributes()
+        lastIdentityChanged = false
+    }
+
     func refreshInstances() -> Bool {
         guard let collectionView, totalEntries > 0 else {
             let changed = !instances.isEmpty

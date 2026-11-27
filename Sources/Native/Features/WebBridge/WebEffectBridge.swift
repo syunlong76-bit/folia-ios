@@ -700,6 +700,25 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
           // 次数（seq）；rty＝verifyBuffer 自派发重试次数；
           // sup＝被合并吞掉的外部 resize 总数（随 report 出）。
           var pend98 = 0, rty98 = 0;
+          // (99) 第 4 条：活版方形中间态治理——旋转中途
+          // WKWebView 会报一拍混合尺寸（新宽×旧高，如
+          // 852×852 → buffer 2556×2556），此时 verifyBuffer
+          // 的自派发 resize 会催渲染器按中间尺寸重建。自派
+          // 发加尺寸稳定性门：视口尺寸连续 ≥2 帧不变才许
+          // 派发；混合尺寸拍只记数不催。sq99＝回执帧的
+          // buffer 为方形而视口非方形的标记（回原生自证
+          // 方形中间态是否绝迹）。
+          var vwTrack = window.innerWidth, vhTrack = window.innerHeight,
+              stableFr = 0;
+          (function watchSize() {
+            requestAnimationFrame(watchSize);
+            if (window.innerWidth === vwTrack && window.innerHeight === vhTrack) {
+              if (stableFr < 99) stableFr += 1;
+            } else {
+              vwTrack = window.innerWidth; vhTrack = window.innerHeight;
+              stableFr = 0;
+            }
+          })();
           function post(msg) {
             try {
               var h = window.webkit && window.webkit.messageHandlers
@@ -746,6 +765,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             info.rst = seq;
             info.rty = rty98;
             info.sup = coal97;
+            info.sq = (info.bufW > 0 && info.bufW === info.bufH
+              && info.clientW !== info.clientH) ? 1 : 0;
             coal97 = 0;
             pend98 = 0;
             post(info);
@@ -753,7 +774,11 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
           }
           function verifyBuffer() {
             var info = snapshot();
-            if (!bufferMatches(info) && !selfDispatch) {
+            // (99) 第 4 条：自派发加稳定性门（见 pend98 处
+            // 注）——混合尺寸拍不催重建，等尺寸落定后的链
+            // 尾 verifyBuffer 再补派（runResizeChain97 的
+            // stable>=2 收口仍调本函数，彼时 stableFr 已够）。
+            if (!bufferMatches(info) && !selfDispatch && stableFr >= 2) {
               selfDispatch = true;
               rty98 += 1;
               window.dispatchEvent(new Event('resize'));
@@ -795,6 +820,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                 resizeDoneSent = true;
                 info.type = 'stageResizeDone';
                 info.rty = rty98;
+                info.sq = (info.bufW > 0 && info.bufW === info.bufH
+                  && info.clientW !== info.clientH) ? 1 : 0;
                 post(info);
               }
               if (stable >= 2) {
@@ -2191,9 +2218,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             let kind = (body["kind"] as? String) ?? "-"
             // (97) 第 3 条：coal＝本轮 resize 风暴被合并掉的条数。
             let coal = (body["coal"] as? NSNumber)?.intValue ?? 0
+            // (99) 第 4 条：sq＝本帧 buffer 方形而视口非方形
+            // （方形中间态标记，活版旋转判读用）。
+            let sq99 = (body["sq"] as? NSNumber)?.intValue ?? 0
             Breadcrumbs.log("p94 web dpr=\(dpr) canvas=\(cw)x\(ch)"
                 + " client=\(vw)x\(vh) buf=\(bw)x\(bh) kind=\(kind)"
-                + " coal=\(coal)")
+                + " coal=\(coal) sq=\(sq99)")
             // (98) 第 8 条：死锁判读（DS 对账）——合并链的
             // pending/reset/suppression 三值独立落行。
             if kind == "resize" {
@@ -2222,7 +2252,8 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
             // （clientW×DPR）/实测 buffer/重试次数独立落行。
             let expW = Int((Double((body["clientW"] as? NSNumber)?.intValue ?? 0) * dpr).rounded())
             let rty = (body["rty"] as? NSNumber)?.intValue ?? 0
-            Breadcrumbs.log("p98 rot buf exp=\(expW) act=\(bw) dpr=\(dpr) rty=\(rty)")
+            let sq99 = (body["sq"] as? NSNumber)?.intValue ?? 0
+            Breadcrumbs.log("p98 rot buf exp=\(expW) act=\(bw) dpr=\(dpr) rty=\(rty) sq=\(sq99)")
             onP94RotSignal?("resized", body)
         case "stageReady":
             // (94) 94-6：JS 回 stage.ready（连续 2 个稳定帧后）——

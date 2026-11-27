@@ -105,6 +105,9 @@ final class SettingsViewController: UIViewController {
     // (98) 第 8 条：舞台旋转转场盲测二选一（不标注优劣，
     // 键 folia.rot98.mode：freeze/live，缺省方式一）。
     private let rotMode98Control = UISegmentedControl(items: ["方式一", "方式二"])
+    // (99) 第 1 项：圣诞树纹理 v 翻转二分开关（键
+    // folia.xmas99.vflip，默认关；与 rot98 开关同组）。
+    private let xmasVflip99Control = UISegmentedControl(items: ["关", "开"])
     private static let renderScales: [Double] = [0.5, 0.75, 1.0, 1.5, 2.0]
     private let reduceMotionSwitch = UISwitch()
     private let systemReduceMotionLabel = UILabel()
@@ -543,6 +546,13 @@ final class SettingsViewController: UIViewController {
         let rotGroup98 = makeGroupCard()
         rotGroup98.addArrangedSubview(makeSegmentedRow(
             "舞台旋转转场", rotMode98Control, #selector(rotMode98Changed)))
+        // (99) 第 1 项：圣诞树纹理 v 翻转二分开关，与 rot98 同组；
+        // 切换后下一次进入圣诞树装配图集时生效。
+        xmasVflip99Control.selectedSegmentIndex =
+            UserDefaults.standard.bool(forKey: "folia.xmas99.vflip") ? 1 : 0
+        rotGroup98.addArrangedSubview(makeHairline())
+        rotGroup98.addArrangedSubview(makeSegmentedRow(
+            "圣诞树纹理 v 翻转", xmasVflip99Control, #selector(xmasVflip99Changed)))
         rotGroup98.addArrangedSubview(makeHintRow(
             "两种转场方式二选一，切换后下一次旋转舞台时生效。"))
         cardStack.addArrangedSubview(rotGroup98)
@@ -1078,6 +1088,14 @@ final class SettingsViewController: UIViewController {
         UserDefaults.standard.set(live ? "live" : "freeze",
                                   forKey: "folia.rot98.mode")
         Breadcrumbs.log("p98 rot mode v=\(live ? "live" : "frz") src=set")
+    }
+
+    /// (99) 第 1 项：圣诞树纹理 v 翻转二分开关（键
+    /// folia.xmas99.vflip；装配侧同名面包屑 p99 xmas vfl 自证）。
+    @objc private func xmasVflip99Changed() {
+        let on = xmasVflip99Control.selectedSegmentIndex == 1
+        UserDefaults.standard.set(on, forKey: "folia.xmas99.vflip")
+        Breadcrumbs.log("p99 xmas vfl v=\(on ? 1 : 0) src=set")
     }
 
     @objc private func themeSwitchChanged() {

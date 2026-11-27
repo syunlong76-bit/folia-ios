@@ -477,11 +477,31 @@ final class SeamMaster: UIView {
     // 刻，切回未过前端有效窗直接复用图并以原 key 续轮询）。
     static var qrChannels98: [String]?
     static var qrKeyCache98: [String: (key: String, channel: String, at: Date)] = [:]
-    static var qrSlot98: [String: (key: String, base64: String?, content: String?, at: Date)] = [:]
+    static var qrSlot98: [String: (key: String, base64: String?, content: String?, at: Date, pre: Bool)] = [:]
     private var qrT098: Date?
     private var qrTotalLogged98 = false
     private var qrCacheHit98 = false
     private var qrReuseKey98: String?
+
+    // (99) 第 6 条：预生成整码＋静默续期——在册平台（默认家
+    // 缝构建时入册、另一家首次切到后入册）、同平台在途守卫
+    // （同时只许一个生成）、最近登录上下文时刻（开缝/切签/
+    // 取码流启动时刷新；超 30 分钟无上下文停续期）、续期定
+    // 时器（15s tick、主 RunLoop；宿主弱引用，宿主没了自停）。
+    // 预生成码只存进程内静态缓存、不落盘、不外发。
+    static var qrPreInFlight99: Set<String> = []
+    static var qrEnrolled99: Set<String> = []
+    static var qrPreAttempt99: [String: Date] = [:]
+    static var qrLastCtx99: Date?
+    static var qrRenewTimer99: Timer?
+    static weak var qrRenewHost99: SeamMaster?
+    private var qrPreHit99 = false
+
+    /// 前端可用窗（与 startQRFlow 双槽判定同值：QQ 160s／
+    /// 酷狗 285s，各已留 15s 余量于服务端 TTL）。
+    private static func qrWindow99(_ prov: String) -> TimeInterval {
+        prov == "qq" ? 160 : 285
+    }
 
     private func qrSeg98(_ prov: String, _ stage: String, _ t0: Date) {
         Breadcrumbs.log("p98 qr seg prov=\(prov) stage=\(stage) ms=\(Int(Date().timeIntervalSince(t0) * 1000)) node=\(ProviderLoginTransport.lastNodeIndex98)")
@@ -490,13 +510,21 @@ final class SeamMaster: UIView {
     private func qrTotal98(_ prov: String) {
         guard !qrTotalLogged98, let t0 = qrT098 else { return }
         qrTotalLogged98 = true
-        Breadcrumbs.log("p98 qr total prov=\(prov) ms=\(Int(Date().timeIntervalSince(t0) * 1000)) cache=\(qrCacheHit98 ? 1 : 0)")
+        Breadcrumbs.log("p98 qr total prov=\(prov) ms=\(Int(Date().timeIntervalSince(t0) * 1000)) cache=\(qrCacheHit98 ? 1 : 0) pre=\(qrPreHit99 ? 1 : 0)")
     }
 
-    /// 缝构建时后台预取：默认平台（openQR94 同判据）预跑
-    /// fetchKey 入缓存，另一家同轮预热（结果同样入缓存）。
-    /// 只预取 key 不预取整码（码 TTL 自生成起算）。
+    /// (99) 第 6 条：缝构建时（现有最早触发点，沿 (98)
+    /// prefetchQRKeys98 的 init 调用）把默认平台从「预取
+    /// key」升级为「预生成整码」——key＋create 全链路走完、
+    /// 整码入双槽，用户点头像时直接命中（见 startQRFlow 的
+    /// pre=1 口径）。另一家仍只预热 key，首次被切到后由
+    /// startQRFlow 入册、同样纳入预生成＋续期。两家都已登
+    /// 录时无码可备、跳过。失败静默：不落痕于 UI、按需链
+    /// 路（startQRFlow 整链重跑）原样兜底。
     private func prefetchQRKeys98() {
+        if let target = defaultQRProvider99() {
+            pregenerateQR99(target, renewal: false)
+        }
         Task { [weak self] in
             guard let self else { return }
             if Self.qrKeyCache98["qq"] == nil {
@@ -511,6 +539,154 @@ final class SeamMaster: UIView {
             if Self.qrKeyCache98["kugou"] == nil,
                let key = try? await self.kugouClient94.fetchKey() {
                 Self.qrKeyCache98["kugou"] = (key, "", Date())
+            }
+        }
+    }
+
+    /// 默认平台（openQR94 同判据：第一家未登录的，QQ 先、
+    /// 酷狗后）；都已登录返回 nil。
+    private func defaultQRProvider99() -> String? {
+        if ProviderSessionStatusQuery.status(for: .qq).isLoggedIn == false {
+            return "qq"
+        }
+        if ProviderSessionStatusQuery.status(for: .kugou).isLoggedIn == false {
+            return "kugou"
+        }
+        return nil
+    }
+
+    /// 预生成/续期共用入口（主线程调用约定：静态守卫与登
+    /// 记只在此改）。同平台在途直接让路；槽内码尚鲜（距可
+    /// 用窗上限 ≥30s）不重生成。续期失败不清空旧槽——旧码
+    /// 到期后由按需链路整链重跑兜底。
+    private func pregenerateQR99(_ prov: String, renewal: Bool) {
+        guard !Self.qrPreInFlight99.contains(prov) else { return }
+        if renewal, let last = Self.qrPreAttempt99[prov],
+           Date().timeIntervalSince(last) < 60 { return }
+        if let slot = Self.qrSlot98[prov],
+           Date().timeIntervalSince(slot.at) < Self.qrWindow99(prov) - 30 {
+            if !renewal {
+                Breadcrumbs.log("p99 qr pre prov=\(prov) hit=1 ms=0")
+            }
+            return
+        }
+        Self.qrPreInFlight99.insert(prov)
+        Self.qrPreAttempt99[prov] = Date()
+        Self.qrEnrolled99.insert(prov)
+        Self.qrLastCtx99 = Date()
+        Self.startQRRenewTimer99(host: self)
+        let oldAge = Self.qrSlot98[prov]
+            .map { Int(Date().timeIntervalSince($0.at)) } ?? 0
+        let t0 = Date()
+        Task { [weak self] in
+            var stored = false
+            if let self {
+                stored = await self.generateQRCode99(prov)
+            }
+            await MainActor.run {
+                Self.qrPreInFlight99.remove(prov)
+                guard stored else { return }
+                if renewal {
+                    Breadcrumbs.log("p99 qr ren prov=\(prov) age=\(oldAge)")
+                } else {
+                    Breadcrumbs.log("p99 qr pre prov=\(prov) hit=0 ms=\(Int(Date().timeIntervalSince(t0) * 1000))")
+                }
+            }
+        }
+    }
+
+    /// key＋create 全链路（与取码流同段同缓存口径：key 优
+    /// 先吃 120s 预取缓存）；成功把整码写双槽并标 pre。
+    /// 任一步失败返回 false、什么都不写。
+    private func generateQRCode99(_ prov: String) async -> Bool {
+        if prov == "qq" {
+            var channel = "qq"
+            if let chs = Self.qrChannels98, !chs.contains(channel) {
+                channel = chs.first ?? channel
+            }
+            var key = ""
+            if let kc = Self.qrKeyCache98["qq"], kc.channel == channel,
+               Date().timeIntervalSince(kc.at) < 120 {
+                key = kc.key
+            } else {
+                guard let fetched = try? await qqClient94.fetchKey(channel: channel)
+                else { return false }
+                key = fetched
+                Self.qrKeyCache98["qq"] = (key, channel, Date())
+            }
+            guard let qr = try? await qqClient94.createQR(key: key),
+                  let img = qr.qrimgBase64, !img.isEmpty else { return false }
+            Self.qrSlot98["qq"] = (qr.key, qr.qrimgBase64, nil, Date(), true)
+            return true
+        }
+        var key = ""
+        if let kc = Self.qrKeyCache98["kugou"],
+           Date().timeIntervalSince(kc.at) < 120 {
+            key = kc.key
+        } else {
+            guard let fetched = try? await kugouClient94.fetchKey()
+            else { return false }
+            key = fetched
+            Self.qrKeyCache98["kugou"] = (key, "", Date())
+        }
+        guard let qr = try? await kugouClient94.createQR(key: key),
+              (qr.qrimgBase64?.isEmpty == false) || (qr.qrContent?.isEmpty == false)
+        else { return false }
+        Self.qrSlot98["kugou"] = (qr.key, qr.qrimgBase64, qr.qrContent, Date(), true)
+        return true
+    }
+
+    // MARK: (99) 静默续期调度
+
+    private static func startQRRenewTimer99(host: SeamMaster) {
+        qrRenewHost99 = host
+        guard qrRenewTimer99 == nil else { return }
+        let timer = Timer(timeInterval: 15, repeats: true) { _ in
+            guard let host = qrRenewHost99 else {
+                qrRenewTimer99?.invalidate()
+                qrRenewTimer99 = nil
+                return
+            }
+            host.qrRenewTick99()
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        qrRenewTimer99 = timer
+    }
+
+    /// 续期 tick（15s）：停跑条件——无在册平台、距最近登
+    /// 录上下文超 30 分钟（定时器自销，下次入册/开缝再
+    /// 起）。单 tick 内：App 非活跃跳过（不补跑）；面板正
+    /// 开着的平台由取码流自管过期刷新、不抢；已登录的平
+    /// 台退册清槽；在册平台槽龄进入可用窗末 30s（留 ≥30s
+    /// 余量）才静默重生成，槽缺失（曾失败）亦补生成（受
+    /// pregenerateQR99 的 60s 尝试间隔约束）。
+    private func qrRenewTick99() {
+        if Self.qrEnrolled99.isEmpty {
+            Self.qrRenewTimer99?.invalidate()
+            Self.qrRenewTimer99 = nil
+            return
+        }
+        guard let ctx = Self.qrLastCtx99,
+              Date().timeIntervalSince(ctx) < 30 * 60 else {
+            Self.qrRenewTimer99?.invalidate()
+            Self.qrRenewTimer99 = nil
+            return
+        }
+        guard UIApplication.shared.applicationState == .active else { return }
+        for prov in Array(Self.qrEnrolled99) {
+            if SeamState85.qrOpen94, SeamState85.qrProvider94 == prov { continue }
+            let provider: NativeSessionStore.Provider = prov == "kugou" ? .kugou : .qq
+            if ProviderSessionStatusQuery.status(for: provider).isLoggedIn {
+                Self.qrEnrolled99.remove(prov)
+                Self.qrSlot98[prov] = nil
+                continue
+            }
+            guard let slot = Self.qrSlot98[prov] else {
+                pregenerateQR99(prov, renewal: true)
+                continue
+            }
+            if Date().timeIntervalSince(slot.at) >= Self.qrWindow99(prov) - 30 {
+                pregenerateQR99(prov, renewal: true)
             }
         }
     }
@@ -1120,10 +1296,21 @@ final class SeamMaster: UIView {
         qrTotalLogged98 = false
         qrCacheHit98 = false
         qrReuseKey98 = nil
+        qrPreHit99 = false
+        // (99) 第 6 条：取码流启动即登录上下文——刷新续期
+        // 上下文时刻并把本台入册（另一家首次切到即在此入
+        // 册，此后与默认家同享预生成＋静默续期）。
+        Self.qrLastCtx99 = Date()
+        Self.qrEnrolled99.insert(provider.rawValue)
+        Self.startQRRenewTimer99(host: self)
         if let slot = Self.qrSlot98[provider.rawValue],
            Date().timeIntervalSince(slot.at) < (provider == .qq ? 160 : 285) {
             qrReuseKey98 = slot.key
             qrCacheHit98 = true
+            qrPreHit99 = slot.pre
+            if slot.pre {
+                Breadcrumbs.log("p99 qr pre prov=\(provider.rawValue) hit=1 ms=0")
+            }
         } else {
             Self.qrSlot98[provider.rawValue] = nil
             qrCachedKey95 = nil
@@ -1229,7 +1416,7 @@ final class SeamMaster: UIView {
             let ct0 = Date()
             qr = try await qqClient94.createQR(key: key)
             qrSeg98("qq", "create", ct0)
-            Self.qrSlot98["qq"] = (qr.key, qr.qrimgBase64, nil, Date())
+            Self.qrSlot98["qq"] = (qr.key, qr.qrimgBase64, nil, Date(), false)
           } catch {
             await MainActor.run {
                 self.qrStatusLabel.text = "二维码生成失败，请检查网络后重试"
@@ -1361,7 +1548,7 @@ final class SeamMaster: UIView {
             let ct0 = Date()
             qr = try await kugouClient94.createQR(key: key)
             qrSeg98("kugou", "create", ct0)
-            Self.qrSlot98["kugou"] = (qr.key, qr.qrimgBase64, qr.qrContent, Date())
+            Self.qrSlot98["kugou"] = (qr.key, qr.qrimgBase64, qr.qrContent, Date(), false)
           } catch {
             await MainActor.run {
                 self.qrStatusLabel.text = "二维码生成失败，请检查网络后重试"
@@ -1457,6 +1644,10 @@ final class SeamMaster: UIView {
 
     private func qrLoginSucceeded(provider: NativeSessionStore.Provider, gen: Int) {
         qrFlowActive = false
+        // (99) 第 6 条：码已被消费且该家已登录——退出预生成
+        // 在册并清槽，续期 tick 不再为它重生成。
+        Self.qrEnrolled99.remove(provider.rawValue)
+        Self.qrSlot98[provider.rawValue] = nil
         coordinator94.finish(generation: gen)
         Breadcrumbs.log("p94 seam qr login=\(provider.rawValue)")
         closeQR94()

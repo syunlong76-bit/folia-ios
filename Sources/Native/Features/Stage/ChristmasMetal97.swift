@@ -129,6 +129,14 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
     private var viewSizePt: CGSize = .zero
     private weak var deviceRef: MTLDevice?
 
+    /// (99) 第 1 项：圣诞树纹理 v 轴翻转二分开关（键
+    /// folia.xmas99.vflip，默认关）。真机日志分不开「v 轴行序
+    /// 错位」与「颜色/alpha 错」，同一包内可切做真机对照：
+    /// 开时在图集 UV 矩形生成处做 v' = 1 - v（见 buildAtlas）。
+    static var vflip99: Bool {
+        UserDefaults.standard.bool(forKey: "folia.xmas99.vflip")
+    }
+
     private static let maxSprites = 20000
     private static let maxTris = 64
 
@@ -189,43 +197,54 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
         }
         let atlasH = y + shelfH
         guard atlasH > 0, atlasH <= 8192 else { return false }
-        // 位图上下文（预乘 BGRA：premultipliedFirst|byteOrder32Little，(98) 修正——旧 Last|32Big 实产 RGBA 与 .bgra8Unorm 声明互换 R/B）：翻转绘制使内存行 0＝图集顶行。
-        let bpr = atlasW * 4
-        var raw = [UInt8](repeating: 0, count: bpr * atlasH)
-        let cs = CGColorSpaceCreateDeviceRGB()
-        let ok: Bool = raw.withUnsafeMutableBytes { ptr in
-            guard let ctx = CGContext(data: ptr.baseAddress, width: atlasW,
-                                      height: atlasH, bitsPerComponent: 8,
-                                      bytesPerRow: bpr, space: cs,
-                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
-                                        | CGBitmapInfo.byteOrder32Little.rawValue)
-            else { return false }
-            ctx.translateBy(x: 0, y: CGFloat(atlasH))
-            ctx.scaleBy(x: 1, y: -1)
-            for idx in sprites.indices {
-                guard let img = sprites[idx] else { continue }
-                let r = placements[idx]
-                // 翻转坐标系下：图集顶行 y 对应上下文 y=atlasH-y-h。
-                ctx.draw(img, in: CGRect(x: r.origin.x,
-                                         y: CGFloat(atlasH) - r.origin.y - r.height,
-                                         width: r.width, height: r.height))
-            }
-            return true
-        }
-        guard ok else { return false }
         let desc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .bgra8Unorm, width: atlasW, height: atlasH, mipmapped: false)
         desc.usage = [.shaderRead]
         guard let tex = device.makeTexture(descriptor: desc) else { return false }
-        raw.withUnsafeBytes { ptr in
-            tex.replace(region: MTLRegionMake2D(0, 0, atlasW, atlasH),
-                        mipmapLevel: 0, withBytes: ptr.baseAddress!, bytesPerRow: bpr)
+        // (99) 第 1 项·内存：逐精灵分块上传，不再整幅图集 CPU
+        // 暂存（旧路 raw＝4096×atlasH×4B≈15.7MB 整块分配，与纹理
+        // 本体同量级、装配峰值翻倍）。位图口径不动：预乘 BGRA
+        // （premultipliedFirst|byteOrder32Little，(98) 修正）；
+        // 每块内翻转绘制使块内存行 0＝该精灵顶行，与旧整幅路
+        // 逐行等价（旧路在整幅上下文里对每格做的正是同一翻转）。
+        let cs = CGColorSpaceCreateDeviceRGB()
+        for idx in sprites.indices {
+            guard let img = sprites[idx] else { continue }
+            let r = placements[idx]
+            let w = Int(r.width), h = Int(r.height)
+            guard w > 0, h > 0 else { continue }
+            let bpr = w * 4
+            var block = [UInt8](repeating: 0, count: bpr * h)
+            let ok: Bool = block.withUnsafeMutableBytes { ptr in
+                guard let ctx = CGContext(data: ptr.baseAddress, width: w,
+                                          height: h, bitsPerComponent: 8,
+                                          bytesPerRow: bpr, space: cs,
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                                            | CGBitmapInfo.byteOrder32Little.rawValue)
+                else { return false }
+                ctx.translateBy(x: 0, y: CGFloat(h))
+                ctx.scaleBy(x: 1, y: -1)
+                ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h))
+                return true
+            }
+            guard ok else { return false }
+            block.withUnsafeBytes { ptr in
+                tex.replace(region: MTLRegionMake2D(Int(r.origin.x), Int(r.origin.y), w, h),
+                            mipmapLevel: 0, withBytes: ptr.baseAddress!, bytesPerRow: bpr)
+            }
         }
         atlasTexture = tex
         Breadcrumbs.log("p98 xmas uv atlasH=\(atlasH) uv13=\(placements.indices.contains(13) ? "\(placements[13])" : "na")")
+        // (99) 第 1 项：v 翻转二分——UV 矩形处做 v' = 1 - v
+        // （minY' = 1 - maxY、maxY' = 1 - minY），采样层其余不动。
+        let vfl = Self.vflip99
+        Breadcrumbs.log("p99 xmas vfl v=\(vfl ? 1 : 0)")
         uvRects = placements.map {
-            CGRect(x: $0.origin.x / CGFloat(atlasW), y: $0.origin.y / CGFloat(atlasH),
-                   width: $0.width / CGFloat(atlasW), height: $0.height / CGFloat(atlasH))
+            let rect = CGRect(x: $0.origin.x / CGFloat(atlasW), y: $0.origin.y / CGFloat(atlasH),
+                              width: $0.width / CGFloat(atlasW), height: $0.height / CGFloat(atlasH))
+            return vfl
+                ? CGRect(x: rect.minX, y: 1 - rect.maxY, width: rect.width, height: rect.height)
+                : rect
         }
         return true
     }
@@ -239,6 +258,22 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
     func clearAtlas() {
         atlasTexture = nil
         uvRects = []
+    }
+
+    /// (99) 第 1 项·内存：退出彻底释放——图集之外，实例/三角
+    /// 缓冲（20000×48B≈0.96MB 等）、管线与命令队列一并置空，
+    /// 待提交帧数组清空。旧 unmount 只放图集，缓冲与管线靠
+    /// 渲染器对象析构兜底，宿主持久复用时不释放。
+    func releaseAll99() {
+        clearAtlas()
+        instanceBuffer = nil
+        triBuffer = nil
+        pipelineSprite = nil
+        pipelineTri = nil
+        commandQueue = nil
+        pendingSprites = []
+        pendingTris = []
+        isReady = false
     }
 
     /// 一帧的实例集（渲染器在 frameTick 内备好，draw 时消费）。
