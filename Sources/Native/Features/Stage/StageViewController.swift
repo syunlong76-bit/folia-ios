@@ -971,7 +971,7 @@ final class StageViewController: UIViewController {
             + " to=\(Int(size.width))x\(Int(size.height))")
         // (94) 94-6：四齐门接管本次 freeze 的释放（旧约
         // 330ms 的固定计时释放口径就此废除）——重置门状态、
-        // 起稳定帧计数链；释放点在 p94RotMaybeRelease。
+        // (98) 第 8 条：释放点改 landed 结算（p98RotReleaseAtLanded）。
         p94RotStart = CACurrentMediaTime()
         p94RotGen += 1
         p94RotAwaiting = true
@@ -995,7 +995,7 @@ final class StageViewController: UIViewController {
         // 结拍先给 WebView 截图盖层（与 (70) B6 切换盖同
         // 法），转场期网页层本体藏在盖下、不再被系统旋转
         // 快照当刚性平面倾斜/侧躺；落定后等新尺寸首帧回
-        // 执再揭（见 armWebRotReveal81）。
+        // 执再揭（(98) 改 landed 结算/有界等待）。
         // (98) 第 8 条：盲测模式读取（设置页「舞台旋转转场」
         // 二选一、不标注优劣）：freeze＝全分辨率冻帧盖；
         // live＝不设盖、网页层随系统转场实时渲染。
