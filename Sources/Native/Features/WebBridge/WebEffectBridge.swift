@@ -478,6 +478,12 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
     /// 样式首帧回执回调（3.7 (67) A4）：StageViewController 等
     /// 淡换时挂，桥收到 styleFrame 消息即转交并落 webfx.frame。
     var onStyleFrame: ((String) -> Void)?
+    /// (94) 94-6 旋转信号回调：注入核查脚本回 stageResizeDone
+    /// （WebView resize 完成、buffer 与新尺寸对齐）与
+    /// stageReady（连续 2 个稳定帧）时转交舞台四齐门结算；
+    /// 载荷为 JS 原始字典（cssW/cssH/bufW/bufH/dpr/clientW/
+    /// clientH/x）。舞台装/卸时置位/清零（同 onStyleFrame 纪律）。
+    var onP94RotSignal: ((String, [String: Any]) -> Void)?
     /// 最近一次由原生指定的网页样式（重载后补推用）与下发时刻
     /// （首帧回执延迟量测用）。
     private var lastDesignatedWebStyle: String?
@@ -505,6 +511,118 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         #endif
         config.userContentController.addUserScript(WKUserScript(
                 source: debugFlagSource, injectionTime:.atDocumentStart, forMainFrameOnly: true))
+
+        // (94) 94-6/94-8 注入核查脚本（原生侧自证，不改前端束）：
+        // ①94-8 分辨率——init（load 后）与每次 resize 时取设备
+        // 原生 devicePixelRatio 动态值（不写死、不封顶），校验
+        // 主画布 backing store ＝ round(CSS 尺寸×dpr)，不一致即
+        // 派发一记 resize 催渲染器按新尺寸重建（自派发防递归），
+        // 结果经 foliaNative 的 p94Web 消息回原生落面包屑。
+        // ②94-6 旋转 content-ready——resize 后以 rAF 数连续
+        // 稳定帧：buffer 与新尺寸对齐先回 stageResizeDone，
+        // 连续 2 帧尺寸不变再回 stageReady，供原生四齐门结算
+        // （废除固定计时释放）。画布取文档内面积最大者（舞台
+        // 主画布）；无画布时以视口尺寸代报。
+        let p94HarnessSource = """
+        (function () {
+          if (window.__foliaP94) return;
+          var seq = 0, selfDispatch = false, resizeDoneSent = false;
+          function post(msg) {
+            try {
+              var h = window.webkit && window.webkit.messageHandlers
+                && window.webkit.messageHandlers.foliaNative;
+              if (h) h.postMessage(msg);
+            } catch (e) {}
+          }
+          function mainCanvas() {
+            var list = document.querySelectorAll('canvas');
+            var best = null, bestArea = -1;
+            for (var i = 0; i < list.length; i++) {
+              var r = list[i].getBoundingClientRect();
+              var area = r.width * r.height;
+              if (area > bestArea) { bestArea = area; best = list[i]; }
+            }
+            return best;
+          }
+          function snapshot() {
+            var dpr = window.devicePixelRatio || 1;
+            var info = { dpr: dpr, cssW: window.innerWidth, cssH: window.innerHeight,
+              clientW: 0, clientH: 0, bufW: 0, bufH: 0, x: 0 };
+            var c = mainCanvas();
+            if (c) {
+              var r = c.getBoundingClientRect();
+              info.clientW = Math.round(r.width);
+              info.clientH = Math.round(r.height);
+              info.bufW = c.width;
+              info.bufH = c.height;
+              info.x = Math.round(r.left);
+            }
+            return info;
+          }
+          function bufferMatches(info) {
+            if (!info.bufW && !info.bufH) return true;
+            return info.bufW === Math.round(info.clientW * info.dpr)
+              && info.bufH === Math.round(info.clientH * info.dpr);
+          }
+          function report(kind) {
+            var info = snapshot();
+            info.type = 'p94Web';
+            info.kind = kind;
+            post(info);
+            return info;
+          }
+          function verifyBuffer() {
+            var info = snapshot();
+            if (!bufferMatches(info) && !selfDispatch) {
+              selfDispatch = true;
+              window.dispatchEvent(new Event('resize'));
+            }
+            return info;
+          }
+          function onResize() {
+            if (selfDispatch) { selfDispatch = false; }
+            else { verifyBuffer(); }
+            seq += 1;
+            var mySeq = seq;
+            resizeDoneSent = false;
+            report('resize');
+            var lastW = window.innerWidth, lastH = window.innerHeight, stable = 0;
+            function tick() {
+              if (mySeq !== seq) return;
+              if (window.innerWidth === lastW && window.innerHeight === lastH) {
+                stable += 1;
+              } else {
+                lastW = window.innerWidth;
+                lastH = window.innerHeight;
+                stable = 0;
+              }
+              var info = snapshot();
+              if (!resizeDoneSent && bufferMatches(info)) {
+                resizeDoneSent = true;
+                info.type = 'stageResizeDone';
+                post(info);
+              }
+              if (stable >= 2) {
+                var done = verifyBuffer();
+                done.type = 'stageReady';
+                post(done);
+                return;
+              }
+              requestAnimationFrame(tick);
+            }
+            requestAnimationFrame(tick);
+          }
+          window.addEventListener('resize', onResize);
+          window.__foliaP94 = { report: report, onResize: onResize };
+          if (document.readyState === 'complete') {
+            setTimeout(function () { verifyBuffer(); report('init'); }, 0);
+          } else {
+            window.addEventListener('load', function () { verifyBuffer(); report('init'); });
+          }
+        })();
+        """
+        config.userContentController.addUserScript(WKUserScript(
+                source: p94HarnessSource, injectionTime:.atDocumentStart, forMainFrameOnly: true))
 
         // P9 兜底（3.6 全量前端，审计 fullapp-exit-audit）：网页绝不出声的
         // 最后一道保险。deck 已在源码层饿死（audioSrc 恒 null、无 play 路径），
@@ -693,6 +811,9 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         webView.scrollView.backgroundColor = .black
         webView.scrollView.isScrollEnabled = true
         webView.scrollView.bounces = false
+        // (94) 94-6：旋转/嵌入时系统自动 inset 不许改舞台可用区，
+        // 容器帧先行设满、内容不许被安全区顶偏。
+        webView.scrollView.contentInsetAdjustmentBehavior = .never
         webView.allowsLinkPreview = false
         // 透明白闪处置：didFinish 前 alpha=0，完成后 150ms 渐入。
         webView.alpha = 0
@@ -1273,6 +1394,25 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: work)
     }
 
+    /// (94) 94-6 旋转前清理：舞台旋转 alongside 里调——清
+    /// WebView 滚动面的 zoom scale / inset 残留（嵌入全屏宿主
+    /// 共用同一 WebView，上一宿主的缩放/内边距不许带进新朝
+    /// 向），并触发注入核查脚本的一轮 resize 核查（94-8 的
+    /// buffer 校验与 stageReady 回报都挂在它的 resize 链上）。
+    func prepareRotationResize94() {
+        let sv = webView.scrollView
+        sv.contentInsetAdjustmentBehavior = .never
+        if sv.zoomScale != 1 {
+            sv.setZoomScale(1, animated: false)
+        }
+        if sv.contentInset != .zero {
+            sv.contentInset = .zero
+        }
+        webView.evaluateJavaScript(
+            "window.__foliaP94 ? window.__foliaP94.onResize() : -1",
+            completionHandler: nil)
+    }
+
     /// 人工重试入口（诊断面板 / 设置页调用）：清退避计数与致命错误后重载。
     func retryAfterFatalError() {
         terminateDates.removeAll()
@@ -1838,6 +1978,43 @@ final class WebEffectBridge: NSObject, ObservableObject, WKScriptMessageHandler 
                 ? (CACurrentMediaTime() - lastVisualPushAt) * 1000 : -1
             Breadcrumbs.log("webfx.frame style=\(styleId) dt=\(String(format: "%.0f", dtMs))")
             onStyleFrame?(styleId)
+        case "p94Web":
+            // (94) 94-8 分辨率自证：dpr 为页面实测的设备原生
+            // devicePixelRatio（动态、不封顶）；canvas＝主画布
+            // CSS 尺寸、client＝视口 CSS 尺寸、buf＝backing
+            // store 实测。buf 应等于 round(canvas×dpr)。
+            let dpr = (body["dpr"] as? NSNumber)?.doubleValue ?? -1
+            let cw = (body["clientW"] as? NSNumber)?.intValue ?? 0
+            let ch = (body["clientH"] as? NSNumber)?.intValue ?? 0
+            let vw = (body["cssW"] as? NSNumber)?.intValue ?? 0
+            let vh = (body["cssH"] as? NSNumber)?.intValue ?? 0
+            let bw = (body["bufW"] as? NSNumber)?.intValue ?? 0
+            let bh = (body["bufH"] as? NSNumber)?.intValue ?? 0
+            let kind = (body["kind"] as? String) ?? "-"
+            Breadcrumbs.log("p94 web dpr=\(dpr) canvas=\(cw)x\(ch)"
+                + " client=\(vw)x\(vh) buf=\(bw)x\(bh) kind=\(kind)")
+            // contentsScale 纪律：不许被改成 1（或任何非屏幕值），
+            // 发现即复原并在同一行留痕。
+            let screenScale = UIScreen.main.scale
+            if abs(webView.layer.contentsScale - screenScale) > 0.01 {
+                webView.layer.contentsScale = screenScale
+                Breadcrumbs.log("p94 web cs restored=\(screenScale)")
+            }
+        case "stageResizeDone":
+            // (94) 94-6：WebView resize 完成（buffer 已与新尺寸
+            // 对齐）——四齐门之二，桥侧落行、舞台侧经回调结算。
+            let vw = (body["cssW"] as? NSNumber)?.intValue ?? 0
+            let vh = (body["cssH"] as? NSNumber)?.intValue ?? 0
+            let bw = (body["bufW"] as? NSNumber)?.intValue ?? 0
+            let bh = (body["bufH"] as? NSNumber)?.intValue ?? 0
+            let dpr = (body["dpr"] as? NSNumber)?.doubleValue ?? -1
+            Breadcrumbs.log("p94 rot web resize css=\(vw)x\(vh) buf=\(bw)x\(bh) dpr=\(dpr)")
+            onP94RotSignal?("resized", body)
+        case "stageReady":
+            // (94) 94-6：JS 回 stage.ready（连续 2 个稳定帧后）——
+            // 四齐门之三；本行只作到达证据，ready 结算行由舞台
+            // 四齐门在全部条件齐时落（p94 rot ready）。
+            onP94RotSignal?("ready", body)
         default:
             break
         }

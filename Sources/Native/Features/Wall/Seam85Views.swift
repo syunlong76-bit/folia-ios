@@ -1,3 +1,4 @@
+import Combine
 import UIKit
 
 /// (85) 第 1 条：世界缝共享等级（网页 bravaisSeamLevel 同
@@ -18,6 +19,12 @@ enum SeamState85 {
         get { UserDefaults.standard.bool(forKey: "folia.seam89.narrow120") }
         set { UserDefaults.standard.set(newValue, forKey: "folia.seam89.narrow120") }
     }
+
+    /// (94) 94-4：二维码展开态/平台——母版共享状态（主页/
+    /// 歌单两缝共用一份、旋转重排不丢；进程内暂存不落盘，
+    /// 缝重建后按此恢复展开态并续跑取码流）。
+    static var qrOpen94 = false
+    static var qrProvider94 = "qq"
 
     /// 网页 contentOpacityFor 同式：开口窄于排版宽时内容
     /// 随之淡出（开到 35% 以下不可见）。
@@ -342,17 +349,1209 @@ final class SeamEdgeTab85View: UIView {
     @objc private func tapped() { onTap?() }
 }
 
-/// (85) 第 1 条：主页缝内容（书脊档 64，网页 BravaisSeam-
-/// Home compact 同构成）：书库行 → 折叠钮 → 竖排页签
-/// （歌单/电台/专辑/本地）→ 中段直达入口（我喜欢的音乐）
-/// → 底部工具格（搜索/设置／队列/⋯）。
-/// port88：账户头像位整件摘除（Miller 2026-11-25 定「头
-/// 像全部去掉」，工坊基线同口径）；点头像定位随之退役。
-/// 选中态两套（网页 fb3）：一级页签＝填色块；本面无二级
-/// 切换（原生分区是独立面、经页签进入），中段直达入口
-/// 是普通按钮形态、不冒充页签。
-/// 命中纪律同 (84) 侧栏：hitTest 只认按钮本体，缝背景一
-/// 律穿透——缝随墙走、不是拖动把手。
+/// (94) 94-4：缝排版单一母版——主页缝与歌单页缝共用同一
+/// 个 SeamMaster 核心组件，自上而下构成定版（与样片
+/// ge-dan-qiang-pai-ban-zhong-she-ji-yang-pian 定版一致）：
+/// 缝顶圆形头像（34pt，点头像缝中区原地切登录二维码，
+/// QQ/酷狗页签可切、无浮层无遮罩、再点头像切回）→ 页签
+/// 行 → 四入口图标行（我喜欢的音乐/云盘/日记本/Navidrome）
+/// → 排版胶囊（横排三段，与歌单页同一组件、同一共享状态
+/// foliaPlaylistLayout91）→ 缝底图标排 → 缝底播放区（上一
+/// 首/暂停白圆钮 38/下一首）。页面差异只剩数据（页签内容/
+/// 计数/头部语义）与回调转发，由 HomeSeam85View /
+/// PlaylistSeam85View 两个适配类承担；构成、布局、状态
+/// （页签选中/胶囊模式/播放态/二维码展开态）只有这一份
+/// 实现，不许再各写一套缝。
+final class SeamMaster: UIView {
+
+    enum Entry { case liked, cloud, diary, navidrome }
+    enum Tool { case search, settings, queue, more, console, append, expand }
+    enum Header { case homeTitle(String), playlist }
+
+    struct ToolItem {
+        let tool: Tool
+        let glyph: SeamGlyph93.Kind
+        let label: String
+    }
+
+    // MARK: 语义回调（适配类转发到宿主既有闭包）
+
+    var onFold: (() -> Void)?
+    var onBack: (() -> Void)?
+    var onHeaderTitleTap: (() -> Void)?
+    var onTabSelected: ((Int) -> Void)?
+    var onEntry: ((Entry) -> Void)?
+    var onLayoutMode: ((Int) -> Void)?
+    var onTool: ((Tool) -> Void)?
+    /// 歌单页专用：缝底播放区中央钮在未播放时接歌单全量
+    /// 播放（宿主 onPlayAll）；主页不设、走全局播放切换。
+    var onPlayAll: (() -> Void)?
+
+    var header: Header = .playlist {
+        didSet { applyHeader() }
+    }
+
+    /// 内容纵向内边距（宿主按工具条/点播台占位设定，转发
+    /// 自适配类既有 contentTopInset/contentBottomInset）。
+    var contentTopInset: CGFloat = 108 { didSet { setNeedsLayout() } }
+    var contentBottomInset: CGFloat = 132 { didSet { setNeedsLayout() } }
+    /// 内容淡出（宿主按渲染开口逐帧喂，见 SeamState85）。
+    var contentOpacity: CGFloat = 1 {
+        didSet { contentView.alpha = contentOpacity }
+    }
+    /// 主页 120 宽档标记（宿主 displayWide89 转发；只影响
+    /// 入口/工具排的行列折法，构成不变）。
+    var displayWide: Bool = false { didSet { setNeedsLayout() } }
+    /// 歌单展开档标记（展开工具钮选中态）。
+    var isExpanded94: Bool = false { didSet { refreshTools() } }
+
+    // MARK: 视图
+
+    private let host94: String
+    private let backdrop86 = SeamBackdrop86()
+    private let contentView = UIView()
+
+    private let avatarButton = UIButton(type: .custom)
+    private let avatarImageView = UIImageView()
+    private let avatarFallbackLabel = UILabel()
+    private let avatarPlaceholderIcon = UIImageView()
+
+    private let mainScroll = UIScrollView()
+    private let mainContent = UIView()
+    private let headerTitleButton = UIButton(type: .system)
+    private let backButton = UIButton(type: .system)
+    private let foldButton = UIButton(type: .system)
+    private var tabButtons: [UIButton] = []
+    private let tabNoteLabel = UILabel()
+    private var entryButtons: [UIButton] = []
+    private let capsuleView = UIView()
+    private var capsuleButtons: [UIButton] = []
+
+    private let qrPanel = UIView()
+    private let qrTitleLabel = UILabel()
+    private let qrCloseButton = UIButton(type: .system)
+    private var qrTabButtons: [UIButton] = []
+    private let qrImageView = UIImageView()
+    private let qrStatusLabel = UILabel()
+    private let qrSpinner = UIActivityIndicatorView(style: .medium)
+
+    private var toolButtons: [UIButton] = []
+    private let prevButton = UIButton(type: .system)
+    private let playButton = UIButton(type: .system)
+    private let nextButton = UIButton(type: .system)
+
+    // MARK: 状态
+
+    private var tabTitles: [String] = []
+    private var tabNote: String?
+    private(set) var selectedTabIndex: Int = 0
+    private(set) var layoutMode: Int =
+        UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91")
+    private var toolItems: [ToolItem] = []
+
+    /// 主区内容高于视口时（横屏矮高）主区纵向可滚、命中
+    /// 放行滚动视图本体；常态内容不滚动、缝背景穿透纪律
+    /// 不变（适配类 hitTest 据此判定）。
+    private(set) var wantsScrollHit94 = false
+
+    private var avatarKey: String?
+    private var avatarHasName = false
+    private static var enrichAttempted94 = Set<String>()
+
+    private var isPlaying94 = PlaybackEngine.shared.isPlaying
+    private var playingCancellable: AnyCancellable?
+
+    private let qqClient94 = QQLoginClient()
+    private let kugouClient94 = KugouLoginClient()
+    private let coordinator94 = PollingCoordinator.shared
+    private var qrFlowActive = false
+
+    init(host: String) {
+        host94 = host
+        super.init(frame: .zero)
+        build()
+        // (94) 94-4 自证：每页缝构建落一行（avatar/qr 为母
+        // 版槽位在岗标记：头像位与二维码切换区均已装配）。
+        Breadcrumbs.log("p94 seam host=\(host) avatar=1 qr=1 ver=master")
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
+
+    deinit {
+        playingCancellable?.cancel()
+        if qrFlowActive { coordinator94.cancelActive(reason: "seam94-deinit") }
+    }
+
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        guard window != nil else { return }
+        refreshAccount94()
+        applyQRVisibility()
+        if SeamState85.qrOpen94 && !qrFlowActive { startQRFlow() }
+    }
+
+    // MARK: 装配
+
+    private func build() {
+        backgroundColor = .clear
+        addSubview(backdrop86)
+        contentView.isUserInteractionEnabled = true
+        addSubview(contentView)
+
+        // 缝顶圆形头像（34pt，样片 32–36 档）：图层圆裁、
+        // 白 0.35 描边环；无图时昵称首字/人形占位（与侧栏
+        // WorkbenchAvatarView 同口径）。
+        avatarImageView.contentMode = .scaleAspectFill
+        avatarImageView.clipsToBounds = true
+        avatarImageView.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        avatarImageView.isUserInteractionEnabled = false
+        avatarButton.addSubview(avatarImageView)
+        avatarFallbackLabel.font = .systemFont(ofSize: 14, weight: .semibold)
+        avatarFallbackLabel.textColor = UIColor.white.withAlphaComponent(0.8)
+        avatarFallbackLabel.textAlignment = .center
+        avatarFallbackLabel.isUserInteractionEnabled = false
+        avatarButton.addSubview(avatarFallbackLabel)
+        avatarPlaceholderIcon.image = UIImage(
+            systemName: "person.crop.circle.fill")
+        avatarPlaceholderIcon.tintColor = UIColor.white.withAlphaComponent(0.45)
+        avatarPlaceholderIcon.contentMode = .scaleAspectFit
+        avatarPlaceholderIcon.isUserInteractionEnabled = false
+        avatarButton.addSubview(avatarPlaceholderIcon)
+        avatarButton.layer.cornerRadius = 17
+        avatarButton.layer.borderWidth = 1
+        avatarButton.layer.borderColor =
+            UIColor.white.withAlphaComponent(0.35).cgColor
+        avatarButton.clipsToBounds = true
+        avatarButton.accessibilityLabel = "账户头像，点击切换登录二维码"
+        avatarButton.addTarget(self, action: #selector(avatarTapped),
+                               for: .touchUpInside)
+        contentView.addSubview(avatarButton)
+
+        // 主区（页签/入口/胶囊）：常态整幅呈现；横屏矮高时
+        // 内容纵滚（见 layoutSubviews 的 wantsScrollHit94）。
+        mainScroll.showsVerticalScrollIndicator = false
+        mainScroll.showsHorizontalScrollIndicator = false
+        mainScroll.addSubview(mainContent)
+        contentView.addSubview(mainScroll)
+
+        // 头部语义行：主页＝「书库」标题（点按翻 64/120 档，
+        // 沿既有 onToggleWide89）＋折叠钮；歌单页＝返回＋折叠。
+        headerTitleButton.titleLabel?.font = .systemFont(ofSize: 12, weight: .heavy)
+        headerTitleButton.setTitleColor(
+            UIColor.white.withAlphaComponent(0.85), for: .normal)
+        headerTitleButton.contentHorizontalAlignment = .left
+        headerTitleButton.addTarget(self, action: #selector(headerTitleTapped),
+                                    for: .touchUpInside)
+        mainContent.addSubview(headerTitleButton)
+        backButton.setImage(UIImage(
+            systemName: "chevron.left",
+            withConfiguration: UIImage.SymbolConfiguration(
+                pointSize: 13, weight: .semibold)), for: .normal)
+        backButton.tintColor = UIColor.white.withAlphaComponent(0.85)
+        backButton.accessibilityLabel = "返回"
+        backButton.addTarget(self, action: #selector(backTapped),
+                             for: .touchUpInside)
+        mainContent.addSubview(backButton)
+        foldButton.setImage(UIImage(
+            systemName: "xmark",
+            withConfiguration: UIImage.SymbolConfiguration(
+                pointSize: 12, weight: .semibold)), for: .normal)
+        foldButton.tintColor = UIColor.white.withAlphaComponent(0.55)
+        foldButton.accessibilityLabel = "折叠"
+        foldButton.addTarget(self, action: #selector(foldTapped),
+                             for: .touchUpInside)
+        mainContent.addSubview(foldButton)
+
+        // 页签行附注（歌单计数走此位，见 PlaylistSeam85View）。
+        tabNoteLabel.font = .systemFont(ofSize: 11)
+        tabNoteLabel.textColor = UIColor.white.withAlphaComponent(0.55)
+        tabNoteLabel.textAlignment = .center
+        mainContent.addSubview(tabNoteLabel)
+
+        // 四入口图标行（(93) C2 字形工厂复用：爱心/云/书本/
+        // 服务器，SeamGlyph93、1.7 线宽、16px 光学尺寸）。
+        for (index, glyph, label) in [
+            (0, SeamGlyph93.Kind.heart, "我喜欢的音乐"),
+            (1, SeamGlyph93.Kind.cloud, "云盘"),
+            (2, SeamGlyph93.Kind.book, "日记本"),
+            (3, SeamGlyph93.Kind.server, "Navidrome"),
+        ] as [(Int, SeamGlyph93.Kind, String)] {
+            let button = UIButton(type: .system)
+            button.setImage(SeamGlyph93.image(glyph), for: .normal)
+            button.tintColor = UIColor.white.withAlphaComponent(0.62)
+            button.accessibilityLabel = label
+            button.tag = index
+            button.addTarget(self, action: #selector(entryTapped(_:)),
+                             for: .touchUpInside)
+            mainContent.addSubview(button)
+            entryButtons.append(button)
+        }
+
+        // 排版胶囊（横排三段，主页/歌单页同一组件同一状态；
+        // 字形与选中语言沿 (93) C3：白 pill＋深字形）。
+        capsuleView.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        capsuleView.layer.borderWidth = 0.5
+        capsuleView.layer.borderColor =
+            UIColor.white.withAlphaComponent(0.16).cgColor
+        capsuleView.layer.cornerRadius = 18
+        mainContent.addSubview(capsuleView)
+        let capsuleGlyphs: [SeamGlyph93.Kind] = [.layoutGrid, .layoutList, .layoutAlbum]
+        let capsuleNames = ["现行版式", "杂志式", "唱片架式"]
+        for (index, glyph) in capsuleGlyphs.enumerated() {
+            let button = UIButton(type: .system)
+            button.setImage(SeamGlyph93.image(glyph, pointSize: 16), for: .normal)
+            button.layer.cornerRadius = 15
+            button.tag = index
+            button.accessibilityLabel = capsuleNames[index]
+            button.addTarget(self, action: #selector(capsuleTapped(_:)),
+                             for: .touchUpInside)
+            capsuleView.addSubview(button)
+            capsuleButtons.append(button)
+        }
+        refreshCapsule()
+
+        buildQRPanel()
+        buildFooter()
+
+        // 播放态单一事实源：PlaybackEngine.$isPlaying（与两
+        // 宿主点播台同一订阅口径），只刷中央钮字形。
+        playingCancellable = PlaybackEngine.shared.$isPlaying
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] playing in
+                self?.isPlaying94 = playing
+                self?.refreshTransport()
+            }
+        refreshTransport()
+        applyHeader()
+        applyQRVisibility()
+    }
+
+    private func buildQRPanel() {
+        // 缝中区原地切换的登录二维码区（样片 .seam-qr）：替
+        // 换主区呈现、无浮层无遮罩；点头像或关闭钮切回。
+        qrPanel.backgroundColor = UIColor.white.withAlphaComponent(0.045)
+        qrPanel.layer.borderWidth = 0.5
+        qrPanel.layer.borderColor =
+            UIColor.white.withAlphaComponent(0.16).cgColor
+        qrPanel.layer.cornerRadius = 16
+        qrPanel.isHidden = true
+        contentView.addSubview(qrPanel)
+        qrTitleLabel.text = "扫码登录"
+        qrTitleLabel.font = .systemFont(ofSize: 11, weight: .semibold)
+        qrTitleLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        qrPanel.addSubview(qrTitleLabel)
+        qrCloseButton.setImage(UIImage(
+            systemName: "xmark",
+            withConfiguration: UIImage.SymbolConfiguration(
+                pointSize: 10, weight: .semibold)), for: .normal)
+        qrCloseButton.tintColor = UIColor.white.withAlphaComponent(0.6)
+        qrCloseButton.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+        qrCloseButton.layer.cornerRadius = 13
+        qrCloseButton.accessibilityLabel = "关闭二维码"
+        qrCloseButton.addTarget(self, action: #selector(qrCloseTapped),
+                                for: .touchUpInside)
+        qrPanel.addSubview(qrCloseButton)
+        for (index, title) in ["QQ 音乐", "酷狗音乐"].enumerated() {
+            let button = UIButton(type: .system)
+            button.setTitle(title, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 11, weight: .semibold)
+            button.layer.cornerRadius = 9
+            button.tag = index
+            button.accessibilityLabel = title
+            button.addTarget(self, action: #selector(qrTabTapped(_:)),
+                             for: .touchUpInside)
+            qrPanel.addSubview(button)
+            qrTabButtons.append(button)
+        }
+        qrImageView.backgroundColor = .white
+        qrImageView.layer.cornerRadius = 10
+        qrImageView.clipsToBounds = true
+        qrImageView.contentMode = .scaleAspectFit
+        qrPanel.addSubview(qrImageView)
+        qrStatusLabel.font = .systemFont(ofSize: 11)
+        qrStatusLabel.textColor = UIColor.white.withAlphaComponent(0.6)
+        qrStatusLabel.textAlignment = .center
+        qrStatusLabel.numberOfLines = 2
+        qrPanel.addSubview(qrStatusLabel)
+        qrSpinner.color = .white
+        qrSpinner.hidesWhenStopped = true
+        qrPanel.addSubview(qrSpinner)
+        refreshQRTabs()
+    }
+
+    private func buildFooter() {
+        // 缝底播放区：上一首/暂停白圆钮/下一首——中央钮径
+        // 38 与点播台中央钮同值，字形走 DeckGlyph82 同一工
+        // 厂（prev/next 19、play/pause 20），三钮热区 ≥38。
+        prevButton.setImage(DeckGlyph82.image(.prev, pointSize: 19), for: .normal)
+        prevButton.tintColor = .white
+        prevButton.accessibilityLabel = "上一首"
+        prevButton.addTarget(self, action: #selector(prevTapped),
+                             for: .touchUpInside)
+        contentView.addSubview(prevButton)
+        playButton.backgroundColor = .white
+        playButton.layer.cornerRadius = 19
+        playButton.tintColor = UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                                       blue: 27.0 / 255, alpha: 1)
+        playButton.accessibilityLabel = "播放"
+        playButton.addTarget(self, action: #selector(playTapped),
+                             for: .touchUpInside)
+        contentView.addSubview(playButton)
+        nextButton.setImage(DeckGlyph82.image(.next, pointSize: 19), for: .normal)
+        nextButton.tintColor = .white
+        nextButton.accessibilityLabel = "下一首"
+        nextButton.addTarget(self, action: #selector(nextTapped),
+                             for: .touchUpInside)
+        contentView.addSubview(nextButton)
+    }
+
+    // MARK: 数据配置（适配类调用）
+
+    func setTabs(titles: [String], selected: Int, note: String?) {
+        tabTitles = titles
+        tabNote = note
+        for button in tabButtons { button.removeFromSuperview() }
+        tabButtons = []
+        for (index, title) in titles.enumerated() {
+            let button = UIButton(type: .system)
+            button.setTitle(title, for: .normal)
+            button.titleLabel?.font = .systemFont(ofSize: 12, weight: .bold)
+            button.titleLabel?.lineBreakMode = .byTruncatingTail
+            button.accessibilityLabel = title
+            button.tag = index
+            button.addTarget(self, action: #selector(tabTapped(_:)),
+                             for: .touchUpInside)
+            mainContent.addSubview(button)
+            tabButtons.append(button)
+        }
+        tabNoteLabel.text = note
+        tabNoteLabel.isHidden = note == nil
+        selectedTabIndex = max(0, min(selected, max(0, titles.count - 1)))
+        refreshTabs()
+        setNeedsLayout()
+    }
+
+    func setSelectedTab(_ index: Int) {
+        selectedTabIndex = index
+        refreshTabs()
+    }
+
+    func setTools(_ items: [ToolItem]) {
+        toolItems = items
+        for button in toolButtons { button.removeFromSuperview() }
+        toolButtons = []
+        for (index, item) in items.enumerated() {
+            let button = UIButton(type: .system)
+            button.setImage(SeamGlyph93.image(item.glyph), for: .normal)
+            button.tintColor = UIColor.white.withAlphaComponent(0.7)
+            button.accessibilityLabel = item.label
+            button.tag = index
+            button.addTarget(self, action: #selector(toolTapped(_:)),
+                             for: .touchUpInside)
+            contentView.addSubview(button)
+            toolButtons.append(button)
+        }
+        refreshTools()
+        setNeedsLayout()
+    }
+
+    func setLayoutMode(_ mode: Int, notify: Bool) {
+        layoutMode = max(0, min(2, mode))
+        refreshCapsule()
+        if notify { onLayoutMode?(layoutMode) }
+    }
+
+    // MARK: 选中态回刷
+
+    private func applyHeader() {
+        switch header {
+        case .homeTitle(let title):
+            headerTitleButton.setTitle(title, for: .normal)
+            headerTitleButton.isHidden = false
+            backButton.isHidden = true
+        case .playlist:
+            headerTitleButton.isHidden = true
+            backButton.isHidden = false
+        }
+    }
+
+    private func refreshTabs() {
+        for (index, button) in tabButtons.enumerated() {
+            // 缝页签选中语言（(86) 定版）：白 0.9 全圆 pill＋
+            // 深色字；未选透明底＋white/62。
+            let selected = index == selectedTabIndex
+            button.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.9) : .clear
+            button.setTitleColor(selected
+                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                          blue: 27.0 / 255, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.62), for: .normal)
+            button.layer.cornerRadius = 14
+        }
+    }
+
+    private func refreshCapsule() {
+        for (index, button) in capsuleButtons.enumerated() {
+            let selected = index == layoutMode
+            button.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.9) : .clear
+            button.tintColor = selected
+                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                          blue: 27.0 / 255, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.62)
+        }
+    }
+
+    private func refreshTools() {
+        for (index, button) in toolButtons.enumerated() {
+            guard index < toolItems.count else { continue }
+            let active = toolItems[index].tool == .expand && isExpanded94
+            button.backgroundColor = active
+                ? UIColor.white.withAlphaComponent(0.9) : .clear
+            button.tintColor = active
+                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                          blue: 27.0 / 255, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.7)
+            button.layer.cornerRadius = 13
+        }
+    }
+
+    private func refreshTransport() {
+        playButton.setImage(
+            DeckGlyph82.image(isPlaying94 ? .pause : .play, pointSize: 20),
+            for: .normal)
+        playButton.accessibilityLabel = isPlaying94 ? "暂停" : "播放"
+    }
+
+    // MARK: 头像（(92) 定案同源：侧栏三家头像行同一资料
+    // 缓存 ProviderSessionStatusQuery＋同一 WorkbenchCover
+    // .loadAvatar 加载链＋同款 enrichProfile 自愈链）
+
+    func refreshAccount94() {
+        let statuses = ProviderSessionStatusQuery.allStatuses()
+        let loggedIn = statuses.filter(\.isLoggedIn)
+        let avatarStatus = loggedIn.first { $0.avatarURL != nil }
+            ?? statuses.first { $0.avatarURL != nil }
+        let name = loggedIn.first?.displayName ?? statuses.first?.displayName
+        avatarHasName = !(name ?? "").isEmpty
+        avatarFallbackLabel.text = name.flatMap { $0.first.map(String.init) }
+        let key = avatarStatus?.avatarURL?.absoluteString
+            ?? "none:\(name ?? "")"
+        if key != avatarKey {
+            avatarKey = key
+            if let status = avatarStatus, let url = status.avatarURL {
+                let expected = key
+                WorkbenchCover.loadAvatar(url: url, into: avatarImageView,
+                    completion: { [weak self] ok in
+                        guard let self, self.avatarKey == expected else { return }
+                        self.avatarFallbackLabel.isHidden = ok || !self.avatarHasName
+                        self.avatarPlaceholderIcon.isHidden = ok || self.avatarHasName
+                        Breadcrumbs.log(
+                            "p94 seam avatar img=\(ok ? "ok" : "nil") src=\(status.provider.rawValue)")
+                    },
+                    isCurrent: { [weak self] in self?.avatarKey == expected })
+            } else {
+                avatarImageView.image = nil
+                avatarFallbackLabel.isHidden = !avatarHasName
+                avatarPlaceholderIcon.isHidden = avatarHasName
+                Breadcrumbs.log("p94 seam avatar img=nil src=none")
+            }
+        }
+        // 自愈链（与 WorkbenchOverlayHostView.enrichProfile92
+        // 同源三路）：已登录但资料缺头像/昵称/VIP 的家，每家
+        // 每进程补齐一次（母版两实例共享尝试集，不重复打）。
+        for status in statuses
+        where status.isLoggedIn
+            && (status.avatarURL == nil || status.displayName == nil
+                || status.vipLevel == nil)
+            && !Self.enrichAttempted94.contains(status.provider.rawValue) {
+            Self.enrichAttempted94.insert(status.provider.rawValue)
+            enrichProfile94(for: status.provider)
+        }
+    }
+
+    private func enrichProfile94(for provider: NativeSessionStore.Provider) {
+        Task { [weak self] in
+            switch provider {
+            case .netease:
+                guard let status = try? await NativeDataClient.shared.fetchLoginStatus(),
+                      status.loggedIn else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .netease, accountId: status.userId,
+                    displayName: status.nickname, avatarURLString: status.avatarURL)
+                NativeSessionStore.shared.saveVIP(
+                    provider: .netease, level: status.vipType)
+            case .qq:
+                let client = QQLoginClient()
+                guard let cookie = NativeSessionStore.shared.qqCookieString(),
+                      let profile = try? await client.fetchLoginStatus(cookie: cookie)
+                else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .qq, accountId: profile.accountId,
+                    displayName: profile.nickname,
+                    avatarURLString: profile.avatarURLString)
+                if let vip = await client.fetchVIPLevel(cookie: cookie) {
+                    NativeSessionStore.shared.saveVIP(provider: .qq, level: vip)
+                }
+            case .kugou:
+                let client = KugouLoginClient()
+                guard let cookie = NativeSessionStore.shared.kugouCookieString(),
+                      let profile = try? await client.fetchUserDetail(
+                        cookie: cookie, userId: Self.kugouUserId94(in: cookie))
+                else { return }
+                NativeSessionStore.shared.saveProfile(
+                    provider: .kugou, accountId: profile.accountId,
+                    displayName: profile.nickname,
+                    avatarURLString: profile.avatarURLString)
+                if let initial = profile.vipLevel {
+                    NativeSessionStore.shared.saveVIP(provider: .kugou, level: initial)
+                }
+                if let vip = await client.fetchVIPLevel(cookie: cookie) {
+                    NativeSessionStore.shared.saveVIP(provider: .kugou, level: vip)
+                }
+            }
+            Breadcrumbs.log("p94 seam enrich provider=\(provider.rawValue)")
+            await MainActor.run { self?.refreshAccount94() }
+        }
+    }
+
+    private static func kugouUserId94(in cookie: String) -> String? {
+        for entry in cookie.split(separator: ";") {
+            let parts = entry.split(separator: "=", maxSplits: 1)
+            if parts.count == 2,
+               parts[0].trimmingCharacters(in: .whitespaces).lowercased() == "userid" {
+                return parts[1].trimmingCharacters(in: .whitespaces)
+            }
+        }
+        return nil
+    }
+
+    // MARK: 二维码（取码/轮询沿 LoginViewController 网页版
+    // 登录流：QQLoginClient/KugouLoginClient 三步＋
+    // PollingCoordinator 代次纪律＋落存前同款校验与复核；
+    // 不新造端点、不新造落存形态）
+
+    private var qrProvider: NativeSessionStore.Provider {
+        SeamState85.qrProvider94 == "kugou" ? .kugou : .qq
+    }
+
+    private func applyQRVisibility() {
+        let open = SeamState85.qrOpen94
+        qrPanel.isHidden = !open
+        mainScroll.isHidden = open
+        if open { refreshQRTabs() }
+    }
+
+    private func refreshQRTabs() {
+        for (index, button) in qrTabButtons.enumerated() {
+            let selected = (index == 0) == (qrProvider == .qq)
+            button.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.9) : .clear
+            button.setTitleColor(selected
+                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
+                          blue: 27.0 / 255, alpha: 1)
+                : UIColor.white.withAlphaComponent(0.6), for: .normal)
+        }
+        qrStatusLabel.text = qrProvider == .qq
+            ? "请使用 QQ 音乐 App 扫一扫登录" : "请使用酷狗音乐 App 扫一扫登录"
+    }
+
+    private func openQR94() {
+        // 缺省平台：第一家未登录的（QQ 先、酷狗后）；都已登
+        // 录时沿当前共享选择。
+        if ProviderSessionStatusQuery.status(for: .qq).isLoggedIn == false {
+            SeamState85.qrProvider94 = "qq"
+        } else if ProviderSessionStatusQuery.status(for: .kugou).isLoggedIn == false {
+            SeamState85.qrProvider94 = "kugou"
+        }
+        SeamState85.qrOpen94 = true
+        applyQRVisibility()
+        Breadcrumbs.log("p94 seam qr=open provider=\(qrProvider.rawValue)")
+        startQRFlow()
+    }
+
+    private func closeQR94() {
+        SeamState85.qrOpen94 = false
+        if qrFlowActive {
+            qrFlowActive = false
+            coordinator94.cancelActive(reason: "seam94-qr-close")
+        }
+        qrSpinner.stopAnimating()
+        applyQRVisibility()
+    }
+
+    private func startQRFlow() {
+        let provider = qrProvider
+        let gen = coordinator94.begin(provider: provider)
+        qrFlowActive = true
+        qrImageView.image = nil
+        qrStatusLabel.text = "正在生成二维码…"
+        qrSpinner.startAnimating()
+        let task = Task { [weak self] in
+            await self?.runQRFlow(provider: provider, gen: gen)
+        }
+        coordinator94.attach(task, generation: gen)
+    }
+
+    private enum QRFlowOutcome { case done, refresh, fatal }
+
+    private func runQRFlow(provider: NativeSessionStore.Provider, gen: Int) async {
+        // QQ 后端 TTL 180 秒、前端 175 秒收手；酷狗 5 分钟
+        // （LoginViewController 同口径）。
+        let deadline = Date().addingTimeInterval(provider == .qq ? 175 : 5 * 60)
+        while !Task.isCancelled, coordinator94.isCurrent(gen), Date() < deadline {
+            let outcome = provider == .qq
+                ? await runOneQQQRCode(gen: gen, deadline: deadline)
+                : await runOneKugouQRCode(gen: gen, deadline: deadline)
+            if outcome == .done || outcome == .fatal || Task.isCancelled {
+                // 收尾摘除协调器登记（成功路径已在
+                // qrLoginSucceeded 内 finish，此处幂等补位）；
+                // 被新一代次取消时 isCurrent 为假、不动他人。
+                await MainActor.run {
+                    if self.coordinator94.isCurrent(gen) {
+                        self.qrFlowActive = false
+                        self.coordinator94.finish(generation: gen)
+                        if outcome == .fatal {
+                            self.qrSpinner.stopAnimating()
+                        } else if Date() >= deadline {
+                            self.qrStatusLabel.text = "二维码已过期，点头像重试"
+                            self.qrSpinner.stopAnimating()
+                        }
+                    }
+                }
+                return
+            }
+        }
+        if !coordinator94.isCurrent(gen) { return }
+        await MainActor.run {
+            if self.qrFlowActive {
+                self.qrFlowActive = false
+                self.coordinator94.finish(generation: gen)
+                self.qrStatusLabel.text = "二维码已过期，点头像重试"
+                self.qrSpinner.stopAnimating()
+            }
+        }
+    }
+
+    private func runOneQQQRCode(gen: Int, deadline: Date) async -> QRFlowOutcome {
+        let qr: QQLoginClient.QRCode
+        do {
+            // 通道沿 LoginViewController：先探测后端声明，
+            // 缺省 qq 通道在列则用之、否则用声明首个。
+            var channel = "qq"
+            if let channels = await qqClient94.fetchChannels(),
+               !channels.contains(channel) {
+                channel = channels.first ?? channel
+            }
+            let key = try await qqClient94.fetchKey(channel: channel)
+            qr = try await qqClient94.createQR(key: key)
+        } catch {
+            await MainActor.run {
+                self.qrStatusLabel.text = "二维码生成失败，请检查网络后重试"
+                self.qrSpinner.stopAnimating()
+            }
+            return .fatal
+        }
+        if Task.isCancelled || !coordinator94.isCurrent(gen) { return .done }
+        guard let image = qr.qrimgBase64, !image.isEmpty else {
+            Breadcrumbs.log("login.qq.fail reason=no-qrimg")
+            await MainActor.run {
+                self.qrStatusLabel.text = "二维码生成失败（后端未回图），请重试"
+                self.qrSpinner.stopAnimating()
+            }
+            return .fatal
+        }
+        await MainActor.run {
+            self.showQRImage(base64: image, content: nil)
+            self.qrStatusLabel.text = "请用 QQ 扫码"
+            self.qrSpinner.stopAnimating()
+        }
+        while !Task.isCancelled, coordinator94.isCurrent(gen), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if Task.isCancelled || !coordinator94.isCurrent(gen) { return .done }
+            let result: QQLoginClient.CheckResult
+            do {
+                result = try await qqClient94.check(key: qr.key)
+            } catch {
+                continue // 单次轮询失败不终止（LoginViewController 同口径）。
+            }
+            switch result {
+            case .waiting, .unknown:
+                break
+            case .scanned:
+                await MainActor.run { self.qrStatusLabel.text = "已扫码，请在手机上确认登录" }
+            case .expired:
+                Breadcrumbs.log("login.qq.expired")
+                await MainActor.run { self.qrStatusLabel.text = "二维码已过期，正在刷新…" }
+                return .refresh
+            case .failed:
+                Breadcrumbs.log("login.qq.fail reason=upstream-rejected")
+                await MainActor.run {
+                    self.qrStatusLabel.text = "登录被上游拒绝，请稍后重试"
+                    self.qrSpinner.stopAnimating()
+                }
+                return .fatal
+            case .authorized(let cookie):
+                guard coordinator94.isCurrent(gen) else { return .done }
+                return await handleQQAuthorized94(cookie, gen: gen)
+            }
+        }
+        return .done
+    }
+
+    private func handleQQAuthorized94(_ cookie: String, gen: Int) async -> QRFlowOutcome {
+        let value = cookie.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard NativeSessionStore.isValidQQCookie(value) else {
+            Breadcrumbs.log("login.qq.fail reason=invalid-cookie len=\(value.count)")
+            await MainActor.run {
+                self.qrStatusLabel.text = "登录回包异常（会话校验未过），请重试"
+            }
+            return .fatal
+        }
+        let expires = Date().addingTimeInterval(3 * 24 * 3600)
+        guard NativeSessionStore.shared.saveQQSession(
+            cookie: value, accountId: nil, displayName: nil,
+            loginType: 2, expiresAt: expires) else {
+            Breadcrumbs.log("login.qq.fail reason=keychain-write len=\(value.count)")
+            await MainActor.run {
+                self.qrStatusLabel.text = "会话保存失败，请重试"
+            }
+            return .fatal
+        }
+        Breadcrumbs.log("login.qq.success len=\(value.count) hash=\(NativeSessionStore.hash8(value))")
+        // login_status 复核（LoginViewController 同判据）：后
+        // 端不认只清 QQ 本家；网络失败按 transient 保留会话。
+        do {
+            if let profile = try await qqClient94.fetchLoginStatus(cookie: value) {
+                NativeSessionStore.shared.saveProfile(
+                    provider: .qq, accountId: profile.accountId,
+                    displayName: profile.nickname,
+                    avatarURLString: profile.avatarURLString)
+                _ = NativeSessionStore.shared.saveQQSession(
+                    cookie: value, accountId: profile.accountId,
+                    displayName: profile.nickname, loginType: 2, expiresAt: expires)
+            } else {
+                let verdict = NativeSessionStore.classifyAuthFailure(
+                    provider: .qq, httpStatus: 200, businessCode: nil,
+                    errorCode: nil, hasProfile: false)
+                if verdict == .sessionInvalid {
+                    Breadcrumbs.log("login.qq.fail reason=status-unrecognized")
+                    NativeSessionStore.shared.clear(provider: .qq, reason: "status-unrecognized")
+                    await MainActor.run {
+                        self.qrStatusLabel.text = "后端未确认登录，请重试"
+                        self.qrSpinner.stopAnimating()
+                    }
+                    return .fatal
+                }
+            }
+        } catch {
+            Breadcrumbs.log("login.qq.status-check result=transient")
+        }
+        await MainActor.run { self.qrLoginSucceeded(provider: .qq, gen: gen) }
+        return .done
+    }
+
+    private func runOneKugouQRCode(gen: Int, deadline: Date) async -> QRFlowOutcome {
+        let qr: KugouLoginClient.QRCode
+        do {
+            let key = try await kugouClient94.fetchKey()
+            qr = try await kugouClient94.createQR(key: key)
+        } catch {
+            await MainActor.run {
+                self.qrStatusLabel.text = "二维码生成失败，请检查网络后重试"
+                self.qrSpinner.stopAnimating()
+            }
+            return .fatal
+        }
+        if Task.isCancelled || !coordinator94.isCurrent(gen) { return .done }
+        await MainActor.run {
+            self.showQRImage(base64: qr.qrimgBase64, content: qr.qrContent)
+            self.qrStatusLabel.text = "请用酷狗音乐 App 扫码"
+            self.qrSpinner.stopAnimating()
+        }
+        while !Task.isCancelled, coordinator94.isCurrent(gen), Date() < deadline {
+            try? await Task.sleep(nanoseconds: 2_000_000_000)
+            if Task.isCancelled || !coordinator94.isCurrent(gen) { return .done }
+            let result: KugouLoginClient.CheckResult
+            do {
+                result = try await kugouClient94.check(key: qr.key)
+            } catch {
+                continue
+            }
+            switch result {
+            case .waiting, .unknown:
+                break
+            case .scanned:
+                await MainActor.run { self.qrStatusLabel.text = "已扫码，请在手机上确认登录" }
+            case .expired:
+                Breadcrumbs.log("login.kugou.expired")
+                await MainActor.run { self.qrStatusLabel.text = "二维码已过期，正在刷新…" }
+                return .refresh
+            case .failed:
+                Breadcrumbs.log("login.kugou.fail reason=check-failed")
+                await MainActor.run {
+                    self.qrStatusLabel.text = "登录失败，请重试"
+                    self.qrSpinner.stopAnimating()
+                }
+                return .fatal
+            case .authorized(let cookie, let userId):
+                guard coordinator94.isCurrent(gen) else { return .done }
+                return await handleKugouAuthorized94(cookie, userId: userId, gen: gen)
+            }
+        }
+        return .done
+    }
+
+    private func handleKugouAuthorized94(_ cookie: String, userId: String,
+                                          gen: Int) async -> QRFlowOutcome {
+        let value = cookie.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard NativeSessionStore.shared.saveKugouCookie(value) else {
+            Breadcrumbs.log("login.kugou.fail reason=invalid-or-write len=\(value.count)")
+            await MainActor.run {
+                self.qrStatusLabel.text = "登录回包异常（会话校验未过），请重试"
+            }
+            return .fatal
+        }
+        Breadcrumbs.log("login.kugou.success len=\(value.count) hash=\(NativeSessionStore.hash8(value))")
+        // 新会话先显式清旧资料再只存 accountId（LoginView-
+        // Controller 同口径，防串号），detail 复核补资料。
+        NativeSessionStore.shared.saveProfile(
+            provider: .kugou, accountId: nil, displayName: nil, avatarURLString: nil)
+        NativeSessionStore.shared.saveProfile(
+            provider: .kugou, accountId: userId, displayName: nil, avatarURLString: nil)
+        do {
+            let profile = try await kugouClient94.fetchUserDetail(
+                cookie: value, userId: userId)
+            NativeSessionStore.shared.saveProfile(
+                provider: .kugou, accountId: profile.accountId ?? userId,
+                displayName: profile.nickname,
+                avatarURLString: profile.avatarURLString)
+        } catch ProviderLoginTransport.TransportError.http(let status) {
+            let verdict = NativeSessionStore.classifyAuthFailure(
+                provider: .kugou, httpStatus: status, businessCode: nil,
+                errorCode: nil, hasProfile: nil)
+            if verdict == .sessionInvalid {
+                Breadcrumbs.log("login.kugou.fail reason=status-rejected status=\(status)")
+                NativeSessionStore.shared.clear(provider: .kugou, reason: "status-rejected")
+                await MainActor.run {
+                    self.qrStatusLabel.text = "后端未确认登录，请重试"
+                    self.qrSpinner.stopAnimating()
+                }
+                return .fatal
+            }
+            Breadcrumbs.log("login.kugou.status-check result=transient status=\(status)")
+        } catch {
+            Breadcrumbs.log("login.kugou.status-check result=transient")
+        }
+        await MainActor.run { self.qrLoginSucceeded(provider: .kugou, gen: gen) }
+        return .done
+    }
+
+    private func qrLoginSucceeded(provider: NativeSessionStore.Provider, gen: Int) {
+        qrFlowActive = false
+        coordinator94.finish(generation: gen)
+        Breadcrumbs.log("p94 seam qr login=\(provider.rawValue)")
+        closeQR94()
+        refreshAccount94()
+    }
+
+    /// 二维码图（LoginViewController 同式：base64 优先，缺
+    /// 图用内容串本地生成；白瓷砖垫边统一在此）。
+    private func showQRImage(base64: String?, content: String?) {
+        if let raw = base64, !raw.isEmpty {
+            let body = raw.contains(",")
+                ? String(raw.split(separator: ",", maxSplits: 1).last ?? "") : raw
+            if let data = Data(base64Encoded: body), let image = UIImage(data: data) {
+                qrImageView.image = Self.tileQR94(image)
+                return
+            }
+        }
+        if let content, let image = Self.makeQR94(text: content) {
+            qrImageView.image = Self.tileQR94(image)
+        }
+    }
+
+    private static func tileQR94(_ image: UIImage) -> UIImage {
+        let tile: CGFloat = 240, code: CGFloat = 204
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = min(UIScreen.main.scale, 2)
+        let renderer = UIGraphicsImageRenderer(
+            size: CGSize(width: tile, height: tile), format: format)
+        return renderer.image { _ in
+            UIColor.white.setFill()
+            UIRectFill(CGRect(x: 0, y: 0, width: tile, height: tile))
+            image.draw(in: CGRect(
+                x: (tile - code) / 2, y: (tile - code) / 2,
+                width: code, height: code))
+        }
+    }
+
+    private static func makeQR94(text: String) -> UIImage? {
+        guard let filter = CIFilter(name: "CIQRCodeGenerator") else { return nil }
+        filter.setValue(Data(text.utf8), forKey: "inputMessage")
+        filter.setValue("M", forKey: "inputCorrectionLevel")
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        let context = CIContext()
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent)
+        else { return nil }
+        return UIImage(cgImage: cgImage)
+    }
+
+    // MARK: 点按
+
+    @objc private func avatarTapped() {
+        if SeamState85.qrOpen94 {
+            Breadcrumbs.log("p94 seam qr=close src=avatar")
+            closeQR94()
+        } else {
+            openQR94()
+        }
+    }
+
+    @objc private func qrCloseTapped() {
+        Breadcrumbs.log("p94 seam qr=close src=button")
+        closeQR94()
+    }
+
+    @objc private func qrTabTapped(_ sender: UIButton) {
+        let provider: NativeSessionStore.Provider = sender.tag == 0 ? .qq : .kugou
+        guard provider != qrProvider || !qrFlowActive else { return }
+        SeamState85.qrProvider94 = provider.rawValue
+        refreshQRTabs()
+        Breadcrumbs.log("p94 seam qr=open provider=\(provider.rawValue)")
+        startQRFlow()
+    }
+
+    @objc private func headerTitleTapped() { onHeaderTitleTap?() }
+    @objc private func backTapped() { onBack?() }
+    @objc private func foldTapped() { onFold?() }
+
+    @objc private func tabTapped(_ sender: UIButton) {
+        selectedTabIndex = sender.tag
+        refreshTabs()
+        onTabSelected?(sender.tag)
+    }
+
+    @objc private func entryTapped(_ sender: UIButton) {
+        switch sender.tag {
+        case 0: onEntry?(.liked)
+        case 1: onEntry?(.cloud)
+        case 2: onEntry?(.diary)
+        default: onEntry?(.navidrome)
+        }
+    }
+
+    @objc private func capsuleTapped(_ sender: UIButton) {
+        setLayoutMode(sender.tag, notify: true)
+    }
+
+    @objc private func toolTapped(_ sender: UIButton) {
+        guard sender.tag < toolItems.count else { return }
+        onTool?(toolItems[sender.tag].tool)
+    }
+
+    @objc private func prevTapped() {
+        Breadcrumbs.log("p94 seam transport=prev host=\(host94)")
+        QueueManager.shared.playPrevious()
+    }
+
+    @objc private func playTapped() {
+        Breadcrumbs.log("p94 seam transport=play host=\(host94)")
+        if isPlaying94 {
+            PlaybackEngine.shared.pause()
+        } else if let onPlayAll {
+            onPlayAll()
+        } else {
+            PlaybackEngine.shared.togglePlayPause()
+        }
+    }
+
+    @objc private func nextTapped() {
+        Breadcrumbs.log("p94 seam transport=next host=\(host94)")
+        QueueManager.shared.playNext(manual: true)
+    }
+
+    // MARK: 布局（横竖屏同一套相对排版；缝宽由宿主帧给、
+    // 两态同值，旋转只重排不丢二维码展开态——展开态在
+    // SeamState85 共享存储、布局不回写）
+
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        backdrop86.frame = bounds
+        let top = contentTopInset
+        let contentH = max(0, bounds.height - contentTopInset - contentBottomInset)
+        contentView.frame = CGRect(x: 0, y: top, width: bounds.width, height: contentH)
+        let W = bounds.width
+        let H = contentH
+        // 内容列宽：窄缝用满宽；展开档（300）收列居中，不拉伸。
+        // 宿主开合补间会经过极小宽度，列宽下限 44 防负尺寸帧。
+        let contentW = W <= 140 ? max(W, 44) : min(W, 220)
+        let contentX = max(0, (W - contentW) / 2)
+
+        // 头像 34 居中顶部。
+        avatarButton.frame = CGRect(x: (W - 34) / 2, y: 0, width: 34, height: 34)
+        avatarImageView.frame = avatarButton.bounds
+        avatarImageView.layer.cornerRadius = 17
+        avatarFallbackLabel.frame = avatarButton.bounds
+        avatarPlaceholderIcon.frame = CGRect(
+            x: 6, y: 6, width: 22, height: 22)
+
+        // 缝底两排：工具排（窄缝 2 行/宽档 1 行）＋播放区 44。
+        let toolRows = contentW < 100 ? 2 : 1
+        let toolsH: CGFloat = toolRows == 2 ? 56 : 30
+        let footerH = toolsH + 6 + 44
+        let footerY = H - footerH
+        layoutTools(contentX: contentX, contentW: contentW,
+                    y: footerY, height: toolsH, rows: toolRows)
+        let transportY = footerY + toolsH + 6
+        let centerX = W / 2
+        prevButton.frame = CGRect(x: centerX - 60, y: transportY + 3,
+                                  width: 38, height: 38)
+        playButton.frame = CGRect(x: centerX - 19, y: transportY + 3,
+                                  width: 38, height: 38)
+        nextButton.frame = CGRect(x: centerX + 22, y: transportY + 3,
+                                  width: 38, height: 38)
+
+        // 主区/二维码区共用同一矩形（原地切换）。
+        let mainY: CGFloat = 40
+        let mainH = max(0, footerY - mainY - 6)
+        mainScroll.frame = CGRect(x: contentX, y: mainY,
+                                  width: contentW, height: mainH)
+        let required = layoutMainContent(contentW: contentW)
+        mainContent.frame = CGRect(
+            x: 0, y: 0, width: contentW, height: max(required, mainH))
+        mainScroll.contentSize = mainContent.frame.size
+        wantsScrollHit94 = required > mainH + 1
+        mainScroll.panGestureRecognizer.isEnabled = wantsScrollHit94
+
+        qrPanel.frame = CGRect(x: contentX, y: mainY,
+                               width: contentW, height: mainH)
+        layoutQRPanel(contentW: contentW, height: mainH)
+    }
+
+    private func layoutTools(contentX: CGFloat, contentW: CGFloat,
+                             y: CGFloat, height: CGFloat, rows: Int) {
+        let count = max(1, toolButtons.count)
+        if rows == 2 {
+            let cols = 3
+            let cellW = contentW / CGFloat(cols)
+            let cellH = height / 2
+            for (index, button) in toolButtons.enumerated() {
+                let col = CGFloat(index % cols), row = CGFloat(index / cols)
+                button.frame = CGRect(
+                    x: contentX + col * cellW + (cellW - 28) / 2,
+                    y: y + row * cellH + (cellH - 26) / 2,
+                    width: 28, height: 26)
+            }
+        } else {
+            let cellW = contentW / CGFloat(count)
+            for (index, button) in toolButtons.enumerated() {
+                button.frame = CGRect(
+                    x: contentX + cellW * CGFloat(index) + (cellW - 30) / 2,
+                    y: y + (height - 30) / 2, width: 30, height: 30)
+            }
+        }
+    }
+
+    /// 主区排版（坐标在 mainContent 内），返回内容总高。
+    private func layoutMainContent(contentW: CGFloat) -> CGFloat {
+        var y: CGFloat = 0
+        // 头部语义行 30。
+        switch header {
+        case .homeTitle:
+            headerTitleButton.frame = CGRect(x: 4, y: y, width: contentW - 44, height: 30)
+            foldButton.frame = CGRect(x: contentW - 34, y: y, width: 32, height: 30)
+        case .playlist:
+            backButton.frame = CGRect(x: 2, y: y, width: 32, height: 30)
+            foldButton.frame = CGRect(x: contentW - 34, y: y, width: 32, height: 30)
+        }
+        y += 34
+        // 页签行：逐签横排 pill（文字横排，不再竖拆单字）。
+        for button in tabButtons {
+            button.frame = CGRect(x: 4, y: y, width: contentW - 8, height: 28)
+            y += 31
+        }
+        if tabNote != nil {
+            tabNoteLabel.frame = CGRect(x: 4, y: y - 2, width: contentW - 8, height: 16)
+            y += 16
+        }
+        y += 6
+        // 四入口图标行：窄缝 2×2、宽档一行四枚（样片同式）。
+        if contentW < 100 {
+            for (index, button) in entryButtons.enumerated() {
+                let col = CGFloat(index % 2), row = CGFloat(index / 2)
+                button.frame = CGRect(
+                    x: contentW / 2 - 32 + col * 34, y: y + row * 32,
+                    width: 30, height: 30)
+            }
+            y += 64
+        } else {
+            let step = contentW / 4
+            for (index, button) in entryButtons.enumerated() {
+                button.frame = CGRect(
+                    x: step * CGFloat(index), y: y, width: step, height: 34)
+            }
+            y += 34
+        }
+        y += 10
+        // 排版胶囊：横排三段（窄缝 62 宽、宽档 132 宽）。
+        let capsuleW: CGFloat = contentW < 100 ? 62 : min(132, contentW - 8)
+        capsuleView.frame = CGRect(
+            x: (contentW - capsuleW) / 2, y: y, width: capsuleW, height: 36)
+        let inner = capsuleW - 6
+        let buttonW = (inner - 4) / 3
+        for (index, button) in capsuleButtons.enumerated() {
+            button.frame = CGRect(
+                x: 3 + CGFloat(index) * (buttonW + 2), y: 3,
+                width: buttonW, height: 30)
+        }
+        y += 36
+        return y
+    }
+
+    private func layoutQRPanel(contentW: CGFloat, height: CGFloat) {
+        qrTitleLabel.frame = CGRect(x: 8, y: 6, width: contentW - 44, height: 16)
+        qrCloseButton.frame = CGRect(x: contentW - 32, y: 2, width: 26, height: 26)
+        var y: CGFloat = 30
+        if contentW >= 100 {
+            let cellW = (contentW - 19) / 2
+            for (index, button) in qrTabButtons.enumerated() {
+                button.frame = CGRect(
+                    x: 8 + CGFloat(index) * (cellW + 3), y: y,
+                    width: cellW, height: 26)
+                button.layer.cornerRadius = 13
+            }
+            y += 32
+        } else {
+            for (index, button) in qrTabButtons.enumerated() {
+                button.frame = CGRect(
+                    x: 6, y: y + CGFloat(index) * 27, width: contentW - 12, height: 25)
+                button.layer.cornerRadius = 9
+            }
+            y += 56
+        }
+        let statusH: CGFloat = 30
+        let qrSize = max(40, min(contentW - 12, height - y - statusH - 14))
+        qrImageView.frame = CGRect(
+            x: (contentW - qrSize) / 2, y: y, width: qrSize, height: qrSize)
+        qrSpinner.center = qrImageView.center
+        qrStatusLabel.frame = CGRect(
+            x: 6, y: y + qrSize + 4, width: contentW - 12, height: statusH)
+    }
+
+    /// 命中放行判定（适配类 hitTest 共用）：滚动视图仅在
+    /// 内容溢出（横屏矮高）时接本体命中，其余背景穿透。
+    func scrollHitView94(_ view: UIView) -> Bool {
+        view === mainScroll && wantsScrollHit94
+    }
+}
+
+/// (94) 94-4：主页缝适配——只供数据（页签标题/选中态/
+/// 宽档）与语义回调转发，构成全在 SeamMaster。
+/// 命中纪律同 (84) 侧栏：hitTest 只认控件本体，缝背景一
+/// 律穿透——缝随墙走、不是拖动把手（主区滚动溢出时例外
+/// 见 SeamMaster.wantsScrollHit94）。
 final class HomeSeam85View: UIView {
 
     var onFold: (() -> Void)?
@@ -373,66 +1572,54 @@ final class HomeSeam85View: UIView {
     var onSettings: (() -> Void)?
     var onQueue: (() -> Void)?
     var onMore: (() -> Void)?
-    /// (93) C1：缝底工具排补控制台入口（样片 lib-tools 第
-    /// 五枚），宿主接 ConsolePanel82.present（与台面控制台
-    /// 钮同一落点）。
+    /// (93) C1：缝底工具排控制台入口（宿主接
+    /// ConsolePanel82.present，与台面控制台钮同一落点）。
     var onConsole93: (() -> Void)?
-    /// (93) C2：四入口图标行补日记本（喜欢/云盘/Navidrome
+    /// (93) C2：四入口图标行日记本（喜欢/云盘/Navidrome
     /// 复用既有 onLiked/onCloud/onNavidrome 闭包不动）。
     var onDiary93: (() -> Void)?
 
-    /// (92) 任务 11：版式切换（现行/A/B）——Miller 令「页面
-    /// 展示 ab 做到主页中间的缝」：开关落缝内原账户空区
-    /// （直达双列与工具格之间），写歌单页同一持久化键
+    /// (92) 任务 11：版式切换——写歌单页同一持久化键
     /// foliaPlaylistLayout91（宿主经 onLayoutMode92 落键＋
-    /// 落痕，歌单页出现时重读对齐）。
+    /// 落痕，歌单页出现时重读对齐）；母版胶囊即本开关。
     var onLayoutMode92: ((Int) -> Void)?
     var layoutMode92: Int =
         UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91") {
-        didSet { refreshLayoutSwitch92() }
+        didSet { master.setLayoutMode(layoutMode92, notify: false) }
     }
-    private let layoutSwitch92 = UIView()
-    private var layoutButtons92: [UIButton] = []
 
     /// 内容纵向内边距（宿主按工具条/点播台占位设定）。
-    var contentTopInset: CGFloat = 108
-    var contentBottomInset: CGFloat = 132
+    var contentTopInset: CGFloat {
+        get { master.contentTopInset }
+        set { master.contentTopInset = newValue }
+    }
+    var contentBottomInset: CGFloat {
+        get { master.contentBottomInset }
+        set { master.contentBottomInset = newValue }
+    }
     /// 内容淡出（宿主按渲染开口逐帧喂，见 SeamState85）。
-    var contentOpacity: CGFloat = 1 {
-        didSet { contentView.alpha = contentOpacity }
+    var contentOpacity: CGFloat {
+        get { master.contentOpacity }
+        set { master.contentOpacity = newValue }
     }
 
     /// (89)B b-seam-tabs：一级页签标题（网页 resolveHome-
-    /// Tabs 原序），tag 与下标同序 0-5。横/竖两种标题形态
-    /// 都由此表生成（竖排走 Seam85Text.vertical）。
+    /// Tabs 原序），tag 与下标同序 0-5。
     private let tabTitles89 = ["歌单", "电台", "探索", "专辑", "本地", "Navidrome"]
 
-    /// (89)B b-seam-tabs：当前选中页签下标（默认 0＝歌单，
-    /// 主页墙本体即歌单集）；宿主点哪个页签选哪个，不再
-    /// 恒 0。赋值即刷新选中态。
+    /// (89)B b-seam-tabs：当前选中页签下标（默认 0＝歌单）；
+    /// 宿主赋值即转发母版回刷选中态。
     var selectedTabIndex: Int = 0 {
-        didSet { refreshTabSelection() }
+        didSet { master.setSelectedTab(selectedTabIndex) }
     }
 
-    /// (89)B b-seam-narrow：宽档（120）排版开关。true 时
-    /// layoutSubviews 走宽档：内容宽＝bounds.width、页签
-    /// 横排整行、直达两整行、工具格底部一排；标题形态随
-    /// 档切换（横排原文/竖排逐字）。
+    /// (89)B b-seam-narrow：宽档（120）排版开关，转发母版
+    /// （只改入口/工具排折法，母版构成不变）。
     var displayWide89: Bool = false {
-        didSet { applyDisplayMode89() }
+        didSet { master.displayWide = displayWide89 }
     }
 
-    private let backdrop86 = SeamBackdrop86()
-    private let contentView = UIView()
-    private let libraryLabel = UILabel()
-    private let foldButton = UIButton(type: .system)
-    private var tabButtons: [UIButton] = []
-    private let likedButton = UIButton(type: .system)
-    private let cloudButton = UIButton(type: .system)
-    /// (93) C2：四入口图标行新增两枚（日记本/服务器）。
-    private let diaryButton93 = UIButton(type: .system)
-    private let naviButton93 = UIButton(type: .system)
-    private var toolButtons: [UIButton] = []
+    private let master = SeamMaster(host: "home")
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -442,337 +1629,48 @@ final class HomeSeam85View: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     private func build() {
-        // port90：缝底改系统毛玻璃（SeamBackdrop86）；缝背景长按
-        // 循环油画随油画退役（点播台长按切主题通路不动）。
         backgroundColor = .clear
-        addSubview(backdrop86)
-        contentView.isUserInteractionEnabled = true
-        addSubview(contentView)
-
-        // 书库标题（网页：extrabold＋字距 0.3em＋white/85）。
-        libraryLabel.attributedText = NSAttributedString(
-            string: "书库",
-            attributes: [
-                .font: UIFont.systemFont(ofSize: 12, weight: .heavy),
-                .foregroundColor: UIColor.white.withAlphaComponent(0.85),
-                .kern: 3.6,
-            ])
-        libraryLabel.textAlignment = .center
-        // (89)B b-seam-narrow：「书库」标题即 64/120 档切换
-        // 钮（点按翻档，宿主经 onToggleWide89 走既有补间
-        // 重排）。命中纪律随之放行标题本体（见 hitTest）。
-        libraryLabel.isUserInteractionEnabled = true
-        libraryLabel.addGestureRecognizer(UITapGestureRecognizer(
-            target: self, action: #selector(libraryTapped89)))
-        contentView.addSubview(libraryLabel)
-
-        // 折叠钮（网页：裸 chevron、white/55、无底衬）。
-        foldButton.setImage(UIImage(
-            systemName: "chevron.left",
-            withConfiguration: UIImage.SymbolConfiguration(
-                pointSize: 13, weight: .semibold)), for: .normal)
-        foldButton.tintColor = UIColor.white.withAlphaComponent(0.55)
-        foldButton.accessibilityLabel = "折叠"
-        foldButton.addTarget(self, action: #selector(foldTapped), for: .touchUpInside)
-        contentView.addSubview(foldButton)
-
-        // 一级页签（竖排）：歌单默认选中（主页墙当前面即
-        // 歌单集，与 (84) 侧栏去向表一致）。字重改网页
-        // bold；圆角在布局时按帧高取半成全圆 pill。
-        // (89)B b-seam-tabs：4 → 6（补探索 tag2、Navidrome
-        // tag5，网页 resolveHomeTabs 原序，见 tabTitles89）。
-        for (index, title) in tabTitles89.enumerated() {
-            let button = UIButton(type: .system)
-            // port90：Navidrome（index 5）窄档横排单行，不走竖拆。
-            button.setTitle(index == 5 ? title : Seam85Text.vertical(title),
-                            for: .normal)
-            button.titleLabel?.numberOfLines = index == 5 ? 1 : 0
-            // (89) §5-8：缝页签字号对齐网页 14。
-            button.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
-            button.titleLabel?.textAlignment = .center
-            button.accessibilityLabel = title
-            button.tag = index
-            button.addTarget(self, action: #selector(tabTapped(_:)), for: .touchUpInside)
-            contentView.addSubview(button)
-            tabButtons.append(button)
+        master.header = .homeTitle("书库")
+        master.setTabs(titles: tabTitles89, selected: selectedTabIndex, note: nil)
+        master.setLayoutMode(layoutMode92, notify: false)
+        master.setTools([
+            SeamMaster.ToolItem(tool: .search, glyph: .search, label: "搜索"),
+            SeamMaster.ToolItem(tool: .settings, glyph: .gear, label: "设置"),
+            SeamMaster.ToolItem(tool: .queue, glyph: .list, label: "队列"),
+            SeamMaster.ToolItem(tool: .more, glyph: .more, label: "更多"),
+            SeamMaster.ToolItem(tool: .console, glyph: .consoleNotes, label: "控制台"),
+        ])
+        master.onHeaderTitleTap = { [weak self] in self?.libraryTapped89() }
+        master.onFold = { [weak self] in self?.foldTapped() }
+        master.onTabSelected = { [weak self] index in self?.dispatchTab(index) }
+        master.onEntry = { [weak self] entry in
+            switch entry {
+            case .liked: self?.likedTapped()
+            case .cloud: self?.cloudTapped()
+            case .diary: self?.diaryTapped93()
+            case .navidrome: self?.naviIconTapped93()
+            }
         }
-        refreshTabSelection()
-
-        // (93) C2：中段直达改四入口图标行（样片 .lib-icons
-        // 定版）：爱心＝我喜欢的音乐、云＝云盘、书本＝日记
-        // 本、服务器＝Navidrome，与缝底工具排同一套细线字
-        // 形（SeamGlyph93、1.7 线宽、16px）。喜欢/云盘钮本
-        // 体与既有 action 不动、只换字形面；排布见
-        // layoutSubviews（窄档 2×2、宽档一行四枚）。
-        for (button, glyph, title, action) in [
-            (likedButton, SeamGlyph93.Kind.heart, "我喜欢的音乐", #selector(likedTapped)),
-            (cloudButton, SeamGlyph93.Kind.cloud, "云盘", #selector(cloudTapped)),
-            (diaryButton93, SeamGlyph93.Kind.book, "日记本", #selector(diaryTapped93)),
-            (naviButton93, SeamGlyph93.Kind.server, "Navidrome", #selector(naviIconTapped93)),
-        ] as [(UIButton, SeamGlyph93.Kind, String, Selector)] {
-            button.setImage(SeamGlyph93.image(glyph), for: .normal)
-            button.tintColor = UIColor.white.withAlphaComponent(0.62)
-            button.accessibilityLabel = title
-            button.addTarget(self, action: action, for: .touchUpInside)
-            contentView.addSubview(button)
+        master.onLayoutMode = { [weak self] mode in
+            self?.layoutMode92 = mode
+            self?.onLayoutMode92?(mode)
         }
-
-        // port88：头像钮已摘除——本缝自上而下为书库行→折
-        // 叠钮→页签→直达双列→工具格，无账户位。
-
-        // (93) C1：缝底工具排重画——五枚全走 SeamGlyph93
-        // （统一 1.7 线宽/圆头/16px 光学尺寸；设置＝标准齿
-        // 轮形，SF gearshape 退役）；既有四钮 action 不动，
-        // 第五枚控制台为新增闭包 onConsole93。
-        for (glyph, label, action) in [
-            (SeamGlyph93.Kind.search, "搜索", #selector(searchTapped)),
-            (SeamGlyph93.Kind.gear, "设置", #selector(settingsTapped)),
-            (SeamGlyph93.Kind.list, "队列", #selector(queueTapped)),
-            (SeamGlyph93.Kind.more, "更多", #selector(moreTapped)),
-            (SeamGlyph93.Kind.consoleNotes, "控制台", #selector(consoleTapped93)),
-        ] as [(SeamGlyph93.Kind, String, Selector)] {
-            let button = UIButton(type: .system)
-            button.setImage(SeamGlyph93.image(glyph), for: .normal)
-            // (86) 第 1 条：工具格去芯片底（网页裸图标
-            // white/70、无底衬无圆角）。
-            button.tintColor = UIColor.white.withAlphaComponent(0.7)
-            button.accessibilityLabel = label
-            button.addTarget(self, action: action, for: .touchUpInside)
-            contentView.addSubview(button)
-            toolButtons.append(button)
+        master.onTool = { [weak self] tool in
+            switch tool {
+            case .search: self?.searchTapped()
+            case .settings: self?.settingsTapped()
+            case .queue: self?.queueTapped()
+            case .more: self?.moreTapped()
+            case .console: self?.consoleTapped93()
+            case .append, .expand: break
+            }
         }
-        // (92) 任务 11：版式开关——玻璃胶囊＋三态 A4 字形
-        // （现行拼贴/A 杂志/B 唱片架，DeckGlyph82 手绘、三
-        // 态轮廓互不混同），选中态走缝页签同语言（白 pill
-        // ＋深字形）。帧位在 layoutSubviews 按可用带高自适
-        // 应（带高不足 40 时隐藏，见彼处注释）。
-        layoutSwitch92.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-        layoutSwitch92.layer.borderWidth = 0.5
-        layoutSwitch92.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
-        layoutSwitch92.layer.cornerRadius = 18
-        contentView.addSubview(layoutSwitch92)
-        // (93) C3：胶囊字形换 SeamGlyph93 共享工厂（样片
-        // 砖墙格/列表/专辑，16px、砖墙格 ×0.86 在工厂内）。
-        let layoutGlyphs93: [SeamGlyph93.Kind] = [.layoutGrid, .layoutList, .layoutAlbum]
-        let layoutNames92 = ["现行版式", "杂志式", "唱片架式"]
-        for (index, glyph) in layoutGlyphs93.enumerated() {
-            let button = UIButton(type: .system)
-            button.setImage(SeamGlyph93.image(glyph, pointSize: 16), for: .normal)
-            button.layer.cornerRadius = 15
-            button.tag = index
-            button.accessibilityLabel = layoutNames92[index]
-            button.addTarget(self, action: #selector(layoutModeTapped92(_:)),
-                             for: .touchUpInside)
-            layoutSwitch92.addSubview(button)
-            layoutButtons92.append(button)
-        }
-        refreshLayoutSwitch92()
-
-        // port88 见证：主页缝建成即无头像位（站点存活自证）。
-        Breadcrumbs.log("port88 seam=avatarless host=home")
-    }
-
-    /// (92) 任务 11：版式开关选中态回刷（缝页签同语言）。
-    private func refreshLayoutSwitch92() {
-        for (index, button) in layoutButtons92.enumerated() {
-            let selected = index == layoutMode92
-            button.backgroundColor = selected
-                ? UIColor.white.withAlphaComponent(0.9) : .clear
-            button.tintColor = selected
-                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
-                          blue: 27.0 / 255, alpha: 1)
-                : UIColor.white.withAlphaComponent(0.62)
-        }
-    }
-
-    @objc private func layoutModeTapped92(_ sender: UIButton) {
-        layoutMode92 = sender.tag
-        onLayoutMode92?(sender.tag)
-    }
-
-    /// (92) 任务 11：开关帧位——直达区底与工具格顶之间的
-    /// 空带居中（窄档横胶囊 58 宽、宽档整行宽）；带高不足
-    /// 40（横屏内容高被压扁、与缝内既有元素同级退化）时
-    /// 隐藏，版式仍可经宽档/竖屏缝切换、歌单页重读生效。
-    /// (93) C1：工具区几何单源（窄档五钮 2 列 3 行须更高
-    /// 区、宽档一行五枚走旧 0.08H 区），胶囊带底与工具排
-    /// 帧共用此数、不许两处各算。
-    private func toolsZone93(H: CGFloat) -> (top: CGFloat, height: CGFloat) {
-        let height = displayWide89 ? 0.08 * H : 0.135 * H
-        return (H - 0.025 * H - height, height)
-    }
-
-    private func layoutLayoutSwitch92(H: CGFloat, cx: CGFloat,
-                                      contentW: CGFloat,
-                                      shortcutsBottom: CGFloat) {
-        let toolsTop = toolsZone93(H: H).top
-        let bandTop = shortcutsBottom + 4
-        let bandBottom = toolsTop - 4
-        guard bandBottom - bandTop >= 40 else {
-            layoutSwitch92.isHidden = true
-            return
-        }
-        layoutSwitch92.isHidden = false
-        let width: CGFloat = displayWide89 ? contentW - 20 : 62
-        let height: CGFloat = 36
-        let x: CGFloat = displayWide89 ? 10 : cx - width / 2
-        let y = (bandTop + bandBottom) / 2 - height / 2
-        layoutSwitch92.frame = CGRect(x: x, y: y, width: width, height: height)
-        let inner = width - 6
-        let buttonW = (inner - 4) / 3
-        for (index, button) in layoutButtons92.enumerated() {
-            button.frame = CGRect(
-                x: 3 + CGFloat(index) * (buttonW + 2), y: 3,
-                width: buttonW, height: height - 6)
-        }
-    }
-
-    private func refreshTabSelection() {
-        for (index, button) in tabButtons.enumerated() {
-            // (89)B b-seam-tabs：选中下标改读 selectedTab-
-            // Index（宿主同步），不再恒 0。
-            let selected = index == selectedTabIndex
-            // (86) 第 1 条：网页选中态——白 0.9 全圆 pill＋
-            // 深色字；未选透明底＋white/62。（(85) 做反：
-            // 白 0.13 方块底＋白字，审计三⑤定案走样。）
-            button.backgroundColor = selected
-                ? UIColor.white.withAlphaComponent(0.9) : .clear
-            button.setTitleColor(selected
-                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
-                          blue: 27.0 / 255, alpha: 1)
-                : UIColor.white.withAlphaComponent(0.62), for: .normal)
-        }
-    }
-
-    /// (89)B b-seam-narrow：档位形态切换——页签与直达钮
-    /// 同时备横/竖两种标题，displayWide89 翻转时换标题、
-    /// 对齐与字号，再走 layoutSubviews 的对应排版分支。
-    private func applyDisplayMode89() {
-        for (index, button) in tabButtons.enumerated() {
-            let title = tabTitles89[index]
-            // port90：Navidrome 窄档不竖拆单字母——横排单行小字呈现。
-            button.setTitle(displayWide89 || index == 5
-                ? title : Seam85Text.vertical(title), for: .normal)
-            button.titleLabel?.numberOfLines = (index == 5 && !displayWide89) ? 1 : 0
-            button.contentHorizontalAlignment = displayWide89 ? .left : .center
-            button.contentEdgeInsets = displayWide89
-                ? UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 0) : .zero
-        }
-        // (93) C2：喜欢/云盘已图标化，两档同为图标面、无
-        // 标题切换（字形/回调不变，仅重排，见 layoutSubviews）。
-        libraryLabel.textAlignment = displayWide89 ? .left : .center
-        setNeedsLayout()
+        addSubview(master)
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        backdrop86.frame = bounds
-        // (89)B b-seam-narrow：宽档内容宽＝bounds.width
-        // （宿主给 120）；窄档维持 64 居中。
-        let contentW: CGFloat = displayWide89 ? bounds.width : 64
-        let top = contentTopInset
-        let bottom = bounds.height - contentBottomInset
-        let contentH = max(0, bottom - top)
-        contentView.frame = CGRect(
-            x: (bounds.width - contentW) / 2, y: top, width: contentW, height: contentH)
-        let cx = contentW / 2
-        let H = contentH
-        // (86) 第 1 条：全改网页相对比例（BRAVAIS_HOME_
-        // SEAM_GEOMETRY／WallParts 渲染同数，基准＝内容
-        // 高 H；(85) 的固定 pt 排版整组退役）。
-        // (89)B b-seam-narrow：宽档书库标题左对齐、折叠钮靠右。
-        libraryLabel.frame = CGRect(
-            x: displayWide89 ? 10 : 0, y: 0.028 * H,
-            width: displayWide89 ? contentW - 20 : contentW,
-            height: max(16, 0.022 * H))
-        // (89) §5-7：折叠钮 28 → 36（网页缝图标钮 36×36）。
-        foldButton.frame = displayWide89
-            ? CGRect(x: contentW - 46, y: 0.066 * H, width: 36, height: 36)
-            : CGRect(x: cx - 18, y: 0.066 * H, width: 36, height: 36)
-        if displayWide89 {
-            // (89)B b-seam-narrow 宽档排版：页签横排整行
-            // （行高 36、宽＝内容宽−20、步距 40、起位仍
-            // 0.118H；选中态仍白 pill、圆角取半行高）；直
-            // 达改两整行横排（0.64H 起、行高 30、步距 34）；
-            // 工具格改底部一排 4 图标（区位同窄档）。
-            for (index, button) in tabButtons.enumerated() {
-                button.frame = CGRect(
-                    x: 10, y: 0.118 * H + CGFloat(index) * 40,
-                    width: contentW - 20, height: 36)
-                button.layer.cornerRadius = 18
-                button.titleLabel?.font = .systemFont(ofSize: 14, weight: .bold)
-            }
-            // (93) C2 宽档：四入口一行四枚等距（样片
-            // .lib-icons 同式），行高 34、起位仍 0.64H。
-            let entryStep = (contentW - 20) / 4
-            for (index, button) in [likedButton, cloudButton,
-                                    diaryButton93, naviButton93].enumerated() {
-                button.frame = CGRect(
-                    x: 10 + entryStep * CGFloat(index), y: 0.64 * H,
-                    width: entryStep, height: 34)
-            }
-            // (93) C1 宽档：工具排一行五枚等距（样片
-            // .lib-tools 同式）。
-            let zone = toolsZone93(H: H)
-            let toolStep = (contentW - 20) / 5
-            for (index, button) in toolButtons.enumerated() {
-                button.frame = CGRect(
-                    x: 10 + toolStep * CGFloat(index),
-                    y: zone.top + (zone.height - 28) / 2,
-                    width: toolStep, height: 28)
-            }
-            // (92) 任务 11＋(93) C2：宽档版式开关（入口行底＝0.64H＋34）。
-            layoutLayoutSwitch92(H: H, cx: cx, contentW: contentW,
-                                 shortcutsBottom: 0.64 * H + 34)
-            return
-        }
-        // port90 页签自适应排版：旧固定步距 0.07H/高 0.062H 下
-        // Navidrome 竖拆 9 行必然瀑布压住「本地」。改：页签区
-        // [max(0.118H, 折叠钮底+8), 0.615H] 六等分，签在步内
-        // 居中、间距均匀、选中胶囊随签居中；普通签宽 30；
-        // Navidrome 横排单行（字 9 bold、宽 56 横胶囊）。
-        let tabsTop = max(0.118 * H, 0.066 * H + 36 + 8)
-        let zoneBottom = 0.615 * H
-        let step = max(0, (zoneBottom - tabsTop) / 6)
-        let tabH = min(40, max(20, step - 5))
-        for (index, button) in tabButtons.enumerated() {
-            let y = tabsTop + CGFloat(index) * step + (step - tabH) / 2
-            if index == 5 {
-                button.frame = CGRect(x: cx - 28, y: y, width: 56, height: tabH)
-                button.layer.cornerRadius = tabH / 2
-                button.titleLabel?.font = .systemFont(ofSize: 9, weight: .bold)
-            } else {
-                button.frame = CGRect(x: cx - 15, y: y, width: 30, height: tabH)
-                button.layer.cornerRadius = min(30, tabH) / 2
-                button.titleLabel?.font = .systemFont(
-                    ofSize: tabH >= 36 ? 14 : 12, weight: .bold)
-            }
-        }
-        // (93) C2 窄档：四入口 2×2（缝宽 64 装不下一行四
-        // 枚 28 命中格，折两行；列沿与工具格两列同沿
-        // cx−30 起、列宽 32），区位仍 0.64H 起、高 62。
-        let entryH: CGFloat = 62
-        for (index, button) in [likedButton, cloudButton,
-                                diaryButton93, naviButton93].enumerated() {
-            let col = CGFloat(index % 2), row = CGFloat(index / 2)
-            button.frame = CGRect(
-                x: cx - 30 + col * 32, y: 0.64 * H + row * 31,
-                width: 30, height: 30)
-        }
-        // (93) C1 窄档：工具格五钮 2 列 3 行（末行控制台
-        // 居左列），区高走 toolsZone93、裸图标无底衬。
-        let zone = toolsZone93(H: H)
-        for (index, button) in toolButtons.enumerated() {
-            let col = CGFloat(index % 2), row = CGFloat(index / 2)
-            let cellH = zone.height / 3
-            button.frame = CGRect(
-                x: cx - 30 + col * 32 + 2,
-                y: zone.top + row * cellH + (cellH - 26) / 2,
-                width: 26, height: 26)
-        }
-        // (92) 任务 11：窄档版式开关（入口区底＝0.64H＋62）。
-        layoutLayoutSwitch92(H: H, cx: cx, contentW: contentW,
-                             shortcutsBottom: 0.64 * H + entryH)
+        master.frame = bounds
     }
 
     // MARK: 命中纪律（只认按钮本体，其余穿透给墙面）
@@ -781,32 +1679,24 @@ final class HomeSeam85View: UIView {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         var node: UIView? = hit
         while let view = node {
-            // (89)B b-seam-narrow：书库标题是 64/120 档切换
-            // 钮（手势挂标签本体），与控件同格放行；其余
-            // 背景穿透纪律不变。
-            if view is UIControl || view === libraryLabel { return hit }
+            if view is UIControl || master.scrollHitView94(view) { return hit }
             if view === self { break }
             node = view.superview
         }
         return nil
     }
 
-    // port88：账户回显（setAccount85）随头像摘除整组退役；
-    // 账户态展示归设置页账户组与侧栏账户区，本缝不再回填。
-
-    // port90：缝长按切主题已随油画背景退役（handler 删除）。
-
-    // MARK: 点按（逐项落痕 sidebar85）
+    // MARK: 点按（逐项落痕 sidebar85，沿既有口径）
 
     @objc private func foldTapped() {
         Breadcrumbs.log("sidebar85 tap dest=fold")
         onFold?()
     }
 
-    @objc private func tabTapped(_ sender: UIButton) {
+    private func dispatchTab(_ index: Int) {
         // (89)B b-seam-tabs：tag 与 tabTitles89 同序 0-5
-        // （探索 2、Navidrome 5 为本包新增分发）。
-        switch sender.tag {
+        // （探索 2、Navidrome 5 为既有分发）。
+        switch index {
         case 0:
             Breadcrumbs.log("sidebar85 tap dest=playlists")
             onPlaylists?()
@@ -887,11 +1777,13 @@ final class HomeSeam85View: UIView {
     }
 }
 
-/// (85) 第 1 条：歌单页缝（网页 BravaisSeamCollection 同
-/// 骨架）：书脊档（64）＝返回 ‹ → 折叠 → 竖排歌单名（点
-/// 它展开）→ 竖排计数 → 播放钮 → 展开钮；展开档（300）
-/// ＝返回＋横排标题＋计数＋播放全部/加入队列＋收起。
-/// 构成与主页缝不同（集合的身份与动作）、骨架同。
+/// (94) 94-4：歌单页缝适配——旧书脊式（竖排标题＋计数＋
+/// 竖排胶囊＋大播放三角）整套退役，内部换 SeamMaster 母
+/// 版；歌单语义映射：返回/折叠→母版头部语义行、播放全部
+/// →缝底播放区中央钮、歌曲计数→页签行附注、歌单名→页签
+/// 行横排标题（竖排标题溢出叠印 bug 随书脊退役消解，母
+/// 版内无竖排标题）。展开档语义保留：母版工具排展开钮
+/// 仍走 onExpandChange、宿主开口宽补间不变。
 final class PlaylistSeam85View: UIView {
 
     var onBack: (() -> Void)?
@@ -899,51 +1791,44 @@ final class PlaylistSeam85View: UIView {
     var onPlayAll: (() -> Void)?
     var onAppendQueue: (() -> Void)?
     var onExpandChange: ((Bool) -> Void)?
-    /// (93) C3：歌单缝同款三段胶囊（与主页缝共享
-    /// SeamGlyph93 工厂与 foliaPlaylistLayout91 单一状态，
-    /// 宿主经此回调写键＋切换版式）。
+    /// (93) C3：排版胶囊（与主页缝共享 SeamGlyph93 工厂与
+    /// foliaPlaylistLayout91 单一状态，宿主经此回调写键＋
+    /// 切换版式）；母版横排胶囊即本开关。
     var onLayoutMode93: ((Int) -> Void)?
     var layoutMode93: Int =
         UserDefaults.standard.integer(forKey: "foliaPlaylistLayout91") {
-        didSet { refreshLayoutSwitch93() }
+        didSet { master.setLayoutMode(layoutMode93, notify: false) }
     }
-    /// (93) C1：展开档补控制台入口（宿主接 ConsolePanel82，
-    /// 与台面控制台钮同一落点；书脊档空间不足不装）。
+    /// (93) C1：控制台入口（宿主接 ConsolePanel82，与台面
+    /// 控制台钮同一落点）。
     var onConsole93: (() -> Void)?
+    /// (94) 94-4 母版补位（新增可选回调，既有签名不变；
+    /// 宿主接线见交付报告最小改动清单）：四入口图标行与
+    /// 缝底工具排的搜索/设置——母版构成全页一致，这两页
+    /// 槽位先立、落点由宿主按主页缝同款接线后生效。
+    var onLiked: (() -> Void)?
+    var onCloud: (() -> Void)?
+    var onDiary93: (() -> Void)?
+    var onNavidrome: (() -> Void)?
+    var onSearch94: (() -> Void)?
+    var onSettings94: (() -> Void)?
 
-    var contentTopInset: CGFloat = 108
-    var contentBottomInset: CGFloat = 132
-    var contentOpacity: CGFloat = 1 {
-        didSet {
-            spineContent.alpha = contentOpacity
-            fullContent.alpha = contentOpacity
-        }
+    var contentTopInset: CGFloat {
+        get { master.contentTopInset }
+        set { master.contentTopInset = newValue }
+    }
+    var contentBottomInset: CGFloat {
+        get { master.contentBottomInset }
+        set { master.contentBottomInset = newValue }
+    }
+    var contentOpacity: CGFloat {
+        get { master.contentOpacity }
+        set { master.contentOpacity = newValue }
     }
 
     private(set) var expanded = false
-    // port90（Miller 2026-11-26 20:27「都是歪的」）：(89)B 的 −4°
-    // 倾斜容器整件取消、缝身摆正，覆盖 b-seam-tilt 裁定。
-    private let backdrop86 = SeamBackdrop86()
-    private let spineContent = UIView()
-    private let fullContent = UIView()
-    private let backButton = UIButton(type: .system)
-    private let foldButton = UIButton(type: .system)
-    private let titleButton = UIButton(type: .system)
-    private let countLabel = UILabel()
-    private let playButton = UIButton(type: .system)
-    private let expandButton = UIButton(type: .system)
-    /// (93) C3：书脊三段胶囊（竖排，样片 .ab 同式）。
-    private let layoutSwitch93 = UIView()
-    private var layoutButtons93: [UIButton] = []
-    /// (93) C1：展开档控制台钮（与播放全部/加入队列同式）。
-    private let fullConsoleButton93 = UIButton(type: .system)
-    // 展开档
-    private let fullBackButton = UIButton(type: .system)
-    private let fullTitleLabel = UILabel()
-    private let fullMetaLabel = UILabel()
-    private let fullPlayButton = UIButton(type: .system)
-    private let fullAppendButton = UIButton(type: .system)
-    private let fullFoldButton = UIButton(type: .system)
+
+    private let master = SeamMaster(host: "wall")
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -953,234 +1838,80 @@ final class PlaylistSeam85View: UIView {
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
     private func build() {
-        // port90：缝底改系统毛玻璃（SeamBackdrop86，两缝同口径）；
-        // 缝身摆正、三层直挂本体；缝长按切主题随油画退役。
         backgroundColor = .clear
-        addSubview(backdrop86)
-        addSubview(spineContent)
-        addSubview(fullContent)
-        fullContent.isHidden = true
+        master.header = .playlist
+        master.setTabs(titles: ["歌单"], selected: 0, note: nil)
+        master.setLayoutMode(layoutMode93, notify: false)
+        master.setTools([
+            SeamMaster.ToolItem(tool: .search, glyph: .search, label: "搜索"),
+            SeamMaster.ToolItem(tool: .settings, glyph: .gear, label: "设置"),
+            SeamMaster.ToolItem(tool: .append, glyph: .list, label: "加入队列"),
+            SeamMaster.ToolItem(tool: .expand, glyph: .expandCorners, label: "展开信息条"),
+            SeamMaster.ToolItem(tool: .console, glyph: .consoleNotes, label: "控制台"),
+        ])
+        master.onBack = { [weak self] in self?.backTapped() }
+        master.onFold = { [weak self] in self?.foldTapped() }
+        // 页签（歌单名）点按沿旧书脊标题语义：展开/收起。
+        master.onTabSelected = { [weak self] _ in self?.expandTapped() }
+        master.onEntry = { [weak self] entry in
+            switch entry {
+            case .liked:
+                Breadcrumbs.log("p94 seam ent=liked host=wall")
+                self?.onLiked?()
+            case .cloud:
+                Breadcrumbs.log("p94 seam ent=cloud host=wall")
+                self?.onCloud?()
+            case .diary:
+                Breadcrumbs.log("p94 seam ent=diary host=wall")
+                self?.onDiary93?()
+            case .navidrome:
+                Breadcrumbs.log("p94 seam ent=navidrome host=wall")
+                self?.onNavidrome?()
+            }
+        }
+        master.onLayoutMode = { [weak self] mode in
+            self?.layoutMode93 = mode
+            self?.onLayoutMode93?(mode)
+        }
+        master.onTool = { [weak self] tool in
+            switch tool {
+            case .search:
+                Breadcrumbs.log("sidebar85 tap dest=search")
+                self?.onSearch94?()
+            case .settings:
+                Breadcrumbs.log("sidebar85 tap dest=settings")
+                self?.onSettings94?()
+            case .append: self?.appendTapped()
+            case .expand: self?.expandTapped()
+            case .console: self?.consoleTapped93()
+            case .queue, .more: break
+            }
+        }
+        // 播放全部→缝底播放区中央钮（母版 onPlayAll 槽）。
+        master.onPlayAll = { [weak self] in self?.playTapped() }
+        addSubview(master)
+        // port90（Miller 2026-11-26 20:27「都是歪的」）：缝身
+        // 摆正、系统毛玻璃——母版 SeamBackdrop86 同口径沿用。
         Breadcrumbs.log("port90 seamtilt=0 glass=1")
-
-        backButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
-        backButton.tintColor = .white
-        backButton.accessibilityLabel = "返回"
-        backButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
-        spineContent.addSubview(backButton)
-        // port90：折叠钮与返回钮同为 chevron.left 相邻成「双箭头」，
-        // 折叠改 xmark（语义＝折叠收起、无障碍标签不变）。
-        foldButton.setImage(UIImage(systemName: "xmark"), for: .normal)
-        foldButton.tintColor = UIColor.white.withAlphaComponent(0.85)
-        foldButton.accessibilityLabel = "折叠"
-        foldButton.addTarget(self, action: #selector(foldTapped), for: .touchUpInside)
-        spineContent.addSubview(foldButton)
-        titleButton.titleLabel?.numberOfLines = 0
-        titleButton.titleLabel?.font = .systemFont(ofSize: 14, weight: .semibold)
-        titleButton.titleLabel?.textAlignment = .center
-        titleButton.setTitleColor(.white, for: .normal)
-        titleButton.accessibilityLabel = "展开信息条"
-        titleButton.addTarget(self, action: #selector(expandTapped), for: .touchUpInside)
-        spineContent.addSubview(titleButton)
-        // port90：计数横排单行（旧竖排在 0.06H 帧高内溢出断行重叠）。
-        countLabel.numberOfLines = 1
-        countLabel.font = .systemFont(ofSize: 11)
-        countLabel.textColor = UIColor.white.withAlphaComponent(0.55)
-        countLabel.textAlignment = .center
-        spineContent.addSubview(countLabel)
-        // 播放钮去底衬（网页书脊裸钮，同折叠钮口径）。
-        playButton.setImage(UIImage(systemName: "play.fill"), for: .normal)
-        playButton.tintColor = .white
-        playButton.accessibilityLabel = "播放全部"
-        playButton.addTarget(self, action: #selector(playTapped), for: .touchUpInside)
-        spineContent.addSubview(playButton)
-        // port88：书脊头像（(86) 第 3 条常驻位）整件摘除，
-        // 计数与播放钮之间的 0.70H 段留空。
-        // (93) C1：展开钮字形换 SeamGlyph93 四角（1.7 线宽，
-        // SF arrow.up.left.and.arrow.down.right 退役）。
-        expandButton.setImage(SeamGlyph93.image(.expandCorners), for: .normal)
-        expandButton.tintColor = UIColor.white.withAlphaComponent(0.85)
-        expandButton.accessibilityLabel = "展开信息条"
-        expandButton.addTarget(self, action: #selector(expandTapped), for: .touchUpInside)
-        spineContent.addSubview(expandButton)
-        // (93) C3：书脊三段胶囊——玻璃竖胶囊＋三枚字形钮
-        // （与主页缝同一 SeamGlyph93 工厂、同一选中语言：
-        // 白 pill＋深字形）；帧位见 layoutSubviews。
-        layoutSwitch93.backgroundColor = UIColor.white.withAlphaComponent(0.07)
-        layoutSwitch93.layer.borderWidth = 0.5
-        layoutSwitch93.layer.borderColor = UIColor.white.withAlphaComponent(0.16).cgColor
-        layoutSwitch93.layer.cornerRadius = 25
-        spineContent.addSubview(layoutSwitch93)
-        let layoutGlyphs93: [SeamGlyph93.Kind] = [.layoutGrid, .layoutList, .layoutAlbum]
-        let layoutNames93 = ["现行版式", "杂志式", "唱片架式"]
-        for (index, glyph) in layoutGlyphs93.enumerated() {
-            let button = UIButton(type: .system)
-            button.setImage(SeamGlyph93.image(glyph, pointSize: 16), for: .normal)
-            button.layer.cornerRadius = 15
-            button.tag = index
-            button.accessibilityLabel = layoutNames93[index]
-            button.addTarget(self, action: #selector(layoutModeTapped93(_:)),
-                             for: .touchUpInside)
-            layoutSwitch93.addSubview(button)
-            layoutButtons93.append(button)
-        }
-        refreshLayoutSwitch93()
-
-        fullBackButton.setImage(UIImage(systemName: "chevron.left"), for: .normal)
-        fullBackButton.tintColor = .white
-        fullBackButton.accessibilityLabel = "返回"
-        fullBackButton.addTarget(self, action: #selector(backTapped), for: .touchUpInside)
-        fullContent.addSubview(fullBackButton)
-        fullTitleLabel.font = .systemFont(ofSize: 16, weight: .semibold)
-        fullTitleLabel.textColor = .white
-        fullTitleLabel.numberOfLines = 2
-        fullContent.addSubview(fullTitleLabel)
-        fullMetaLabel.font = .systemFont(ofSize: 12)
-        fullMetaLabel.textColor = UIColor.white.withAlphaComponent(0.6)
-        fullContent.addSubview(fullMetaLabel)
-        for (button, title, glyph, action) in [
-            (fullPlayButton, "播放全部", "play.fill", #selector(playTapped)),
-            (fullAppendButton, "加入队列", "text.badge.plus", #selector(appendTapped)),
-        ] as [(UIButton, String, String, Selector)] {
-            button.setImage(UIImage(systemName: glyph), for: .normal)
-            button.setTitle("  " + title, for: .normal)
-            button.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
-            button.tintColor = .white
-            button.setTitleColor(.white, for: .normal)
-            button.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-            button.layer.cornerRadius = 12
-            button.contentHorizontalAlignment = .left
-            button.contentEdgeInsets = UIEdgeInsets(top: 0, left: 14, bottom: 0, right: 0)
-            button.accessibilityLabel = title
-            button.addTarget(self, action: action, for: .touchUpInside)
-            fullContent.addSubview(button)
-        }
-        fullFoldButton.setTitle("收起", for: .normal)
-        fullFoldButton.titleLabel?.font = .systemFont(ofSize: 13)
-        fullFoldButton.setTitleColor(UIColor.white.withAlphaComponent(0.75), for: .normal)
-        fullFoldButton.accessibilityLabel = "收起信息条"
-        fullFoldButton.addTarget(self, action: #selector(expandTapped), for: .touchUpInside)
-        fullContent.addSubview(fullFoldButton)
-        // (93) C1：展开档控制台钮（同排钮式：字形＋标题＋
-        // 白 0.10 底），字形走 SeamGlyph93 双音符。
-        fullConsoleButton93.setImage(SeamGlyph93.image(.consoleNotes), for: .normal)
-        fullConsoleButton93.setTitle("  控制台", for: .normal)
-        fullConsoleButton93.titleLabel?.font = .systemFont(ofSize: 14, weight: .medium)
-        fullConsoleButton93.tintColor = .white
-        fullConsoleButton93.setTitleColor(.white, for: .normal)
-        fullConsoleButton93.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-        fullConsoleButton93.layer.cornerRadius = 12
-        fullConsoleButton93.contentHorizontalAlignment = .left
-        fullConsoleButton93.contentEdgeInsets = UIEdgeInsets(top: 0, left: 14, bottom: 0, right: 0)
-        fullConsoleButton93.accessibilityLabel = "控制台"
-        fullConsoleButton93.addTarget(self, action: #selector(consoleTapped93),
-                                      for: .touchUpInside)
-        fullContent.addSubview(fullConsoleButton93)
-        // port88 见证：歌单缝建成即无头像位（站点存活自证）。
-        Breadcrumbs.log("port88 seam=avatarless host=wall")
     }
 
     /// 数据回填（标题/计数）：宿主在种子落地与条目变化时调。
+    /// 歌单名→页签行横排标题、计数→页签行附注。
     func setPlaylist85(title: String, count: Int) {
-        titleButton.setTitle(Seam85Text.vertical(title), for: .normal)
-        countLabel.text = "\(count) 首"
-        fullTitleLabel.text = title
-        fullMetaLabel.text = "\(count) 首"
+        master.setTabs(
+            titles: [title.isEmpty ? "歌单" : title],
+            selected: 0, note: "\(count) 首")
     }
 
     func setExpanded85(_ expanded: Bool) {
         self.expanded = expanded
-        spineContent.isHidden = expanded
-        fullContent.isHidden = !expanded
+        master.isExpanded94 = expanded
         setNeedsLayout()
     }
 
-    /// (93) C3：胶囊选中态回刷（与主页缝同一语言）。
-    private func refreshLayoutSwitch93() {
-        for (index, button) in layoutButtons93.enumerated() {
-            let selected = index == layoutMode93
-            button.backgroundColor = selected
-                ? UIColor.white.withAlphaComponent(0.9) : .clear
-            button.tintColor = selected
-                ? UIColor(red: 22.0 / 255, green: 22.0 / 255,
-                          blue: 27.0 / 255, alpha: 1)
-                : UIColor.white.withAlphaComponent(0.62)
-        }
-    }
-
-    @objc private func layoutModeTapped93(_ sender: UIButton) {
-        layoutMode93 = sender.tag
-        onLayoutMode93?(sender.tag)
-    }
-
-    /// (93) C1：展开档控制台点按。
-    @objc private func consoleTapped93() {
-        Breadcrumbs.log("sidebar85 tap dest=console")
-        onConsole93?()
-    }
-
-    // port88：书脊头像回填（setAccount85）随头像摘除整组退役。
-
-    // port90：缝长按切主题已随油画背景退役（handler 删除）。
-
     override func layoutSubviews() {
         super.layoutSubviews()
-        // port90：无倾斜容器，排版坐标即本视图坐标。
-        let areaW = bounds.width
-        backdrop86.frame = bounds
-        let top = contentTopInset
-        let contentH = max(0, bounds.height - contentTopInset - contentBottomInset)
-        // 书脊内容（64 宽居中）。
-        spineContent.frame = CGRect(
-            x: (areaW - 64) / 2, y: top, width: 64, height: contentH)
-        let cx: CGFloat = 32
-        let H = contentH
-        // (86) 第 1 条：书脊改网页相对比例（BRAVAIS_SPINE_
-        // GEOMETRY 同数，基准＝内容高 H）：back top 0.024、
-        // fold 0.088、title top 0.16 高 0.38、count top
-        // 0.56 高 0.06、play top 0.84、expand top 0.905；
-        // 钮宽网页 0.6×缝宽≈38、原生触控帧 32 居中代偿
-        // （报告注明）。标题不再弹性拉满、计数不再随标题
-        // 底漂移（(85) 走样两处）。
-        backButton.frame = CGRect(x: cx - 16, y: 0.024 * H, width: 32, height: 32)
-        // (89) §5-7：书脊折叠钮 32 → 36（网页缝图标钮 36×36）。
-        foldButton.frame = CGRect(x: cx - 18, y: 0.088 * H, width: 36, height: 36)
-        titleButton.frame = CGRect(
-            x: 12, y: 0.16 * H, width: 40, height: 0.38 * H)
-        // port90：计数横排单行，帧高 18、整缝宽居中（旧 0.06H 高装不下竖排 5 行）。
-        countLabel.frame = CGRect(
-            x: 4, y: 0.56 * H, width: 56, height: 18)
-        // 计数（止 0.62H）与播放（起 0.84H）之间空段：
-        // port88 前为头像位（0.70H 起 32 圆），已摘除留空。
-        playButton.frame = CGRect(x: cx - 18, y: 0.84 * H, width: 36, height: 36)
-        // (89) §5-7：展开钮 28 → 36（网页缝图标钮 36×36）。
-        expandButton.frame = CGRect(x: cx - 18, y: 0.905 * H, width: 36, height: 36)
-        // (93) C3：三段胶囊居计数（止 0.56H＋18）与播放
-        // （起 0.84H）之间空段：宽 50、三钮 44×29＋间 2、
-        // 总高 97；空段不足 97 时隐藏（版式仍可经主页缝切）。
-        let capsuleY = 0.56 * H + 22
-        let capsuleH: CGFloat = 97
-        layoutSwitch93.isHidden = (0.84 * H - capsuleY) < capsuleH
-        if !layoutSwitch93.isHidden {
-            layoutSwitch93.frame = CGRect(
-                x: cx - 25, y: capsuleY, width: 50, height: capsuleH)
-            for (index, button) in layoutButtons93.enumerated() {
-                button.frame = CGRect(
-                    x: 3, y: 3 + CGFloat(index) * 31,
-                    width: 44, height: 29)
-            }
-        }
-        // 展开档内容（300 宽居中、左对齐排版）。
-        fullContent.frame = CGRect(
-            x: (areaW - 300) / 2, y: top, width: 300, height: contentH)
-        // (89) §5-7：展开档返回钮 28 → 32（网页返回钮 32×32）。
-        fullBackButton.frame = CGRect(x: 0, y: 0, width: 32, height: 32)
-        fullTitleLabel.frame = CGRect(x: 36, y: 2, width: 264, height: 44)
-        fullMetaLabel.frame = CGRect(x: 36, y: 48, width: 264, height: 18)
-        fullPlayButton.frame = CGRect(x: 16, y: 84, width: 268, height: 44)
-        fullAppendButton.frame = CGRect(x: 16, y: 136, width: 268, height: 44)
-        fullFoldButton.frame = CGRect(x: 16, y: 188, width: 60, height: 28)
-        // (93) C1：展开档控制台钮（收起行之下、同排钮宽）。
-        fullConsoleButton93.frame = CGRect(x: 16, y: 224, width: 268, height: 44)
+        master.frame = bounds
     }
 
     // MARK: 命中纪律（只认按钮本体，其余穿透给墙面）
@@ -1189,14 +1920,14 @@ final class PlaylistSeam85View: UIView {
         guard let hit = super.hitTest(point, with: event) else { return nil }
         var node: UIView? = hit
         while let view = node {
-            if view is UIControl { return hit }
+            if view is UIControl || master.scrollHitView94(view) { return hit }
             if view === self { break }
             node = view.superview
         }
         return nil
     }
 
-    // MARK: 点按（逐项落痕 sidebar85）
+    // MARK: 点按（逐项落痕 sidebar85，沿既有口径）
 
     @objc private func backTapped() {
         Breadcrumbs.log("sidebar85 tap dest=back")
@@ -1221,5 +1952,11 @@ final class PlaylistSeam85View: UIView {
     @objc private func expandTapped() {
         Breadcrumbs.log("sidebar85 tap dest=\(expanded ? "spine" : "expand")")
         onExpandChange?(!expanded)
+    }
+
+    /// (93) C1：控制台点按。
+    @objc private func consoleTapped93() {
+        Breadcrumbs.log("sidebar85 tap dest=console")
+        onConsole93?()
     }
 }

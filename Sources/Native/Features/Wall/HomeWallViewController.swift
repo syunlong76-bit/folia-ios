@@ -119,6 +119,10 @@ final class HomeWallViewController: UIViewController,
     private var miniPlayButton: UIButton!
     private var miniPrevButton: UIButton!
     private var miniNextButton: UIButton!
+    /// (94) 94-3：台钮最终渲染自证去重键（"btn:glyph"）——
+    /// 布局稳定后每字形状态只测一次，播/停切换换键重测；
+    /// 不逐布局落行、不逐帧渲染（见 probeDeckRender94）。
+    private var deckRenderProbed94 = Set<String>()
     /// (87) 主题四圆点（台面右上，样片 .tdots）：四套油画
     /// 主题点选切换；收起态随内容组淡出（见
     /// setMiniBarContentsAlpha）。
@@ -1007,6 +1011,9 @@ final class HomeWallViewController: UIViewController,
         stickerLayoutOverlays()
         // (85) 第 1 条：缝首规划（相机居中后）＋逐布局落位。
         updateSeam85Frame()
+        // (94) 94-3：布局收口后做台钮最终渲染自证（内部去
+        // 重：每字形状态只测一次，非逐布局开销）。
+        probeDeckRender94()
     }
 
     func scrollViewDidScroll(_ scrollView: UIScrollView) {
@@ -2069,8 +2076,81 @@ final class HomeWallViewController: UIViewController,
                 PlaybackEngine.shared.playbackState == .playing ? .pause : .play,
                 pointSize: 21),
             for: .normal)
+        // (94) 94-3：setImage 后重挂字形层——钮内 blur 层
+        // （buildMiniBar insert at 0）与 A4 渐变层（A4Chrome91
+        // insert at 0）是仅有的插入子视图，刷新路径此前只
+        // setImage、从不重申 imageView 在插入层之上，主题
+        // 刷新（applyMiniTheme→本函数）后字形可被整层盖住；
+        // 此处与 refreshMiniBar 两处刷新口统一重挂。
+        A4Chrome91.rehangGlyph(of: miniPlayButton)
         // (84) 第 1 条：模式钮已撤下台面，本回刷只剩播/停
         // 态（模式回显在控制台面板内自理）。
+    }
+
+    /// (94) 94-3：cov 自证移到按钮最终渲染层。(93) 的自证
+    /// 装在 DeckGlyph82 工厂出口、测不到按钮最终渲染——
+    /// (93) 真机图三主页墙展开台中央钮仍是空圆。本处在
+    /// viewDidLayoutSubviews 收口（布局已稳）时对四钮
+    /// layer 做离屏渲染快照，测中心区域字形覆盖率（判据
+    /// 见 DeckGlyph82.snapshotCenterCoverage），逐钮落
+    /// p94 deck render 行。去重口径：每钮每字形状态只测
+    /// 一次（deckRenderProbed94），播/停切换经 refresh-
+    /// MiniBar 换图后键变重测；不逐布局、不逐帧。
+    /// play/pause 的 cov 低于阈值 0.5%（0.005：A4 play 描
+    /// 边字形在 38pt 钮心 60% 区域的实测覆盖应在 3% 量
+    /// 级，0.5% 已是「只剩零星像素」的空钮线）时，当场
+    /// 以填充路径字形（DeckGlyph82.filledFallbackImage）
+    /// 替换钮图并在同行落 fb=1。
+    private func probeDeckRender94() {
+        guard miniBarPresented, !miniBarCollapsed,
+              miniPlayButton != nil, miniPlayButton.window != nil,
+              miniPlayButton.bounds.width > 0 else { return }
+        let playing = PlaybackEngine.shared.playbackState == .playing
+        probeDeckButton94(miniPlayButton, btn: "play",
+                          glyph: playing ? "pause" : "play",
+                          kind: playing ? .pause : .play)
+        probeDeckButton94(miniPrevButton, btn: "prev", glyph: "prev", kind: nil)
+        probeDeckButton94(miniNextButton, btn: "next", glyph: "next", kind: nil)
+        probeDeckButton94(miniConsoleButton, btn: "console", glyph: "console", kind: nil)
+    }
+
+    private func probeDeckButton94(_ button: UIButton?, btn: String,
+                                   glyph: String, kind: DeckGlyph82.Kind?) {
+        guard let button, button.bounds.width > 0 else { return }
+        let key = "\(btn):\(glyph)"
+        guard !deckRenderProbed94.contains(key) else { return }
+        deckRenderProbed94.insert(key)
+        // ivtop 在重挂前取值：记录 imageView 进探针时是否
+        // 已是钮内最上子视图——覆盖者定位的真机证据位，
+        // 不许被本探针自己的修复动作污染。
+        let ivTop = button.imageView.map {
+            button.subviews.last === $0
+        } ?? false
+        // 测前重挂一次字形层：若 cov 仍低，即排除 z 序因
+        // 素、断在渲染/图片本身，fb 兜底随即接管。
+        A4Chrome91.rehangGlyph(of: button)
+        button.layoutIfNeeded()
+        let imgNil = button.image(for: .normal) == nil
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = UIScreen.main.scale
+        // 钮 layer 树的离屏快照（drawHierarchy 按 bounds
+        // 精确落位，等价渲染 layer 全树、无位置偏移歧义）。
+        let snapshot = UIGraphicsImageRenderer(
+            bounds: button.bounds, format: format).image { _ in
+            button.drawHierarchy(in: button.bounds, afterScreenUpdates: false)
+        }
+        let cov = DeckGlyph82.snapshotCenterCoverage(snapshot)
+        var fb = 0
+        // 阈值 0.5%（0.005）：见 probeDeckRender94 注释。
+        if let kind, cov < 0.005,
+           let filled = DeckGlyph82.filledFallbackImage(kind, pointSize: 21) {
+            button.setImage(filled, for: .normal)
+            A4Chrome91.rehangGlyph(of: button)
+            fb = 1
+        }
+        Breadcrumbs.log("p94 deck render btn=\(btn) cov=\(Int(cov * 1000))"
+            + " img=\(imgNil ? "nil" : "ok") sub=\(button.subviews.count)"
+            + " ivtop=\(ivTop ? 1 : 0) fb=\(fb)")
     }
 
     // (84) 第 1 条：refreshMiniModeButton83 与 miniListTapped83 已随
@@ -2923,6 +3003,10 @@ final class HomeWallViewController: UIViewController,
             DeckGlyph82.image(engine.playbackState == .playing ? .pause : .play,
                               pointSize: 21),
             for: .normal)
+        // (94) 94-3：setImage 后重挂字形层（同 refreshDeck-
+        // Icons82 口径：钮内 blur/A4 渐变插入层之上须恒为
+        // imageView，刷新路径不许只换图不重申 z 序）。
+        A4Chrome91.rehangGlyph(of: miniPlayButton)
         if let art = engine.currentArtwork {
             miniCover.image = art
         } else if let url = track.artworkURL {

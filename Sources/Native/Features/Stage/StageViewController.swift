@@ -326,6 +326,23 @@ final class StageViewController: UIViewController {
     private var stageRotationFrozen = false
     private var stageLayoutPending = false
     private var stageLayoutRuns = 0
+    /// (94) 94-6 旋转 content-ready 四齐门：freeze 释放不再
+    /// 绑固定计时，须四齐——原生布局 landed＋WebView resize
+    /// 完成（stageResizeDone）＋JS 回 stage.ready（stageReady，
+    /// 样式首帧回执同证）＋连续 2 个稳定帧（CADisplayLink 按
+    /// 目标尺寸核对）。原生样式无网页层，后两项天然成立。
+    /// 安全网仅防死锁（3s，触发落 via=tmo94 自证门未齐）。
+    private var p94RotStart: CFTimeInterval = 0
+    private var p94RotGen = 0
+    private var p94RotAwaiting = false
+    private var p94RotNativeLanded = false
+    private var p94RotWebResized = false
+    private var p94RotStageReady = false
+    private var p94RotStableFrames = 0
+    private var p94RotTargetSize: CGSize = .zero
+    private var p94RotLyricGeo: (x: Int, w: Int)?
+    private var p94RotLink: CADisplayLink?
+    private var p94RotSafetyWork: DispatchWorkItem?
     /// (86) 第 9 条：alongside 已排轮的几何（尺寸＋安全
     /// 区），completion 据此判补轮——一致即零补轮、landed
     /// runs 收敛为 1（(85) 实锤旧法解冻后中间 bounds 反复
@@ -925,6 +942,29 @@ final class StageViewController: UIViewController {
         Breadcrumbs.log("stage.rotate freeze gen=\(generation)"
             + " from=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
             + " to=\(Int(size.width))x\(Int(size.height))")
+        // (94) 94-6：四齐门接管本次 freeze 的释放（旧约
+        // 330ms 的固定计时释放口径就此废除）——重置门状态、
+        // 起稳定帧计数链；释放点在 p94RotMaybeRelease。
+        p94RotStart = CACurrentMediaTime()
+        p94RotGen += 1
+        p94RotAwaiting = true
+        p94RotNativeLanded = false
+        p94RotWebResized = webEmbedStyleId == nil
+        p94RotStageReady = webEmbedStyleId == nil
+        p94RotStableFrames = 0
+        p94RotTargetSize = size
+        p94RotLyricGeo = nil
+        Breadcrumbs.log("p94 rot begin from=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
+            + " to=\(Int(size.width))x\(Int(size.height))")
+        // 旋转中冻结墙惯性：与 94-5 共用同一静态停机口，
+        // 停舞台内嵌 WebView 滚动面的惯性/回弹残余。
+        WallPrototypeViewController.p94StopScrollMomentum(
+            WebEffectBridge.shared.webView.scrollView)
+        p94RotLink?.invalidate()
+        let p94Link = CADisplayLink(target: self,
+                                    selector: #selector(p94RotFrameTick))
+        p94Link.add(to: .main, forMode: .common)
+        p94RotLink = p94Link
         // (81) 第 3 条：网页特效层纳入同一冻结管线——冻
         // 结拍先给 WebView 截图盖层（与 (70) B6 切换盖同
         // 法），转场期网页层本体藏在盖下、不再被系统旋转
@@ -964,6 +1004,12 @@ final class StageViewController: UIViewController {
             // handleWebStyleFrame 直揭，不再串行等 landed
             // 后才催（(85) 实锤揭盖迟到 278ms）。
             if self.webEmbedStyleId != nil {
+                // (94) 94-6：WebView 帧先行设满可用区（不等
+                // autoresizing 的自然时序），清 zoom/inset 残留
+                // 并触发 JS 侧 resize 核查链，再走既有 nudge。
+                let wv = WebEffectBridge.shared.webView
+                wv.frame = self.rendererContainer.bounds
+                WebEffectBridge.shared.prepareRotationResize94()
                 WebEffectBridge.shared.nudgeEffectResize81()
             }
         }) { [weak self] _ in
@@ -975,7 +1021,12 @@ final class StageViewController: UIViewController {
             // 的布局请求若几何与 alongside 已排一致（纯旋
             // 转常态），零补轮、runs 收敛为 1；不一致才补
             // 一轮并落 extra=1。
-            self.stageRotationFrozen = false
+            // (94) 94-6：原生 landed 只喂四齐门之一，不再在此
+            // 直接解冻——解冻移交 p94RotMaybeRelease（四齐才放）。
+            self.p94RotNativeLanded = true
+            Breadcrumbs.log("p94 rot native landed dt="
+                + "\(Int((CACurrentMediaTime() - self.p94RotStart) * 1000))")
+            self.p94RotMaybeRelease()
             var extraRun86 = 0
             if self.stageLayoutPending {
                 self.stageLayoutPending = false
@@ -1020,8 +1071,120 @@ final class StageViewController: UIViewController {
             if self.webRotCover81 != nil {
                 Breadcrumbs.log("webfx.rot81 landed gen=\(generation)")
                 self.armWebRotReveal81(generation: generation)
+            } else if self.p94RotAwaiting {
+                // (94) 94-6：无网页盖的原生样式同样挂四齐门
+                // 安全网（防死锁，触发自证 via=tmo94）。
+                self.p94RotArmSafety()
             }
         }
+    }
+
+    // MARK: - (94) 94-6 旋转四齐门结算
+
+    /// 稳定帧计数：朝向尺寸与 WebView 帧都落到目标值才计
+    /// 一帧，任一不符清零；满 2 帧喂门结算。
+    @objc private func p94RotFrameTick() {
+        guard p94RotAwaiting else { return }
+        let sizeOK = abs(view.bounds.width - p94RotTargetSize.width) < 0.5
+            && abs(view.bounds.height - p94RotTargetSize.height) < 0.5
+        var webOK = true
+        if webEmbedStyleId != nil {
+            webOK = WebEffectBridge.shared.webView.frame.size
+                == rendererContainer.bounds.size
+        }
+        if sizeOK && webOK {
+            p94RotStableFrames += 1
+        } else {
+            p94RotStableFrames = 0
+        }
+        if p94RotStableFrames >= 2 {
+            p94RotMaybeRelease()
+        }
+    }
+
+    /// 桥侧旋转信号（stageResizeDone / stageReady）：回报的
+    /// CSS 宽须与本次目标尺寸对位（横竖任一），防上一朝向
+    /// 的迟到回报误喂本门。
+    private func p94HandleRotSignal(kind: String, body: [String: Any]) {
+        guard p94RotAwaiting else { return }
+        let cw = (body["cssW"] as? NSNumber)?.intValue ?? -1
+        guard cw == Int(p94RotTargetSize.width.rounded())
+            || cw == Int(p94RotTargetSize.height.rounded()) else { return }
+        if kind == "resized" {
+            p94RotWebResized = true
+        } else if kind == "ready" {
+            p94RotStageReady = true
+            let x = (body["x"] as? NSNumber)?.intValue ?? 0
+            let w = (body["clientW"] as? NSNumber)?.intValue ?? 0
+            if w > 0 { p94RotLyricGeo = (x: x, w: w) }
+        }
+        p94RotMaybeRelease()
+    }
+
+    /// 四齐结算：原生 landed＋WebView resize 完成＋JS
+    /// stage.ready＋连续 2 稳定帧全齐才解冻并揭盖；歌词行
+    /// 新几何同点落行（JS 主画布客户区优先，否则按舞台左
+    /// 右安全边距推算——歌词行不许出界）。
+    private func p94RotMaybeRelease() {
+        guard p94RotAwaiting, p94RotNativeLanded,
+              p94RotStableFrames >= 2 else { return }
+        if webEmbedStyleId != nil {
+            guard p94RotWebResized, p94RotStageReady else { return }
+        }
+        p94RotAwaiting = false
+        p94RotLink?.invalidate()
+        p94RotLink = nil
+        p94RotSafetyWork?.cancel()
+        p94RotSafetyWork = nil
+        stageRotationFrozen = false
+        p94RotCatchUpLayout()
+        let dt = Int((CACurrentMediaTime() - p94RotStart) * 1000)
+        Breadcrumbs.log("p94 rot ready dt=\(dt) frames=2")
+        if let geo = p94RotLyricGeo {
+            Breadcrumbs.log("p94 rot lyric x=\(geo.x) w=\(geo.w)")
+        } else {
+            let left = Int(view.safeAreaInsets.left.rounded())
+            let right = Int(view.safeAreaInsets.right.rounded())
+            Breadcrumbs.log("p94 rot lyric x=\(left)"
+                + " w=\(Int(view.bounds.width) - left - right)")
+        }
+        if webRotCover81 != nil {
+            revealWebRotCover81(via: "ready94")
+        }
+    }
+
+    /// 释放后补轮：冻结期记下的待办布局以最终 bounds 单轮
+    /// 补齐（与 completion 补轮同式），不留陈旧 pending。
+    private func p94RotCatchUpLayout() {
+        guard stageLayoutPending else { return }
+        stageLayoutPending = false
+        layoutStage()
+        pushSnapshot()
+    }
+
+    /// 防死锁安全网：四齐门 3s 未齐则强制释放并自证
+    /// （via=tmo94＋实测稳定帧数）——不是释放条件，是防永冻
+    /// 的兜底，触发即说明 JS 回报链断，日志可判。
+    private func p94RotArmSafety() {
+        p94RotSafetyWork?.cancel()
+        let gen = p94RotGen
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.p94RotAwaiting,
+                  gen == self.p94RotGen else { return }
+            self.p94RotAwaiting = false
+            self.p94RotLink?.invalidate()
+            self.p94RotLink = nil
+            self.stageRotationFrozen = false
+            self.p94RotCatchUpLayout()
+            let dt = Int((CACurrentMediaTime() - self.p94RotStart) * 1000)
+            Breadcrumbs.log("p94 rot ready dt=\(dt)"
+                + " frames=\(self.p94RotStableFrames) via=tmo94")
+            if self.webRotCover81 != nil {
+                self.revealWebRotCover81(via: "tmo94")
+            }
+        }
+        p94RotSafetyWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0, execute: work)
     }
 
     /// (81) 第 3 条：旋转冻结拍给网页层上截图盖。截图是
@@ -1070,16 +1233,12 @@ final class StageViewController: UIViewController {
     private func armWebRotReveal81(generation: Int) {
         // (86) 第 9 条：nudge 已提前到 alongside 转场期发
         // （新尺寸一定即催网页层重排、回执到达由
-        // handleWebStyleFrame 直揭），此处不再重复催——
-        // 只留 0.9s 超时兜底（回执永不到时防永盖）。
-        let rotGen = webRotGen81
-        webRotRevealWork81?.cancel()
-        let work = DispatchWorkItem { [weak self] in
-            guard let self, rotGen == self.webRotGen81 else { return }
-            self.revealWebRotCover81(via: "tmo")
-        }
-        webRotRevealWork81 = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
+        // handleWebStyleFrame 直揭），此处不再重复催。
+        // (94) 94-6 改：揭盖不再走此处的固定超时（旧 0.9s
+        // 口径废除）——释放归四齐门（p94RotMaybeRelease，
+        // 回执经 handleWebStyleFrame 喂 stage.ready 条件）；
+        // 此处只挂四齐门的防死锁安全网（3s、via=tmo94）。
+        p94RotArmSafety()
     }
 
     private func revealWebRotCover81(via: String) {
@@ -1212,6 +1371,12 @@ final class StageViewController: UIViewController {
         // dismiss 时走 teardown——开过又正常关掉即该样式活
         // 过，清 pending，免健康样式下次启动遭误报回退。
         finishStyleProof(via: "teardown")
+        // (94) 94-6：四齐门计数链/安全网随台收尾（防 CADisplayLink 留住本台）。
+        p94RotLink?.invalidate()
+        p94RotLink = nil
+        p94RotSafetyWork?.cancel()
+        p94RotSafetyWork = nil
+        p94RotAwaiting = false
         settleTimer?.invalidate()
         settleTimer = nil
         settleReanchorAt = nil
@@ -1916,6 +2081,11 @@ final class StageViewController: UIViewController {
         }
         webView.isUserInteractionEnabled = false
         rendererContainer.bringSubviewToFront(webView)
+        // (94) 94-6：桥侧旋转信号（resize 完成/stage.ready）
+        // 转交本台四齐门；摘嵌时清零（detachWebEmbed）。
+        WebEffectBridge.shared.onP94RotSignal = { [weak self] kind, body in
+            self?.p94HandleRotSignal(kind: kind, body: body)
+        }
     }
 
     /// (81) 第 6 条：町景手势断点修复。断点定案（代码坐
@@ -1971,7 +2141,14 @@ final class StageViewController: UIViewController {
         // (81) 第 3 条：旋转揭盖等的是同一路首帧回执——
         // 盖在场时先结算揭盖（与样式淡换武装相互独立）。
         if webRotCover81 != nil, styleId == webEmbedStyleId {
-            revealWebRotCover81(via: "ack")
+            // (94) 94-6：四齐门在岗时首帧回执只作 stage.ready
+            // 证据喂门、不直揭——四齐才释放揭盖。
+            if p94RotAwaiting {
+                p94RotStageReady = true
+                p94RotMaybeRelease()
+            } else {
+                revealWebRotCover81(via: "ack")
+            }
         }
         guard styleId == webEmbedStyleId, webFadeWorkItem != nil else { return }
         completeWebFade(generation: webSwapGeneration, via: "ack")
@@ -2042,6 +2219,8 @@ final class StageViewController: UIViewController {
         // 宿主/MainViewController 口径为 false 约束布局）。
         webView.translatesAutoresizingMaskIntoConstraints = false
         WebEffectBridge.shared.isEmbeddedInStage = false
+        // (94) 94-6：旋转信号回调随摘嵌清零，不许带出本台。
+        WebEffectBridge.shared.onP94RotSignal = nil
         webEmbedStyleId = nil
     }
 

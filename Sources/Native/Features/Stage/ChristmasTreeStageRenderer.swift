@@ -4,8 +4,10 @@ import QuartzCore
 // 圣诞树 christmas（(93) 新增原生歌词样式）：粒子圣诞树＋无人机
 // 环绕镜头，当前行歌词由雪粒汇聚成形、唱完碎散成雪。参数口径
 // 对齐网页样片（sheng-dan-ge-ci-te-xiao-yang-pian）：
-//  - 粒子分池：树体 3000＋金链螺旋 340＋歌词 3000＋远雪 650＋
-//    近雪 110，合计 7100。
+//  - 粒子分账（(94) 94-8 按样片拆账，不再 7100 混编）：歌词
+//    粒子池 3000 独立成账；树粒子 3000（金链螺旋 340 为树
+//    装饰子账）；雪/星尘余量另账＝远雪 650＋近雪 110＝760。
+//    三账合计仍 7100（粒子总数不变、只拆账）。
 //  - 聚字时序：汇聚 1.0s（easeOutBack、逐粒延迟 ≤0.55s）→ 停留
 //    → 行末 0.8s 碎散成雪；5s 行时停留恰至 4.2s，与样片一致
 //    （长行停留随行长延长，汇聚/碎散时长不随行长变）。
@@ -64,14 +66,17 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     private var snapshot: LyricStageSnapshot?
     private var isActive = false
 
-    // 粒子池计数（样片口径，mount 面包屑报总数）
+    // 粒子分账常量（(94) 94-8，样片口径）：歌词池独立 3000；
+    // 树池 3000（金链 340 为其装饰子账）；雪/星尘余量另账
+    // 760（远 650＋近 110）。mount 面包屑逐账落数。
+    private static let lyricCount = 3000
     private static let treeCount = 3000
     private static let garlandCount = 340
-    private static let lyricCount = 3000
     private static let snowFarCount = 650
     private static let snowNearCount = 110
+    static var snowAccount: Int { snowFarCount + snowNearCount }
     static var totalParticles: Int {
-        treeCount + garlandCount + lyricCount + snowFarCount + snowNearCount
+        lyricCount + treeCount + garlandCount + snowAccount
     }
 
     // 树体/金链：静态 3D 点 + 精灵档下标（烘焙时定版）
@@ -92,6 +97,10 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     // 12 深色描边晕、13 金星、14 地面暖光池、15 歌词带暗椭圆衬底
     private var sprites: [CGImage?] = []
     private var spritesReady = false
+    /// (94) 94-8：精灵烘焙时的屏幕 scale（渲染时动态读
+    /// UIScreen.main.scale、不写死不封顶）；scale 变化（换
+    /// 机/旋转不改 scale，此为兜底）时整表重烘。
+    private var bakedScale94: CGFloat = 0
 
     // 相机/动画相位（frameTick 累计，宿主驱动）
     private var elapsed: TimeInterval = 0
@@ -129,6 +138,20 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         self.context = context
         bakeSpritesIfNeeded()
         Breadcrumbs.log("p93 xmas on n=\(Self.totalParticles)")
+        // (94) 94-8：分账/scale/纹理账同行自证（纹理对 ≤250MB 口径）。
+        Breadcrumbs.log("p94 xmas pools lyric=\(Self.lyricCount) tree=\(Self.treeCount)"
+            + " garland=\(Self.garlandCount) snow=\(Self.snowAccount) total=\(Self.totalParticles)")
+        Breadcrumbs.log("p94 xmas scale=\(String(format: "%.1f", UIScreen.main.scale))"
+            + " tex=\(String(format: "%.1f", textureMB94()))MB")
+    }
+
+    /// (94) 94-8：精灵纹理账（CGImage 像素×4B 求和，MB）。
+    private func textureMB94() -> Double {
+        var bytes = 0
+        for img in sprites {
+            if let img { bytes += img.width * img.height * 4 }
+        }
+        return Double(bytes) / 1_000_000.0
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {
@@ -173,9 +196,12 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     }
 
     func unmount() {
+        // (94) 94-8：样式切出释放全部精灵纹理并落释放账。
+        if spritesReady { Breadcrumbs.log("p94 xmas tex=0.0MB off") }
         isActive = false
         sprites = []
         spritesReady = false
+        bakedScale94 = 0
         treePos = []; treeSprite = []; garlandPos = []
         snowFarSeed = []; snowNearSeed = []
         pDelay = []; pTwinkle = []; pTint = []; pDrift = []
@@ -193,7 +219,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         fpsWindow += dt
         if fpsWindow >= 5.0 && fpsFrames > 0 {
             let avg = fpsAccum / Double(fpsFrames)
-            Breadcrumbs.log("p93 xmas fps=\(String(format: "%.1f", 1.0 / avg)) avgMs=\(String(format: "%.2f", avg * 1000))")
+            Breadcrumbs.log("p94 xmas fps=\(String(format: "%.1f", 1.0 / avg)) avgMs=\(String(format: "%.2f", avg * 1000))")
             fpsAccum = 0; fpsFrames = 0; fpsWindow = 0
         }
     }
@@ -277,11 +303,16 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     // MARK: 精灵烘焙（径向点/金星/暖光池/带衬底，一次性）
 
     private func bakeSpritesIfNeeded() {
-        guard !spritesReady else { return }
+        // (94) 94-8：scale 渲染时动态取 UIScreen.main.scale
+        // （Miller 10:55 铁令：不写死、不封顶）；已烘且 scale
+        // 未变直接复用缓存，scale 变则整表重烘。
+        let dynScale = UIScreen.main.scale
+        if spritesReady && bakedScale94 == dynScale { return }
         spritesReady = true
+        bakedScale94 = dynScale
         func dot(size: Int, stops: [(CGFloat, UIColor)]) -> CGImage? {
             let fmt = UIGraphicsImageRendererFormat()
-            fmt.scale = 1; fmt.opaque = false
+            fmt.scale = UIScreen.main.scale; fmt.opaque = false
             let img = UIGraphicsImageRenderer(size: CGSize(width: size, height: size), format: fmt).image { c in
                 let ctx = c.cgContext
                 let colors = stops.map { $0.1.cgColor } as CFArray
@@ -338,7 +369,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     private func bakeStar() -> CGImage? {
         let size = 256
         let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1; fmt.opaque = false
+        fmt.scale = UIScreen.main.scale; fmt.opaque = false
         let img = UIGraphicsImageRenderer(size: CGSize(width: size, height: size), format: fmt).image { c in
             let ctx = c.cgContext
             ctx.translateBy(x: 128, y: 128)
@@ -363,7 +394,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
 
     private func bakeBandShadow() -> CGImage? {
         let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1; fmt.opaque = false
+        fmt.scale = UIScreen.main.scale; fmt.opaque = false
         let img = UIGraphicsImageRenderer(size: CGSize(width: 512, height: 256), format: fmt).image { c in
             let ctx = c.cgContext
             ctx.translateBy(x: 256, y: 128)
@@ -384,7 +415,10 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     private func sampleLine(_ text: String) {
         let CW = 1200, CH = 300
         let fmt = UIGraphicsImageRendererFormat()
-        fmt.scale = 1; fmt.opaque = false
+        // (94) 94-8：离屏采样图同走动态 scale（不封顶）；下方
+        // 采样步长按位图实际像素/逻辑尺寸比缩放，归一化坐标
+        // 口径与 scale=1 时逐点等价。
+        fmt.scale = UIScreen.main.scale; fmt.opaque = false
         let size = CGSize(width: CW, height: CH)
         let img = UIGraphicsImageRenderer(size: size, format: fmt).image { _ in
             var font = UIFont.systemFont(ofSize: 168, weight: .black)
@@ -401,19 +435,21 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         guard let cg = img.cgImage, let data = cg.dataProvider?.data,
               let bytes = CFDataGetBytePtr(data) else { linePoints = []; return }
         let bpr = cg.bytesPerRow
+        let pw = cg.width, ph = cg.height
+        let step = max(1, Int((Double(pw) / Double(CW) * 2).rounded()))
         var pts: [CGPoint] = []
         var y = 0
-        while y < CH {
+        while y < ph {
             var x = 0
-            while x < CW {
+            while x < pw {
                 // alpha 通道偏移按位图 alphaInfo 取（RGBA/BGRA 均为 +3）
                 if bytes[y * bpr + x * 4 + 3] > 120 {
-                    pts.append(CGPoint(x: Double(x) / Double(CW) - 0.5,
-                                       y: 0.5 - Double(y) / Double(CH)))
+                    pts.append(CGPoint(x: Double(x) / Double(pw) - 0.5,
+                                       y: 0.5 - Double(y) / Double(ph)))
                 }
-                x += 2
+                x += step
             }
-            y += 2
+            y += step
         }
         // 确定性洗牌（样片：种子 = 字数×977+13）
         let rng = p93Mulberry32(seed: UInt32(text.count * 977 + 13))
@@ -513,6 +549,12 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     }
 
     private func drawFrame(_ ctx: CGContext, rect: CGRect) {
+        // (94) 94-8：scale 漂移兜底重烘（同机旋转不触发）。
+        if spritesReady && bakedScale94 != UIScreen.main.scale {
+            sprites = []; spritesReady = false; bakeSpritesIfNeeded()
+            Breadcrumbs.log("p94 xmas scale=\(String(format: "%.1f", UIScreen.main.scale))"
+                + " tex=\(String(format: "%.1f", textureMB94()))MB rebake=1")
+        }
         guard sprites.count > 15, !treePos.isEmpty else { return }
         let t = elapsed
         let cam = makeCamera(t: t, rect: rect)

@@ -134,6 +134,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 歌单头签名）；全量重刷（reloadAltPlaylist91）后同步。
     private var altCurrentId92: String?
     private var altHeaderSignature92 = ""
+    /// (94) 94-5：版式切换三步序的在途标志与 bounce 暂存。
+    /// 切换中手势不冻结吞没：交叉淡化全程 allowUserInteraction、
+    /// 不加任何拦截层，本标志只防切换重入，结束即复原 bounce。
+    private var p94WallSwitchInFlight = false
+    private var p94SavedBounces: [(UIScrollView, Bool)] = []
     /// port91 顶部段控成员（layoutSwitch91/layoutSwitchButtons91）
     /// 已随 (92) 任务 11 撤除：版式切换移主页缝，见 installPlaylistLayout91。
     private var magazineTable91: UITableView?
@@ -1980,6 +1985,38 @@ final class WallPrototypeViewController: UIViewController,
             guard let self else { return }
             ConsolePanel82.present(from: self)
         }
+        // (94) 94-4 集成接线：母版新槽位与主页缝同款落点
+        // （云盘/日记本/Navidrome 空态/搜索/设置逐项对齐
+        // HomeWall 的 seam 接线，不许歌单页一页一个样）。
+        seam.onLiked = { [weak self] in self?.openLikedFromSeam94() }
+        seam.onCloud = { [weak self] in
+            guard let self else { return }
+            let drive = CloudDriveViewController()
+            drive.modalPresentationStyle = .fullScreen
+            self.present(drive, animated: true)
+        }
+        seam.onDiary93 = { [weak self] in
+            guard let self else { return }
+            let diary = DiaryViewController90(tagged: nil)
+            diary.modalPresentationStyle = .fullScreen
+            self.present(diary, animated: true)
+        }
+        seam.onNavidrome = { [weak self] in
+            guard let self else { return }
+            let empty = SeamNavidromeEmpty89ViewController()
+            empty.modalPresentationStyle = .fullScreen
+            self.present(empty, animated: true)
+        }
+        seam.onSearch94 = { [weak self] in
+            guard let self else { return }
+            SearchHostPresenter.presentSearch(from: self)
+        }
+        seam.onSettings94 = { [weak self] in
+            guard let self else { return }
+            let settings = SettingsViewController()
+            settings.modalPresentationStyle = .overFullScreen
+            self.present(settings, animated: false)
+        }
         // port88：缝头像绑定位（(86) 第 3 条）＋账户同源回
         // 填随书脊头像摘除一并退役，本缝无头像位。
         playlistSeam85 = seam
@@ -2005,6 +2042,42 @@ final class WallPrototypeViewController: UIViewController,
         }
         startSeamTween85(toWidth: target, toOriginX: originX)
         Breadcrumbs.log("seam85 expand host=wall on=\(expanded ? 1 : 0)")
+    }
+
+    /// (94) 94-4：歌单缝「我喜欢」落点——与主页缝同目的
+    /// 地（喜欢歌单的照片墙）：登录态取 userId → 用户歌
+    /// 单中 specialType=5 者 → 全屏开墙。未登录/未找到/
+    /// 失败均给可见反馈，不静默吞。
+    private func openLikedFromSeam94() {
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let status = try await NativeDataClient.shared.fetchLoginStatus()
+                guard status.loggedIn, let uid = status.userId else {
+                    NativePlaybackFailureToast.show(message: "先登录网易云才能打开我喜欢")
+                    Breadcrumbs.log("p94 seam liked miss src=wall login=0")
+                    return
+                }
+                let lists = try await NativeDataClient.shared
+                    .fetchUserPlaylists(userId: uid)
+                guard let liked = lists.first(where: { $0.isLikedCollection }) else {
+                    NativePlaybackFailureToast.show(message: "没找到我喜欢的音乐歌单")
+                    Breadcrumbs.log("p94 seam liked miss src=wall login=1")
+                    return
+                }
+                let wall = WallPrototypeViewController(
+                    playlistId: liked.id, title: liked.name,
+                    coverUrl: liked.coverUrl)
+                wall.modalPresentationStyle = .fullScreen
+                wall.modalTransitionStyle = .crossDissolve
+                wall.startPreload()
+                self.present(wall, animated: true)
+                Breadcrumbs.log("p94 seam liked open src=wall")
+            } catch {
+                NativePlaybackFailureToast.show(message: "我喜欢歌单加载失败")
+                Breadcrumbs.log("p94 seam liked miss src=wall err=1")
+            }
+        }
     }
 
     /// 加入队列：已加载曲目整单追加（QueueManager
@@ -5518,32 +5591,220 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         UserDefaults.standard.set(mode, forKey: "foliaPlaylistLayout91")
         Breadcrumbs.log("p93 layout sw=\(SeamGlyph93.layoutName93(mode))")
         guard mode != playlistLayout91 else { return }
-        let oldView: UIView? = playlistLayout91 == 0 ? collectionView
-            : playlistLayout91 == 1 ? magazineTable91 : shelfView91
+        let oldMode = playlistLayout91
+        // (94) 94-5 ①：切版式入口即停机——停墙 fling/减速与
+        // display link 驱动、禁 bounce 残余，并捕获当前可见
+        // 锚点。(93) 日志的黑屏组合证据（identity 连变＋
+        // origin 跑到负百万＋render.audit visible=0）指向：
+        // 惯性未停时在旧虚拟坐标上继续滑，origin 被推出合
+        // 法域——先停、再锚、验可见才淡化（见 p94 三步序）。
+        let ctx94 = p94BeginWallSwitch(from: oldMode, to: mode)
+        let oldView: UIView? = oldMode == 0 ? collectionView
+            : oldMode == 1 ? magazineTable91 : shelfView91
         let newView: UIView? = mode == 0 ? collectionView
             : mode == 1 ? magazineTable91 : shelfView91
         playlistLayout91 = mode
         playlistSeam85?.layoutMode93 = mode
         guard let oldView, let newView, oldView !== newView else {
             applyPlaylistLayout91()
+            p94EndWallSwitch()
             return
         }
         // 新视图原地备数据＋首帧（不动 z 序：缝/台/歌词层
         // 的既有层级不许被版式切换打乱），旧视图全程在场
         // 承托，双向 alpha 交叉淡化后才隐藏旧视图。
         reloadAltPlaylist91()
+        // (94) 94-5 ②：identity/reload/rebase 结算之后，按
+        // 切换前锚点重锚 origin 并按新实例集覆盖域 clamp。
+        p94ReanchorWall(ctx94)
         newView.isHidden = false
         newView.alpha = 0
         view.layoutIfNeeded()
+        // (94) 94-5 ③：新版式 visible>0 验证通过才交叉淡化
+        // （0.25s 维持）；为 0 先延一帧重锚重试，仍为 0 则
+        // 禁止淡化、整单回滚旧版式（宁可留旧版式一帧）。
+        // 验收线（94-5 定版）：切换全程 wall.render.audit 的
+        // visible 不得连续 2 次为 0——重锚保证模式 0 落地即
+        // 有可见砖，验证不过即不淡化、不露黑。
+        let visible = p94VisibleCount94(for: mode)
+        Breadcrumbs.log("p94 wall sw show visible=\(visible)")
+        if visible == 0, !entries.isEmpty {
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.p94ReanchorWall(ctx94)
+                self.view.layoutIfNeeded()
+                let retry = self.p94VisibleCount94(for: mode)
+                Breadcrumbs.log("p94 wall sw show visible=\(retry) retry=1")
+                if retry > 0 {
+                    self.p94CrossfadeWallSwitch(oldView: oldView, newView: newView)
+                } else {
+                    newView.isHidden = true
+                    newView.alpha = 1
+                    self.playlistLayout91 = oldMode
+                    self.playlistSeam85?.layoutMode93 = oldMode
+                    UserDefaults.standard.set(oldMode,
+                        forKey: "foliaPlaylistLayout91")
+                    self.p94EndWallSwitch()
+                    Breadcrumbs.log("p94 wall sw abort mode=\(mode) back=\(oldMode)")
+                }
+            }
+            return
+        }
+        p94CrossfadeWallSwitch(oldView: oldView, newView: newView)
+    }
+
+    // MARK: - (94) 94-5 排版切换三步序（停机→重锚→验可见才淡化）
+
+    /// 94-6 舞台旋转侧共用的停机口（静态入口）：同值
+    /// setContentOffset(animated:false) 即取消 UIScrollView 的
+    /// 减速与 bounce 回弹动画（系统既定语义）；94-5 墙本体与
+    /// 94-6 旋转冻结都只许走这一口，不许另写一份。
+    static func p94StopScrollMomentum(_ scrollView: UIScrollView) {
+        scrollView.setContentOffset(scrollView.contentOffset, animated: false)
+    }
+
+    /// 一次版式切换的上下文：切换前锚点（实例 id＋世界中心）
+    /// 与切换前 worldOrigin（重锚面包屑的 before 值）。
+    private struct P94WallSwitch {
+        let from: Int
+        let to: Int
+        let anchorId: String?
+        let anchorCenter: CGPoint?
+        let before: CGPoint
+    }
+
+    /// 94-5 ①停机＋锚点捕获：三版式滚动面全停、定位/缝补间
+    /// 两条 CADisplayLink 取消、bounce 暂关（结束复原）。
+    private func p94BeginWallSwitch(from: Int, to: Int) -> P94WallSwitch {
+        let start = CACurrentMediaTime()
+        let vel = collectionView.panGestureRecognizer.velocity(in: view)
+        let speed = Int(hypot(vel.x, vel.y).rounded())
+        let fling = collectionView.isDecelerating ? 1 : 0
+        Breadcrumbs.log("p94 wall sw begin mode=\(from)->\(to) vel=\(speed) fling=\(fling)")
+        p94WallSwitchInFlight = true
+        var scrolls: [UIScrollView] = [collectionView]
+        if let table = magazineTable91 { scrolls.append(table) }
+        if let shelf = shelfCollection91 { scrolls.append(shelf) }
+        for sv in scrolls { Self.p94StopScrollMomentum(sv) }
+        locateLink?.invalidate()
+        locateLink = nil
+        locateCompletion = nil
+        seamTween85?.invalidate()
+        seamTween85 = nil
+        p94SavedBounces = scrolls.map { ($0, $0.bounces) }
+        for (sv, _) in p94SavedBounces { sv.bounces = false }
+        let dt = Int((CACurrentMediaTime() - start) * 1000)
+        Breadcrumbs.log("p94 wall sw stop dt=\(dt)")
+        // 锚点：视口中心世界点命中的实例；无命中取中心距最近者。
+        var anchorId: String?
+        var anchorCenter: CGPoint?
+        if wallLayout.cameraScale > 0, !wallLayout.instances.isEmpty {
+            let scale = Double(wallLayout.cameraScale)
+            let cx = Double(wallLayout.worldOrigin.x)
+                + Double(collectionView.bounds.width) / scale / 2
+            let cy = Double(wallLayout.worldOrigin.y)
+                + Double(collectionView.bounds.height) / scale / 2
+            var bestDist = Double.greatestFiniteMagnitude
+            for inst in wallLayout.instances {
+                let r = inst.rect
+                let icx = r.x + r.width / 2
+                let icy = r.y + r.height / 2
+                if cx >= r.x, cx <= r.x + r.width,
+                   cy >= r.y, cy <= r.y + r.height {
+                    anchorId = inst.instanceId
+                    anchorCenter = CGPoint(x: icx, y: icy)
+                    break
+                }
+                let d = hypot(icx - cx, icy - cy)
+                if d < bestDist {
+                    bestDist = d
+                    anchorId = inst.instanceId
+                    anchorCenter = CGPoint(x: icx, y: icy)
+                }
+            }
+        }
+        return P94WallSwitch(from: from, to: to, anchorId: anchorId,
+                             anchorCenter: anchorCenter,
+                             before: wallLayout.worldOrigin)
+    }
+
+    /// 94-5 ②重锚：先与滚动回调同路结算 identity/reload
+    /// （身份变才 reloadData），再把 worldOrigin 移到「锚点
+    /// 实例中心＝视口中心」，最后按实例集覆盖矩形 clamp——
+    /// 视口中心不许落在覆盖域外，保证落地即有可见砖。仅
+    /// 模式 0 墙本体有世界相机；A/B 无此步（可见性由 ③ 把关）。
+    private func p94ReanchorWall(_ ctx: P94WallSwitch) {
+        guard ctx.to == 0 else { return }
+        if wallLayout.refreshInstances() {
+            collectionView.reloadData()
+        }
+        guard let anchorCenter = ctx.anchorCenter,
+              wallLayout.cameraScale > 0,
+              !wallLayout.instances.isEmpty else {
+            Breadcrumbs.log("p94 wall reanchor anchor=\(ctx.anchorId ?? "-")"
+                + " before=\(Int(ctx.before.x)),\(Int(ctx.before.y))"
+                + " after=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y)) clamped=0")
+            return
+        }
+        let scale = Double(wallLayout.cameraScale)
+        let vw = Double(collectionView.bounds.width) / scale
+        let vh = Double(collectionView.bounds.height) / scale
+        var covMinX = Double.greatestFiniteMagnitude
+        var covMinY = Double.greatestFiniteMagnitude
+        var covMaxX = -Double.greatestFiniteMagnitude
+        var covMaxY = -Double.greatestFiniteMagnitude
+        for inst in wallLayout.instances {
+            covMinX = min(covMinX, inst.rect.x)
+            covMinY = min(covMinY, inst.rect.y)
+            covMaxX = max(covMaxX, inst.rect.x + inst.rect.width)
+            covMaxY = max(covMaxY, inst.rect.y + inst.rect.height)
+        }
+        var targetCX = Double(anchorCenter.x)
+        var targetCY = Double(anchorCenter.y)
+        var clamped = 0
+        let clX = min(max(targetCX, covMinX), covMaxX)
+        let clY = min(max(targetCY, covMinY), covMaxY)
+        if clX != targetCX || clY != targetCY {
+            clamped = 1
+            targetCX = clX
+            targetCY = clY
+        }
+        wallLayout.worldOrigin = CGPoint(x: targetCX - vw / 2,
+                                         y: targetCY - vh / 2)
+        wallLayout.invalidateLayout()
+        Breadcrumbs.log("p94 wall reanchor anchor=\(ctx.anchorId ?? "-")"
+            + " before=\(Int(ctx.before.x)),\(Int(ctx.before.y))"
+            + " after=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y)) clamped=\(clamped)")
+    }
+
+    /// 94-5 ③的可见计数：按目标版式取各自的可见 cell 数。
+    private func p94VisibleCount94(for mode: Int) -> Int {
+        switch mode {
+        case 0: return collectionView.visibleCells.count
+        case 1: return magazineTable91?.visibleCells.count ?? 0
+        default: return shelfCollection91?.visibleCells.count ?? 0
+        }
+    }
+
+    /// 交叉淡化本体（0.25s、双向 alpha、旧视图落定才隐藏，
+    /// 与 (93) C3 同式）；完成复原 bounce 与在途标志。
+    private func p94CrossfadeWallSwitch(oldView: UIView, newView: UIView) {
         UIView.animate(withDuration: 0.25, delay: 0,
                        options: [.allowUserInteraction, .beginFromCurrentState]) {
             newView.alpha = 1
             oldView.alpha = 0
-        } completion: { _ in
+        } completion: { [weak self] _ in
             oldView.isHidden = true
             oldView.alpha = 1
             newView.alpha = 1
+            self?.p94EndWallSwitch()
         }
+    }
+
+    private func p94EndWallSwitch() {
+        for (sv, bounces) in p94SavedBounces { sv.bounces = bounces }
+        p94SavedBounces = []
+        p94WallSwitchInFlight = false
     }
 
     fileprivate func applyPlaylistLayout91() {

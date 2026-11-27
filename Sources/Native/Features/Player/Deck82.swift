@@ -188,9 +188,16 @@ enum DeckGlyph82 {
             // 每进程一次）；play 覆盖率 <2% 判描边丢失、
             // 当场改填充三角重渲兜底（fb=1），下轮日志据
             // cov/fb 裁决丢失环。pause 本为填充、cov 应 ≈73。
+            // (94) 94-3：兜底扩到 pause——(93) fb 只对 play
+            // 生效是放大因素（DS 对账 B1）；pause cov 过低
+            // 同样当场以填充双条重渲（render93(true) 的
+            // pause 分支即填充双圆角矩形，与常规路径同形）。
+            // 注：本处仍只是工厂出口自证，按钮最终渲染层的
+            // cov 自证在 HomeWallViewController 的 p94 deck
+            // render（94-3 主仪器），两层分工不混。
             let cov = glyphCoverage93(image)
             var fb = 0
-            if cov < 0.02, kind == .play {
+            if cov < 0.02, kind == .play || kind == .pause {
                 image = render93(true)
                 fb = 1
             }
@@ -222,6 +229,72 @@ enum DeckGlyph82 {
             hit += 1
         }
         return Double(hit) / Double(w * h)
+    }
+
+    /// (94) 94-3：按钮最终渲染层快照的中心区域字形覆盖
+    /// 率（0–1）——宿主对钮 layer 离屏渲染后调本函数，
+    /// 只数中心 centerFraction×centerFraction 矩形内的
+    /// 「近不透明亮白」像素占比（alpha>200 且 R>200，预
+    /// 乘口径）：字形为白色模板 alpha 1 恒达标；A4 渐变
+    /// 层 alpha ≤0.15、字形光晕 alpha ≤0.30、blur 离屏
+    /// 无背景可采多呈透明/暗色，均达不到此门——故本值
+    /// 只认字形本体，不被钮面玻璃层污染。
+    static func snapshotCenterCoverage(_ image: UIImage,
+                                       centerFraction: CGFloat = 0.6) -> Double {
+        guard let cg = image.cgImage, cg.width > 0, cg.height > 0
+        else { return 0 }
+        let w = cg.width, h = cg.height
+        var data = [UInt8](repeating: 0, count: w * h * 4)
+        guard let ctx = CGContext(
+            data: &data, width: w, height: h, bitsPerComponent: 8,
+            bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+        else { return 0 }
+        ctx.draw(cg, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let x0 = Int(CGFloat(w) * (1 - centerFraction) / 2)
+        let x1 = w - x0
+        let y0 = Int(CGFloat(h) * (1 - centerFraction) / 2)
+        let y1 = h - y0
+        guard x1 > x0, y1 > y0 else { return 0 }
+        var hit = 0
+        for y in y0..<y1 {
+            var i = (y * w + x0) * 4
+            for _ in x0..<x1 {
+                if data[i + 3] > 200, data[i] > 200 { hit += 1 }
+                i += 4
+            }
+        }
+        return Double(hit) / Double((x1 - x0) * (y1 - y0))
+    }
+
+    /// (94) 94-3：填充路径字形直出——按钮最终渲染层 cov
+    /// 过低时的当场兜底图（play＝填充三角、pause＝填充
+    /// 双条，几何与 coreGlyph 的 A4 定义同源同画布），宿
+    /// 主以此替换钮图，保证字形不依赖描边渲染链存活。
+    /// 其余字形无填充兜底（返回 nil，宿主只落痕不替换）。
+    static func filledFallbackImage(_ kind: Kind, pointSize: CGFloat) -> UIImage? {
+        guard kind == .play || kind == .pause else { return nil }
+        let scale = pointSize / 24
+        let size = CGSize(width: pointSize, height: pointSize)
+        let image = UIGraphicsImageRenderer(size: size).image { _ in
+            UIColor.white.setFill()
+            if kind == .play {
+                let tri = UIBezierPath()
+                tri.move(to: CGPoint(x: 10 * scale, y: 8.1 * scale))
+                tri.addLine(to: CGPoint(x: 17.3 * scale, y: 12 * scale))
+                tri.addLine(to: CGPoint(x: 10 * scale, y: 15.9 * scale))
+                tri.close()
+                tri.fill()
+            } else {
+                for x in [8.85, 12.65] as [CGFloat] {
+                    UIBezierPath(roundedRect: CGRect(
+                        x: x * scale, y: 7.8 * scale,
+                        width: 2.5 * scale, height: 8.4 * scale),
+                        cornerRadius: 1.25 * scale).fill()
+                }
+            }
+        }
+        return image.withRenderingMode(.alwaysTemplate)
     }
 
     /// (93) B2：shuffle 手绘路径字形（24 画布、模板图）：
@@ -783,11 +856,29 @@ final class A4GradientView91: UIView {
 }
 
 enum A4Chrome91 {
+    /// (94) 94-3：字形层重挂——把 UIButton 的 imageView
+    /// 提到全部插入子视图（blur/A4 渐变）之上。UIButton
+    /// 在 setImage/状态变化时内部重排，插入层与 imageView
+    /// 的相对 z 序无任何代码在刷新后重申（主页墙
+    /// refreshMiniBar/refreshDeckIcons82 只 setImage），
+    /// 本函数即刷新后重挂的定向修法；无副作用、可重复调。
+    static func rehangGlyph(of button: UIButton) {
+        if let imageView = button.imageView {
+            button.bringSubviewToFront(imageView)
+        }
+    }
+
     /// 给钮套 A4 玻璃面：渐变层＋边框＋字形光晕。重复调用
     /// 幂等（已套过的钮按 tag 标记跳过）。cornerRadius 应
     /// 与钮既有圆角一致（调用方在设好圆角后调用）。
     static func apply(to button: UIButton, cornerRadius: CGFloat) {
-        if button.viewWithTag(910_411) != nil { return }
+        if button.viewWithTag(910_411) != nil {
+            // (94) 94-3：幂等早退不再整层跳过——渐变层已在
+            // 场时仍重挂字形层（主题刷新后 apply 被再调到
+            // 的路径靠此把 imageView 提回插入层之上）。
+            rehangGlyph(of: button)
+            return
+        }
         let grad = A4GradientView91(cornerRadius: cornerRadius)
         grad.tag = 910_411
         grad.translatesAutoresizingMaskIntoConstraints = false
@@ -806,6 +897,8 @@ enum A4Chrome91 {
             imageView.layer.shadowRadius = 6
             imageView.layer.shadowOffset = CGSize(width: 0, height: 2)
         }
+        // (94) 94-3：渐变层 insert at 0 后再确认字形层在最上。
+        rehangGlyph(of: button)
     }
 }
 

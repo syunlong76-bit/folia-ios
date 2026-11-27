@@ -408,18 +408,21 @@ final class Fx87RootView: UIView {
 /// （卡/钮）帧内才交回系统命中，其余整屏穿透回主窗。
 final class FxOverlayHost91: UIView {
     override func hitTest(_ point: CGPoint, with event: UIEvent?) -> UIView? {
-        // (93) A1 复核：原实现有一条例外路径——点落在某子视
-        // 图帧内、但该子视图自身不可交互（或其 hitTest 返
-        // nil）时，super.hitTest 会回落返回宿主自身，整屏
-        // 拦截点按。修：仅当命中结果确实是子视图（非宿主
-        // 自身）才交回，子视图须可见且可交互；其余一律
-        // nil 穿透回主窗（特效开＋控制台在场时同纪律）。
-        for sub in subviews where !sub.isHidden && sub.alpha > 0.01
-            && sub.isUserInteractionEnabled {
-            if sub.frame.contains(point) {
-                let hit = super.hitTest(point, with: event)
-                return hit === self ? nil : hit
-            }
+        // (94) 94-7 白名单制（Miller 10:58 定案：(93) 特效开
+        // 启后全屏点不动、只能杀 App）：只交回明确可点控件
+        // 本体——命中视图本身是 UIControl，或其祖先链（止于
+        // 本宿主）含 UIControl（钮内标签/图标子视图归其钮）。
+        // 现网控件全集：祝福卡「收起」钮、写灯钮、推荐卡
+        // 「播放」/「下次吧」钮。命中宿主自身、祝福卡/推荐
+        // 卡背景、标签、封面图等任何普通容器一律 nil 穿
+        // 透回主窗，控制台开/关与点外关台通路恒可达。
+        guard let hit = super.hitTest(point, with: event), hit !== self else {
+            return nil
+        }
+        var node: UIView? = hit
+        while let v = node, v !== self {
+            if v is UIControl { return hit }
+            node = v.superview
         }
         return nil
     }
@@ -476,6 +479,8 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private var blessCard: UIView?
     private var blessLabel: UILabel?
     private var blessHideWork: DispatchWorkItem?
+    /// (94) 94-7：showBless 防重入计数（展示中再触发落痕）。
+    private var blessDup94 = 0
     private var wishButton: UIButton?
     private var recCard: UIView?
     private var recCover: UIImageView?
@@ -651,6 +656,10 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 if isSnow { names.append("sn") }
                 if isWind { names.append("wd") }
                 Breadcrumbs.log("p93 probe arm fx=\(names.joined(separator: "+"))")
+                // (94) 94-7：p94 arm 在岗自证＋浮层层级账（任一
+                // 特效开启边沿各落一次，供定性覆层构成）。
+                Breadcrumbs.log("p94 fx arm fx=\(names.joined(separator: "+"))")
+                logFxLayers94()
             } else {
                 Breadcrumbs.log("p93 probe off")
             }
@@ -671,6 +680,37 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         return host.bounds.contains(p) ? "host" : "none"
     }
 
+    /// (94) 94-7：浮层层级账——宿主子视图类名/帧/alpha 同
+    /// 行落盘（黄面/吞点按定性靠此行对账实际在场层）。
+    private func logFxLayers94() {
+        func desc(_ v: UIView) -> String {
+            let f = v.frame
+            return "\(String(describing: type(of: v)))"
+                + "[\(Int(f.minX)),\(Int(f.minY)),\(Int(f.width))x\(Int(f.height))"
+                + " a=\(String(format: "%.2f", v.alpha)) hid=\(v.isHidden ? 1 : 0)]"
+        }
+        let hostSubs = (overlayHost91?.subviews ?? []).map(desc).joined(separator: ",")
+        let fxSubs = (rootView?.subviews ?? []).map(desc).joined(separator: ",")
+        Breadcrumbs.log("p94 fx layers host={\(hostSubs)} fxwin={\(fxSubs)}")
+    }
+
+    /// (94) 94-7：点按归属（p94 口径）——card＝落在可见卡/
+    /// 钮帧内；ctrl＝主窗 hitTest 命中 UIControl 本体（或其
+    /// 子视图）；host＝宿主在场但点在卡外非控件区（hitTest
+    /// 恒穿透）；nil＝宿主不在场。
+    private func tapOwn94(at p: CGPoint, hit: UIView?) -> String {
+        for sub in [recCard, blessCard, wishButton] {
+            guard let sub = sub, !sub.isHidden, sub.alpha > 0.01 else { continue }
+            if sub.frame.contains(p) { return "card" }
+        }
+        var node = hit
+        while let v = node {
+            if v is UIControl { return "ctrl" }
+            node = v.superview
+        }
+        return overlayHost91?.window != nil ? "host" : "nil"
+    }
+
     @objc private func handleTapProbe92(_ gr: UITapGestureRecognizer) {
         guard let view = gr.view else { return }
         let now = CACurrentMediaTime()
@@ -687,6 +727,12 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         Breadcrumbs.log("p92 tap ok zone=\(zx)\(zy)")
         // (93) A5：归属行（节流与 p92 行共用计数，每秒≤2 条）。
         Breadcrumbs.log("p93 tap own=\(tapOwn93(at: p)) zone=\(zx)\(zy)")
+        // (94) 94-7：p94 点按自证——归属/命中类名/祝福卡态同行。
+        let hit94 = view.hitTest(p, with: nil)
+        let hitName94 = hit94.map { String(describing: type(of: $0)) } ?? "nil"
+        let bless94 = (blessCard?.isHidden == false) ? 1 : 0
+        Breadcrumbs.log("p94 fx tap own=\(tapOwn94(at: p, hit: hit94))"
+            + " hit=\(hitName94) bless=\(bless94)")
     }
 
     public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
@@ -694,9 +740,29 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         true
     }
 
+    /// (94) 94-7：祝福卡展示期，被动识别器（passiveTap91）
+    /// 由 delegate 过滤——触摸命中任何可交互控件时不收，
+    /// 不许旁路抢在控件之前 showBless/补放烟花。
+    public func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer,
+                                  shouldReceive touch: UITouch) -> Bool {
+        if gestureRecognizer === passiveTap91,
+           let card = blessCard, !card.isHidden,
+           let main = mainWindow {
+            if tapHitsInteractive91(at: touch.location(in: main)) { return false }
+        }
+        return true
+    }
+
     @objc private func handlePassiveTap(_ gr: UITapGestureRecognizer) {
         guard let rv = rootView else { return }
         let p = gr.location(in: rv)
+        // (94) 94-7：祝福卡展示期卡外点——关卡（点按本身经
+        // 宿主白名单 hitTest 已穿透回主窗，本路只收卡）。
+        if let card = blessCard, !card.isHidden,
+           !card.frame.contains(p), !tapHitsInteractive91(at: p) {
+            hideBless()
+            Breadcrumbs.log("p94 fx bless outclose")
+        }
         // port91（任务 1）：孔明灯点按看祝福走主窗旁路——点中
         // 灯体、且该点未命中任何可交互控件/自有浮层卡时才
         // showBless 并落 p91 lamp hit 自证；灯命中区不补放
@@ -733,7 +799,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     @discardableResult
     public func toggleFireworks() -> Bool {
-        if isFireworks { stopFw() } else { startFw() }
+        if isFireworks { stopFw(src: "consolebtn") } else { startFw(src: "consolebtn") }
         return isFireworks
     }
 
@@ -741,20 +807,20 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     public func toggleLanterns() -> Bool {
         // port90: 用户点关须当帧清场。旧 soft-stop 淡出 2–4 秒，按钮已灭、
         // 画面还在，用户确认性再点把状态翻回开，表象「关不掉」。
-        if isLanterns { stopLantern(hard: true); Breadcrumbs.log("port90 fx ln off hard") } else { startLantern() }
+        if isLanterns { stopLantern(hard: true, src: "consolebtn"); Breadcrumbs.log("port90 fx ln off hard") } else { startLantern(src: "consolebtn") }
         return isLanterns
     }
 
     @discardableResult
     public func toggleSnow() -> Bool {
         // port90: 同 toggleLanterns，点关硬清（自融只留给 12 秒自动停）。
-        if isSnow { stopSnow(hard: true); Breadcrumbs.log("port90 fx sn off hard") } else { startSnow() }
+        if isSnow { stopSnow(hard: true, src: "consolebtn"); Breadcrumbs.log("port90 fx sn off hard") } else { startSnow(src: "consolebtn") }
         return isSnow
     }
 
     @discardableResult
     public func toggleWind() -> Bool {
-        if isWind { stopWind(src93: "manual") } else { startWind() }
+        if isWind { stopWind(src: "consolebtn") } else { startWind(src: "consolebtn") }
         return isWind
     }
 
@@ -765,7 +831,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     /// 雪样式值（淡蓝）保留、手动开仍走 startSnow、12 秒
     /// 自融保留。
     public func applyDefaultSnow88() {
-        if isSnow { stopSnow(hard: true) }
+        if isSnow { stopSnow(hard: true, src: "auto") }
         Breadcrumbs.log("p92 snow=default-off")
     }
 
@@ -788,38 +854,42 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
             + " mb=\(StyleOpenTrace.physFootprintMB())")
     }
 
-    private func setFw(_ on: Bool) {
+    private func setFw(_ on: Bool, src: String = "auto") {
         guard isFireworks != on else { return }
         isFireworks = on
         Breadcrumbs.log(on ? "fx87 fw=1" : "fx87 fw=0")
+        Breadcrumbs.log("p94 fx sw fx=fw on=\(on ? 1 : 0) src=\(src) state=\(isFireworks ? 1 : 0)")
         noteFxOrder93("fw", on)
         memLog93("fw", on)
         onStateChanged?()
         refreshTapProbe92()
     }
-    private func setLantern(_ on: Bool) {
+    private func setLantern(_ on: Bool, src: String = "auto") {
         guard isLanterns != on else { return }
         isLanterns = on
         Breadcrumbs.log(on ? "fx87 ln=1" : "fx87 ln=0")
+        Breadcrumbs.log("p94 fx sw fx=ln on=\(on ? 1 : 0) src=\(src) state=\(isLanterns ? 1 : 0)")
         noteFxOrder93("ln", on)
         memLog93("ln", on)
         onStateChanged?()
         refreshTapProbe92()
         refreshWishButton()
     }
-    private func setSnow(_ on: Bool) {
+    private func setSnow(_ on: Bool, src: String = "auto") {
         guard isSnow != on else { return }
         isSnow = on
         Breadcrumbs.log(on ? "fx87 sn=1" : "fx87 sn=0")
+        Breadcrumbs.log("p94 fx sw fx=sn on=\(on ? 1 : 0) src=\(src) state=\(isSnow ? 1 : 0)")
         noteFxOrder93("sn", on)
         memLog93("sn", on)
         onStateChanged?()
         refreshTapProbe92()
     }
-    private func setWind(_ on: Bool) {
+    private func setWind(_ on: Bool, src: String = "auto") {
         guard isWind != on else { return }
         isWind = on
         Breadcrumbs.log(on ? "fx87 wd=1" : "fx87 wd=0")
+        Breadcrumbs.log("p94 fx sw fx=wd on=\(on ? 1 : 0) src=\(src) state=\(isWind ? 1 : 0)")
         noteFxOrder93("wd", on)
         memLog93("wd", on)
         onStateChanged?()
@@ -834,76 +904,80 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
         }
     }
 
-    private func startFw() {
+    private func startFw(src: String = "auto") {
         refreshSizeFromRootView()
-        stopLantern(hard: true); stopSnow(hard: true); stopWind(src93: "mutex")
+        stopLantern(hard: true, src: "mutex"); stopSnow(hard: true, src: "mutex"); stopWind(src: "mutex")
         recShown = false; fwStep = 0; rains = []
         fwStart = nowMsNow()
         // (93) E：dt 采样窗自本场烟花起算。
         fwDtSum93 = 0; fwDtN93 = 0; fwDtLogAt93 = fwStart
         hideRecCard()
-        setFw(true)
+        setFw(true, src: src)
         ensureLoop()
     }
 
-    private func stopFw() {
+    private func stopFw(src: String = "auto") {
         rockets = []; sparks = []; crackles = []; halos = []; rains = []; splitQueue = []
-        setFw(false)
+        setFw(false, src: src)
         settleAfterStop90()
     }
 
-    private func startLantern() {
+    private func startLantern(src: String = "auto") {
         refreshSizeFromRootView()
-        stopFw(); stopSnow(hard: true)
+        stopFw(src: "mutex"); stopSnow(hard: true, src: "mutex")
         lnStopping = false
         lnLastSpawn = 0
         for _ in 0..<FxTuning88.lnInitial { spawnLantern(init: true) }
-        setLantern(true)
+        setLantern(true, src: src)
         ensureLoop()
     }
 
-    private func stopLantern(hard: Bool) {
+    private func stopLantern(hard: Bool, src: String = "auto") {
         if hard { lanterns = []; lnStopping = false } else { lnStopping = true }
-        setLantern(false)
+        setLantern(false, src: src)
         if hard || lanterns.isEmpty { hideBless() }
         if hard { settleAfterStop90() }
     }
 
-    private func startSnow() {
+    private func startSnow(src: String = "auto") {
         refreshSizeFromRootView()
-        stopFw(); stopLantern(hard: true)
+        stopFw(src: "mutex"); stopLantern(hard: true, src: "mutex")
         snMelt = 1; snStart = nowMsNow()
         let target = max(90, min(175, Int((W * H / 8500).rounded())))
         for _ in 0..<target { spawnFlake(init: true) }
-        setSnow(true)
+        setSnow(true, src: src)
         ensureLoop()
     }
 
-    private func stopSnow(hard: Bool) {
+    private func stopSnow(hard: Bool, src: String = "auto") {
         if hard { flakes = []; snMelt = 1 }
-        setSnow(false)
+        setSnow(false, src: src)
         if hard { settleAfterStop90() }
     }
 
-    private func startWind() {
+    private func startWind(src: String = "auto") {
         wdStart = nowMsNow()
-        setWind(true)
+        setWind(true, src: src)
         ensureLoop()
     }
 
-    /// (93) A2：风的关闭来源入参化——manual＝用户手动关
-    /// （toggleWind）；mutex＝开烟花时的互斥清场（既有行
-    /// 为不动）；其余任何来源（未来新增的自动关）一律以
-    /// 非 manual 落 p93 fxauto 自证，不许再出现无来源的
-    /// 静默自关（(92) 日志实锤：旧 5 秒自关无点按无落痕）。
-    private func stopWind(src93: String = "auto") {
-        if isWind && src93 != "manual" {
-            Breadcrumbs.log("p93 fxauto fx=wd src=\(src93)")
+    /// (93) A2／(94) 94-9：风的关闭来源入参化——consolebtn
+    /// ＝控制台钮手动关（toggleWind）；mutex＝开烟花时的
+    /// 互斥清场（既有行为不动）；其余任何来源（未来新增
+    /// 的自动关）一律以非 consolebtn 落 p93 fxauto 自证，
+    /// 且全部来源统一经 setWind 落 p94 fx sw 同行自证，不
+    /// 许再出现无来源的静默自关（(92) 日志实锤：旧 5 秒
+    /// 自关无点按无落痕）。风无定时自关路径（(93) 已删）。
+    private func stopWind(src: String = "auto") {
+        // (94) 94-9：p94 fx sw 同行口径由 setWind 落（src 与
+        // 变更后引擎态同行）；p93 fxauto 保留作非手动来源旁证。
+        if isWind && src != "consolebtn" {
+            Breadcrumbs.log("p93 fxauto fx=wd src=\(src)")
         }
         windPow = 0
         // port90: 旧实现只归零风力，streaks/leaves 残留继续渲染、anyFx 恒真、窗不隐。
         streaks = []; leaves = []
-        setWind(false)
+        setWind(false, src: src)
         settleAfterStop90()
     }
 
@@ -1154,7 +1228,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
                 recShown = true
                 showRecCard()
             }
-            if t > 15500 { setFw(false) }
+            if t > 15500 { setFw(false, src: "auto") }
         }
 
         // 光晕（source-over，爆点彩色晕，alpha 上限 0.22×amp 量级照样片式）
@@ -1591,7 +1665,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     private func stepSnow(_ ctx: CGContext, f: Double) {
         if isSnow {
             if nowMs - snStart > 12000 {
-                setSnow(false)   // 12 秒自动停，之后 snMelt 渐隐
+                setSnow(false, src: "auto")   // 12 秒自动停，之后 snMelt 渐隐
             } else if flakes.count < 185 && chance(0.65, f) {
                 spawnFlake(init: false)
             }
@@ -2027,6 +2101,13 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
 
     func showBless(_ text: String) {
         guard let card = blessCard, let label = blessLabel else { return }
+        // (94) 94-7：防重入——展示中再触发不重弹、不重置计
+        // 时，只落计数面包屑（黄面嫌疑的反复弹起在此收口）。
+        if !card.isHidden {
+            blessDup94 += 1
+            Breadcrumbs.log("p94 fx bless dup n=\(blessDup94)")
+            return
+        }
         label.text = text
         Breadcrumbs.log("fx87 bless")
         blessHideWork?.cancel()
@@ -2176,7 +2257,7 @@ public final class GlobalFx87: NSObject, UIGestureRecognizerDelegate {
     }
 
     func releaseWishLantern(_ text: String) {
-        if !isLanterns { setLantern(true) }
+        if !isLanterns { setLantern(true, src: "link") }
         lnStopping = false
         spawnLantern(init: false, wish: text)
         if let mine = lanterns.last {

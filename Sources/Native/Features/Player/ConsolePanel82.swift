@@ -91,6 +91,32 @@ final class ConsolePanel82: UIViewController,
     /// (93) A1：关闭原因已落痕标记（多入口去重＋宿主消失兜底判读）。
     private var p93DismissReason93: String?
 
+    // MARK: (94) 94-1/94-2 仪器与分段装载状态
+    /// 94-2 分段计时：tap 为零点（present(from:) 注入，与
+    /// p93PopStart93 同刻），其余为各段完成时刻（CACurrent-
+    /// MediaTime），齐后由 p94TryEmitSeg94 一行落盘。
+    private var p94Tap94: CFTimeInterval = 0
+    private var p94PresentDone94: CFTimeInterval = 0
+    private var p94LoadDone94: CFTimeInterval = 0
+    private var p94LayoutDone94: CFTimeInterval = 0
+    private var p94First94: CFTimeInterval = 0
+    private var p94Inter94: CFTimeInterval = 0
+    private var p94SegEmitted94 = false
+    private var p94DisplayLink94: CADisplayLink?
+    /// 94-1 几何自证去重：上一行 geo 串（scr/bounds/calc/
+    /// frame 任一变化才再落一行）。
+    private var p94LastGeo94 = ""
+    private var p94LastCalc94: CGSize = .zero
+    /// 94-2 骨架先行：首帧占位骨架（卡框＋钮排圆占位＋行条
+    /// 占位），重内容装载段 A 完成后淡出移除。
+    private var skeleton94: UIView?
+    private var p94ContentBuilt94 = false
+    private var p94StagesStarted94 = false
+    private var p94Stages94: [() -> Void] = []
+    private var p94StageIndex94 = 0
+    /// 条带分片装载代次（队列回刷时递增，旧分片自动作废）。
+    private var p94StripGen94 = 0
+
     /// (87) 主视图（条带＋钮排＋功能行＋音量＋图层＋灯）
     /// 与队列网格视图（卡内切换、弹簧交叉）。
     /// port90（任务 21/24）：主视图改纵向滚动容器——拍立得区
@@ -175,9 +201,14 @@ final class ConsolePanel82: UIViewController,
         panel.modalTransitionStyle = .crossDissolve
         // (93) A3：弹出起点打点（首帧渲染后在 viewDidAppear 对账）。
         panel.p93PopStart93 = CACurrentMediaTime()
+        // (94) 94-2：分段计时零点与点按同刻（与 A3 同源打点）。
+        panel.p94Tap94 = panel.p93PopStart93
         Breadcrumbs.log("console82 present host=\(type(of: host))")
         Breadcrumbs.log("console85 present form=card")
         host.present(panel, animated: true)
+        // (94) 94-2：present 段＝present 调用返回时刻（转场
+        // 本身异步进行、不在此等待）。
+        panel.p94PresentDone94 = CACurrentMediaTime()
     }
 
     /// (93) A1：根视图用 ConsoleDimRoot93——hitTest 对卡外点
@@ -274,6 +305,21 @@ final class ConsolePanel82: UIViewController,
             queueView87.bottomAnchor.constraint(equalTo: card85.bottomAnchor),
         ])
 
+        // (94) 94-2 骨架先行：viewDidLoad 到此为止——首帧只
+        // 有卡框（毛玻璃＋描边）＋钮排/行条占位骨架；下方原
+        // viewDidLoad 的全部重内容（条带封面/队列表/拍立得
+        // 区/各功能行）移入 buildFullContent94()，由转场完成
+        // 后（viewDidAppear）的分段装载队列逐段构建。
+        buildSkeleton94()
+        p94LoadDone94 = CACurrentMediaTime()
+    }
+
+    /// (94) 94-2 装载段 A：原 viewDidLoad 后半段整体迁入
+    /// （构成/尺寸/间距逐项不变）。由 startStagedLoad94 在
+    /// 转场完成后调用一次；调用前 p94ContentBuilt94=false，
+    /// bindState 的队列回刷被 refreshQueueViews87 的门控挡
+    /// 住、待本段末置位后走分片装载。
+    private func buildFullContent94() {
         // (87) 队列头行：封面条带＋右上清空钮（既有功能
         // 保留，样片无此钮——报告注明）。
         let clearButton = UIButton(type: .system)
@@ -704,8 +750,14 @@ final class ConsolePanel82: UIViewController,
             helpButton.centerYAnchor.constraint(equalTo: lightSwitch.centerYAnchor),
             helpButton.trailingAnchor.constraint(equalTo: mainView87.frameLayoutGuide.trailingAnchor, constant: -24),
         ]
-        // 初始按竖屏集落位；首个布局回调按真实朝向校正。
-        NSLayoutConstraint.activate(portraitConstraints85)
+        // (94) 94-2：本段在转场后才跑，初始集按构建时刻的
+        // 真实朝向落位并同步 consoleLandscape86（骨架期布局
+        // 回调因约束集为空跳过切换、见 viewDidLayoutSubviews
+        // 门控）；后续旋转仍由布局回调整组换。
+        let builtLandscape = view.bounds.width > view.bounds.height
+        consoleLandscape86 = builtLandscape
+        NSLayoutConstraint.activate(
+            builtLandscape ? landscapeConstraints85 : portraitConstraints85)
 
         refreshModeButton()
         refreshLikeButton()
@@ -716,6 +768,9 @@ final class ConsolePanel82: UIViewController,
         GlobalFx87.shared.onStateChanged = { [weak self] in
             self?.refreshFxButtons87()
         }
+        // (94) 94-2：内容建成置位后才放行队列回刷（条带分片
+        // ＋队列表 reload 各自成段，见 refreshQueueViews87）。
+        p94ContentBuilt94 = true
         bindState()
         Breadcrumbs.log("port89 console=right/w296/r24/fn42x40/vol30+val")
         // (89)B 见证：功能行网页 6 格构成＋高生长＋聚焦胶囊。
@@ -728,9 +783,12 @@ final class ConsolePanel82: UIViewController,
         super.viewDidLayoutSubviews()
         // (86) 第 7 条＋横屏核查：朝向定布局集与卡尺寸
         // （切换只在朝向真变时发生、防布局回环）。
+        // (94) 94-2 门控：骨架期约束集尚未构建（两组皆空），
+        // 跳过整组切换，待 buildFullContent94 按真实朝向落位。
         let bounds = view.bounds
         let landscape = bounds.width > bounds.height
-        if consoleLandscape86 != landscape {
+        if consoleLandscape86 != landscape,
+           !portraitConstraints85.isEmpty || !landscapeConstraints85.isEmpty {
             consoleLandscape86 = landscape
             NSLayoutConstraint.deactivate(
                 landscape ? portraitConstraints85 : landscapeConstraints85)
@@ -738,27 +796,28 @@ final class ConsolePanel82: UIViewController,
                 landscape ? landscapeConstraints85 : portraitConstraints85)
             Breadcrumbs.log("console86 land=\(landscape ? 1 : 0)")
         }
-        // (93) C4②：卡宽改对齐特效改版样片口径——样片 .stack
-        // 宽 min(620px, 100vw−20px)、控制台与之同宽，即宽/视口
-        // 宽＝min(620, 屏宽−20)/屏宽（竖屏 390 宽时 370/390≈
-        // 0.949、横屏 844 宽时 620/844≈0.735）。横竖同式：
-        // min(620, 屏宽−20)；(89) 竖 min(296, 屏宽−32) 与
-        // (86) 横 min(0.86×屏宽, 640) 均与样片比例不一致，退役。
-        let cardW = min(620, bounds.width - 20)
+        // (94) 94-1 几何回滚（Miller 2026-11-27 10:56 点选）：
+        // 宽回 (92) 源码公式——竖屏 min(296, bounds.width−32)、
+        // 横屏 min(bounds.width×0.86, 640)；(93) 的横竖同式
+        // min(620, 屏宽−20) 退役。
+        let cardW = landscape
+            ? min(bounds.width * 0.86, 640)
+            : min(296, bounds.width - 32)
         if let cardWidth85, abs(cardWidth85.constant - cardW) > 0.5 {
             cardWidth85.constant = cardW
         }
-        // 卡高：(89)B 改网页 PanelShell 内容生长口径——高
-        // ＝内容链实高，上限＝屏高−底锚 90−顶距 56（网页
-        // max-height: 100dvh−底距−56 同式）。port90 竖屏链账
-        // （拍立得区＋合并行后）：顶 10＋拍立得 272＋10＋条带
-        // 86＋10＋钮排 54＋12＋功能 40＋12＋音量行 38＋14＋合
-        // 并行 30＋14＋灯 46＋底留 10 → 内容高 658；横屏＝顶
-        // 10＋拍立得 186＋8＋左列链 192＋底留 12 → 396（右列
-        // 更矮、不主导）。超上限时主视图纵向滚动（任务 24），
-        // 各行尺寸不缩。
+        // (94) 94-1 高改回 (82) 定版：竖横同为屏高×0.549
+        // （呈现上下文 bounds.height×0.549 取整）。横屏取值
+        // 口径：再与 (92) 横屏 cap 取 min——cap 沿现行 cap89
+        // 口径＝屏高−safeAreaInsets.bottom−90（卡底锚）−56
+        // （顶距），防横屏矮高时卡顶冲出可用区；竖屏不套 cap，
+        // 按 Miller 点选原文直取 0.549 屏高。(89)B 内容生长
+        // 高（竖 min(658,cap)/横 min(396,cap)）退役；内容超
+        // 卡高时主视图纵向滚动（port90 任务 24 口径不变）。
         let cap89 = bounds.height - view.safeAreaInsets.bottom - 90 - 56
-        let cardH = landscape ? min(396, cap89) : min(658, cap89)
+        let cardH = landscape
+            ? min((bounds.height * 0.549).rounded(), cap89)
+            : (bounds.height * 0.549).rounded()
         if let cardHeight85, abs(cardHeight85.constant - cardH) > 0.5 {
             cardHeight85.constant = cardH
         }
@@ -766,12 +825,69 @@ final class ConsolePanel82: UIViewController,
         if let win = view.window {
             Self.presentedCardFrame = card85.convert(card85.bounds, to: win)
         }
+        // (94) 94-2：首次布局完成打点（seg 的 layout 段）。
+        if p94LayoutDone94 == 0 {
+            p94LayoutDone94 = CACurrentMediaTime()
+        }
+        // (94) 94-1 几何自证：四数同行、变化才落（见 p94LogGeo94）。
+        p94LastCalc94 = CGSize(width: cardW, height: cardH)
+        p94LogGeo94(calc: p94LastCalc94)
+    }
+
+    /// (94) 94-1 几何自证面包屑：`p94 console geo scr=WxH
+    /// bounds=WxH calc=WxH frame=WxH`——scr=UIScreen.main.
+    /// bounds、bounds=呈现上下文 view.bounds、calc=94-1 公
+    /// 式算出的卡宽高、frame=card85 实际 frame 宽高。布局
+    /// 回调每遍调用、串变化才落盘（present 时首遍布局即落
+    /// 第一行，viewDidAppear 再补调一次收 frame 定值）。
+    private func p94LogGeo94(calc: CGSize) {
+        guard calc.width > 0, calc.height > 0 else { return }
+        let scr = UIScreen.main.bounds.size
+        let b = view.bounds.size
+        let f = card85.frame.size
+        func wh(_ s: CGSize) -> String {
+            "\(Int(s.width.rounded()))x\(Int(s.height.rounded()))"
+        }
+        let line = "p94 console geo scr=\(wh(scr)) bounds=\(wh(b))"
+            + " calc=\(wh(calc)) frame=\(wh(f))"
+        guard line != p94LastGeo94 else { return }
+        p94LastGeo94 = line
+        Breadcrumbs.log(line)
+    }
+
+    /// (94) 94-2：首帧 commit 量测——装一次性 CADisplayLink，
+    /// 其首个回调近似首帧已提交显示的时刻（seg 的 first 段
+    /// 取此值；取不到时 p94TryEmitSeg94 以 viewDidAppear 时
+    /// 刻兜底，见彼处注释）。
+    override func viewWillAppear(_ animated: Bool) {
+        super.viewWillAppear(animated)
+        if p94First94 == 0, p94DisplayLink94 == nil {
+            let link = CADisplayLink(target: self,
+                                     selector: #selector(p94FirstFrame94(_:)))
+            link.add(to: .main, forMode: .common)
+            p94DisplayLink94 = link
+        }
+    }
+
+    @objc private func p94FirstFrame94(_ link: CADisplayLink) {
+        if p94First94 == 0 {
+            p94First94 = CACurrentMediaTime()
+        }
+        link.invalidate()
+        p94DisplayLink94 = nil
+        p94TryEmitSeg94()
     }
 
     /// (85) 第 7 条：入场——卡弹簧缩放＋淡入（iOS 系统
     /// 弹簧口径，禁线性）。
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
+        // (94) 94-1：present 完成时刻补落一行 geo（frame 此
+        // 时已定值；与布局行同串则去重不重落）。
+        p94LogGeo94(calc: p94LastCalc94)
+        // (94) 94-2：转场已完成——启动分段装载（骨架→重内
+        // 容逐段构建）；入场弹簧动画与装载并行、互不等待。
+        startStagedLoad94()
         // (93) A3 自证：弹出起点→首帧渲染后间隔（目标 <50ms；
         // 拍立得打印已移出本路径，见下方动画 completion）。
         if p93PopStart93 > 0 {
@@ -789,10 +905,11 @@ final class ConsolePanel82: UIViewController,
                        options: [.allowUserInteraction]) {
             self.card85.alpha = 1
             self.card85.transform = .identity
-        } completion: { [weak self] _ in
-            // (93) A3：拍立得备池＋打印移出弹出关键路径——入场
-            // 动画完成后才启动（打印本身在 Polaroid90 内再分帧）。
-            self?.polaroidZone90.beginIfNeeded()
+        } completion: { _ in
+            // (94) 94-2：拍立得备池＋打印不再挂本 completion——
+            // 已并入 startStagedLoad94 的装载段 B（转场完成后
+            // 逐段装载，打印本身在 Polaroid90 内再分帧，沿
+            // (93) A3 移出弹出关键路径的口径）。
         }
         refreshTrans87()
     }
@@ -840,6 +957,140 @@ final class ConsolePanel82: UIViewController,
         dismissConsole93(reason: "dim")
     }
 
+    // MARK: (94) 94-2 骨架＋分段装载＋seg 落盘
+
+    /// 骨架（首帧唯一内容，卡框在 viewDidLoad 已建）：钮排
+    /// 三圆占位（46/54/46、间距/行高与真钮排同账）＋两条行
+    /// 条占位。纯 UIView、无图无字、isUserInteractionEnabled
+    /// =false 不吞点按；真内容在下层 mainView87 建成后淡出。
+    private func buildSkeleton94() {
+        let skel = UIView()
+        skel.isUserInteractionEnabled = false
+        skel.translatesAutoresizingMaskIntoConstraints = false
+        card85.addSubview(skel)
+        let circles = UIStackView()
+        circles.axis = .horizontal
+        circles.spacing = 26
+        circles.alignment = .center
+        circles.translatesAutoresizingMaskIntoConstraints = false
+        for size in [CGFloat(46), 54, 46] {
+            let dot = UIView()
+            dot.backgroundColor = UIColor.white.withAlphaComponent(0.12)
+            dot.layer.cornerRadius = size / 2
+            dot.translatesAutoresizingMaskIntoConstraints = false
+            NSLayoutConstraint.activate([
+                dot.widthAnchor.constraint(equalToConstant: size),
+                dot.heightAnchor.constraint(equalToConstant: size),
+            ])
+            circles.addArrangedSubview(dot)
+        }
+        skel.addSubview(circles)
+        var bars: [UIView] = []
+        for _ in 0..<2 {
+            let bar = UIView()
+            bar.backgroundColor = UIColor.white.withAlphaComponent(0.08)
+            bar.layer.cornerRadius = 6
+            bar.translatesAutoresizingMaskIntoConstraints = false
+            skel.addSubview(bar)
+            bars.append(bar)
+        }
+        NSLayoutConstraint.activate([
+            skel.leadingAnchor.constraint(equalTo: card85.leadingAnchor),
+            skel.trailingAnchor.constraint(equalTo: card85.trailingAnchor),
+            skel.topAnchor.constraint(equalTo: card85.topAnchor),
+            skel.bottomAnchor.constraint(equalTo: card85.bottomAnchor),
+            circles.topAnchor.constraint(equalTo: skel.topAnchor, constant: 24),
+            circles.centerXAnchor.constraint(equalTo: skel.centerXAnchor),
+            circles.heightAnchor.constraint(equalToConstant: 54),
+            bars[0].topAnchor.constraint(equalTo: circles.bottomAnchor, constant: 12),
+            bars[0].leadingAnchor.constraint(equalTo: skel.leadingAnchor, constant: 12),
+            bars[0].trailingAnchor.constraint(equalTo: skel.trailingAnchor, constant: -12),
+            bars[0].heightAnchor.constraint(equalToConstant: 40),
+            bars[1].topAnchor.constraint(equalTo: bars[0].bottomAnchor, constant: 12),
+            bars[1].leadingAnchor.constraint(equalTo: skel.leadingAnchor, constant: 12),
+            bars[1].trailingAnchor.constraint(equalTo: skel.trailingAnchor, constant: -12),
+            bars[1].heightAnchor.constraint(equalToConstant: 38),
+        ])
+        skeleton94 = skel
+    }
+
+    /// 分段装载队列：段 A＝重内容构建（buildFullContent94，
+    /// 其内的条带/队列表再各自异步分片、见 refreshQueue-
+    /// Views87）；段 B＝拍立得备池启动。每段独立一轮主队列
+    /// 派发、段间让出主线程供帧提交，段内不对整树
+    /// layoutIfNeeded；目标每段主线程工作 <8ms（条带按 6
+    /// 张/片切分即为此设）。装载全程不动 view 的
+    /// allowUserInteraction 语义：根视图/手势/弹簧动画均带
+    /// .allowUserInteraction，骨架不接点按，装载中点按不吞。
+    /// 横竖屏弹出共用本队列同一条路。
+    private func startStagedLoad94() {
+        guard !p94StagesStarted94 else { return }
+        p94StagesStarted94 = true
+        p94Stages94 = [
+            { [weak self] in
+                guard let self else { return }
+                self.buildFullContent94()
+                // inter 段＝核心控件建成、骨架撤下、可交互时刻。
+                self.p94Inter94 = CACurrentMediaTime()
+                self.liftSkeleton94()
+                self.p94TryEmitSeg94()
+            },
+            { [weak self] in
+                self?.polaroidZone90.beginIfNeeded()
+            },
+        ]
+        p94StageIndex94 = 0
+        runNextStage94()
+    }
+
+    private func runNextStage94() {
+        guard p94StageIndex94 < p94Stages94.count else {
+            p94Stages94 = []
+            return
+        }
+        let stage = p94Stages94[p94StageIndex94]
+        p94StageIndex94 += 1
+        DispatchQueue.main.async { [weak self] in
+            stage()
+            self?.runNextStage94()
+        }
+    }
+
+    /// 骨架撤下：真内容已在下层建成，骨架只淡出不位移——
+    /// 无闪烁/跳变（入场 crossDissolve＋卡弹簧维持原样）。
+    private func liftSkeleton94() {
+        guard let skel = skeleton94 else { return }
+        skeleton94 = nil
+        UIView.animate(withDuration: 0.2, delay: 0,
+                       options: [.allowUserInteraction, .curveEaseOut]) {
+            skel.alpha = 0
+        } completion: { _ in
+            skel.removeFromSuperview()
+        }
+    }
+
+    /// (94) 94-2 分段计时落盘：`p94 pop seg tap=0 present=..
+    /// load=.. layout=.. first=.. inter=..`（相对 tap 的累计
+    /// ms、一行）。first 取 CADisplayLink 首回调（见
+    /// viewWillAppear 装载处）；若 seg 齐时 link 尚未回调，
+    /// 以 viewDidAppear 时刻兜底（本函数在 viewDidAppear 后
+    /// 的段 A 完成时调用、届时已出现）。
+    /// 目标口径：tap→首帧 commit ≤ 转场时长＋50ms——达标
+    /// 与否以本行真机数据裁，此处不宣称已达标。
+    private func p94TryEmitSeg94() {
+        guard !p94SegEmitted94, p94Tap94 > 0, p94PresentDone94 > 0,
+              p94LoadDone94 > 0, p94LayoutDone94 > 0, p94Inter94 > 0
+        else { return }
+        let first = p94First94 > 0 ? p94First94 : CACurrentMediaTime()
+        p94SegEmitted94 = true
+        func ms(_ t: CFTimeInterval) -> Int {
+            Int(((t - p94Tap94) * 1000).rounded())
+        }
+        Breadcrumbs.log("p94 pop seg tap=0 present=\(ms(p94PresentDone94))"
+            + " load=\(ms(p94LoadDone94)) layout=\(ms(p94LayoutDone94))"
+            + " first=\(ms(first)) inter=\(ms(p94Inter94))")
+    }
+
     private func bindState() {
         QueueManager.shared.$queue
             .receive(on: DispatchQueue.main)
@@ -882,30 +1133,59 @@ final class ConsolePanel82: UIViewController,
 
     /// 条带与网格同源回刷：条带按样片口径从当前曲起轮
     /// 转全队列；网格按队列原序。
+    /// (94) 94-2 分段装载：内容未建成（骨架期）直接返回，
+    /// bindState 的初值在本段末由 p94ContentBuilt94 置位后
+    /// 的调用承接；条带改为异步分片构建（6 张/片、每片一轮
+    /// 主队列、目标单片 <8ms、片内不对整树 layoutIfNeeded），
+    /// 队列表 reloadData 独立成段另起一轮主队列；新回刷递
+    /// 增代次、未完旧分片自动作废。
     private func refreshQueueViews87() {
+        guard p94ContentBuilt94 else { return }
+        p94StripGen94 += 1
+        let gen = p94StripGen94
         stripTiles87.forEach { $0.removeFromSuperview() }
         stripTiles87 = []
         let count = queueTracks.count
+        var order: [Int] = []
         if count > 0 {
             let start = queueCurrent >= 0 && queueCurrent < count ? queueCurrent : 0
-            for offset in 0..<count {
-                let index = (start + offset) % count
-                let tile = CoverTile87()
-                tile.configure(track: queueTracks[index],
-                               index: index,
-                               isCurrent: index == queueCurrent,
-                               isPlaying: PlaybackEngine.shared.isPlaying)
-                tile.tag = index
-                tile.addTarget(self, action: #selector(stripTileTapped87(_:)), for: .touchUpInside)
-                NSLayoutConstraint.activate([
-                    tile.widthAnchor.constraint(equalToConstant: 74),
-                    tile.heightAnchor.constraint(equalToConstant: 74),
-                ])
-                stripStack87.addArrangedSubview(tile)
-                stripTiles87.append(tile)
+            order = (0..<count).map { (start + $0) % count }
+        }
+        buildStripSlice94(gen: gen, order: order, cursor: 0)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, gen == self.p94StripGen94 else { return }
+            self.table87?.reloadData()
+        }
+    }
+
+    /// (94) 94-2 条带分片：单片最多 6 张封面，余量让给下
+    /// 一轮主队列续建（分片间帧可提交、点按不被长任务吞）。
+    private func buildStripSlice94(gen: Int, order: [Int], cursor: Int) {
+        guard gen == p94StripGen94, cursor < order.count else { return }
+        let end = min(cursor + 6, order.count)
+        for position in cursor..<end {
+            let index = order[position]
+            // 分片跨多轮主队列，期间队列可能被清空/缩短——越界即停片。
+            guard index < queueTracks.count else { return }
+            let tile = CoverTile87()
+            tile.configure(track: queueTracks[index],
+                           index: index,
+                           isCurrent: index == queueCurrent,
+                           isPlaying: PlaybackEngine.shared.isPlaying)
+            tile.tag = index
+            tile.addTarget(self, action: #selector(stripTileTapped87(_:)), for: .touchUpInside)
+            NSLayoutConstraint.activate([
+                tile.widthAnchor.constraint(equalToConstant: 74),
+                tile.heightAnchor.constraint(equalToConstant: 74),
+            ])
+            stripStack87.addArrangedSubview(tile)
+            stripTiles87.append(tile)
+        }
+        if end < order.count {
+            DispatchQueue.main.async { [weak self] in
+                self?.buildStripSlice94(gen: gen, order: order, cursor: end)
             }
         }
-        table87?.reloadData()
     }
 
     @objc private func stripTileTapped87(_ sender: CoverTile87) {

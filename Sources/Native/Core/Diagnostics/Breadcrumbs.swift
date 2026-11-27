@@ -13,12 +13,46 @@ enum Breadcrumbs {
     private static var samplerRefs = 0
     private static var lastAvailMB = -1
 
+    // (94) 94-9 内存高水位：进程内 footprint 历史最大值。每次
+    // log 采样顺带更新；高水位每抬升 ≥8MB 直接落一行
+    // `p94 mem hw=`（直写日志仓、不经 log() 防递归），ev 记
+    // 触发事件的首词。峰值判读以高水位为准，告别单点采样
+    // 猜峰值（(93) 教训：特效时段采样缺失无从判读）。
+    private static var hwMaxMB = -1
+    private static var hwReportedMB = -1
+    private static let hwLock = NSLock()
+
+    private static func noteHW(_ mb: Int, ev: String) {
+        guard mb > 0 else { return }
+        hwLock.lock()
+        if mb > hwMaxMB { hwMaxMB = mb }
+        let shouldEmit = mb >= hwReportedMB + 8 && mb == hwMaxMB
+        if shouldEmit { hwReportedMB = mb }
+        hwLock.unlock()
+        guard shouldEmit else { return }
+        let availMB = os_proc_available_memory() / 1_048_576
+        let tag = ev.split(separator: " ").first.map(String.init) ?? "?"
+        FoliaBridgeLogStore.shared.write(
+            level: "info", module: "crumb",
+            message: "p94 mem hw=\(mb) now=\(mb) ev=\(tag)"
+                + " · availMB=\(availMB) footprintMB=\(mb)")
+    }
+
+    /// (94) 高水位当前值（报告/其他自证行引用）。
+    static var highWaterMB: Int {
+        hwLock.lock()
+        defer { hwLock.unlock() }
+        return hwMaxMB
+    }
+
     static func log(_ event: String) {
         installIfNeeded()
         let availMB = os_proc_available_memory() / 1_048_576
+        let fp = footprintMB()
         FoliaBridgeLogStore.shared.write(
             level: "info", module: "crumb",
-            message: "\(event) · availMB=\(availMB) footprintMB=\(footprintMB())")
+            message: "\(event) · availMB=\(availMB) footprintMB=\(fp)")
+        noteHW(fp, ev: event)
     }
 
     /// (63) 同步落盘版 log（DS R63 对账口径）：调用返回时该行
@@ -31,9 +65,11 @@ enum Breadcrumbs {
     static func logSync(_ event: String) {
         installIfNeeded()
         let availMB = os_proc_available_memory() / 1_048_576
+        let fp = footprintMB()
         FoliaBridgeLogStore.shared.writeSync(
             level: "info", module: "crumb",
-            message: "\(event) · availMB=\(availMB) footprintMB=\(footprintMB())")
+            message: "\(event) · availMB=\(availMB) footprintMB=\(fp)")
+        noteHW(fp, ev: event)
     }
 
     /// (78) 见证启动自检：(77) 两处见证（seam.flash77 被
@@ -114,6 +150,21 @@ enum Breadcrumbs {
             last["emitted"] = true
             UserDefaults.standard.set(last, forKey: "folia.rot84.last")
         }
+        witnessBoot94()
+    }
+
+    /// (94) 见证名册：geo=p94 console geo（控制台几何四数）、
+    /// seg=p94 pop seg（弹出分段计时）、deck=p94 deck render
+    /// （中央钮最终渲染层 cov）、seam=p94 seam（缝母版在岗）、
+    /// wall=p94 wall sw/reanchor（切版式三步序）、rot=p94 rot
+    /// （旋转 content-ready 四齐）、fx=p94 fx arm/sw/tap/layers
+    /// （覆层白名单＋退出路径＋开关同行自证）、xmas=p94 xmas
+    /// scale/fps、web=p94 web dpr、mem=p94 mem hw（高水位）。
+    /// 启动即登记在册：某见证在真机日志缺席＝站点没跑，
+    /// 不许再拿「0 条」含糊判读。
+    static func witnessBoot94() {
+        log("p94 wit geo=1 seg=1 deck=1 seam=1 wall=1 rot=1"
+            + " fx=1 xmas=1 web=1 mem=1")
     }
 
     /// 墙面出现/消失时成对调用；首个调用者启动采样，最后一个停。
@@ -136,6 +187,9 @@ enum Breadcrumbs {
 
     private static func tick() {
         let availMB = os_proc_available_memory() / 1_048_576
+        // (94) 94-9：周期采样同样喂高水位（ev=tick），墙不在场
+        // 的时段由各关键事件的 log 采样兜底。
+        noteHW(footprintMB(), ev: "tick")
         // 只在水位明显变化或告急时落盘，避免刷屏。
         if abs(availMB - lastAvailMB) >= 16 || availMB < 120 {
             lastAvailMB = availMB
