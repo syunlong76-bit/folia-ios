@@ -1542,8 +1542,9 @@ final class HomeWallViewController: UIViewController,
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = DeckLayout82.expandedRadius102
-        blur.layer.borderWidth = 1
-        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        // (104) 毛边修复：毛玻璃层边框撤除（与主题层边框
+        // 同位叠加成毛边）；唯一边框移最上层 glassTint。
+        blur.layer.borderWidth = 0
         blur.clipsToBounds = true
         blur.translatesAutoresizingMaskIntoConstraints = false
         // (84) 第 3 条命中结构修法（DS 定案）：毛玻璃只作
@@ -1604,6 +1605,10 @@ final class HomeWallViewController: UIViewController,
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         glassTint.layer.cornerRadius = DeckLayout82.expandedRadius102
+        // (104) 毛边修复：全台唯一可见边框落本层（最上层
+        // 罩）；毛玻璃/主题层边框已撤（同位双边叠加成毛边）。
+        glassTint.layer.borderWidth = 1
+        glassTint.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)

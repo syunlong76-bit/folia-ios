@@ -31,10 +31,16 @@ enum SearchHostPresenter {
         Breadcrumbs.log("p101 search present stage-theme="
             + "\(String(describing: MiniPlayerTheme.effective))"
             + " fx=\(MiniPlayerTheme.effectsEnabled ? 1 : 0)")
+        // (104) 搜索线①：宿主改容器（SearchDeckHostVC104）
+        // ——SwiftUI 搜索页＋搜索内播放台同窗，点播放经同
+        // 一 setQueue 漏斗起播、台当场在搜索页内弹出（旧
+        // 宿主只有 UIHostingController，台在被盖住的墙上、
+        // 点播无台可见）。onClose/右滑退出改关容器。
         let host = UIHostingController(rootView: SearchWorkspaceView())
+        let container = SearchDeckHostVC104(hosting: host)
         host.rootView = SearchWorkspaceView(
-            onClose: { [weak host] in
-                host?.dismiss(animated: true)
+            onClose: { [weak container] in
+                container?.dismiss(animated: true)
             },
             onPlaySong: { song, queue in
                 Breadcrumbs.log("search.play track=\(song.id) queue=\(queue.count)")
@@ -43,17 +49,18 @@ enum SearchHostPresenter {
                     startingAt: queue.firstIndex { $0.id == song.id } ?? 0,
                     source: "search")
             },
-            onOpenCollection: { [weak host] collection in
-                guard let host else { return }
-                presentCollection(collection, from: host)
+            onOpenCollection: { [weak container] collection in
+                guard let container else { return }
+                presentCollection(collection, from: container)
             })
-        host.modalPresentationStyle = .fullScreen
+        host.view.backgroundColor = .clear
+        container.modalPresentationStyle = .fullScreen
         // (101) 第 3 项：搜索页补左缘右滑退出（头部 ✕ 已按
         // 定版撤除，关闭走本手势 + onClose 同路 dismiss）。
-        EdgeBack101.install(on: host, page: "search") { [weak host] in
-            host?.dismiss(animated: true)
+        EdgeBack101.install(on: container, page: "search") { [weak container] in
+            container?.dismiss(animated: true)
         }
-        presenter.present(host, animated: true)
+        presenter.present(container, animated: true)
     }
 
     private static func presentCollection(_ collection: SearchCollection,

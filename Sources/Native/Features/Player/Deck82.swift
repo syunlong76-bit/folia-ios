@@ -822,6 +822,13 @@ enum DeckGeometry102 {
             + " overflowBelow=\(String(format: "%.1f", overflow))")
         Breadcrumbs.log("deck.radii host=\(host)"
             + " v=\(vals.joined(separator: "/")) eq=\(eq)")
+        // (104) 毛边自证：三层边框宽（毛玻璃/主题层/玻璃
+        // 罩）——修复后恒 0/0/1（唯一边框在最上层罩）。
+        let bws = [blur, theme, glass].map {
+            $0.map { String(format: "%.1f", $0.layer.borderWidth) } ?? "-"
+        }
+        Breadcrumbs.log("p104 deck fringe host=\(host)"
+            + " bw=\(bws.joined(separator: "/"))")
     }
 }
 

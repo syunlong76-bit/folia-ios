@@ -320,15 +320,16 @@ struct SearchWorkspaceView: View {
                 }
             }
         } label: {
-            HStack(spacing: 5) {
+            HStack(spacing: 4) {
                 Text(providerSummary99)
-                    .font(.system(size: 13, weight: .semibold))
+                    .font(.system(size: 12.5, weight: .semibold))
                     .lineLimit(1)
+                    .fixedSize(horizontal: true, vertical: false)
                 Image(systemName: "chevron.down")
                     .font(.system(size: 10, weight: .semibold))
             }
             .foregroundColor(ink)
-            .padding(.horizontal, 12)
+            .padding(.horizontal, 10)
             // (101) 第 2 项：平台小胶囊与搜索框同高 40。
             .frame(height: 40)
             .background(RoundedRectangle(cornerRadius: 20).fill(field101))
@@ -344,7 +345,12 @@ struct SearchWorkspaceView: View {
         // 除（关闭走右滑退出，宿主 onClose 通路不变），无平
         // 台图标行。注记行与状态行保留（信息行、非图标行）。
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 10) {
+            // (104) 搜索线③：顶部一行挤兑修复——旧法页签文字
+            // 无单行/定宽约束，被弹性搜索框压成「单/曲」两行、
+            // 平台胶囊文案被截断。改：页签与胶囊 fixedSize 保
+            // 自然宽、单行不折，弹性只由搜索框吸收；间距收紧
+            // （行内 10→8、页签间 14→10、胶囊内距 12→10）。
+            HStack(spacing: 8) {
                 HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
                         .font(.system(size: 14, weight: .medium))
@@ -364,7 +370,7 @@ struct SearchWorkspaceView: View {
 
                 // 页签并排同行：文字签 + 选中金色短下划线，
                 // 切换 kind + 已搜重搜的通路不变。
-                HStack(spacing: 14) {
+                HStack(spacing: 10) {
                     ForEach(SearchKind.allCases, id: \.self) { item in
                         Button {
                             guard item != kind else { return }
@@ -374,6 +380,8 @@ struct SearchWorkspaceView: View {
                             VStack(spacing: 3) {
                                 Text(item.label)
                                     .font(.system(size: 15, weight: item == kind ? .bold : .regular))
+                                    .lineLimit(1)
+                                    .fixedSize(horizontal: true, vertical: false)
                                 RoundedRectangle(cornerRadius: 1)
                                     .fill(item == kind ? gold : Color.clear)
                                     .frame(width: 20, height: 2)
@@ -532,15 +540,13 @@ struct SearchWorkspaceView: View {
                 StickerViewRepresentable(asset: "cat-02", mode: .once(holdLast: true))
                     .frame(width: 90, height: 90)
             }
-            ZStack {
-                Circle()
-                    .stroke(ink.opacity(0.4), lineWidth: 2)
-                    .frame(width: 88, height: 88)
-                Rectangle()
-                    .fill(accent)
-                    .frame(width: 124, height: 6)
-                    .rotationEffect(.degrees(-32))
-            }
+            // (104) 搜索追加项：空态中央标记换自家图形——
+            // 单音符（6 号/A4 单音符字形语言、细线描边）＋一
+            // 条对角斜杠；旧灰圆圈＋金条的「禁止风」图形撤除。
+            // 音符描边走 ink（随主题深浅翻转），斜杠走主题金
+            // （与页签下划线同族）；尺寸与旧标记相当（88）。
+            SearchEmptyMark104(ink: ink, slash: accent)
+                .frame(width: 88, height: 88)
             Text(text)
                 .font(.system(size: 14, weight: .semibold))
                 .foregroundColor(ink.opacity(showRetry ? 0.7 : 0.6))
@@ -1281,4 +1287,64 @@ private func searchFormatPlayCount(_ count: Int) -> String {
 private func searchTrimZero(_ value: Double) -> String {
     let text = String(format: "%.1f", value)
     return text.hasSuffix(".0") ? String(text.dropLast(2)) : text
+}
+
+// MARK: - (104) 空态自家标记：单音符＋对角斜杠
+
+/// 音符字形：符头（斜椭圆）＋符干＋符尾，单条 Path 细线
+/// 描边——与 6 号 App 图标/A4 图标系的单音符字形语言同
+/// 族（DeckGlyph82 的线描口径）。斜杠独立一层走主题金。
+private struct SearchEmptyMark104: View {
+    let ink: Color
+    let slash: Color
+
+    var body: some View {
+        ZStack {
+            SearchNoteGlyph104()
+                .stroke(ink.opacity(0.55),
+                        style: StrokeStyle(lineWidth: 3.5,
+                                           lineCap: .round,
+                                           lineJoin: .round))
+            SearchSlashGlyph104()
+                .stroke(slash,
+                        style: StrokeStyle(lineWidth: 4,
+                                           lineCap: .round))
+        }
+    }
+}
+
+private struct SearchNoteGlyph104: Shape {
+    func path(in rect: CGRect) -> Path {
+        let w = rect.width, h = rect.height
+        var path = Path()
+        // 符头：椭圆绕自身中心微倾 -15°（音符符头口径）。
+        let headRect = CGRect(x: rect.minX + 0.20 * w, y: rect.minY + 0.60 * h,
+                              width: 0.27 * w, height: 0.20 * h)
+        let center = CGPoint(x: headRect.midX, y: headRect.midY)
+        let tilt = CGAffineTransform(translationX: center.x, y: center.y)
+            .rotated(by: -15 * .pi / 180)
+            .translatedBy(x: -center.x, y: -center.y)
+        path.addEllipse(in: headRect.applying(tilt))
+        // 符干：符头右上直上。
+        let stemX = rect.minX + 0.455 * w
+        path.move(to: CGPoint(x: stemX, y: rect.minY + 0.66 * h))
+        path.addLine(to: CGPoint(x: stemX, y: rect.minY + 0.18 * h))
+        // 符尾：自符干顶向右下弯回符干。
+        path.move(to: CGPoint(x: stemX, y: rect.minY + 0.18 * h))
+        path.addQuadCurve(
+            to: CGPoint(x: stemX, y: rect.minY + 0.42 * h),
+            control: CGPoint(x: rect.minX + 0.74 * w, y: rect.minY + 0.24 * h))
+        return path
+    }
+}
+
+private struct SearchSlashGlyph104: Shape {
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX + 0.13 * rect.width,
+                              y: rect.minY + 0.87 * rect.height))
+        path.addLine(to: CGPoint(x: rect.minX + 0.87 * rect.width,
+                                 y: rect.minY + 0.13 * rect.height))
+        return path
+    }
 }

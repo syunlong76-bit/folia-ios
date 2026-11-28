@@ -65,7 +65,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Virelai
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "103"
+        CFBundleVersion: "104"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -151,7 +151,7 @@ targets:
       properties:
         CFBundleDisplayName: FoliaWidgets
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "103"
+        CFBundleVersion: "104"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

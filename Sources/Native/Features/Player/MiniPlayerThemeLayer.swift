@@ -94,8 +94,11 @@ final class MiniPlayerThemeLayer: UIView {
         // 编码 35 与台身 42 不共心露边即此层）；宿主形态
         // 切换时再以 setCornerRadius 随台高回写。
         layer.cornerRadius = DeckLayout82.expandedRadius102
-        layer.borderWidth = 1
-        layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        // (104) 毛边修复：本层边框撤除——旧制本层与宿主毛
+        // 玻璃层各带一条 1pt 白 0.30 边、同位叠加约 51% 且
+        // 两条抗锯齿路径不重合，台顶沿读作毛边。全台唯一
+        // 可见边框改由各宿主最上层 glassTint 承载（单源）。
+        layer.borderWidth = 0
         clipsToBounds = true
 
         bgImageView.contentMode = .scaleAspectFill

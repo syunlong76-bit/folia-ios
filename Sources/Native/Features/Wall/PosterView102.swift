@@ -161,17 +161,38 @@ final class PosterView102: UIView, UIScrollViewDelegate {
         currentIndex = index
         scroll.setContentOffset(
             CGPoint(x: CGFloat(index) * bounds.width, y: 0), animated: animated)
+        refreshLoadWindow()
     }
 
     private func rebuildPages() {
         for page in pages { page.removeFromSuperview() }
-        pages = items.map { item in
+        pages = items.enumerated().map { index, item in
             let page = PosterPage102()
-            page.configure(item: item)
+            page.configure(item: item, index: index)
             scroll.addSubview(page)
             return page
         }
         layoutPages()
+        refreshLoadWindow()
+    }
+
+    /// (104) 海报线＋内存线：图片懒加载窗——只加载当前页
+    /// ±2 的大图，窗外页卸图。旧制 rebuildPages 时 283 页
+    /// 全量 configure 各发一个大图任务（(102) 日志实证
+    /// poster on 后 footprint 194→312MB 的主因），且图片
+    /// 通路本身是断的（见 PosterPage102.configure 注）。
+    private func refreshLoadWindow() {
+        guard !pages.isEmpty else { return }
+        let lo = max(0, currentIndex - 2)
+        let hi = min(pages.count - 1, currentIndex + 2)
+        for (i, page) in pages.enumerated() {
+            if i >= lo && i <= hi {
+                page.loadImageIfNeeded(
+                    priority: i == currentIndex ? .visible : .prefetch)
+            } else {
+                page.unloadImage()
+            }
+        }
     }
 
     private func layoutPages() {
@@ -212,6 +233,7 @@ final class PosterView102: UIView, UIScrollViewDelegate {
         if clamped != currentIndex {
             currentIndex = clamped
             onSettle?(clamped)
+            refreshLoadWindow()
         }
     }
 }
@@ -261,21 +283,66 @@ private final class PosterPage102: UIView {
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
 
-    func configure(item: PosterView102.Item) {
+    private var item: PosterView102.Item?
+    private var pageIndex = -1
+
+    func configure(item: PosterView102.Item, index: Int) {
+        self.item = item
+        pageIndex = index
         titleLabel.text = item.title
         artistLabel.text = item.artist
         loadTask?.cancel()
+        loadTask = nil
         bgView.image = nil
         artView.image = nil
-        guard let raw = item.picUrl else { return }
-        let big = PlaylistLayout102.largeCoverURLString(raw)
+    }
+
+    /// (104) 海报线根治：旧 configure 把条目原始 picUrl
+    /// （数据链的 /img 相对路径）直传 NativeCoverLoader
+    /// .image(for:)——该入口以入参为最终 URL 直拉，相对
+    /// 路径拼不出可请求 URL、http 明文又被 ATS 拦，全量
+    /// 静默失败（(102) 日志 195 条 poster 面包屑无一条图
+    /// 片落痕、图 3 大黑块即此）。改走加载器正道：先
+    /// largeCoverURLString 升大图参数（绝对地址时），再
+    /// proxiedURLString 过 /img 网关（相对路径解包升档、
+    /// 绝对地址 base64 封装），tier 用 maxSize 大图档；
+    /// 成败逐页落 p104 poster img（通路自证）。加载时机
+    /// 由宿主视图的懒加载窗控制（当前 ±2），本函只在被
+    /// 点名时发请求。
+    func loadImageIfNeeded(priority: NativeCoverLoader.LoadPriority) {
+        guard bgView.image == nil, loadTask == nil,
+              let raw = item?.picUrl, !raw.isEmpty else { return }
+        let idx = pageIndex
         loadTask = Task { [weak self] in
+            let big = PlaylistLayout102.largeCoverURLString(raw)
+            guard let url = NativeCoverLoader.shared.proxiedURLString(
+                big, tier: NativeCoverLoader.maxSize) else {
+                Breadcrumbs.log("p104 poster img st=badurl i=\(idx)")
+                self?.loadTask = nil
+                return
+            }
             let image = await NativeCoverLoader.shared.image(
-                for: big, tier: PlaylistLayout102.posterImageTier)
-            guard let self, !Task.isCancelled, let image else { return }
+                for: url, tier: NativeCoverLoader.maxSize,
+                priority: priority)
+            guard let self, !Task.isCancelled else { return }
+            self.loadTask = nil
+            guard self.item?.picUrl == raw else { return }
+            guard let image else {
+                Breadcrumbs.log("p104 poster img st=nil i=\(idx)")
+                return
+            }
             self.bgView.image = image
             self.artView.image = image
+            Breadcrumbs.log("p104 poster img st=ok i=\(idx)")
         }
+    }
+
+    /// 懒加载窗外：取消在途并卸图，内存只留窗内大图。
+    func unloadImage() {
+        loadTask?.cancel()
+        loadTask = nil
+        bgView.image = nil
+        artView.image = nil
     }
 
     /// 样板构图：竖屏纵列（大图在上、题注同宽在下）；

@@ -737,8 +737,10 @@ final class WallPrototypeViewController: UIViewController,
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = DeckLayout82.expandedRadius102
-        blur.layer.borderWidth = 1
-        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        // (104) 毛边修复：毛玻璃层边框撤除（与主题层边框
+        // 同位叠加成毛边，见 MiniPlayerThemeLayer 注）；
+        // 唯一边框移最上层 glassTint。
+        blur.layer.borderWidth = 0
         blur.clipsToBounds = true
         blur.translatesAutoresizingMaskIntoConstraints = false
         // (84) 第 3 条：毛玻璃禁交互（命中结构，同主页墙）。
@@ -791,6 +793,11 @@ final class WallPrototypeViewController: UIViewController,
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         glassTint.layer.cornerRadius = DeckLayout82.expandedRadius102
+        // (104) 毛边修复：全台唯一可见边框落本层（最上
+        // 层罩，白 0.30 与旧两层同色同宽，只剩一条抗锯齿
+        // 路径）；圆角由形态收口随台高回写、边框随行。
+        glassTint.layer.borderWidth = 1
+        glassTint.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -2382,8 +2389,12 @@ final class WallPrototypeViewController: UIViewController,
         avatarButton102 = avatar
         if let cover = playlistCoverUrl {
             Task { [weak self] in
+                // (104) 海报线同根：原始 picUrl 须先过 /img
+                // 网关再拉（直传相对路径必失败，见海报页注）。
+                guard let url = NativeCoverLoader.shared
+                    .proxiedURLString(cover, tier: 200) else { return }
                 let img = await NativeCoverLoader.shared.image(
-                    for: cover, tier: 200)
+                    for: url, tier: 200)
                 guard let self, let img else { return }
                 self.avatarButton102?.setImage(
                     img.withRenderingMode(.alwaysOriginal), for: .normal)

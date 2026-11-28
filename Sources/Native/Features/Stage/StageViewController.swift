@@ -365,6 +365,15 @@ final class StageViewController: UIViewController {
     private var p94RotLyricGeo: (x: Int, w: Int)?
     private var p94RotLink: CADisplayLink?
     private var p94RotSafetyWork: DispatchWorkItem?
+    /// (104) 旋转线③：卡帧量测——旋转窗口内 CADisplayLink
+    /// 帧间隙监测（≥30ms 记一记），landed 后 0.6s 结算落
+    /// p104 rot hitch，给「仍卡一帧」提供帧级证据（卡在
+    /// 哪、多大），不再靠录屏逐帧猜。
+    private var p104RotLink: CADisplayLink?
+    private var p104RotLastTs: CFTimeInterval = 0
+    private var p104RotMaxGapMs = 0
+    private var p104RotGapCount = 0
+    private var p104RotWork: DispatchWorkItem?
     /// (98) 第 8 条：旋转根治第一步——四齐门删除后的状态：
     /// p98RotLive＝盲测模式（设置页二选一）；(100) 第 2 项
     /// 起 live 亦设冻帧盖（方案 (a)，见 viewWillTransition），
@@ -1009,6 +1018,7 @@ final class StageViewController: UIViewController {
         p94RotStableFrames = 0
         p94RotTargetSize = size
         p94RotLyricGeo = nil
+        p104RotHitchStart()
         Breadcrumbs.log("p94 rot begin from=\(Int(view.bounds.width))x\(Int(view.bounds.height))"
             + " to=\(Int(size.width))x\(Int(size.height))")
         // 旋转中冻结墙惯性：与 94-5 共用同一静态停机口，
@@ -1184,8 +1194,22 @@ final class StageViewController: UIViewController {
     private func p94HandleRotSignal(kind: String, body: [String: Any]) {
         guard p94RotAwaiting || p98RotHoldWork != nil else { return }
         let cw = (body["cssW"] as? NSNumber)?.intValue ?? -1
-        guard cw == Int(p94RotTargetSize.width.rounded())
-            || cw == Int(p94RotTargetSize.height.rounded()) else { return }
+        let ch = (body["cssH"] as? NSNumber)?.intValue ?? -1
+        let tw = Int(p94RotTargetSize.width.rounded())
+        let th = Int(p94RotTargetSize.height.rounded())
+        // (104) 旋转线②：信号门改宽高双合——旧门「宽合目
+        // 标宽 OR 目标高」在 393×852→852×393 时旧 css 宽
+        // 393 恰等目标高，未 resized 的旧 buffer 信号被误
+        // 收、提前换盖（(102) 日志 15:48Z fume 会话实证
+        // sw=1 在 dt≈154–173、真 resized 在 dt=554）。桥
+        // 侧 snapshot() 本就带 cssH，双合可落；拒收落痕
+        // p104 rot sigrej 供判读（真信号被拒会走 landed
+        // 有界等待 ≤400ms 兜底，不裸奔）。
+        guard cw == tw && ch == th else {
+            Breadcrumbs.log("p104 rot sigrej k=\(kind)"
+                + " cw=\(cw) ch=\(ch) tw=\(tw) th=\(th)")
+            return
+        }
         let dt = Int((CACurrentMediaTime() - p94RotStart) * 1000)
         Breadcrumbs.log("p98 rot sig k=\(kind) dt=\(dt)")
         if kind == "resized" {
@@ -1223,6 +1247,7 @@ final class StageViewController: UIViewController {
         p94RotAwaiting = false
         p94RotSafetyWork?.cancel()
         p94RotSafetyWork = nil
+        p104RotHitchSettle()
         stageRotationFrozen = false
         p94RotCatchUpLayout()
         let dt = Int((CACurrentMediaTime() - p94RotStart) * 1000)
@@ -1320,26 +1345,62 @@ final class StageViewController: UIViewController {
         }
     }
 
-    /// (99) 第 4 条：冻结盖目标构图换盖——网页层 buffer 已
-    /// 到目标尺寸（resized 信号）且盖仍在场时，按当前（目
-    /// 标）bounds 重抓一帧换掉盖图：揭盖前盖面即目标构图，
-    /// 不再是旋转前构图的拉伸。换盖自证同落 p99 rot cov
-    /// （sw=1）。
+    /// (99) 第 4 条：冻结盖目标构图换盖——(104) 旋转线①
+    /// 撤除本体的全分辨率快照：(102) 真机录屏逐帧实证，
+    /// 重复帧恰落在 resized+ready 信号到达时刻（freeze
+    /// 后 dt≈255–305ms），此时主线程正被本快照的全分辨
+    /// 率 WebView 渲染＋盖图换装堵住一帧。改：信号只记
+    /// 「目标 buffer 已就绪」，盖维持冻结拍构图（scaleTo
+    /// Fill 拉伸）直至 landed 有界揭盖——盖面构图在最后
+    /// ≤400ms 的保真让位于帧平滑（Miller 本轮点名的是
+    /// 卡帧、非盖面构图）。卡帧是否根除由 p104 rot hitch
+    /// 帧间隙落痕在 (104) 真机判读。
     private func p99SwapRotCover() {
         guard webRotCover81 != nil else { return }
-        let rotGen = webRotGen81
-        let webView = WebEffectBridge.shared.webView
-        let cfg = WKSnapshotConfiguration()
-        cfg.snapshotWidth = NSNumber(value: Double(max(200, webView.bounds.width)))
-        webView.takeSnapshot(with: cfg) { [weak self] image, _ in
-            guard let self, rotGen == self.webRotGen81,
-                  let cover = self.webRotCover81, let image else { return }
-            cover.image = image
-            let covDt = Int((CACurrentMediaTime() - self.webRotStart81) * 1000)
-            Breadcrumbs.log("p99 rot cov sw=1"
-                + " w=\(Int(image.size.width * image.scale))"
-                + " h=\(Int(image.size.height * image.scale)) dt=\(covDt)")
+        let covDt = Int((CACurrentMediaTime() - webRotStart81) * 1000)
+        Breadcrumbs.log("p104 rot swapdef dt=\(covDt)")
+    }
+
+    // MARK: - (104) 旋转帧间隙监测
+
+    private func p104RotHitchStart() {
+        p104RotWork?.cancel()
+        p104RotLink?.invalidate()
+        p104RotLastTs = 0
+        p104RotMaxGapMs = 0
+        p104RotGapCount = 0
+        let link = CADisplayLink(target: self,
+                                 selector: #selector(p104RotTick(_:)))
+        link.add(to: .main, forMode: .common)
+        p104RotLink = link
+    }
+
+    @objc private func p104RotTick(_ link: CADisplayLink) {
+        if p104RotLastTs > 0 {
+            let gapMs = Int((link.timestamp - p104RotLastTs) * 1000)
+            if gapMs >= 30 {
+                p104RotGapCount += 1
+                p104RotMaxGapMs = max(p104RotMaxGapMs, gapMs)
+            }
         }
+        p104RotLastTs = link.timestamp
+    }
+
+    /// landed 结算点调：再等 0.6s（盖淡出期一并计入）停
+    /// 链落痕。
+    private func p104RotHitchSettle() {
+        p104RotWork?.cancel()
+        let gen = p94RotGen
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.p104RotLink?.invalidate()
+            self.p104RotLink = nil
+            Breadcrumbs.log("p104 rot hitch gen=\(gen)"
+                + " n=\(self.p104RotGapCount)"
+                + " max=\(self.p104RotMaxGapMs)")
+        }
+        p104RotWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6, execute: work)
     }
 
     private func revealWebRotCover81(via: String) {
@@ -3490,8 +3551,9 @@ final class StageViewController: UIViewController {
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
         blur.layer.cornerRadius = DeckLayout82.expandedRadius102
-        blur.layer.borderWidth = 1
-        blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
+        // (104) 毛边修复：毛玻璃层边框撤除（与主题层边框
+        // 同位叠加成毛边）；唯一边框移最上层 glassTint。
+        blur.layer.borderWidth = 0
         blur.clipsToBounds = true
         blur.translatesAutoresizingMaskIntoConstraints = false
         // (84) 第 3 条：毛玻璃禁交互（命中结构，同两面墙）。
@@ -3530,6 +3592,10 @@ final class StageViewController: UIViewController {
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
         glassTint.layer.cornerRadius = DeckLayout82.expandedRadius102
+        // (104) 毛边修复：全台唯一可见边框落本层（最上层
+        // 罩）；毛玻璃/主题层边框已撤（同位双边叠加成毛边）。
+        glassTint.layer.borderWidth = 1
+        glassTint.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)

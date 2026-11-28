@@ -94,17 +94,57 @@ struct DiaryBookRootView99: View {
     @State private var spreadIndex = 0
     @State private var dragOffset: CGFloat = 0
     @State private var editorRequest: DiaryEditorRequest99?
-    @State private var detailEntry: DiaryEntry99?
     @State private var shareEntry: DiaryEntry99?
-    /// (101) 第 5 项：手写签名板开关（头部入口）。
+    /// (101) 第 5 项：手写签名板开关（(104) 起入口在条目
+    /// 页签名区，头部旧钮随书体重构撤除）。
     @State private var showSignaturePad101 = false
+    /// (104) 日记线：面板（日历/时间轴/歌曲/回收站）——
+    /// 过审样板定版为书之上的面板，不再是书页（(102) 把
+    /// 它们做成书页是图 6「按歌曲卡片列表」的病灶）。
+    @State private var panel104: DiaryPanel104?
+    /// 草稿「丢弃」：草稿由今日播放计算生成、无条目本体
+    /// 可删，丢弃＝本会话内不再作页（数据口径如实记于
+    /// (104) 报告与审计表）。
+    @State private var draftDismissed104 = false
+    /// 朝向盒（非 @Published 的引用盒）：body 构建期写入
+    /// 当前朝向，供面板点条目时把单元序换算成 spread 序，
+    /// 避开在 body 里写 @State。
+    @State private var geoBox104 = DiaryGeoBox104()
 
-    private let pageTitles = ["今日草稿", "时间轴", "日历", "歌曲", "回收站"]
+    enum DiaryPanel104: String, Identifiable {
+        case calendar, timeline, songs, trash
+        var id: String { rawValue }
+    }
+
+    private enum Unit104: Identifiable {
+        case draft
+        case entry(DiaryEntry99)
+        var id: String {
+            switch self {
+            case .draft: return "draft"
+            case .entry(let entry): return entry.id
+            }
+        }
+    }
+
+    /// 书的页单元：草稿页（未确认＋未丢弃＋今日有播放时
+    /// 在首）＋条目页（store.entries 已倒序）。
+    private func units() -> [Unit104] {
+        var list: [Unit104] = []
+        if !store.todayDraftConfirmed, !draftDismissed104,
+           !store.todayPlays().isEmpty {
+            list.append(.draft)
+        }
+        list.append(contentsOf: store.entries.map { Unit104.entry($0) })
+        return list
+    }
 
     var body: some View {
         GeometryReader { geo in
             let landscape = geo.size.width > geo.size.height
-            let spreads = makeSpreads(landscape: landscape)
+            let _ = geoBox104.set(landscape)
+            let units = units()
+            let spreads = makeSpreads(count: units.count, landscape: landscape)
             VStack(spacing: 0) {
                 header
                     .sheet(item: $editorRequest) { request in
@@ -120,73 +160,71 @@ struct DiaryBookRootView99: View {
                         .fill(DiaryPaper99.paper)
                         .shadow(color: .black.opacity(0.25), radius: 12, y: 5)
                     HStack(spacing: 0) {
-                        ForEach(spreads[safe: min(spreadIndex, spreads.count - 1)] ?? [0], id: \.self) { page in
-                            pageView(page)
+                        let spread = spreads.isEmpty ? []
+                            : spreads[min(spreadIndex, spreads.count - 1)]
+                        ForEach(spread, id: \.self) { unitIndex in
+                            unitView(units[unitIndex])
                                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            if landscape, page == (spreads[safe: min(spreadIndex, spreads.count - 1)] ?? [0]).first {
+                            if landscape, unitIndex == spread.first {
                                 Rectangle()
                                     .fill(LinearGradient(colors: [.clear, .black.opacity(0.16), .clear],
                                                          startPoint: .leading, endPoint: .trailing))
                                     .frame(width: 22)
                             }
                         }
+                        if units.isEmpty {
+                            emptyPage104
+                        }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 14))
                     // (101) 第 5 项：真翻页——拖动时书页绕纵轴
-                    // 3D 卷起（perspective + 随动明暗）替代旧
-                    // 平移近似，松手弹簧落定换页（下方手势）。
+                    // 3D 卷起（perspective + 随动明暗），松手
+                    // 弹簧落定换页（下方手势），(104) 沿用。
                     .modifier(DiaryPageCurl101(offset: dragOffset,
                                                width: geo.size.width))
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
-                .sheet(item: $detailEntry) { entry in
-                    DiaryDetailView99(store: store, entry: entry,
-                                      onExport: {
-                                          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                              shareEntry = entry
-                                          }
-                                      },
-                                      onEdit: {
-                                          detailEntry = nil
-                                          DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-                                              editorRequest = DiaryEditorRequest99(
-                                                  song: entry.songId.map { DiarySong90(id: $0, title: entry.songTitle ?? "",
-                                                      artist: entry.songArtist ?? "", artwork: entry.songArtwork) },
-                                                  prefillText: entry.text, editing: entry)
-                                          }
-                                      })
-                }
                 .gesture(
                     DragGesture(minimumDistance: 24)
                         .onChanged { dragOffset = $0.translation.width }
                         .onEnded { value in
-                            let step = landscape ? 1 : 1
                             var next = spreadIndex
-                            if value.translation.width < -60 { next = min(spreadIndex + step, spreads.count - 1) }
-                            if value.translation.width > 60 { next = max(spreadIndex - step, 0) }
-                            // (101) 第 5 项：翻页路径自证（3D
-                            // 卷页，非平移）。
-                            Breadcrumbs.log("p101 diary flip curl=1 turned=\(next != spreadIndex ? 1 : 0)")
+                            if value.translation.width < -60 { next = min(spreadIndex + 1, spreads.count - 1) }
+                            if value.translation.width > 60 { next = max(spreadIndex - 1, 0) }
+                            Breadcrumbs.log("p104 diary flip curl=1 turned=\(next != spreadIndex ? 1 : 0) i=\(next)")
                             withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
                                 spreadIndex = next
                                 dragOffset = 0
                             }
                         })
-                footer(spreads: spreads)
+                footer(spreads: spreads, units: units)
                     .sheet(item: $shareEntry) { entry in
                         DiaryShareView99(entry: entry)
+                    }
+                    .sheet(item: $panel104) { panel in
+                        panelView104(panel)
                     }
             }
             .background(Color(UIColor { tc in
                 tc.userInterfaceStyle == .dark
                     ? UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1)
                     : UIColor(red: 0.90, green: 0.86, blue: 0.78, alpha: 1) }))
+            .onChange(of: spreadIndex) { _, newValue in
+                let unitsNow = units()
+                let spreadsNow = makeSpreads(count: unitsNow.count,
+                                              landscape: geoBox104.landscape)
+                guard !spreadsNow.isEmpty else { return }
+                let spread = spreadsNow[min(newValue, spreadsNow.count - 1)]
+                if let first = spread.first, unitsNow.indices.contains(first) {
+                    Breadcrumbs.log("p104 diary page i=\(newValue) id=\(unitsNow[first].id)")
+                }
+            }
         }
     }
 
-    private func makeSpreads(landscape: Bool) -> [[Int]] {
-        let pages = Array(0..<pageTitles.count)
+    private func makeSpreads(count: Int, landscape: Bool) -> [[Int]] {
+        let pages = Array(0..<count)
         guard landscape else { return pages.map { [$0] } }
         var spreads: [[Int]] = []
         var i = 0
@@ -198,24 +236,18 @@ struct DiaryBookRootView99: View {
     }
 
     private var header: some View {
-        HStack(spacing: 10) {
+        HStack(spacing: 8) {
             VStack(alignment: .leading, spacing: 1) {
                 Text("音乐日记本").font(.system(size: 21, weight: .bold)).foregroundColor(DiaryPaper99.ink)
                 Text("以歌为线索，记下每一个时刻").font(.system(size: 11)).foregroundColor(DiaryPaper99.dim)
             }
             Spacer()
-            // (101) 第 5 项：手写签名入口（签名板：手写 →
-            // 系统美化 → 存档，打印落款用美化版）。
-            Button {
-                showSignaturePad101 = true
-            } label: {
-                Image(systemName: "scribble.variable")
-                    .font(.system(size: 15, weight: .semibold))
-                    .frame(width: 34, height: 34)
-                    .background(Circle().fill(DiaryPaper99.card))
-                    .foregroundColor(DiaryPaper99.ink)
-            }
-            .accessibilityLabel("手写签名")
+            // (104) 面板四钮：日历/时间轴/歌曲/回收站（样板
+            // 的 overlay 面板入口）。
+            panelButton104(.calendar, icon: "calendar", label: "日历")
+            panelButton104(.timeline, icon: "list.bullet", label: "时间轴")
+            panelButton104(.songs, icon: "music.note.list", label: "按歌曲")
+            panelButton104(.trash, icon: "trash", label: "回收站")
             Button {
                 editorRequest = DiaryEditorRequest99(song: initialSong,
                                                      prefillText: store.editorAutosave)
@@ -238,7 +270,22 @@ struct DiaryBookRootView99: View {
         .padding(.top, 10)
     }
 
-    private func footer(spreads: [[Int]]) -> some View {
+    private func panelButton104(_ panel: DiaryPanel104, icon: String,
+                                label: String) -> some View {
+        Button {
+            panel104 = panel
+            Breadcrumbs.log("p104 diary panel k=\(panel.rawValue)")
+        } label: {
+            Image(systemName: icon)
+                .font(.system(size: 14, weight: .semibold))
+                .frame(width: 34, height: 34)
+                .background(Circle().fill(DiaryPaper99.card))
+                .foregroundColor(DiaryPaper99.ink)
+        }
+        .accessibilityLabel(label)
+    }
+
+    private func footer(spreads: [[Int]], units: [Unit104]) -> some View {
         HStack {
             Button {
                 withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
@@ -247,8 +294,7 @@ struct DiaryBookRootView99: View {
             } label: { Image(systemName: "chevron.left") }
             .disabled(spreadIndex == 0)
             Spacer()
-            Text(spreads[safe: min(spreadIndex, spreads.count - 1)]?
-                    .map { pageTitles[$0] }.joined(separator: " · ") ?? "")
+            Text(footerText104(spreads: spreads, units: units))
                 .font(.system(size: 12)).foregroundColor(DiaryPaper99.dim)
             Spacer()
             Button {
@@ -263,30 +309,391 @@ struct DiaryBookRootView99: View {
         .padding(.vertical, 10)
     }
 
+    private func footerText104(spreads: [[Int]], units: [Unit104]) -> String {
+        guard !units.isEmpty, !spreads.isEmpty else { return "" }
+        let idx = min(spreadIndex, spreads.count - 1)
+        var label = ""
+        if let first = spreads[idx].first, units.indices.contains(first) {
+            switch units[first] {
+            case .draft: label = "今日草稿"
+            case .entry(let entry): label = entry.dateKey
+            }
+        }
+        return "第 \(idx + 1) / \(spreads.count) 页 · \(label)"
+    }
+
     @ViewBuilder
-    private func pageView(_ page: Int) -> some View {
-        switch page {
-        case 0:
-            DiaryDraftPage99(store: store,
-                             onConfirmEdit: { text, song in
-                                 editorRequest = DiaryEditorRequest99(song: song, prefillText: text,
-                                                                      isDraftConfirm: true)
-                             })
-        case 1:
-            DiaryTimelinePage99(store: store, onSelect: { detailEntry = $0 })
-        case 2:
-            DiaryCalendarPage99(store: store, onSelect: { detailEntry = $0 })
-        case 3:
-            DiarySongsPage99(store: store, onSelect: { detailEntry = $0 })
-        default:
-            DiaryTrashPage99(store: store)
+    private func unitView(_ unit: Unit104) -> some View {
+        switch unit {
+        case .draft:
+            DiaryDraftPage104(store: store,
+                              onConfirmEdit: { text, song in
+                                  editorRequest = DiaryEditorRequest99(song: song, prefillText: text,
+                                                                       isDraftConfirm: true)
+                              },
+                              onDiscard: { draftDismissed104 = true })
+        case .entry(let entry):
+            DiaryEntryPage104(entry: entry,
+                              onEdit: {
+                                  editorRequest = DiaryEditorRequest99(
+                                      song: entry.songId.map {
+                                          DiarySong90(id: $0, title: entry.songTitle ?? "",
+                                                      artist: entry.songArtist ?? "",
+                                                      artwork: entry.songArtwork)
+                                      },
+                                      prefillText: entry.text, editing: entry)
+                              },
+                              onPrint: { shareEntry = entry },
+                              onTrash: { store.trashEntry(id: entry.id) },
+                              onSignature: { showSignaturePad101 = true })
+        }
+    }
+
+    private var emptyPage104: some View {
+        VStack(spacing: 10) {
+            Text("还没有日记")
+                .font(.system(size: 16, weight: .semibold))
+                .foregroundColor(DiaryPaper99.ink)
+            Text("听几首歌生成今日草稿，或点右上角「记一笔」。")
+                .font(.system(size: 12.5))
+                .foregroundColor(DiaryPaper99.dim)
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+    }
+
+    /// 面板容器：纸面底＋标题行（关闭钮），内容复用既有
+    /// 四个功能 View（原书页 1–4 的实现不重写，只换落点）。
+    @ViewBuilder
+    private func panelView104(_ panel: DiaryPanel104) -> some View {
+        ZStack {
+            DiaryPaper99.paper.ignoresSafeArea()
+            VStack(spacing: 0) {
+                HStack {
+                    Text(panelTitle104(panel))
+                        .font(.system(size: 16, weight: .bold))
+                        .foregroundColor(DiaryPaper99.ink)
+                    Spacer()
+                    Button("关闭") { panel104 = nil }
+                        .font(.system(size: 14, weight: .semibold))
+                        .foregroundColor(DiaryPaper99.accent)
+                }
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
+                switch panel {
+                case .calendar:
+                    DiaryCalendarPage99(store: store, onSelect: focusEntry104)
+                case .timeline:
+                    DiaryTimelinePage99(store: store, onSelect: focusEntry104)
+                case .songs:
+                    DiarySongsPage99(store: store, onSelect: focusEntry104)
+                case .trash:
+                    DiaryTrashPage99(store: store)
+                }
+            }
+        }
+    }
+
+    private func panelTitle104(_ panel: DiaryPanel104) -> String {
+        switch panel {
+        case .calendar: return "日历"
+        case .timeline: return "时间轴"
+        case .songs: return "按歌曲"
+        case .trash: return "回收站"
+        }
+    }
+
+    /// 面板内点条目：关面板＋翻书到该条目页。
+    private func focusEntry104(_ entry: DiaryEntry99) {
+        panel104 = nil
+        let units = units()
+        guard let idx = units.firstIndex(where: { $0.id == entry.id })
+        else { return }
+        withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
+            spreadIndex = geoBox104.landscape ? idx / 2 : idx
+        }
+        Breadcrumbs.log("p104 diary focus id=\(entry.id)")
+    }
+}
+
+/// 朝向引用盒（见 DiaryBookRootView99.geoBox104 注）。
+private final class DiaryGeoBox104 {
+    var landscape = false
+    func set(_ value: Bool) { landscape = value }
+}
+
+// MARK: - (104) 条目页（过审样板 DiaryPage 构成）
+
+/// 一页 = 一条日记（样板 DiaryPage.tsx 逐项）：日期行
+/// （大日期＋星期，右为日期）→ 歌曲封面小卡 → 格线正文
+/// （32pt 格线、条目字体、行距补到整格）→ 底行（左移入
+/// 回收站、右签名区）→ 贴纸全页覆盖层（fx/fy 全页相对
+/// 坐标，与打印纸面同口径）。心情不上页（样板定版）；
+/// 条目无 title/tags 字段，样板对应两行无数据来源、不
+/// 渲染（不造假）。点页身进编辑器（编辑器内为页式画
+/// 布＋底部抽屉，(102) 已落；样板的就地编辑为已知偏
+/// 差，记于审计表）。
+struct DiaryEntryPage104: View {
+    let entry: DiaryEntry99
+    let onEdit: () -> Void
+    let onPrint: () -> Void
+    let onTrash: () -> Void
+    let onSignature: () -> Void
+    @ObservedObject private var sigStore = DiarySignature99.shared
+    @ObservedObject private var fontSig102 = DiaryFontSignature102.shared
+
+    private static let grid: CGFloat = 32
+
+    private var entryDate: Date {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy-MM-dd"
+        return f.date(from: entry.dateKey) ?? Date()
+    }
+
+    private var prettyDate: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy年M月d日"
+        return f.string(from: entryDate)
+    }
+
+    private var weekday: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "EEEE"
+        return f.string(from: entryDate)
+    }
+
+    /// 行距补到 32 整格（格线贴线口径）：spacing = 格高
+    /// − 字体行高。
+    private var bodyLineSpacing: CGFloat {
+        let name = entry.fontName ?? "Songti SC"
+        let ui = UIFont(name: name, size: 16) ?? UIFont.systemFont(ofSize: 16)
+        return Self.grid - ui.lineHeight
+    }
+
+    var body: some View {
+        ZStack(alignment: .topLeading) {
+            VStack(alignment: .leading, spacing: 0) {
+                HStack(alignment: .center) {
+                    Text(prettyDate)
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundColor(DiaryPaper99.ink)
+                    Text(weekday)
+                        .font(.system(size: 13))
+                        .foregroundColor(DiaryPaper99.dim)
+                    Spacer()
+                    Text(entry.dateKey)
+                        .font(.system(size: 12))
+                        .foregroundColor(DiaryPaper99.dim)
+                }
+                .frame(height: Self.grid)
+                if let title = entry.songTitle {
+                    HStack(spacing: 10) {
+                        DiaryCoverView99(raw: entry.songArtwork, size: 52)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(title)
+                                .font(.system(size: 14.5, weight: .semibold))
+                                .foregroundColor(DiaryPaper99.ink)
+                                .lineLimit(1)
+                            Text(entry.songArtist ?? "")
+                                .font(.system(size: 12))
+                                .foregroundColor(DiaryPaper99.dim)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10)
+                        .fill(DiaryPaper99.card))
+                    .padding(.top, 24)
+                }
+                ZStack(alignment: .topLeading) {
+                    DiaryRuledLines104()
+                    Text(entry.text)
+                        .font(DiaryBodyFont102.font(name: entry.fontName, size: 16))
+                        .foregroundColor(DiaryPaper99.ink)
+                        .lineSpacing(bodyLineSpacing)
+                        .padding(.top, 5)
+                }
+                .padding(.top, Self.grid)
+                .frame(maxWidth: .infinity, maxHeight: .infinity,
+                       alignment: .topLeading)
+                HStack(alignment: .bottom, spacing: 14) {
+                    Button(action: onTrash) {
+                        Text("移入回收站")
+                            .font(.system(size: 13))
+                            .foregroundColor(DiaryPaper99.dim)
+                    }
+                    Spacer()
+                    Button(action: onPrint) {
+                        Image(systemName: "printer")
+                            .font(.system(size: 15))
+                            .foregroundColor(DiaryPaper99.dim)
+                    }
+                    .accessibilityLabel("打印这一页")
+                    Button(action: onSignature) {
+                        signatureZone104
+                    }
+                    .accessibilityLabel("签名")
+                }
+                .padding(.top, 12)
+            }
+            .padding(.horizontal, 24)
+            .padding(.top, 26)
+            .padding(.bottom, 16)
+            // 贴纸全页覆盖（读态不可拖，点按透传到页身进
+            // 编辑器——样板读态点页即编辑，同义）。
+            if !entry.placements.isEmpty {
+                DiaryPlacementCanvas99(placements: entry.placements)
+                    .allowsHitTesting(false)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture { onEdit() }
+    }
+
+    @ViewBuilder
+    private var signatureZone104: some View {
+        if fontSig102.channel == "font", fontSig102.hasFontSignature {
+            Text(fontSig102.text)
+                .font(.custom(fontSig102.fontName, size: 22))
+                .foregroundColor(DiaryPaper99.ink)
+        } else if let image = sigStore.beautifiedImage {
+            Image(uiImage: image)
+                .resizable().scaledToFit().frame(height: 40)
+        } else {
+            Text("签名")
+                .font(.custom("Kaiti SC", size: 15))
+                .foregroundColor(DiaryPaper99.dim)
+                .padding(.bottom, 2)
+                .overlay(alignment: .bottom) {
+                    Rectangle()
+                        .fill(DiaryPaper99.dim.opacity(0.6))
+                        .frame(height: 1)
+                }
         }
     }
 }
 
-private extension Array {
-    subscript(safe index: Int) -> Element? {
-        indices.contains(index) ? self[index] : nil
+/// 32pt 格线（样板 paper-lines 的原生等效：横线每 32pt
+/// 一行，淡墨色）。
+private struct DiaryRuledLines104: View {
+    var body: some View {
+        Canvas { context, size in
+            var path = Path()
+            var y: CGFloat = 32
+            while y < size.height {
+                path.move(to: CGPoint(x: 0, y: y))
+                path.addLine(to: CGPoint(x: size.width, y: y))
+                y += 32
+            }
+            context.stroke(path,
+                           with: .color(DiaryPaper99.ink.opacity(0.14)),
+                           lineWidth: 1)
+        }
+    }
+}
+
+// MARK: - (104) 草稿页（条目页语法）
+
+/// 今日草稿作书的第一页：日期行＋「今日草稿」徽标＋今
+/// 日歌曲清单＋草稿正文＋页内三钮（存进日记本＝直接确
+/// 认、编辑并确认、丢弃）。数据与确认通路复用
+/// DiaryStore99 既有口径（todayPlays/draftText/
+/// confirmTodayDraft），只换呈现为页形态。
+struct DiaryDraftPage104: View {
+    @ObservedObject var store: DiaryStore99
+    let onConfirmEdit: (String, DiarySong90?) -> Void
+    let onDiscard: () -> Void
+
+    private var prettyToday: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "yyyy年M月d日"
+        return f.string(from: Date())
+    }
+
+    private var weekdayToday: String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "zh_CN")
+        f.dateFormat = "EEEE"
+        return f.string(from: Date())
+    }
+
+    var body: some View {
+        let plays = store.todayPlays()
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(alignment: .center) {
+                Text(prettyToday)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundColor(DiaryPaper99.ink)
+                Text(weekdayToday)
+                    .font(.system(size: 13))
+                    .foregroundColor(DiaryPaper99.dim)
+                Spacer()
+                Text("今日草稿")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundColor(DiaryPaper99.accent)
+                    .padding(.horizontal, 10).padding(.vertical, 4)
+                    .background(Capsule()
+                        .fill(DiaryPaper99.accent.opacity(0.12)))
+            }
+            .frame(height: 32)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    ForEach(plays, id: \.track.id) { play in
+                        HStack(spacing: 10) {
+                            DiaryCoverView99(
+                                raw: play.track.artworkURL?.absoluteString,
+                                size: 40)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(play.track.title)
+                                    .font(.system(size: 13.5, weight: .semibold))
+                                    .foregroundColor(DiaryPaper99.ink)
+                                    .lineLimit(1)
+                                Text(play.track.artist)
+                                    .font(.system(size: 11.5))
+                                    .foregroundColor(DiaryPaper99.dim)
+                                    .lineLimit(1)
+                            }
+                            Spacer()
+                            Text("\(play.playsToday) 次")
+                                .font(.system(size: 12))
+                                .foregroundColor(DiaryPaper99.dim)
+                        }
+                    }
+                    Text(store.draftText(plays: plays))
+                        .font(.system(size: 12.5))
+                        .foregroundColor(DiaryPaper99.dim)
+                        .padding(.top, 4)
+                }
+                .padding(.top, 20)
+            }
+            HStack(spacing: 10) {
+                Button("存进日记本") { _ = store.confirmTodayDraft() }
+                    .font(.system(size: 14, weight: .semibold))
+                    .padding(.horizontal, 16).padding(.vertical, 9)
+                    .background(Capsule().fill(DiaryPaper99.accent))
+                    .foregroundColor(.white)
+                Button("编辑并确认") {
+                    let top = plays.first.map { DiarySong90(track: $0.track) }
+                    onConfirmEdit(store.draftText(plays: plays), top)
+                }
+                .font(.system(size: 14, weight: .semibold))
+                .padding(.horizontal, 16).padding(.vertical, 9)
+                .background(Capsule().stroke(DiaryPaper99.accent, lineWidth: 1.2))
+                .foregroundColor(DiaryPaper99.accent)
+                Button("丢弃", action: onDiscard)
+                    .font(.system(size: 14))
+                    .foregroundColor(DiaryPaper99.dim)
+                Spacer()
+            }
+            .padding(.top, 12)
+        }
+        .padding(.horizontal, 24)
+        .padding(.top, 26)
+        .padding(.bottom, 16)
     }
 }
 
