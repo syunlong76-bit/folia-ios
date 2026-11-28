@@ -77,7 +77,8 @@ final class SearchDeck104: UIView {
         buildContent()
         bindEngine()
         progressDriver.onFraction = { [weak self] fraction in
-            self?.setProgress(fraction)
+            guard let self else { return }
+            self.setProgress(fraction)
         }
         let tap = UITapGestureRecognizer(target: self,
                                          action: #selector(bodyTapped(_:)))
@@ -315,18 +316,23 @@ final class SearchDeck104: UIView {
     private func bindEngine() {
         engine.$currentTrack
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] track in self?.trackChanged(track) }
+            .sink { [weak self] track in
+                guard let self else { return }
+                self.trackChanged(track)
+            }
             .store(in: &cancellables)
         engine.$currentArtwork
             .receive(on: DispatchQueue.main)
             .sink { [weak self] image in
-                if let image { self?.coverView.image = image }
+                guard let self, let image else { return }
+                self.coverView.image = image
             }
             .store(in: &cancellables)
         engine.$isPlaying
             .receive(on: DispatchQueue.main)
             .sink { [weak self] playing in
-                self?.playButton.setImage(
+                guard let self else { return }
+                self.playButton.setImage(
                     DeckGlyph82.image(playing ? .pause : .play, pointSize: 21),
                     for: .normal)
             }
@@ -334,7 +340,10 @@ final class SearchDeck104: UIView {
         NotificationCenter.default.publisher(
             for: .foliaMiniPlayerThemeChanged)
             .receive(on: DispatchQueue.main)
-            .sink { [weak self] _ in self?.applyTheme() }
+            .sink { [weak self] _ in
+                guard let self else { return }
+                self.applyTheme()
+            }
             .store(in: &cancellables)
         applyTheme()
     }
@@ -440,7 +449,8 @@ final class SearchDeck104: UIView {
         guard !isHidden, engine.currentTrack != nil else { return }
         idleTimer = Timer.scheduledTimer(withTimeInterval: 5,
                                          repeats: false) { [weak self] _ in
-            self?.setCollapsed(true)
+            guard let self else { return }
+            self.setCollapsed(true)
         }
     }
 
@@ -549,7 +559,10 @@ final class SearchDeckHostVC104: UIViewController {
 
         deck.translatesAutoresizingMaskIntoConstraints = false
         deck.consoleHost = self
-        deck.onOpenStage = { [weak self] in self?.openStageFromDeck() }
+        deck.onOpenStage = { [weak self] in
+            guard let self else { return }
+            self.openStageFromDeck()
+        }
         view.addSubview(deck)
 
         deckWidthC = deck.widthAnchor.constraint(

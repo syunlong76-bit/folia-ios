@@ -211,7 +211,7 @@ struct DiaryBookRootView99: View {
                     ? UIColor(red: 0.07, green: 0.07, blue: 0.09, alpha: 1)
                     : UIColor(red: 0.90, green: 0.86, blue: 0.78, alpha: 1) }))
             .onChange(of: spreadIndex) { _, newValue in
-                let unitsNow = units()
+                let unitsNow = self.units()
                 let spreadsNow = makeSpreads(count: unitsNow.count,
                                               landscape: geoBox104.landscape)
                 guard !spreadsNow.isEmpty else { return }
