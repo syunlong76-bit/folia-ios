@@ -3,9 +3,11 @@ import UIKit
 /// (101) 第 1 项：歌单页排版构图定版数值（样板 Space
 /// ge-dan-ye-pai-ban-yang-ban 的最终 CSS 即规格蓝本，逐项
 /// 对应移植；与原生现状冲突处以样板为准）。
-/// - 缝宽：竖屏窄屏（maxW ≤ 520）148；横屏宽屏（minW ≥
-///   640）252；其余 clamp(188, 48vw, 330)。原生 120 书脊档
-///   为样板未描绘的收起态，保留不动；展开档改走本表。
+/// - 缝宽：竖屏窄屏（maxW ≤ 520）188；横屏宽屏（minW ≥
+///   640）252；其余 clamp(188, 48vw, 330)。（(106) 覆盖：
+///   样板 v9 定版竖屏 188，原 (101) 的 148 作废；原生 120
+///   书脊档自 (106) 起歌单页不再使用——缝只在网格视图以
+///   展开档常驻，其余视图无缝。）
 /// - 内容头：标题 20 粗 / 总数 15。
 /// - 网格：2 列（内容宽 ≥ 560 时 3 列）、行距 20 / 列距
 ///   14、封面圆角 18、卡名 15/600、歌手 13。
@@ -25,11 +27,12 @@ enum PlaylistLayout101 {
     /// 书脊（收起）档：样板未描绘，原生既有 120 保留。
     static let seamSpineWidth: CGFloat = 120
 
-    /// 展开档缝宽（样板 .app{--seam} 媒体查询三档）。
+    /// 展开档缝宽（样板 .app{--seam} 媒体查询三档；
+    /// (106) v9 定版：竖屏 188 / 横屏 252）。
     static func seamExpandedWidth(viewWidth: CGFloat,
                                   viewHeight: CGFloat) -> CGFloat {
         if viewWidth <= 520, viewHeight >= viewWidth {
-            return 148
+            return 188
         }
         if viewWidth >= 640 {
             return 252
@@ -81,4 +84,27 @@ enum PlaylistLayout101 {
     /// 行）中心偏移（相对台中心）。
     static let capsuleRowTopOffset: CGFloat = -27
     static let capsuleRowBottomOffset: CGFloat = 25
+
+    // MARK: (106) 歌单页顶行与样式菜单（样板 v9 定版）
+
+    /// 顶行：左歌单名 17/600＋计数 13（纯文字无底）；右
+    /// 搜索/样式两钮 40×40 裸字形（字形 21＋投影）。
+    static let topTitleFont: CGFloat = 17
+    static let topCountFont: CGFloat = 13
+    static let topButtonSide: CGFloat = 40
+    static let topButtonGlyph: CGFloat = 21
+    static let topInset: CGFloat = 12
+    static let topOffsetY: CGFloat = 10
+
+    /// 样式菜单：宽 176、内距 6、圆角 18、行高 44（字形
+    /// 20＋名 15）、选中行白 0.13 底＋600 字重。
+    static let styleMenuWidth: CGFloat = 176
+    static let styleMenuPadding: CGFloat = 6
+    static let styleMenuCorner: CGFloat = 18
+    static let styleMenuRowHeight: CGFloat = 44
+    static let styleMenuRowCorner: CGFloat = 12
+    static let styleMenuGlyph: CGFloat = 20
+    static let styleMenuFont: CGFloat = 15
+    /// 菜单顶距（安全区顶起算，样板 58）。
+    static let styleMenuTop: CGFloat = 58
 }

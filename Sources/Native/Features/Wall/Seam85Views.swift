@@ -405,6 +405,13 @@ final class SeamMaster: UIView {
     /// 歌单展开档标记（展开工具钮选中态）。
     var isExpanded94: Bool = false { didSet { refreshTools() } }
 
+    /// (106) 歌单页 v9 定版开关（仅歌单适配类开启，主页
+    /// 默认关、零影响）：缝内不放视图切换胶囊（切换统一
+    /// 走歌单页顶行样式菜单）；缝头不放折叠钮（缝无收起
+    /// 态——网格常驻、切走整缝消失，由宿主门控负责）。
+    var hidesLayoutCapsule106: Bool = false { didSet { setNeedsLayout() } }
+    var hidesFoldButton106: Bool = false { didSet { applyHeader() } }
+
     // MARK: 视图
 
     private let host94: String
@@ -1012,6 +1019,9 @@ final class SeamMaster: UIView {
             headerTitleButton.isHidden = true
             backButton.isHidden = false
         }
+        // (106) 歌单缝无折叠态：折叠钮隐藏（主页 .homeTitle
+        // 的折叠钮是另一语义，不受本开关影响时才置真）。
+        foldButton.isHidden = hidesFoldButton106
     }
 
     private func refreshTabs() {
@@ -1953,21 +1963,28 @@ final class SeamMaster: UIView {
         }
         y += 10
         // 排版胶囊：横排三段（窄缝 62 宽、宽档 132 宽）。
-        let capsuleW: CGFloat = contentW < 100 ? 62 : min(132, contentW - 8)
-        capsuleView.frame = CGRect(
-            x: (contentW - capsuleW) / 2, y: y, width: capsuleW, height: 36)
-        let inner = capsuleW - 6
-        let buttonW = (inner - 4) / 3
-        for (index, button) in capsuleButtons.enumerated() {
-            button.frame = CGRect(
-                x: 3 + CGFloat(index) * (buttonW + 2), y: 3,
-                width: buttonW, height: 30)
-            // (95) 6b：全圆角 pill——半径按实际尺寸钳制，
-            // 帧（宽档/窄档）变化时随布局更新。
-            button.layer.cornerRadius =
-                min(button.frame.width, button.frame.height) / 2
+        // (106) 歌单缝隐藏胶囊：整段不占位（切换走顶行样式
+        // 菜单），主页不受影响。
+        if hidesLayoutCapsule106 {
+            capsuleView.isHidden = true
+        } else {
+            capsuleView.isHidden = false
+            let capsuleW: CGFloat = contentW < 100 ? 62 : min(132, contentW - 8)
+            capsuleView.frame = CGRect(
+                x: (contentW - capsuleW) / 2, y: y, width: capsuleW, height: 36)
+            let inner = capsuleW - 6
+            let buttonW = (inner - 4) / 3
+            for (index, button) in capsuleButtons.enumerated() {
+                button.frame = CGRect(
+                    x: 3 + CGFloat(index) * (buttonW + 2), y: 3,
+                    width: buttonW, height: 30)
+                // (95) 6b：全圆角 pill——半径按实际尺寸钳制，
+                // 帧（宽档/窄档）变化时随布局更新。
+                button.layer.cornerRadius =
+                    min(button.frame.width, button.frame.height) / 2
+            }
+            y += 36
         }
-        y += 36
         return y
     }
 
@@ -2301,19 +2318,26 @@ final class PlaylistSeam85View: UIView {
     private func build() {
         backgroundColor = .clear
         master.header = .playlist
+        // (106) v9 定版：歌单缝无视图胶囊、无折叠钮、无
+        // 展开/收起态（网格常驻展开、其余视图整缝消失，
+        // 由宿主门控驱动；母版开关仅本适配类开启）。
+        master.hidesLayoutCapsule106 = true
+        master.hidesFoldButton106 = true
         master.setTabs(titles: ["歌单"], selected: 0, note: nil)
         master.setLayoutMode(layoutMode93, notify: false)
         master.setTools([
             SeamMaster.ToolItem(tool: .search, glyph: .search, label: "搜索"),
             SeamMaster.ToolItem(tool: .settings, glyph: .gear, label: "设置"),
             SeamMaster.ToolItem(tool: .append, glyph: .list, label: "加入队列"),
-            SeamMaster.ToolItem(tool: .expand, glyph: .expandCorners, label: "展开信息条"),
             SeamMaster.ToolItem(tool: .console, glyph: .consoleNotes, label: "控制台"),
         ])
         master.onBack = { [weak self] in self?.backTapped() }
         master.onFold = { [weak self] in self?.foldTapped() }
-        // 页签（歌单名）点按沿旧书脊标题语义：展开/收起。
-        master.onTabSelected = { [weak self] _ in self?.expandTapped() }
+        // (106) 页签（歌单名）点按不再触发展开/收起（无此
+        // 状态）；保留落痕便于真机判读。
+        master.onTabSelected = { _ in
+            Breadcrumbs.log("sidebar85 tap dest=tab106 noop")
+        }
         master.onEntry = { [weak self] entry in
             switch entry {
             case .liked:

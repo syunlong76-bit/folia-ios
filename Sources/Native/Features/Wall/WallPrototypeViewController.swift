@@ -314,14 +314,27 @@ final class WallPrototypeViewController: UIViewController,
     /// (85) 第 1 条：歌单页世界缝（PlaylistSeam85View）＋
     /// 侧边竖标签＋开合补间（与主页缝同骨架、构成不同）。
     private var playlistSeam85: PlaylistSeam85View?
-    /// (102) 第 1 项：海报视图＋页头三件（缝收起头像/
-    /// 右上搜索/视图切换胶囊），样板 v4 定版。
+    /// (102) 第 1 项：海报视图本体（页头三件自 (106) 起
+    /// 由顶行＋样式菜单接替，见下方 106 状态）。
     private var posterView102: PosterView102?
     private var posterActive102 = false
-    private var avatarButton102: UIButton?
     private var searchButton102: UIButton?
-    private var viewCapsule102: UIView?
-    private var viewCapsuleButtons102: [UIButton] = []
+    /// (106) 歌单页顶行＋样式菜单（样板 v9 定版）：左歌
+    /// 单名/计数纯文字（网格视图隐去）、右搜索＋样式钮
+    /// （钮面＝当前视图字形）、毛玻璃悬浮菜单＋点外收起
+    /// 命中层。头像钮与中央视图胶囊（102）整组退役。
+    private var topTitleLabel106: UILabel?
+    private var topCountLabel106: UILabel?
+    private var styleButton106: UIButton?
+    private var styleMenu106: UIVisualEffectView?
+    private var styleMenuRows106: [UIButton] = []
+    private var styleMenuDismiss106: UIControl?
+    private var styleMenuOpen106 = false
+    /// (106) 缝门控（宿主本地态，不写共享持久键
+    /// SeamState85.levelHidden——那是主页缝共用状态）：
+    /// 网格视图开缝（常驻展开档）、其余视图/海报关缝。
+    /// nil＝尚未结算。
+    private var seamGateOpen106: Bool?
     private var seamEdgeTab85: SeamEdgeTab85View?
     private var seamPlanned85 = false
     private var seamExpanded85 = false
@@ -486,8 +499,8 @@ final class WallPrototypeViewController: UIViewController,
         installPlaylistSeam85()
         // port91（任务 8）：歌单三版式切换器＋A/B 两套视图装配。
         installPlaylistLayout91()
-        // (102) 第 1 项：海报视图与页头三件装配。
-        installPosterChrome102()
+        // (102) 海报视图本体＋(106) 顶行与样式菜单装配。
+        installPlaylistChrome106()
 
         // (76) ④左缘滑动返回（与 ⑧ 摘 ✕ 互为前提、同批落
         // 地）：落点 = closeTapped 既有契约（背板在场时
@@ -2157,15 +2170,15 @@ final class WallPrototypeViewController: UIViewController,
         view.addSubview(seam)
         seam.setPlaylist85(title: playlistTitle ?? "", count: entries.count)
         seam.onBack = { [weak self] in self?.closeTapped() }
-        seam.onFold = { [weak self] in self?.foldPlaylistSeam85() }
+        // (106) onFold/onExpandChange 解线：歌单缝无折叠/
+        // 展开态，显隐由 refreshPlaylistSeamGate106 按视图
+        // 门控（网格开、其余关）；母版折叠钮已隐藏、展开
+        // 工具已撤，回调无触发源。
         seam.onPlayAll = { [weak self] in
             guard let self, !self.entries.isEmpty else { return }
             self.startQueueAt(queueIndex: 0)
         }
         seam.onAppendQueue = { [weak self] in self?.appendPlaylistToQueue85() }
-        seam.onExpandChange = { [weak self] expanded in
-            self?.setPlaylistSeamExpanded85(expanded)
-        }
         // (93) C3：歌单缝三段胶囊——写同一持久化键＋走交
         // 叉淡化切换（switchPlaylistLayout93，不整墙重刷）。
         seam.onLayoutMode93 = { [weak self] mode in
@@ -2223,37 +2236,57 @@ final class WallPrototypeViewController: UIViewController,
         let tab = SeamEdgeTab85View()
         tab.isHidden = true
         view.addSubview(tab)
-        tab.onTap = { [weak self] in self?.reopenPlaylistSeam85() }
+        // (106) 侧边标签不再接重开：缝显隐由视图门控决定，
+        // 标签恒隐（updatePlaylistSeam85Frame 内收口）。
         seamEdgeTab85 = tab
         wallLayout.seamEnabled85 = true
         Breadcrumbs.log("seam85 on host=wall hidden=\(SeamState85.levelHidden ? 1 : 0)")
     }
 
-    /// 展开档切换：开口目标 120↔300 补间（0.36s），内容
-    /// 套随之换（书脊/完整条）；相机让位按新开口重规划
-    /// （preferX 保锚、只让相机）。（(95) 6a：基础档随
-    /// 歌单缝宽 64→120 同步。）
-    private func setPlaylistSeamExpanded85(_ expanded: Bool) {
-        seamExpanded85 = expanded
-        playlistSeam85?.setExpanded85(expanded)
-        // (101) 第 1 项：展开档缝宽改走样板定版响应式三档
-        // （竖屏窄屏 148 / 横屏宽屏 252 / 其余 clamp(188,
-        // 48vw, 330)）；收起书脊档 120 为样板未描绘的原生
-        // 状态，保留。
-        let target: CGFloat = expanded
+    /// (106) 当前视图名（面包屑/门控共用）：海报优先，
+    /// 其余按 playlistLayout91（wall/magazine/shelf 对外
+    /// 名 grid/list/polaroid 与样板菜单同名）。
+    private func currentViewName106() -> String {
+        if posterActive102 { return "poster" }
+        return ["grid", "list", "polaroid"][max(0, min(2, playlistLayout91))]
+    }
+
+    /// (106) 缝门控收口（样板 v9 定版）：缝只在网格视图
+    /// 出现——常驻展开档（竖屏 188/横屏 252，单源
+    /// PlaylistLayout101.seamExpandedWidth），无书脊/收起
+    /// 态；列表/拍立得/海报下整缝关（开口补间到 0、缝视
+    /// 图隐藏）。门控只写宿主本地 seamGateOpen106，不碰
+    /// 共享持久键 SeamState85.levelHidden（主页缝状态不
+    /// 许被歌单页串改）。调用点：首规划、版式切换提交收
+    /// 口（p99SettleLayoutCommit）、海报进/出、旋转落定。
+    /// 同态且宽度已达目标时不重复补间（旋转换档除外）。
+    private func refreshPlaylistSeamGate106() {
+        let open = !posterActive102 && playlistLayout91 == 0
+        let target: CGFloat = open
             ? PlaylistLayout101.seamExpandedWidth(
                 viewWidth: view.bounds.width,
                 viewHeight: view.bounds.height)
-            : PlaylistLayout101.seamSpineWidth
-        Breadcrumbs.log("p101 layout seam target=\(Int(target)) open=\(expanded ? 1 : 0)")
-        var originX: CGFloat?
-        if let anchor = wallLayout.seamAnchorX85 {
-            originX = wallLayout.seamPlan85(openWidth: target, preferX: anchor).originX
+            : 0
+        let changed = seamGateOpen106 != open
+        seamGateOpen106 = open
+        seamExpanded85 = open
+        playlistSeam85?.setExpanded85(open)
+        if seamPlanned85,
+           changed || abs(wallLayout.seamOpenWidth85 - target) > 0.5 {
+            var originX: CGFloat?
+            if open {
+                let plan = wallLayout.seamPlan85(
+                    openWidth: target, preferX: wallLayout.seamAnchorX85)
+                wallLayout.seamAnchorX85 = plan.anchor
+                originX = plan.originX
+            }
+            startSeamTween85(toWidth: target, toOriginX: originX)
         }
-        startSeamTween85(toWidth: target, toOriginX: originX)
-        Breadcrumbs.log("seam85 expand host=wall on=\(expanded ? 1 : 0)")
+        if changed {
+            Breadcrumbs.log("p106 layout view=\(currentViewName106())"
+                + " seam=\(open ? "on" : "off")")
+        }
         applyCapsuleLayout101()
-        syncPosterChrome102()
     }
 
     /// (101) 第 1 项：竖屏开缝时胶囊台两行紧凑排布（样板
@@ -2339,14 +2372,26 @@ final class WallPrototypeViewController: UIViewController,
             + " seam=\(Int(seamW))")
     }
 
-    // MARK: - (102) 第 1 项：海报视图与页头三件
+    // MARK: - (102) 海报视图本体＋(106) 歌单页顶行与样式菜单
 
-    /// 装配：海报层（台之下、墙之上）＋左上头像（缝收起
-    /// 态可见、点按展开缝）＋右上搜索钮（常驻、与缝内搜
-    /// 索同落点）＋顶部中央视图切换胶囊（四格：墙/杂志/
-    /// 唱片架/海报，缝展开时隐藏、与样板「缝收起时常驻」
-    /// 同口径）。
-    private func installPosterChrome102() {
+    /// (106) 样式四视图字形（菜单行/钮面共用）：网格/列
+    /// 表/拍立得/海报，与 (102) 胶囊同字形源。
+    private func styleGlyph106(_ index: Int) -> UIImage? {
+        let size = PlaylistLayout101.styleMenuGlyph
+        switch index {
+        case 0: return SeamGlyph93.image(.layoutGrid, pointSize: size)
+        case 1: return SeamGlyph93.image(.layoutList, pointSize: size)
+        case 2: return SeamGlyph93.image(.layoutAlbum, pointSize: size)
+        default: return PosterGlyph102.image(pointSize: size)
+        }
+    }
+
+    /// 装配：海报层（台之下、墙之上）＋(106) 顶行（左歌
+    /// 单名＋计数纯文字、右搜索＋样式钮）＋样式悬浮菜单
+    /// 与点外收起层。(102) 的左上头像与中央视图胶囊整
+    /// 组退役（头像按 Miller 02:34/02:53 定版删除、切换
+    /// 统一走样式菜单）。
+    private func installPlaylistChrome106() {
         let poster = PosterView102()
         poster.isHidden = true
         poster.translatesAutoresizingMaskIntoConstraints = false
@@ -2374,153 +2419,288 @@ final class WallPrototypeViewController: UIViewController,
         ])
         posterView102 = poster
 
-        let side = PlaylistLayout102.headerButtonSide
-        let avatar = UIButton(type: .custom)
-        avatar.clipsToBounds = true
-        avatar.layer.cornerRadius = side / 2
-        avatar.backgroundColor = UIColor.white.withAlphaComponent(0.10)
-        avatar.setImage(UIImage(systemName: "person.crop.circle"),
-                        for: .normal)
-        avatar.tintColor = .white
-        avatar.translatesAutoresizingMaskIntoConstraints = false
-        avatar.addTarget(self, action: #selector(avatarTapped102),
-                         for: .touchUpInside)
-        view.addSubview(avatar)
-        avatarButton102 = avatar
-        if let cover = playlistCoverUrl {
-            Task { [weak self] in
-                // (104) 海报线同根：原始 picUrl 须先过 /img
-                // 网关再拉（直传相对路径必失败，见海报页注）。
-                guard let url = NativeCoverLoader.shared
-                    .proxiedURLString(cover, tier: 200) else { return }
-                let img = await NativeCoverLoader.shared.image(
-                    for: url, tier: 200)
-                guard let self, let img else { return }
-                self.avatarButton102?.setImage(
-                    img.withRenderingMode(.alwaysOriginal), for: .normal)
-                self.avatarButton102?.imageView?.contentMode = .scaleAspectFill
-            }
-        }
+        // 顶行左：歌单名（17/600）＋计数（13，60%）纯文字，
+        // 直接落在页面背景上（投影保可读），无面板无底色。
+        let title = UILabel()
+        title.text = playlistTitle ?? "歌单"
+        title.font = .systemFont(ofSize: PlaylistLayout101.topTitleFont,
+                                 weight: .semibold)
+        title.textColor = .white
+        title.lineLimit = 1
+        title.layer.shadowColor = UIColor.black.cgColor
+        title.layer.shadowOpacity = 0.5
+        title.layer.shadowRadius = 5
+        title.layer.shadowOffset = CGSize(width: 0, height: 1)
+        title.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(title)
+        topTitleLabel106 = title
+        let count = UILabel()
+        count.text = "\(entries.count) 首"
+        count.font = .systemFont(ofSize: PlaylistLayout101.topCountFont)
+        count.textColor = UIColor.white.withAlphaComponent(0.6)
+        count.layer.shadowColor = UIColor.black.cgColor
+        count.layer.shadowOpacity = 0.5
+        count.layer.shadowRadius = 5
+        count.layer.shadowOffset = CGSize(width: 0, height: 1)
+        count.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(count)
+        topCountLabel106 = count
 
-        let search = UIButton(type: .custom)
-        search.clipsToBounds = true
-        search.layer.cornerRadius = side / 2
-        search.backgroundColor = UIColor.black.withAlphaComponent(0.35)
-        search.setImage(SeamGlyph93.image(.search, pointSize: 18),
-                        for: .normal)
-        search.tintColor = .white
-        search.translatesAutoresizingMaskIntoConstraints = false
+        // 顶行右：搜索＋样式，两钮 40×40 裸字形（样板口
+        // 径，无圆底），样式钮面＝当前视图字形。
+        func topButton106() -> UIButton {
+            let b = UIButton(type: .custom)
+            b.tintColor = .white
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.layer.shadowColor = UIColor.black.cgColor
+            b.layer.shadowOpacity = 0.5
+            b.layer.shadowRadius = 3
+            b.layer.shadowOffset = CGSize(width: 0, height: 1)
+            view.addSubview(b)
+            return b
+        }
+        let search = topButton106()
+        search.setImage(SeamGlyph93.image(
+            .search, pointSize: PlaylistLayout101.topButtonGlyph), for: .normal)
+        search.accessibilityLabel = "搜索"
         search.addTarget(self, action: #selector(searchTapped102),
                          for: .touchUpInside)
-        view.addSubview(search)
         searchButton102 = search
-
-        let capsule = UIView()
-        capsule.backgroundColor = UIColor.black.withAlphaComponent(0.35)
-        capsule.layer.cornerRadius = 18
-        capsule.translatesAutoresizingMaskIntoConstraints = false
-        view.addSubview(capsule)
-        viewCapsule102 = capsule
-        let glyphs: [UIImage?] = [
-            SeamGlyph93.image(.layoutGrid, pointSize: 17),
-            SeamGlyph93.image(.layoutList, pointSize: 17),
-            SeamGlyph93.image(.layoutAlbum, pointSize: 17),
-            PosterGlyph102.image(pointSize: 17),
-        ]
-        for (i, glyph) in glyphs.enumerated() {
-            let b = UIButton(type: .custom)
-            b.tag = i
-            b.tintColor = .white
-            b.setImage(glyph, for: .normal)
-            b.layer.cornerRadius = 14
-            b.translatesAutoresizingMaskIntoConstraints = false
-            b.addTarget(self, action: #selector(viewCapsuleTapped102(_:)),
+        let style = topButton106()
+        style.accessibilityLabel = "切换样式"
+        style.addTarget(self, action: #selector(styleButtonTapped106),
                         for: .touchUpInside)
-            capsule.addSubview(b)
-            viewCapsuleButtons102.append(b)
+        styleButton106 = style
+
+        let side = PlaylistLayout101.topButtonSide
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            title.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor,
+                constant: PlaylistLayout101.topOffsetY),
+            title.trailingAnchor.constraint(
+                lessThanOrEqualTo: search.leadingAnchor, constant: -16),
+            count.leadingAnchor.constraint(
+                equalTo: title.trailingAnchor, constant: 10),
+            count.centerYAnchor.constraint(equalTo: title.centerYAnchor),
+            style.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -PlaylistLayout101.topInset),
+            style.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 2),
+            style.widthAnchor.constraint(equalToConstant: side),
+            style.heightAnchor.constraint(equalToConstant: side),
+            search.trailingAnchor.constraint(
+                equalTo: style.leadingAnchor, constant: -4),
+            search.topAnchor.constraint(equalTo: style.topAnchor),
+            search.widthAnchor.constraint(equalToConstant: side),
+            search.heightAnchor.constraint(equalToConstant: side),
+        ])
+
+        // 点外收起命中层：菜单之下、内容之上，展开时才接
+        // 命中（这次点按只收菜单、不落到选歌/播放上）。
+        let dismiss = UIControl()
+        dismiss.isHidden = true
+        dismiss.translatesAutoresizingMaskIntoConstraints = false
+        dismiss.addTarget(self, action: #selector(styleMenuDismissTapped106),
+                          for: .touchUpInside)
+        view.addSubview(dismiss)
+        NSLayoutConstraint.activate([
+            dismiss.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            dismiss.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            dismiss.topAnchor.constraint(equalTo: view.topAnchor),
+            dismiss.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        styleMenuDismiss106 = dismiss
+
+        // 样式菜单：毛玻璃悬浮层（宽 176、圆角 18），纵
+        // 列四行（字形 20＋名 15、行高 44），当前项高亮。
+        let menu = UIVisualEffectView(
+            effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
+        // 圆角靠 clipsToBounds 收口（与样板 18 圆角一致）；
+        // 阴影与 clips 互斥，本层不另挂阴影（深底上靠毛玻
+        // 璃明度差分界，与控制台浮层同口径）。
+        menu.clipsToBounds = true
+        menu.layer.cornerRadius = PlaylistLayout101.styleMenuCorner
+        menu.isHidden = true
+        menu.alpha = 0
+        // 展开缩放锚点右上（须在首次布局前设定，布局引擎
+        // 按帧对齐、后续不跳位）。
+        menu.layer.anchorPoint = CGPoint(x: 1, y: 0)
+        menu.translatesAutoresizingMaskIntoConstraints = false
+        let tint = UIView()
+        tint.backgroundColor = UIColor(red: 28 / 255, green: 28 / 255,
+                                       blue: 31 / 255, alpha: 0.55)
+        tint.isUserInteractionEnabled = false
+        tint.translatesAutoresizingMaskIntoConstraints = false
+        menu.contentView.addSubview(tint)
+        NSLayoutConstraint.activate([
+            tint.leadingAnchor.constraint(equalTo: menu.contentView.leadingAnchor),
+            tint.trailingAnchor.constraint(equalTo: menu.contentView.trailingAnchor),
+            tint.topAnchor.constraint(equalTo: menu.contentView.topAnchor),
+            tint.bottomAnchor.constraint(equalTo: menu.contentView.bottomAnchor),
+        ])
+        view.addSubview(menu)
+        styleMenu106 = menu
+        let names = ["网格", "列表", "拍立得", "海报"]
+        for i in 0..<4 {
+            let row = UIButton(type: .custom)
+            row.tag = i
+            row.setImage(styleGlyph106(i), for: .normal)
+            row.setTitle(names[i], for: .normal)
+            row.titleLabel?.font = .systemFont(
+                ofSize: PlaylistLayout101.styleMenuFont)
+            row.contentHorizontalAlignment = .left
+            row.imageEdgeInsets = UIEdgeInsets(top: 0, left: 12, bottom: 0, right: 0)
+            row.titleEdgeInsets = UIEdgeInsets(top: 0, left: 11, bottom: 0, right: 0)
+            row.layer.cornerRadius = PlaylistLayout101.styleMenuRowCorner
+            row.translatesAutoresizingMaskIntoConstraints = false
+            row.addTarget(self, action: #selector(styleMenuRowTapped106(_:)),
+                          for: .touchUpInside)
+            menu.contentView.addSubview(row)
+            styleMenuRows106.append(row)
             NSLayoutConstraint.activate([
-                b.topAnchor.constraint(equalTo: capsule.topAnchor, constant: 4),
-                b.bottomAnchor.constraint(equalTo: capsule.bottomAnchor, constant: -4),
-                b.widthAnchor.constraint(equalToConstant: 34),
-                b.leadingAnchor.constraint(
-                    equalTo: i == 0 ? capsule.leadingAnchor
-                        : viewCapsuleButtons102[i - 1].trailingAnchor,
-                    constant: i == 0 ? 4 : 2),
-                i == glyphs.count - 1
-                    ? b.trailingAnchor.constraint(
-                        equalTo: capsule.trailingAnchor, constant: -4)
-                    : b.trailingAnchor.constraint(
-                        lessThanOrEqualTo: capsule.trailingAnchor, constant: -4),
+                row.leadingAnchor.constraint(
+                    equalTo: menu.contentView.leadingAnchor,
+                    constant: PlaylistLayout101.styleMenuPadding),
+                row.trailingAnchor.constraint(
+                    equalTo: menu.contentView.trailingAnchor,
+                    constant: -PlaylistLayout101.styleMenuPadding),
+                row.heightAnchor.constraint(
+                    equalToConstant: PlaylistLayout101.styleMenuRowHeight),
+                row.topAnchor.constraint(
+                    equalTo: i == 0 ? menu.contentView.topAnchor
+                        : styleMenuRows106[i - 1].bottomAnchor,
+                    constant: i == 0 ? PlaylistLayout101.styleMenuPadding : 0),
+                i == 3 ? row.bottomAnchor.constraint(
+                    equalTo: menu.contentView.bottomAnchor,
+                    constant: -PlaylistLayout101.styleMenuPadding)
+                    : row.bottomAnchor.constraint(
+                        lessThanOrEqualTo: menu.contentView.bottomAnchor),
             ])
         }
         NSLayoutConstraint.activate([
-            avatar.leadingAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.leadingAnchor,
-                constant: PlaylistLayout102.headerInset),
-            avatar.topAnchor.constraint(
-                equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
-            avatar.widthAnchor.constraint(equalToConstant: side),
-            avatar.heightAnchor.constraint(equalToConstant: side),
-            search.trailingAnchor.constraint(
+            menu.trailingAnchor.constraint(
                 equalTo: view.safeAreaLayoutGuide.trailingAnchor,
-                constant: -PlaylistLayout102.headerInset),
-            search.topAnchor.constraint(equalTo: avatar.topAnchor),
-            search.widthAnchor.constraint(equalToConstant: side),
-            search.heightAnchor.constraint(equalToConstant: side),
-            capsule.centerXAnchor.constraint(equalTo: view.centerXAnchor),
-            capsule.topAnchor.constraint(equalTo: avatar.topAnchor),
-            capsule.heightAnchor.constraint(equalToConstant: side),
+                constant: -PlaylistLayout101.topInset),
+            menu.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor,
+                constant: PlaylistLayout101.styleMenuTop),
+            menu.widthAnchor.constraint(
+                equalToConstant: PlaylistLayout101.styleMenuWidth),
+            // 高度显式定死（内距 6×2＋行 44×4＝188），不依
+            // 赖 contentView 内容驱动（毛玻璃层尺寸须稳）。
+            menu.heightAnchor.constraint(
+                equalToConstant: PlaylistLayout101.styleMenuPadding * 2
+                    + PlaylistLayout101.styleMenuRowHeight * 4),
         ])
         syncPosterChrome102()
-        refreshViewCapsule102()
+        refreshStyleChrome106()
     }
 
-    /// 头像/胶囊显隐收口：缝展开时两件皆隐（样板口径：
-    /// 头像是缝的收起形态、胶囊在缝收起时常驻）；海报
-    /// 形态下缝已收起、两件皆显。搜索钮常驻不随。
+    /// 顶行收口（沿用旧名，调用点不变）：缝门控按当前视
+    /// 图结算（海报进出/版式提交后调用）＋顶行左文字显隐
+    /// （网格隐、海报与列表/拍立得显）。
     private func syncPosterChrome102() {
-        let seamUp = seamExpanded85 && !posterActive102
-        avatarButton102?.isHidden = seamUp
-        viewCapsule102?.isHidden = seamUp
+        refreshPlaylistSeamGate106()
+        let gridMounted = !posterActive102 && playlistLayout91 == 0
+        topTitleLabel106?.isHidden = gridMounted
+        topCountLabel106?.isHidden = gridMounted
     }
 
-    private func refreshViewCapsule102() {
-        for (i, b) in viewCapsuleButtons102.enumerated() {
-            let selected = posterActive102 ? i == 3 : i == playlistLayout91
-            b.backgroundColor = selected
-                ? UIColor.white.withAlphaComponent(0.28) : .clear
+    /// 样式钮面字形＋菜单高亮＋顶行文字内容收口。
+    private func refreshStyleChrome106() {
+        let current = posterActive102 ? 3 : playlistLayout91
+        styleButton106?.setImage(styleGlyph106(current), for: .normal)
+        for (i, row) in styleMenuRows106.enumerated() {
+            let selected = i == current
+            row.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.13) : .clear
+            row.setTitleColor(selected
+                ? .white : UIColor.white.withAlphaComponent(0.6), for: .normal)
+            row.titleLabel?.font = .systemFont(
+                ofSize: PlaylistLayout101.styleMenuFont,
+                weight: selected ? .semibold : .regular)
         }
-    }
-
-    @objc private func avatarTapped102() {
-        // 缝全隐时先重开（120 档），再走展开收口（系统
-        // 弹簧口径由缝补间既有实现承担，与缝内点按展开
-        // 同路）。
-        if SeamState85.levelHidden { reopenPlaylistSeam85() }
-        if !seamExpanded85 { setPlaylistSeamExpanded85(true) }
-        Breadcrumbs.log("p102 avatar expand seam")
+        topTitleLabel106?.text = playlistTitle ?? "歌单"
+        topCountLabel106?.text = "\(entries.count) 首"
     }
 
     @objc private func searchTapped102() {
         SearchHostPresenter.presentSearch(from: self)
     }
 
-    @objc private func viewCapsuleTapped102(_ sender: UIButton) {
+    /// 样式菜单开/收：自右上角弹簧缩放展开（锚点右上、
+    /// scale .9＋上移 6 起步），收起同曲线反向；命中层随
+    /// 展开接管内容区点按。
+    @objc private func styleButtonTapped106() {
+        guard let menu = styleMenu106 else { return }
+        if styleMenuOpen106 {
+            setStyleMenuOpen106(false)
+            return
+        }
+        styleMenuOpen106 = true
+        refreshStyleChrome106()
+        styleMenuDismiss106?.isHidden = false
+        menu.isHidden = false
+        menu.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+            .translatedBy(x: 0, y: -6)
+        menu.alpha = 0
+        UIView.animate(withDuration: 0.38, delay: 0,
+                       usingSpringWithDamping: 0.85,
+                       initialSpringVelocity: 0,
+                       options: [.allowUserInteraction]) {
+            menu.transform = .identity
+            menu.alpha = 1
+        }
+        Breadcrumbs.log("p106 layout menu open=1")
+    }
+
+    private func setStyleMenuOpen106(_ open: Bool) {
+        guard let menu = styleMenu106, styleMenuOpen106 != open else { return }
+        styleMenuOpen106 = open
+        if open {
+            styleButtonTapped106()
+            return
+        }
+        styleMenuDismiss106?.isHidden = true
+        UIView.animate(withDuration: 0.3, delay: 0,
+                       usingSpringWithDamping: 0.9,
+                       initialSpringVelocity: 0,
+                       options: [.allowUserInteraction]) {
+            menu.transform = CGAffineTransform(scaleX: 0.9, y: 0.9)
+                .translatedBy(x: 0, y: -6)
+            menu.alpha = 0
+        } completion: { _ in
+            menu.isHidden = true
+            menu.transform = .identity
+        }
+        Breadcrumbs.log("p106 layout menu open=0")
+    }
+
+    @objc private func styleMenuDismissTapped106() {
+        setStyleMenuOpen106(false)
+    }
+
+    @objc private func styleMenuRowTapped106(_ sender: UIButton) {
+        setStyleMenuOpen106(false)
         if sender.tag == 3 {
             activatePoster102()
         } else {
             deactivatePoster102()
             switchPlaylistLayout93(sender.tag)
-            refreshViewCapsule102()
+            refreshStyleChrome106()
         }
     }
 
-    /// 进海报形态：缝面收起让位（头像形态）、台常驻
-    /// （海报层本就在台之下）、海报数据以当前 entries
-    /// 装配、起始位对齐当前播放序位（无则 0）。
+    /// 进海报形态：缝由门控关掉让位（(106)：syncPoster-
+    /// Chrome102 内 refreshPlaylistSeamGate106 按
+    /// posterActive102 结算）、台常驻（海报层本就在台之
+    /// 下）、海报数据以当前 entries 装配、起始位对齐当
+    /// 前播放序位（无则 0）。
     private func activatePoster102() {
         guard let poster = posterView102 else { return }
-        if seamExpanded85 { setPlaylistSeamExpanded85(false) }
         posterActive102 = true
         refreshPosterItems102(force: true)
         poster.isHidden = false
@@ -2534,7 +2714,7 @@ final class WallPrototypeViewController: UIViewController,
             poster.scrollTo(index: idx, animated: false)
         }
         syncPosterChrome102()
-        refreshViewCapsule102()
+        refreshStyleChrome106()
         Breadcrumbs.log("p102 poster on n=\(entries.count)")
     }
 
@@ -2543,7 +2723,7 @@ final class WallPrototypeViewController: UIViewController,
         posterActive102 = false
         posterView102?.isHidden = true
         syncPosterChrome102()
-        refreshViewCapsule102()
+        refreshStyleChrome106()
         Breadcrumbs.log("p102 poster off")
     }
 
@@ -2610,44 +2790,32 @@ final class WallPrototypeViewController: UIViewController,
     private func planPlaylistSeam85IfNeeded() {
         guard !seamPlanned85, didCenterCamera, playlistSeam85 != nil else { return }
         seamPlanned85 = true
-        if SeamState85.levelHidden {
+        // (106) 首规划按视图门控：网格才开缝（展开档宽
+        // 188/252），其余视图开口 0；不再读共享持久键
+        // SeamState85.levelHidden（主页缝的折叠态与歌单页
+        // 缝显隐自 (106) 起脱钩）。
+        let open = !posterActive102 && playlistLayout91 == 0
+        seamGateOpen106 = open
+        seamExpanded85 = open
+        playlistSeam85?.setExpanded85(open)
+        guard open else {
             wallLayout.seamOpenWidth85 = 0
             updatePlaylistSeam85Frame()
+            Breadcrumbs.log("p106 layout view=\(currentViewName106()) seam=off")
             return
         }
-        // (95) 6a：歌单宿主缝宽 64→120（Miller 批准适度加宽，
-        // 与主页母版宽档同值）——歌单名完整显示、工具排成
-        // 行、播放区不出界；只改歌单宿主调用点，主页不动。
-        let plan = wallLayout.seamPlan85(openWidth: 120, preferX: nil)
+        let width = PlaylistLayout101.seamExpandedWidth(
+            viewWidth: view.bounds.width, viewHeight: view.bounds.height)
+        let plan = wallLayout.seamPlan85(openWidth: width, preferX: nil)
         wallLayout.seamAnchorX85 = plan.anchor
         wallLayout.worldOrigin.x = plan.originX
-        wallLayout.seamOpenWidth85 = 120
+        wallLayout.seamOpenWidth85 = width
         _ = wallLayout.refreshInstances()
         collectionView.reloadData()
         updatePlaylistSeam85Frame()
         Breadcrumbs.log("seam85 plan host=wall anchor=\(Int(plan.anchor))")
-    }
-
-    private func foldPlaylistSeam85() {
-        SeamState85.levelHidden = true
-        if seamExpanded85 {
-            seamExpanded85 = false
-            playlistSeam85?.setExpanded85(false)
-        }
-        startSeamTween85(toWidth: 0, toOriginX: nil)
-        Breadcrumbs.log("seam85 fold host=wall")
-        syncPosterChrome102()
-    }
-
-    private func reopenPlaylistSeam85() {
-        SeamState85.levelHidden = false
-        // (95) 6a：重开同走 120 宽档，与首规划同值不回窄。
-        let plan = wallLayout.seamPlan85(openWidth: 120, preferX: nil)
-        wallLayout.seamAnchorX85 = plan.anchor
-        seamPlanned85 = true
-        startSeamTween85(toWidth: 120, toOriginX: plan.originX)
-        Breadcrumbs.log("seam85 reopen host=wall anchor=\(Int(plan.anchor))")
-        syncPosterChrome102()
+        Breadcrumbs.log("p106 layout view=\(currentViewName106()) seam=on")
+        applyCapsuleLayout101()
     }
 
     /// 缝开合补间（与主页缝同式：CADisplayLink、开口
@@ -2689,7 +2857,12 @@ final class WallPrototypeViewController: UIViewController,
         guard let seam = playlistSeam85 else { return }
         planPlaylistSeam85IfNeeded()
         let geo = wallLayout.seamGeometry85()
-        let hidden = SeamState85.levelHidden
+        // (106) 隐藏判定改读宿主门控（网格开/其余关），不
+        // 再读共享持久键 SeamState85.levelHidden；关缝补间
+        // 在飞时保持可见随开口收窄（与样板宽度过渡同式），
+        // 补间落定且开口 <1 才整缝隐藏。
+        let hidden = geo.width < 1
+            || (!(seamGateOpen106 ?? false) && seamTween85 == nil)
         if hidden || geo.width < 1 {
             seam.isHidden = true
         } else {
@@ -2703,26 +2876,15 @@ final class WallPrototypeViewController: UIViewController,
             seam.contentBottomInset = view.safeAreaInsets.bottom
                 + (capsuleTwoRow101
                     ? PlaylistLayout101.capsuleTwoRowContentBottom : 116)
+            // (106) 缝只有展开档：内容淡出基准恒为展开宽。
             seam.contentOpacity = SeamState85.contentOpacity(
-                rendered: geo.width, content: seamExpanded85
-                    ? PlaylistLayout101.seamExpandedWidth(
-                        viewWidth: view.bounds.width,
-                        viewHeight: view.bounds.height)
-                    : PlaylistLayout101.seamSpineWidth)
+                rendered: geo.width, content: PlaylistLayout101.seamExpandedWidth(
+                    viewWidth: view.bounds.width,
+                    viewHeight: view.bounds.height))
         }
-        guard let tab = seamEdgeTab85 else { return }
-        // 首规划未成（数据未到）前不显侧边标签，免加载
-        // 期边缘闪现（同主页缝）。
-        if seamPlanned85, hidden || geo.collapsed {
-            tab.isHidden = false
-            let tabW: CGFloat = 20, tabH: CGFloat = 96
-            tab.frame = CGRect(
-                x: geo.side < 0 ? 0 : view.bounds.width - tabW,
-                y: view.bounds.height * 0.42,
-                width: tabW, height: tabH)
-        } else {
-            tab.isHidden = true
-        }
+        // (106) 侧边竖标签恒隐：缝显隐由视图门控决定，无
+        // 「点标签重开」语义。
+        seamEdgeTab85?.isHidden = true
     }
 
     // MARK: 附加功能浮层（3.7 (60) 第 7 条，曲目墙宿主）
@@ -3207,6 +3369,12 @@ final class WallPrototypeViewController: UIViewController,
                 + " latticeComputes=\(self.wallLayout.latticeComputeCount)")
             // (86) 第 5 条：收起轨宽按新朝向重写（同点收尾）。
             self.refreshTrackWidth86(portrait: size.width < size.height)
+            // (106) 缝宽按新朝向重结算（188↔252）：门控同态
+            // 也重规划开口宽，落一条 p106 自证行。
+            self.refreshPlaylistSeamGate106()
+            Breadcrumbs.log("p106 layout view=\(self.currentViewName106())"
+                + " seam=\((self.seamGateOpen106 ?? false) ? "on" : "off")"
+                + " rot=1")
         }
     }
 
@@ -3549,6 +3717,8 @@ final class WallPrototypeViewController: UIViewController,
                     // 同源）。
                     self.playlistSeam85?.setPlaylist85(
                         title: self.playlistTitle ?? "", count: total)
+                    // (106) 顶行名/计数随种子落地同步回填。
+                    self.refreshStyleChrome106()
                     // 丝滑切入收口：唤醒等数据的 present、氛围底退场、
                     // 首屏波次从此刻起算。
                     self.loadAttempts = 0
@@ -6285,11 +6455,17 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         headCount.translatesAutoresizingMaskIntoConstraints = false
         shelf.addSubview(headCount)
         shelfHeaderCount91 = headCount
+        // (106) 样板 v9：拍立得视图无页内大头——歌单名/计
+        // 数由顶行统一承载，架头两标签隐藏（布局占位保
+        // 留，架层顶距不变）；文本回填照旧走 reloadAlt，
+        // 隐藏不影响数据通路。
+        headTitle.isHidden = true
+        headCount.isHidden = true
         let flow = UICollectionViewFlowLayout()
         flow.scrollDirection = .horizontal
         flow.itemSize = CGSize(width: 150, height: 198)
         flow.minimumLineSpacing = 14
-        flow.sectionInset = UIEdgeInsets(top: 0, left: 120, bottom: 0, right: 24)   // (95) 避缝起点随缝宽 120
+        flow.sectionInset = UIEdgeInsets(top: 0, left: 16, bottom: 0, right: 24)   // (106) 本视图无缝、全幅，起点回左边距 16
         let shelfCV = UICollectionView(frame: .zero, collectionViewLayout: flow)
         shelfCV.backgroundColor = .clear
         shelfCV.showsHorizontalScrollIndicator = false
@@ -6309,9 +6485,11 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
             shelf.trailingAnchor.constraint(equalTo: view.trailingAnchor),
             shelf.topAnchor.constraint(equalTo: view.topAnchor),
             shelf.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            headTitle.leadingAnchor.constraint(equalTo: shelf.leadingAnchor, constant: 120),   // (95) 避缝起点随缝宽 120
+            headTitle.leadingAnchor.constraint(equalTo: shelf.leadingAnchor, constant: 16),   // (106) 无缝全幅，起点回左边距 16
             headTitle.topAnchor.constraint(equalTo: shelf.safeAreaLayoutGuide.topAnchor, constant: 52),
-            headCount.trailingAnchor.constraint(equalTo: shelf.trailingAnchor, constant: -20),
+            // (106) 计数改挂标题右侧成一行（原右缘位与顶行
+            // 搜索/样式钮冲突；与样板顶行「名＋计数」同式）。
+            headCount.leadingAnchor.constraint(equalTo: headTitle.trailingAnchor, constant: 10),
             headCount.centerYAnchor.constraint(equalTo: headTitle.centerYAnchor),
             shelfCV.leadingAnchor.constraint(equalTo: shelf.leadingAnchor),
             shelfCV.trailingAnchor.constraint(equalTo: shelf.trailingAnchor),
@@ -6612,6 +6790,10 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         wallLayout.settleAnchor99()
         Breadcrumbs.log("p99 lay settle src=\(src) mode=\(playlistLayout91)"
             + " org=\(Int(wallLayout.worldOrigin.x)),\(Int(wallLayout.worldOrigin.y))")
+        // (106) 版式提交同帧结算缝门控＋顶行/样式钮态：
+        // 网格开缝、其余关缝，顶行左文字随之显隐。
+        syncPosterChrome102()
+        refreshStyleChrome106()
     }
 
     private func p94EndWallSwitch() {
@@ -6823,31 +7005,17 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         Breadcrumbs.log("p92 alt refresh=targeted n=\(touched)")
     }
 
-    /// A 杂志式歌单头：大标题＋计数行＋发丝线（样板定版）。
+    /// A 杂志式歌单头：(106) 样板 v9 定版下列表视图无大
+    /// 标题头——歌单名/计数由顶行统一承载（与样板 .list
+    /// 只有顶行、无页内大头同式），原 26pt 大标题＋计数
+    /// 行＋发丝线整组退役，只留 18 高垫片（表 contentInset
+    /// .top 46 ＋ 18 ＝ 64，与样板列表顶距一致）。签名变
+    /// 化时的重建（refreshAltPlaybackState92）走同一口，
+    /// 重建垫片无副作用。
     private func makeMagazineHeader91() -> UIView {
         let width = max(view.bounds.width, 320)
-        let header = UIView(frame: CGRect(x: 0, y: 0, width: width, height: 118))
+        let header = UIView(frame: CGRect(x: 0, y: 0, width: width, height: 18))
         header.backgroundColor = .black
-        let title = UILabel()
-        title.text = playlistTitle ?? "歌单"
-        title.font = .systemFont(ofSize: 26, weight: .bold)
-        title.textColor = .white
-        title.numberOfLines = 2
-        title.lineBreakMode = .byTruncatingTail
-        // (95) 第 6 条集成调整：歌单缝 64→120 加宽后，A/B 内容避缝
-        // 起点同步 64→120（右缘留 20 不变），防标题钻到缝下。
-        title.frame = CGRect(x: 120, y: 16, width: width - 140, height: 64)
-        header.addSubview(title)
-        let sub = UILabel()
-        sub.text = "\(entries.count) 首 · 歌单"
-        sub.font = .systemFont(ofSize: 12.5)
-        sub.textColor = UIColor.white.withAlphaComponent(0.5)
-        sub.frame = CGRect(x: 120, y: 84, width: width - 140, height: 16)
-        header.addSubview(sub)
-        let rule = UIView()
-        rule.backgroundColor = UIColor.white.withAlphaComponent(0.08)
-        rule.frame = CGRect(x: 120, y: 110, width: width - 140, height: 0.5)
-        header.addSubview(rule)
         return header
     }
 
@@ -6944,18 +7112,19 @@ final class PlaylistMagazineCell91: UITableViewCell {
         super.layoutSubviews()
         let w = contentView.bounds.width, h = contentView.bounds.height
         accentBar.frame = CGRect(x: 0, y: 14, width: 3, height: h - 28)
-        // (95) 第 6 条集成调整：缝 64→120 后整行内容右移 56 保原内部
-        // 间距（编号起点原贴缝缘 64），防编号/封面被缝盖住。
-        numberLabel.frame = CGRect(x: 120, y: 0, width: 26, height: h)
+        // (106) 列表视图无缝、全幅：整行左移 104 回全幅排
+        // 版（编号 16 / 封面 52 / 文字 118），行内相对间距
+        // 与 (95)/(101) 定版不变。
+        numberLabel.frame = CGRect(x: 16, y: 0, width: 26, height: h)
         // (101) 第 1 项：缩略图按样板定版 54（原 44）。
         let thumb = PlaylistLayout101.listThumbSize
-        coverView.frame = CGRect(x: 156, y: (h - thumb) / 2, width: thumb, height: thumb)
+        coverView.frame = CGRect(x: 52, y: (h - thumb) / 2, width: thumb, height: thumb)
         // (101) 第 1 项：爱心/加号钮命中按样板定版 40（视
         // 觉盘 18 居中于命中框内）。
         diaryButton91.frame = CGRect(x: w - 52, y: (h - 40) / 2, width: 40, height: 40)
         heartButton91.frame = CGRect(x: w - 100, y: (h - 40) / 2, width: 40, height: 40)
         heartDisc91.frame = heartButton91.frame.insetBy(dx: 11, dy: 11)
-        let textX: CGFloat = 222
+        let textX: CGFloat = 118
         titleLabel.frame = CGRect(x: textX, y: h / 2 - 20,
                                   width: w - textX - 112, height: 20)
         artistLabel.frame = CGRect(x: textX, y: h / 2 + 3,
