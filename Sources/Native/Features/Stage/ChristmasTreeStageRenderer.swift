@@ -33,7 +33,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     func mount(context: LyricStageContext) {
         self.context = context
         engine.assemble()
-        Breadcrumbs.log("p103 xmas on fp=\(Breadcrumbs.footprintMB97())")
+        Breadcrumbs.log("p105 xmas on fp=\(Breadcrumbs.footprintMB97())")
     }
 
     func applySnapshot(_ snapshot: LyricStageSnapshot) {

@@ -360,11 +360,30 @@ final class XmasLyricMachine103 {
     private var rng = XmasRNG103(seed: 31415)
     private var bag: [Int] = []
     private var lastAnchorIdx: Int = -1
-    private var curLine: Int = -1
+    private var curLine: Int = -1          // 已 commit（正在显示）的行
     private var curAnchor: XmasAnchor103? = nil
     private var glyphW: Float = 0
     private var glyphH: Float = 0
     private var aspect: Float = 1
+
+    // (105) 字形采样两段式：光栅化＋像素扫描是本机最重的一次性
+    // CPU 活（1400×200 离屏渲染＋采样），(103) 在宿主 tick 线程
+    // 同步执行、逐行切换时卡主线程。改为：update() 发现新行时只
+    // 登记 sampleRequest，引擎派到后台队列采样后 provideGlyph
+    // 回填，下一 tick 的 update() 才 commit（洗牌＋写借粒数组，
+    // 毫秒内）。commit 前画面沿用上一行的锚点/字形（包络按新行
+    // 时序走），采样延迟通常 ≤2 帧。
+    struct SampleRequest {
+        var line: Int
+        var text: String
+        var anchor: XmasAnchor103
+        var aspect: Float
+    }
+    private(set) var sampleRequest: SampleRequest? = nil
+    private var pendingLine: Int = -1
+    private var pendingAnchor: XmasAnchor103? = nil
+    private var prepared: (line: Int, glyph: XmasGlyph103)? = nil
+    private let preparedLock = NSLock()
 
     func setAspect(_ a: Float) { aspect = a }
 
@@ -372,8 +391,32 @@ final class XmasLyricMachine103 {
         curLine = -1
         bag = []
         lastAnchorIdx = -1
+        pendingLine = -1
+        pendingAnchor = nil
+        sampleRequest = nil
+        preparedLock.lock(); prepared = nil; preparedLock.unlock()
         for i in aMisc2.indices where i % 3 == 0 { aMisc2[i] = 0 }
         borrowDirty = true
+    }
+
+    /// 后台采样完成回填（引擎在后台队列调用，仅写备好槽）。
+    func provideGlyph(line: Int, glyph: XmasGlyph103) {
+        preparedLock.lock()
+        prepared = (line, glyph)
+        preparedLock.unlock()
+    }
+
+    /// 备好槽里是否已有指定行的字形（引擎派发去重用）。
+    func hasPrepared(line: Int) -> Bool {
+        preparedLock.lock(); defer { preparedLock.unlock() }
+        return prepared?.line == line
+    }
+
+    private func takePrepared(line: Int) -> XmasGlyph103? {
+        preparedLock.lock(); defer { preparedLock.unlock() }
+        guard let p = prepared, p.line == line else { return nil }
+        prepared = nil
+        return p.glyph
     }
 
     private func nextAnchor() -> XmasAnchor103 {
@@ -390,11 +433,11 @@ final class XmasLyricMachine103 {
         return XmasAnchor103.all[idx].resolved(aspect: aspect)
     }
 
-    /// assignLine 等价：采样字形＋写借粒属性（全池 aLyrOn 先清零）。
-    private func assignLine(text: String) {
-        let anchor = nextAnchor()
+    /// assignLine 的 commit 段：字形已由后台采样备好，此处只写
+    /// 借粒属性（全池 aLyrOn 先清零）。须在 tick 线程调用（与
+    /// 引擎上传 aLyr/aMisc2 的 memcpy 同线程，无竞态）。
+    private func commitLine(text: String, glyph: XmasGlyph103, anchor: XmasAnchor103) {
         curAnchor = anchor
-        let glyph = XmasGlyphSampler103.sample(text: text, scale: anchor.scale, aspect: aspect, rng: rng)
         glyphW = glyph.worldW
         glyphH = glyph.worldH
         for i in 0..<Self.poolCount { aMisc2[i * 3] = 0 }
@@ -434,13 +477,29 @@ final class XmasLyricMachine103 {
         f.lineIndex = lineIndex
         guard lineIndex >= 0, lines.indices.contains(lineIndex) else {
             curLine = -1
+            pendingLine = -1
+            sampleRequest = nil
             return f
         }
         let line = lines[lineIndex]
         if lineIndex != curLine {
-            curLine = lineIndex
-            assignLine(text: line.text)
-            f.justAssigned = true
+            // (105) 两段式：备好则立即 commit；未备好则登记采样
+            // 请求（锚点在此刻按洗牌袋定下，与采样结果一同生效）。
+            if pendingLine == lineIndex, let a = pendingAnchor,
+               let g = takePrepared(line: lineIndex) {
+                commitLine(text: line.text, glyph: g, anchor: a)
+                curLine = lineIndex
+                pendingLine = -1
+                pendingAnchor = nil
+                sampleRequest = nil
+                f.justAssigned = true
+            } else if pendingLine != lineIndex {
+                let a = nextAnchor()
+                pendingLine = lineIndex
+                pendingAnchor = a
+                sampleRequest = SampleRequest(line: lineIndex, text: line.text,
+                                              anchor: a, aspect: aspect)
+            }
         }
         guard let anchor = curAnchor else { return f }
         let dur = max(line.end - line.start, 0.1)

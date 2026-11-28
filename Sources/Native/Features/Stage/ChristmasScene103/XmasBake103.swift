@@ -117,6 +117,8 @@ struct XmasBakedScene103 {
     var benches: [XmasBenchReg103] = []
     var triangleCount: Int = 0
     var vertexCount: Int = 0
+    var boundsMin: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
+    var boundsMax: SIMD3<Float> = SIMD3<Float>(0, 0, 0)
 }
 
 // MARK: - 构建器
@@ -210,10 +212,18 @@ final class XmasBakeBuilder103 {
     }
 
     func finish() -> (positions: [Float], normals: [Float], uvs: [Float], colors: [Float],
-                      indices: [UInt32], groups: [XmasGroup103]) {
+                      indices: [UInt32], groups: [XmasGroup103],
+                      boundsMin: SIMD3<Float>, boundsMax: SIMD3<Float>) {
         var pos: [Float] = [], nor: [Float] = [], uv: [Float] = [], col: [Float] = []
         var idx: [UInt32] = []
         var groups: [XmasGroup103] = []
+        var bMin = SIMD3<Float>(repeating: .greatestFiniteMagnitude)
+        var bMax = SIMD3<Float>(repeating: -.greatestFiniteMagnitude)
+        // (105) 根因修复：addPrim 里索引以「组内顶点基址」存储，合并
+        // 进全局顶点数组时必须叠加每组在全局数组中的顶点偏移——
+        // (103) 漏了这一步，除第 0 组外所有组的索引全部指向错位
+        // 顶点，烘出横贯全场的巨型三角（构图死亡＋全屏 overdraw）。
+        var vertexBase: UInt32 = 0
         for g in groupParams.indices {
             var grp = XmasGroup103(params: groupParams[g])
             grp.indexStart = idx.count
@@ -223,11 +233,14 @@ final class XmasBakeBuilder103 {
                 nor.append(contentsOf: [v.1.x, v.1.y, v.1.z])
                 uv.append(contentsOf: [v.2.x, v.2.y])
                 col.append(contentsOf: [v.3.x, v.3.y, v.3.z, v.3.w])
+                bMin = simd_min(bMin, v.0); bMax = simd_max(bMax, v.0)
             }
-            idx.append(contentsOf: groupIdx[g])
+            idx.append(contentsOf: groupIdx[g].map { $0 + vertexBase })
+            vertexBase += UInt32(groupVerts[g].count)
             groups.append(grp)
         }
-        return (pos, nor, uv, col, idx, groups)
+        if bMin.x > bMax.x { bMin = SIMD3<Float>(0, 0, 0); bMax = SIMD3<Float>(0, 0, 0) }
+        return (pos, nor, uv, col, idx, groups, bMin, bMax)
     }
 }
 

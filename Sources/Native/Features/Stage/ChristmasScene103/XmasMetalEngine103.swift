@@ -246,6 +246,33 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
     private var fpsWindow: TimeInterval = 0
     private var lastAnchorName = ""
 
+    // (105) 性能隔离：宿主 frameTick 走主线程（CADisplayLink），
+    // (103) 把落雪模拟＋字形采样＋全部编码都压在主线程，场景一
+    // 重就拖垮全 App。落雪模拟与字形采样改到本队列异步执行，
+    // tick 线程只消费快照（memcpy 小数组）；编码仍在 tick 线程
+    // （MTKView draw 纪律），其耗时由 perf 面包屑逐项落痕。
+    private let simQueue = DispatchQueue(label: "folia.xmas.sim105", qos: .userInitiated)
+    private let snapLock = NSLock()
+    private var simBusy = false
+    private var snapFallPos: [Float] = []
+    private var snapFallMisc: [Float] = []
+    private var snapAccPos: [Float] = []
+    private var snapAccMisc: [Float] = []
+    private var snapAccLife: [Float] = []
+    private var snapFallDirty = false
+    private var snapAccDirty = false
+    private var snapGust: Float = 0
+    private var lastGust: Float = 0
+    private var sampleInFlight = -1
+    private var sampleFlightDone = true   // snapLock 保护；防过期采样覆盖新行结果后无人重派
+    // perf 窗口（与 fps 同 5s 窗）：tick 线程编码耗时均值/峰值、
+    // 后台模拟峰值、字形采样峰值（毫秒）。
+    private var perfEncSum: Double = 0
+    private var perfEncMax: Double = 0
+    private var perfEncN: Int = 0
+    private var perfSimMax: Double = 0
+    private var perfAssignMax: Double = 0
+
     override init() {
         let dev = MTLCreateSystemDefaultDevice()
         device = dev
@@ -264,7 +291,7 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
         if let dev {
             library = try? dev.makeLibrary(source: XmasShaders103.source, options: nil)
             if library == nil {
-                Breadcrumbs.log("p103 xmas shader lib=nil")
+                Breadcrumbs.log("p105 xmas shader lib=nil")
             }
         }
         buildPipelines()
@@ -328,7 +355,7 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
         sd.sAddressMode = .clampToEdge
         sd.tAddressMode = .clampToEdge
         sampler = device.makeSamplerState(descriptor: sd)
-        Breadcrumbs.log("p103 xmas pipes ent=\(pipeEntOpaque != nil ? 1 : 0) pool=\(pipePool != nil ? 1 : 0) final=\(pipeFinal != nil ? 1 : 0)")
+        Breadcrumbs.log("p105 xmas pipes ent=\(pipeEntOpaque != nil ? 1 : 0) pool=\(pipePool != nil ? 1 : 0) final=\(pipeFinal != nil ? 1 : 0)")
     }
 
     // MARK: 程序化贴图（逐像素生成，口径对样板 canvas 渐变）
@@ -495,7 +522,7 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
     func assemble() {
         guard !ready, let device else { return }
         guard let scene = XmasBake103.build() else {
-            Breadcrumbs.log("p103 xmas bake=nil")
+            Breadcrumbs.log("p105 xmas bake=nil")
             return
         }
         baked = scene
@@ -542,19 +569,34 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
         accPosBuf = device.makeBuffer(length: XmasSnowSim103.accN * 3 * 4, options: .storageModeShared)
         accMiscBuf = device.makeBuffer(length: XmasSnowSim103.accN * 3 * 4, options: .storageModeShared)
         accLifeBuf = device.makeBuffer(length: XmasSnowSim103.accN * 4, options: .storageModeShared)
-        uploadAccum()
+        uploadAccum(pos: sim.accPositions, misc: sim.accMisc, life: sim.accLife)
+        // (105) 首帧前同步跑一步模拟灌快照（此后模拟全在后台队列），
+        // 免首帧雪片堆在原点。
+        sim.update(dt: 1.0 / 60.0, now: 0)
+        snapFallPos = sim.fallPositions; snapFallMisc = sim.fallMisc; snapFallDirty = true
+        snapAccPos = sim.accPositions; snapAccMisc = sim.accMisc; snapAccLife = sim.accLife
+        snapAccDirty = true
+        sim.accDirty = false
         ready = true
         let texBytes = textures.compactMap { $0 }.reduce(0) { $0 + $1.width * $1.height * 4 }
-        Breadcrumbs.log("p103 xmas bake tris=\(scene.triangleCount) verts=\(scene.vertexCount)"
+        Breadcrumbs.log("p105 xmas bake tris=\(scene.triangleCount) verts=\(scene.vertexCount)"
             + " groups=\(scene.groups.count) pools orbit=\(poolOrbit.count) canopy=\(poolCanopy.count)"
             + " texMB=\(String(format: "%.1f", Double(texBytes) / 1_000_000))")
+        // (105) GPU buffer 建好后释放 Swift 侧烘焙大数组（顶点/法线/
+        // UV/颜色/索引＋GLB 原图，约 19MB）：baked 只留组参数、盘、
+        // 光晕、落点等元数据供逐帧绘制与面包屑，驻留压回线内。
+        baked?.positions = []
+        baked?.normals = []
+        baked?.uvs = []
+        baked?.colors = []
+        baked?.indices = []
+        baked?.glbTextures = []
     }
 
-    private func uploadAccum() {
-        guard let sim = snowSim else { return }
-        if let b = accPosBuf { sim.accPositions.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
-        if let b = accMiscBuf { sim.accMisc.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
-        if let b = accLifeBuf { sim.accLife.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
+    private func uploadAccum(pos: [Float], misc: [Float], life: [Float]) {
+        if let b = accPosBuf { pos.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
+        if let b = accMiscBuf { misc.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
+        if let b = accLifeBuf { life.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
     }
 
     func teardown() {
@@ -570,9 +612,18 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
         hdrRT = nil; depthRT = nil
         bloomTex = [[nil, nil], [nil, nil], [nil, nil]]
         rtSize = .zero
+        // (105) 复位异步状态，重进时首帧面包屑与模拟派发重新起算。
+        firstFrameLogged = false
+        sampleInFlight = -1
+        snapLock.lock()
+        simBusy = false
+        snapFallDirty = false
+        snapAccDirty = false
+        sampleFlightDone = true
+        snapLock.unlock()
         // 程序贴图保留（小、跨装配复用）；GLB 贴图随 baked 释放
         textures = Array(textures.prefix(7))
-        Breadcrumbs.log("p103 xmas off fp=\(Breadcrumbs.footprintMB97())")
+        Breadcrumbs.log("p105 xmas off fp=\(Breadcrumbs.footprintMB97())")
     }
 
     // MARK: 宿主面
@@ -587,7 +638,19 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
 
     func setActive(_ on: Bool) {
         active = on
-        if !on { lastTickWall = nil }
+        if !on {
+            lastTickWall = nil
+            // (105) 离开舞台/不可见：停 tick 之外再释放 RT 与 bloom
+            // 链（约 52MB），驻留不长期占线；回到舞台时 ensureRTs
+            // 按当前 drawable 尺寸重建。烘焙缓冲与贴图保留（重进
+            // 免再烘焙），全释放只在 unmount 的 teardown。
+            if hdrRT != nil || depthRT != nil {
+                hdrRT = nil
+                depthRT = nil
+                bloomTex = [[nil, nil], [nil, nil], [nil, nil]]
+                Breadcrumbs.log("p105 xmas rt released fp=\(Breadcrumbs.footprintMB97())")
+            }
+        }
     }
 
     private func noteResize() {
@@ -605,7 +668,7 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
             default: rigTTheta = 0.567; rigTPhi = 1.516; rigTRadius = 22; fovDeg = 40
             }
             if time == 0 { rigTheta = rigTTheta; rigPhi = rigTPhi; rigRadius = rigTRadius }
-            Breadcrumbs.log("p103 xmas tier=\(tier) aspect=\(String(format: "%.2f", aspect))")
+            Breadcrumbs.log("p105 xmas tier=\(tier) aspect=\(String(format: "%.2f", aspect))")
         }
     }
 
@@ -652,14 +715,19 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
             rigTPhi = min(1.58, max(0.92, rigTPhi - dy * 0.0032))
             velTheta = -dx * 0.0052 / Float(dt) * 0.016
             velPhi = -dy * 0.0032 / Float(dt) * 0.016
-            // 拖动搅雪（雪层专属附加响应，样板同构）
+            // 拖动搅雪（雪层专属附加响应，样板同构）；(105) 写入
+            // 派到 sim 队列，与后台模拟同线程改雪状态，免竞态。
             let spd = hypot(dx, dy)
             if spd > 2, let sim = snowSim {
                 if let pt = rayPoint(loc, toCenter: SIMD3<Float>(0, 4.5, 0)) {
-                    sim.stirVel = SIMD3<Float>((pt.x - sim.stir.x) * 2.2, (pt.y - sim.stir.y) * 2.2, (pt.z - sim.stir.z) * 2.2)
-                    sim.stir = pt
-                    sim.stirPower = min(1, spd * 0.05)
-                    sim.stirT = time
+                    let power = min(1, spd * 0.05)
+                    let tNow = time
+                    simQueue.async {
+                        sim.stirVel = SIMD3<Float>((pt.x - sim.stir.x) * 2.2, (pt.y - sim.stir.y) * 2.2, (pt.z - sim.stir.z) * 2.2)
+                        sim.stir = pt
+                        sim.stirPower = power
+                        sim.stirT = tNow
+                    }
                 }
             }
         default:
@@ -712,9 +780,11 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
             rippleStart = time
             ripplePos = p
         }
-        // 同一次点按踢起雪沫（样板：以画面中心深度点为锚）
+        // 同一次点按踢起雪沫（样板：以画面中心深度点为锚）；
+        // (105) 派到 sim 队列执行（puff 逐片改速度，与模拟同线程）。
         if let sim = snowSim, let ppt = rayPoint(loc, toCenter: SIMD3<Float>(0, 4.5, 0)) {
-            sim.puff(ppt.x, min(9, max(0.5, ppt.y)), ppt.z)
+            let py = min(9, max(0.5, ppt.y))
+            simQueue.async { sim.puff(ppt.x, py, ppt.z) }
         }
     }
 
@@ -808,7 +878,8 @@ extension XmasMetalEngine103 {
         camProj = p
     }
 
-    /// 宿主逐帧入口：存 position、推进时钟与全部 CPU 侧状态、触发一帧绘制。
+    /// 宿主逐帧入口：存 position、推进时钟、派发后台模拟/采样、
+    /// 触发一帧绘制（绘制消费最近一份模拟快照）。
     func tick(position: TimeInterval) {
         latestPosition = position
         guard active, ready else { return }
@@ -819,7 +890,79 @@ extension XmasMetalEngine103 {
             noteFPS(d)
         }
         lastTickWall = now
+        dispatchSimStep()
+        dispatchSampleIfNeeded()
         view.draw()
+    }
+
+    /// 落雪模拟一步（后台队列）：算完把输出数组拷进快照槽，
+    /// tick 线程的 render 只 memcpy 快照进 GPU buffer。
+    private func dispatchSimStep() {
+        guard let sim = snowSim else { return }
+        snapLock.lock()
+        if simBusy { snapLock.unlock(); return }
+        simBusy = true
+        snapLock.unlock()
+        let dt = frameDt, now = time, pinch = pinchSnow
+        simQueue.async { [weak self] in
+            let t0 = CACurrentMediaTime()
+            sim.pinchSnow = pinch
+            sim.update(dt: dt, now: now)
+            let ms = (CACurrentMediaTime() - t0) * 1000
+            guard let self else { return }
+            self.snapLock.lock()
+            self.snapFallPos = sim.fallPositions
+            self.snapFallMisc = sim.fallMisc
+            self.snapFallDirty = true
+            if sim.accDirty {
+                self.snapAccPos = sim.accPositions
+                self.snapAccMisc = sim.accMisc
+                self.snapAccLife = sim.accLife
+                self.snapAccDirty = true
+                sim.accDirty = false
+            }
+            self.snapGust = sim.gust
+            self.perfSimMax = max(self.perfSimMax, ms)
+            self.simBusy = false
+            self.snapLock.unlock()
+        }
+    }
+
+    /// 字形采样派发（后台队列）：状态机登记请求后在此采样回填；
+    /// 已备好/在飞则不重复派发，过期结果由状态机按行号自愈。
+    private func dispatchSampleIfNeeded() {
+        guard let req = lyricMachine.sampleRequest else {
+            sampleInFlight = -1
+            return
+        }
+        if lyricMachine.hasPrepared(line: req.line) {
+            sampleInFlight = -1
+            return
+        }
+        snapLock.lock()
+        let flightDone = sampleFlightDone
+        snapLock.unlock()
+        if sampleInFlight == req.line && !flightDone { return }   // 采样中
+        // 未派发，或上一发已回但结果被过期采样覆盖（备好槽对不上
+        // 本行）→（重）派发，自愈。
+        sampleInFlight = req.line
+        snapLock.lock()
+        sampleFlightDone = false
+        snapLock.unlock()
+        let machine = lyricMachine
+        simQueue.async { [weak self] in
+            let t0 = CACurrentMediaTime()
+            let glyph = XmasGlyphSampler103.sample(
+                text: req.text, scale: req.anchor.scale, aspect: req.aspect,
+                rng: XmasRNG103(seed: UInt32(777000 + req.line * 131 + 7)))
+            let ms = (CACurrentMediaTime() - t0) * 1000
+            machine.provideGlyph(line: req.line, glyph: glyph)
+            guard let self else { return }
+            self.snapLock.lock()
+            self.perfAssignMax = max(self.perfAssignMax, ms)
+            self.sampleFlightDone = true
+            self.snapLock.unlock()
+        }
     }
 
     private func noteFPS(_ d: TimeInterval) {
@@ -827,9 +970,21 @@ extension XmasMetalEngine103 {
         fpsAccum += d; fpsFrames += 1; fpsWindow += d
         if fpsWindow >= 5, fpsFrames > 0 {
             let avg = fpsAccum / Double(fpsFrames)
-            Breadcrumbs.log("p103 xmas fps=\(String(format: "%.1f", 1.0 / avg))"
-                + " avgMs=\(String(format: "%.2f", avg * 1000)) fp=\(Breadcrumbs.footprintMB97())")
+            // (105) 帧成本逐项打点：encAvg/encMax＝tick 线程编码
+            // （毫秒），simMax＝后台落雪模拟峰值，assignMax＝后台
+            // 字形采样峰值——160ms 级卡顿须能按此三项归因。
+            let encAvg = perfEncN > 0 ? perfEncSum / Double(perfEncN) : 0
+            snapLock.lock()
+            let sMax = perfSimMax, aMax = perfAssignMax
+            perfSimMax = 0; perfAssignMax = 0
+            snapLock.unlock()
+            Breadcrumbs.log("p105 xmas fps=\(String(format: "%.1f", 1.0 / avg))"
+                + " avgMs=\(String(format: "%.2f", avg * 1000))"
+                + " encAvg=\(String(format: "%.2f", encAvg)) encMax=\(String(format: "%.2f", perfEncMax))"
+                + " simMax=\(String(format: "%.2f", sMax)) assignMax=\(String(format: "%.2f", aMax))"
+                + " fp=\(Breadcrumbs.footprintMB97())")
             fpsAccum = 0; fpsFrames = 0; fpsWindow = 0
+            perfEncSum = 0; perfEncMax = 0; perfEncN = 0
         }
     }
 
@@ -860,13 +1015,14 @@ extension XmasMetalEngine103 {
             bytes += lw * lh * 8 * 2
         }
         rtBytes = bytes
-        Breadcrumbs.log("p103 xmas rt \(w)x\(h) bytes=\(bytes) MB=\(String(format: "%.1f", Double(bytes) / 1_000_000))")
+        Breadcrumbs.log("p105 xmas rt \(w)x\(h) bytes=\(bytes) MB=\(String(format: "%.1f", Double(bytes) / 1_000_000))")
         return hdrRT != nil && depthRT != nil
     }
 
     func render() {
         guard active, ready, let queue, let baked,
               pipeEntOpaque != nil, pipeFinal != nil else { return }
+        let encT0 = CACurrentMediaTime()
         if inflight.wait(timeout: .now()) == .timedOut { return }   // in-flight 闸：忙时跳过
         guard ensureRTs(), let hdr = hdrRT, let depth = depthRT,
               let drawable = view.currentDrawable else {
@@ -888,20 +1044,29 @@ extension XmasMetalEngine103 {
         if lf.justAssigned, let a = lf.anchor {
             if a.name != lastAnchorName {
                 lastAnchorName = a.name
-                Breadcrumbs.log("p103 xmas anchor=\(a.name) line=\(idx)")
+                Breadcrumbs.log("p105 xmas anchor=\(a.name) line=\(idx)")
             }
         }
         applyCamera(dt: frameDt, lyricFrame: lf)
-
-        // ---- 雪模拟 ----
-        pinchSnow += (pinchSnowTarget - pinchSnow) * (1 - pow(Float(0.02), frameDt))
-        if let sim = snowSim {
-            sim.pinchSnow = pinchSnow
-            sim.update(dt: frameDt, now: time)
-            if let b = fallPosBuf { sim.fallPositions.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
-            if let b = fallMiscBuf { sim.fallMisc.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
-            if sim.accDirty { uploadAccum(); sim.accDirty = false }
+        if lf.justAssigned {
+            // (105) 构图自证：每次锚点切换落一条相机/场景界/三角面。
+            logFrameCrumb(baked)
         }
+
+        // ---- 雪模拟快照消费（(105)：模拟在 simQueue 后台跑，
+        // 此处只把最近一份快照 memcpy 进 GPU buffer） ----
+        pinchSnow += (pinchSnowTarget - pinchSnow) * (1 - pow(Float(0.02), frameDt))
+        snapLock.lock()
+        if snapFallDirty {
+            if let b = fallPosBuf { snapFallPos.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
+            if let b = fallMiscBuf { snapFallMisc.withUnsafeBytes { memcpy(b.contents(), $0.baseAddress!, min(b.length, $0.count)) } }
+            snapFallDirty = false
+        }
+        let accSnap: ([Float], [Float], [Float])? = snapAccDirty ? (snapAccPos, snapAccMisc, snapAccLife) : nil
+        snapAccDirty = false
+        lastGust = snapGust
+        snapLock.unlock()
+        if let (ap, am, al) = accSnap { uploadAccum(pos: ap, misc: am, life: al) }
 
         // ---- spread 弹簧 ----
         spreadCur += (spreadTarget - spreadCur) * (1 - pow(Float(0.001), frameDt))
@@ -1036,8 +1201,21 @@ extension XmasMetalEngine103 {
         cmd.commit()
         if !firstFrameLogged {
             firstFrameLogged = true
-            Breadcrumbs.log("p103 xmas first frame rt=\(rtBytes) fp=\(Breadcrumbs.footprintMB97())")
+            // (105) 首帧构图自证（相机位/场景界/三角面数）。
+            logFrameCrumb(baked)
+            Breadcrumbs.log("p105 xmas first frame rt=\(rtBytes) fp=\(Breadcrumbs.footprintMB97())")
         }
+        let encMs = (CACurrentMediaTime() - encT0) * 1000
+        perfEncSum += encMs; perfEncMax = max(perfEncMax, encMs); perfEncN += 1
+    }
+
+    /// (105) 构图自证面包屑：相机世界位＋烘焙场景包围盒＋三角面数。
+    private func logFrameCrumb(_ baked: XmasBakedScene103) {
+        func f(_ v: Float) -> String { String(format: "%.1f", v) }
+        Breadcrumbs.log("p105 xmas frame cam=(\(f(camPos.x)),\(f(camPos.y)),\(f(camPos.z)))"
+            + " bounds=(\(f(baked.boundsMin.x)),\(f(baked.boundsMin.y)),\(f(baked.boundsMin.z)))"
+            + "-(\(f(baked.boundsMax.x)),\(f(baked.boundsMax.y)),\(f(baked.boundsMax.z)))"
+            + " tris=\(baked.triangleCount)")
     }
 
     // MARK: 帧内子绘制
@@ -1191,7 +1369,7 @@ extension XmasMetalEngine103 {
         enc.setDepthStencilState(depthOff)
         if let sampler { enc.setFragmentSamplerState(sampler, index: 0) }
         let rt = time - rippleStart
-        let gustVal: Float = (snowSim?.gust ?? 0) * 0.85 + pinchSnow * 0.7
+        let gustVal: Float = lastGust * 0.85 + pinchSnow * 0.7
         func drawOne(_ g: PoolGPU, isOrbit: Bool, isFarSnow: Bool) {
             guard g.count > 0, let pos = g.pos, let col = g.col, let m1 = g.misc1, let dir = g.dir else { return }
             var U = XmasPoolU103()

@@ -431,6 +431,8 @@ enum XmasBake103 {
         scene.colors = fin.colors
         scene.indices = fin.indices
         scene.groups = fin.groups
+        scene.boundsMin = fin.boundsMin
+        scene.boundsMax = fin.boundsMax
         scene.vertexCount = fin.positions.count / 3
         scene.triangleCount = fin.indices.count / 3
         return scene
