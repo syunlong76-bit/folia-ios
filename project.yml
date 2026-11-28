@@ -51,6 +51,11 @@ targets:
       # "Diary/diary-opening.mp4" 与 "Diary/Stickers/<类>/<名>.png"）
       - path: Resources/Diary
         type: folder
+      # (103) 圣诞场景 GLB 资产（12 个，poly.pizza CC0/CC-BY；
+      # folder reference，运行时定位 "ChristmasTown/<名>.glb"，
+      # 由 XmasGLB103 最小加载器读取）
+      - path: Resources/ChristmasTown
+        type: folder
     info:
       path: Info.plist
       # 注意：XcodeGen 在 generate 时按这里的 properties 重写 Info.plist，
@@ -60,7 +65,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Virelai
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "102"
+        CFBundleVersion: "103"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -146,7 +151,7 @@ targets:
       properties:
         CFBundleDisplayName: FoliaWidgets
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "102"
+        CFBundleVersion: "103"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:
