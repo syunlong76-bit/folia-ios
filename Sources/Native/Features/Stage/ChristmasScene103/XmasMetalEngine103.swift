@@ -283,7 +283,7 @@ final class XmasMetalEngine103: NSObject, UIGestureRecognizerDelegate {
         let d = MTLRenderPipelineDescriptor()
         d.vertexFunction = v
         d.fragmentFunction = f
-        let ca = d.colorAttachments[0]
+        guard let ca = d.colorAttachments[0] else { return nil }
         ca.pixelFormat = format
         if let (op, src, dst) = blend {
             ca.isBlendingEnabled = true

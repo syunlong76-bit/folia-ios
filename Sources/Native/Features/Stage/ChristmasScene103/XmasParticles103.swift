@@ -319,11 +319,14 @@ enum XmasGlyphSampler103 {
         let charW = Float(W) / Float(max(text.count, 1))
         out.worldW = worldW
         out.worldH = worldH
-        out.pts = raw.map { (xx, yy) in
-            (x: (Float(xx) / Float(W) - 0.5) * worldW,
-             y: (0.5 - Float(yy) / Float(H)) * worldH,
-             z: (rng.next() - 0.5) * 0.06,
-             ch: min(text.count - 1, Int(Float(xx) / charW)))
+        let fW = Float(W), fH = Float(H)
+        let charCount = text.count
+        out.pts = raw.map { (xx, yy) -> (x: Float, y: Float, z: Float, ch: Int) in
+            let gx: Float = (Float(xx) / fW - 0.5) * worldW
+            let gy: Float = (0.5 - Float(yy) / fH) * worldH
+            let gz: Float = (rng.next() - 0.5) * 0.06
+            let gch: Int = min(charCount - 1, Int(Float(xx) / charW))
+            return (x: gx, y: gy, z: gz, ch: gch)
         }
         return out
     }
