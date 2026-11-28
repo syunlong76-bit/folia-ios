@@ -314,6 +314,14 @@ final class WallPrototypeViewController: UIViewController,
     /// (85) 第 1 条：歌单页世界缝（PlaylistSeam85View）＋
     /// 侧边竖标签＋开合补间（与主页缝同骨架、构成不同）。
     private var playlistSeam85: PlaylistSeam85View?
+    /// (102) 第 1 项：海报视图＋页头三件（缝收起头像/
+    /// 右上搜索/视图切换胶囊），样板 v4 定版。
+    private var posterView102: PosterView102?
+    private var posterActive102 = false
+    private var avatarButton102: UIButton?
+    private var searchButton102: UIButton?
+    private var viewCapsule102: UIView?
+    private var viewCapsuleButtons102: [UIButton] = []
     private var seamEdgeTab85: SeamEdgeTab85View?
     private var seamPlanned85 = false
     private var seamExpanded85 = false
@@ -478,6 +486,8 @@ final class WallPrototypeViewController: UIViewController,
         installPlaylistSeam85()
         // port91（任务 8）：歌单三版式切换器＋A/B 两套视图装配。
         installPlaylistLayout91()
+        // (102) 第 1 项：海报视图与页头三件装配。
+        installPosterChrome102()
 
         // (76) ④左缘滑动返回（与 ⑧ 摘 ✕ 互为前提、同批落
         // 地）：落点 = closeTapped 既有契约（背板在场时
@@ -659,7 +669,7 @@ final class WallPrototypeViewController: UIViewController,
         let bar = MiniBarHitView()
         bar.backgroundColor = .clear
         // (95) 第 11 条：胶囊台身圆角 35→31（高 62 的 pill）。
-        bar.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        bar.layer.cornerRadius = DeckLayout82.expandedRadius102
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -726,7 +736,7 @@ final class WallPrototypeViewController: UIViewController,
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        blur.layer.cornerRadius = DeckLayout82.expandedRadius102
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -780,7 +790,7 @@ final class WallPrototypeViewController: UIViewController,
         miniRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        glassTint.layer.cornerRadius = DeckLayout82.expandedRadius102
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -1133,7 +1143,7 @@ final class WallPrototypeViewController: UIViewController,
         // (84) 第 1 条：展开轨底锚复原 (80) 的 −7。
         // (87) 样片台：展开轨底锚 −9（进度行独立成行）。
         // (95) 第 11 条：展开轨底锚 −7→−2（贴胶囊下沿）。
-        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -2)
+        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -DeckLayout82.expandedTrackBottomInset102)
         miniTrackTopC?.isActive = true
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5.5)
         miniTrackBottomConstraint?.isActive = false
@@ -1986,7 +1996,7 @@ final class WallPrototypeViewController: UIViewController,
         // 动。底距 −5.5 使 5pt 线在 16pt 容器内居中。展开
         // 侧底锚常量与 miniTrackTopC 同步 −2（该约束展开
         // 态未激活、仅账面一致）。
-        miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -2
+        miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -DeckLayout82.expandedTrackBottomInset102
         // (81) 第 1 条两态口径（盖过 (79) 的恒 134，与主
         // 页墙同账）：收起态居中 134×5 短轨；展开态还原
         // 台内全宽长 seek 轨（lead/trail ±24（(96) E 项
@@ -2025,10 +2035,14 @@ final class WallPrototypeViewController: UIViewController,
         // (84) 第 1 条：把手已复原 (80) 圆点/皮肤形态，收
         // 起态不再压平（同主页墙）。
         miniProgressKnob.transform = .identity
-        // (95) 第 11 条：展开圆角随台身 31（收起 8 不动）。
-        let radius: CGFloat = collapsed ? 8 : 36
+        // (102) 第 5 项：圆角四层同写单源值（同主页墙）。
+        let radius: CGFloat = DeckLayout82.radius102(
+            collapsed: collapsed,
+            barHeight: MiniBarQuickRowView.expandedBarHeight)
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
+        miniGlassTint?.layer.cornerRadius = radius
+        miniThemeLayer?.setCornerRadius(radius)
         // 收起态命中带（3.7 (21.1)）：视觉仍 16pt，纵向命中
         // 扩到 44pt（上下各 14pt）；展开态归零，原分发不变。
         // 全部形态切换（收起/展开/边沿复位）都经此收口，开关
@@ -2057,6 +2071,11 @@ final class WallPrototypeViewController: UIViewController,
             let dy = abs(miniProgressKnob.center.y - miniProgressTrack.center.y)
             Breadcrumbs.log("p97 knob wall dy=\(String(format: "%.1f", dy))"
                 + " col=\(collapsed ? 1 : 0)")
+            // (102) 第 5 项自证：把手出台量＋四层圆角实测。
+            DeckGeometry102.log(host: "wall", bar: bar,
+                                blur: miniBlurView, glass: miniGlassTint,
+                                theme: miniThemeLayer,
+                                knob: miniProgressKnob)
         }
         // (63) 第 2 条形态面包屑（与主页墙同构）：标志/几何
         // 高/三识别器启停位同行落盘，供失同步判读。
@@ -2143,6 +2162,8 @@ final class WallPrototypeViewController: UIViewController,
         // (93) C3：歌单缝三段胶囊——写同一持久化键＋走交
         // 叉淡化切换（switchPlaylistLayout93，不整墙重刷）。
         seam.onLayoutMode93 = { [weak self] mode in
+            // (102) 第 1 项：缝内切版式同退海报形态。
+            self?.deactivatePoster102()
             self?.switchPlaylistLayout93(mode)
         }
         // (93) C1：歌单缝展开档控制台入口——与台面控制台
@@ -2225,6 +2246,7 @@ final class WallPrototypeViewController: UIViewController,
         startSeamTween85(toWidth: target, toOriginX: originX)
         Breadcrumbs.log("seam85 expand host=wall on=\(expanded ? 1 : 0)")
         applyCapsuleLayout101()
+        syncPosterChrome102()
     }
 
     /// (101) 第 1 项：竖屏开缝时胶囊台两行紧凑排布（样板
@@ -2269,6 +2291,12 @@ final class WallPrototypeViewController: UIViewController,
             bar.layer.cornerRadius = PlaylistLayout101.capsuleTwoRowCorner
             miniBlurView?.layer.cornerRadius =
                 PlaylistLayout101.capsuleTwoRowCorner
+            // (102) 第 5 项：两行形态四层同值（玻璃罩/主题
+            // 层此前未随写、与台身 30 不共心）。
+            miniGlassTint?.layer.cornerRadius =
+                PlaylistLayout101.capsuleTwoRowCorner
+            miniThemeLayer?.setCornerRadius(
+                PlaylistLayout101.capsuleTwoRowCorner)
             for (index, c) in miniMainCenterY.enumerated() {
                 c.constant = index == 0
                     ? PlaylistLayout101.capsuleRowTopOffset
@@ -2302,6 +2330,222 @@ final class WallPrototypeViewController: UIViewController,
         Breadcrumbs.log("p101 capsule tworow=\(want ? 1 : 0)"
             + " h=\(Int(miniBarHeightConstraint?.constant ?? -1))"
             + " seam=\(Int(seamW))")
+    }
+
+    // MARK: - (102) 第 1 项：海报视图与页头三件
+
+    /// 装配：海报层（台之下、墙之上）＋左上头像（缝收起
+    /// 态可见、点按展开缝）＋右上搜索钮（常驻、与缝内搜
+    /// 索同落点）＋顶部中央视图切换胶囊（四格：墙/杂志/
+    /// 唱片架/海报，缝展开时隐藏、与样板「缝收起时常驻」
+    /// 同口径）。
+    private func installPosterChrome102() {
+        let poster = PosterView102()
+        poster.isHidden = true
+        poster.translatesAutoresizingMaskIntoConstraints = false
+        poster.onSettle = { [weak self] idx in
+            // 胶囊台同步：原生台面显示源是播放引擎当前
+            // 曲、无预览通道——落痕＋海报位即同步凭据，
+            // 点播后引擎当前曲与海报位自然一致（见报告）。
+            Breadcrumbs.log("p102 poster settle idx=\(idx)")
+        }
+        poster.onTapPlay = { [weak self] idx in
+            guard let self, idx >= 0, idx < self.entries.count else { return }
+            Breadcrumbs.log("p102 poster play idx=\(idx)")
+            self.startQueueAt(queueIndex: idx)
+        }
+        if let bar = miniBar {
+            view.insertSubview(poster, belowSubview: bar)
+        } else {
+            view.addSubview(poster)
+        }
+        NSLayoutConstraint.activate([
+            poster.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            poster.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            poster.topAnchor.constraint(equalTo: view.topAnchor),
+            poster.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+        ])
+        posterView102 = poster
+
+        let side = PlaylistLayout102.headerButtonSide
+        let avatar = UIButton(type: .custom)
+        avatar.clipsToBounds = true
+        avatar.layer.cornerRadius = side / 2
+        avatar.backgroundColor = UIColor.white.withAlphaComponent(0.10)
+        avatar.setImage(UIImage(systemName: "person.crop.circle"),
+                        for: .normal)
+        avatar.tintColor = .white
+        avatar.translatesAutoresizingMaskIntoConstraints = false
+        avatar.addTarget(self, action: #selector(avatarTapped102),
+                         for: .touchUpInside)
+        view.addSubview(avatar)
+        avatarButton102 = avatar
+        if let cover = playlistCoverUrl {
+            Task { [weak self] in
+                let img = await NativeCoverLoader.shared.image(
+                    for: cover, tier: 200)
+                guard let self, let img else { return }
+                self.avatarButton102?.setImage(
+                    img.withRenderingMode(.alwaysOriginal), for: .normal)
+                self.avatarButton102?.imageView?.contentMode = .scaleAspectFill
+            }
+        }
+
+        let search = UIButton(type: .custom)
+        search.clipsToBounds = true
+        search.layer.cornerRadius = side / 2
+        search.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        search.setImage(SeamGlyph93.image(.search, pointSize: 18),
+                        for: .normal)
+        search.tintColor = .white
+        search.translatesAutoresizingMaskIntoConstraints = false
+        search.addTarget(self, action: #selector(searchTapped102),
+                         for: .touchUpInside)
+        view.addSubview(search)
+        searchButton102 = search
+
+        let capsule = UIView()
+        capsule.backgroundColor = UIColor.black.withAlphaComponent(0.35)
+        capsule.layer.cornerRadius = 18
+        capsule.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(capsule)
+        viewCapsule102 = capsule
+        let glyphs: [UIImage?] = [
+            SeamGlyph93.image(.layoutGrid, pointSize: 17),
+            SeamGlyph93.image(.layoutList, pointSize: 17),
+            SeamGlyph93.image(.layoutAlbum, pointSize: 17),
+            PosterGlyph102.image(pointSize: 17),
+        ]
+        for (i, glyph) in glyphs.enumerated() {
+            let b = UIButton(type: .custom)
+            b.tag = i
+            b.tintColor = .white
+            b.setImage(glyph, for: .normal)
+            b.layer.cornerRadius = 14
+            b.translatesAutoresizingMaskIntoConstraints = false
+            b.addTarget(self, action: #selector(viewCapsuleTapped102(_:)),
+                        for: .touchUpInside)
+            capsule.addSubview(b)
+            viewCapsuleButtons102.append(b)
+            NSLayoutConstraint.activate([
+                b.topAnchor.constraint(equalTo: capsule.topAnchor, constant: 4),
+                b.bottomAnchor.constraint(equalTo: capsule.bottomAnchor, constant: -4),
+                b.widthAnchor.constraint(equalToConstant: 34),
+                b.leadingAnchor.constraint(
+                    equalTo: i == 0 ? capsule.leadingAnchor
+                        : viewCapsuleButtons102[i - 1].trailingAnchor,
+                    constant: i == 0 ? 4 : 2),
+                i == glyphs.count - 1
+                    ? b.trailingAnchor.constraint(
+                        equalTo: capsule.trailingAnchor, constant: -4)
+                    : b.trailingAnchor.constraint(
+                        lessThanOrEqualTo: capsule.trailingAnchor, constant: -4),
+            ])
+        }
+        NSLayoutConstraint.activate([
+            avatar.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor,
+                constant: PlaylistLayout102.headerInset),
+            avatar.topAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 8),
+            avatar.widthAnchor.constraint(equalToConstant: side),
+            avatar.heightAnchor.constraint(equalToConstant: side),
+            search.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -PlaylistLayout102.headerInset),
+            search.topAnchor.constraint(equalTo: avatar.topAnchor),
+            search.widthAnchor.constraint(equalToConstant: side),
+            search.heightAnchor.constraint(equalToConstant: side),
+            capsule.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            capsule.topAnchor.constraint(equalTo: avatar.topAnchor),
+            capsule.heightAnchor.constraint(equalToConstant: side),
+        ])
+        syncPosterChrome102()
+        refreshViewCapsule102()
+    }
+
+    /// 头像/胶囊显隐收口：缝展开时两件皆隐（样板口径：
+    /// 头像是缝的收起形态、胶囊在缝收起时常驻）；海报
+    /// 形态下缝已收起、两件皆显。搜索钮常驻不随。
+    private func syncPosterChrome102() {
+        let seamUp = seamExpanded85 && !posterActive102
+        avatarButton102?.isHidden = seamUp
+        viewCapsule102?.isHidden = seamUp
+    }
+
+    private func refreshViewCapsule102() {
+        for (i, b) in viewCapsuleButtons102.enumerated() {
+            let selected = posterActive102 ? i == 3 : i == playlistLayout91
+            b.backgroundColor = selected
+                ? UIColor.white.withAlphaComponent(0.28) : .clear
+        }
+    }
+
+    @objc private func avatarTapped102() {
+        // 缝全隐时先重开（120 档），再走展开收口（系统
+        // 弹簧口径由缝补间既有实现承担，与缝内点按展开
+        // 同路）。
+        if SeamState85.levelHidden { reopenPlaylistSeam85() }
+        if !seamExpanded85 { setPlaylistSeamExpanded85(true) }
+        Breadcrumbs.log("p102 avatar expand seam")
+    }
+
+    @objc private func searchTapped102() {
+        SearchHostPresenter.presentSearch(from: self)
+    }
+
+    @objc private func viewCapsuleTapped102(_ sender: UIButton) {
+        if sender.tag == 3 {
+            activatePoster102()
+        } else {
+            deactivatePoster102()
+            switchPlaylistLayout93(sender.tag)
+            refreshViewCapsule102()
+        }
+    }
+
+    /// 进海报形态：缝面收起让位（头像形态）、台常驻
+    /// （海报层本就在台之下）、海报数据以当前 entries
+    /// 装配、起始位对齐当前播放序位（无则 0）。
+    private func activatePoster102() {
+        guard let poster = posterView102 else { return }
+        if seamExpanded85 { setPlaylistSeamExpanded85(false) }
+        posterActive102 = true
+        refreshPosterItems102(force: true)
+        poster.isHidden = false
+        poster.alpha = 0
+        UIView.animate(withDuration: 0.3, delay: 0,
+                       options: [.curveEaseOut]) {
+            poster.alpha = 1
+        }
+        if let current = PlaybackEngine.shared.currentTrack,
+           let idx = entries.firstIndex(where: { $0.id == current.id }) {
+            poster.scrollTo(index: idx, animated: false)
+        }
+        syncPosterChrome102()
+        refreshViewCapsule102()
+        Breadcrumbs.log("p102 poster on n=\(entries.count)")
+    }
+
+    private func deactivatePoster102() {
+        guard posterActive102 else { return }
+        posterActive102 = false
+        posterView102?.isHidden = true
+        syncPosterChrome102()
+        refreshViewCapsule102()
+        Breadcrumbs.log("p102 poster off")
+    }
+
+    /// entries 变更后刷新海报数据（浏览中不打断：海报
+    /// 激活态跳过，退出重进时 force 装配）。
+    private func refreshPosterItems102(force: Bool = false) {
+        guard let poster = posterView102 else { return }
+        if posterActive102 && !force { return }
+        poster.setItems(entries.map {
+            PosterView102.Item(title: $0.title,
+                               artist: $0.subtitle ?? "",
+                               picUrl: $0.picUrl)
+        })
     }
 
     /// (94) 94-4：歌单缝「我喜欢」落点——与主页缝同目的
@@ -2381,6 +2625,7 @@ final class WallPrototypeViewController: UIViewController,
         }
         startSeamTween85(toWidth: 0, toOriginX: nil)
         Breadcrumbs.log("seam85 fold host=wall")
+        syncPosterChrome102()
     }
 
     private func reopenPlaylistSeam85() {
@@ -2391,6 +2636,7 @@ final class WallPrototypeViewController: UIViewController,
         seamPlanned85 = true
         startSeamTween85(toWidth: 120, toOriginX: plan.originX)
         Breadcrumbs.log("seam85 reopen host=wall anchor=\(Int(plan.anchor))")
+        syncPosterChrome102()
     }
 
     /// 缝开合补间（与主页缝同式：CADisplayLink、开口
@@ -3238,6 +3484,7 @@ final class WallPrototypeViewController: UIViewController,
                     self.nativeTracks = detail.tracks
                     self.allTrackIds = detail.trackIds
                     self.entries = seed
+                    self.refreshPosterItems102()
                     self.wallLayout.totalEntries = total
                     // 数据变更点（(58)）：条目身份代指递增，实例
                     // 集缓存随之失效重算（与 totalEntries 同批）。
@@ -3366,6 +3613,7 @@ final class WallPrototypeViewController: UIViewController,
                         self.entries.append(contentsOf: chunk.map {
                             Entry(id: $0.id, title: $0.name, picUrl: $0.picUrl, subtitle: $0.artists)
                         })
+                        self.refreshPosterItems102()
                         // 分页进度文案已删（3.7 (53) L 组）：拼接
                         // 照常推进，只刷新墙面，不再上屏计数。
                         // (97) 第 11 条：同种子落点——隐藏墙跳过

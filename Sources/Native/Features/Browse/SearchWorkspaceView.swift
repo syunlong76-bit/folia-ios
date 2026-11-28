@@ -150,7 +150,10 @@ struct SearchWorkspaceView: View {
         stageTheme101 == .meadow || stageTheme101 == .snow
     }
     private var sub101: Color {
-        stageLight101 ? cardInk.opacity(0.55) : sub101
+        // (102) 第 4 项修复：(101) else 分支误写自引用 sub101，
+        // 深色主题（star/ocean/none）求值即无限递归被尾调用
+        // 压成死循环卡死。改回 FoliaTheme.secondary。
+        stageLight101 ? cardInk.opacity(0.55) : FoliaTheme.secondary
     }
     private var field101: Color {
         stageLight101 ? Color.black.opacity(0.06) : FoliaTheme.field

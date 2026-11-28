@@ -60,7 +60,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Virelai
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "101"
+        CFBundleVersion: "102"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -101,6 +101,8 @@ targets:
         # 唯一生效源；仓库根 Info.plist 无此键、Widgets
         # Info.plist 文件不存在，无第二份同名键可覆盖。
         NSFaceIDUsageDescription: "解锁你的音乐日记本"
+        # (102) 第 2 项：打印完成态「保存图片」写相册用。
+        NSPhotoLibraryAddUsageDescription: "把打印好的日记页存进你的相册"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSExceptionDomains:
@@ -144,7 +146,7 @@ targets:
       properties:
         CFBundleDisplayName: FoliaWidgets
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "101"
+        CFBundleVersion: "102"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

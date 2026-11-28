@@ -1479,7 +1479,7 @@ final class HomeWallViewController: UIViewController,
         let bar = MiniBarHitView()
         bar.backgroundColor = .clear
         // (95) 第 1 条：胶囊台高 62、bar 圆角取半高 31。
-        bar.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        bar.layer.cornerRadius = DeckLayout82.expandedRadius102
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -1541,7 +1541,7 @@ final class HomeWallViewController: UIViewController,
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        blur.layer.cornerRadius = DeckLayout82.expandedRadius102
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -1603,7 +1603,7 @@ final class HomeWallViewController: UIViewController,
         miniRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        glassTint.layer.cornerRadius = DeckLayout82.expandedRadius102
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -1975,7 +1975,7 @@ final class HomeWallViewController: UIViewController,
         // −14 系三行版式收口、随紧凑台退役）。
         // (87) 样片台：进度行独立、轨底锚 −9。
         // (95) 第 6 条：展开态轨底锚 −7 → −2（细轨贴胶囊下沿）。
-        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -2)
+        miniTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -DeckLayout82.expandedTrackBottomInset102)
         miniTrackTopC?.isActive = true
         miniTrackBottomConstraint = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -5.5)
         miniTrackBottomConstraint?.isActive = false
@@ -2896,7 +2896,7 @@ final class HomeWallViewController: UIViewController,
         // 收起（线身不再挂点）。台体容器不动（宽/高/命中带
         // 原样，命中区不随视觉缩小——第 4 项反方向纪律）。
         // 底距 −5.5 使 5pt 线在 16pt 容器内居中。
-        miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -7
+        miniTrackBottomConstraint?.constant = collapsed ? -5.5 : -DeckLayout82.expandedTrackBottomInset102
         // (81) 第 1 条两态口径（盖过 (79) 的恒 134——展开台
         // 里短轨悬在中段系 (79) 做过头，Miller (79) 验收图
         // 证点名）：收起态居中 134×5 短轨（与 home
@@ -2937,10 +2937,16 @@ final class HomeWallViewController: UIViewController,
         // 起态不再压平（(82) 的 0.25 压平是花朵把手专用，
         // 随花朵退役；(80)/(23) 口径圆点两态同形）。
         miniProgressKnob.transform = .identity
-        // (95) 第 1 条：展开圆角随胶囊新高改 31（收起 8 不动）。
-        let radius: CGFloat = collapsed ? 8 : 36
+        // (102) 第 5 项：圆角四层同写单源值（旧字面量
+        // 36 只写台身/毛玻璃、玻璃罩停 42、主题层 35，
+        // 不共心露边即此）；展开 = 当前台高之半、收起 8。
+        let radius: CGFloat = DeckLayout82.radius102(
+            collapsed: collapsed,
+            barHeight: MiniBarQuickRowView.expandedBarHeight)
         miniBar?.layer.cornerRadius = radius
         miniBlurView?.layer.cornerRadius = radius
+        miniGlassTint?.layer.cornerRadius = radius
+        miniThemeLayer?.setCornerRadius(radius)
         // 收起态命中带（3.7 (21.1)）：视觉仍 16pt，纵向命中
         // 扩到 44pt（上下各 14pt）；展开态归零，原分发不变。
         // 全部形态切换（收起/展开/边沿复位）都经此收口，开关
@@ -2980,6 +2986,11 @@ final class HomeWallViewController: UIViewController,
             let dy = abs(miniProgressKnob.center.y - miniProgressTrack.center.y)
             Breadcrumbs.log("p97 knob home dy=\(String(format: "%.1f", dy))"
                 + " col=\(collapsed ? 1 : 0)")
+            // (102) 第 5 项自证：把手出台量＋四层圆角实测。
+            DeckGeometry102.log(host: "home", bar: bar,
+                                blur: miniBlurView, glass: miniGlassTint,
+                                theme: miniThemeLayer,
+                                knob: miniProgressKnob)
         }
         // (63) 第 2 条形态面包屑：每次形态收口落一行——标志/
         // 几何高/三识别器启停位同行，下轮日志一次判清标志与

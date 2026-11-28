@@ -90,7 +90,10 @@ final class MiniPlayerThemeLayer: UIView {
     init() {
         super.init(frame: .zero)
         isUserInteractionEnabled = false
-        layer.cornerRadius = 35
+        // (102) 第 5 项：初值改走 DeckLayout82 单源（旧硬
+        // 编码 35 与台身 42 不共心露边即此层）；宿主形态
+        // 切换时再以 setCornerRadius 随台高回写。
+        layer.cornerRadius = DeckLayout82.expandedRadius102
         layer.borderWidth = 1
         layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         clipsToBounds = true
@@ -183,6 +186,13 @@ final class MiniPlayerThemeLayer: UIView {
     }
 
     // MARK: 宿主接口
+
+    /// (102) 第 5 项：圆角回写口——三宿主形态收口时以
+    /// DeckLayout82 单源值调用，使主题层与台身/毛玻璃/
+    /// 玻璃罩四层恒同值共心（旧 35 硬编码退役）。
+    func setCornerRadius(_ radius: CGFloat) {
+        layer.cornerRadius = radius
+    }
 
     func apply(theme newTheme: MiniPlayerTheme) {
         theme = newTheme

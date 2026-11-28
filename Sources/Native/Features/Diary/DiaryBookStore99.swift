@@ -50,12 +50,19 @@ struct DiaryEntry99: Codable, Identifiable, Equatable {
     var songArtwork: String?
     /// true = 由今日草稿确认生成（卡面打「今日草稿」标）。
     var fromDraft: Bool
+    /// (102) 第 2 项：正文字体名（nil = 默认 Songti）。
+    /// 与 scanAllowed 一起走 decodeIfPresent 回落，旧档零迁移。
+    var fontName: String? = nil
+    /// (102) 第 2 项：「允许扫码访问」——控制打印页是否
+    /// 印二维码与访客页可见性；旧档缺键回落 true。
+    var scanAllowed: Bool = true
 }
 
 extension DiaryEntry99 {
     private enum CodingKeys101: String, CodingKey {
         case id, dateKey, createdAt, text, mood, stickerNames, placements
         case songId, songTitle, songArtist, songArtwork, fromDraft
+        case fontName, scanAllowed
     }
 
     /// 旧档兼容解码：placements 缺键回落空数组，其余键与
@@ -75,6 +82,8 @@ extension DiaryEntry99 {
         songArtist = try c.decodeIfPresent(String.self, forKey: .songArtist)
         songArtwork = try c.decodeIfPresent(String.self, forKey: .songArtwork)
         fromDraft = try c.decode(Bool.self, forKey: .fromDraft)
+        fontName = try c.decodeIfPresent(String.self, forKey: .fontName)
+        scanAllowed = try c.decodeIfPresent(Bool.self, forKey: .scanAllowed) ?? true
     }
 
     func encode(to encoder: Encoder) throws {
@@ -91,6 +100,8 @@ extension DiaryEntry99 {
         try c.encodeIfPresent(songArtist, forKey: .songArtist)
         try c.encodeIfPresent(songArtwork, forKey: .songArtwork)
         try c.encode(fromDraft, forKey: .fromDraft)
+        try c.encodeIfPresent(fontName, forKey: .fontName)
+        try c.encode(scanAllowed, forKey: .scanAllowed)
     }
 }
 
@@ -190,7 +201,8 @@ final class DiaryStore99: ObservableObject {
     @discardableResult
     func addEntry(text: String, mood: String?, stickerNames: [String],
                   placements: [DiaryStickerPlacement99] = [],
-                  song: DiarySong90?) -> DiaryEntry99 {
+                  song: DiarySong90?,
+                  fontName: String? = nil) -> DiaryEntry99 {
         let entry = DiaryEntry99(
             id: UUID().uuidString,
             dateKey: Self.dateKey(for: Date()),
@@ -198,7 +210,7 @@ final class DiaryStore99: ObservableObject {
             text: text, mood: mood, stickerNames: stickerNames,
             placements: placements,
             songId: song?.id, songTitle: song?.title, songArtist: song?.artist,
-            songArtwork: song?.artwork, fromDraft: false)
+            songArtwork: song?.artwork, fromDraft: false, fontName: fontName)
         entries.insert(entry, at: 0)
         editorAutosave = ""
         save()
@@ -324,8 +336,11 @@ struct DiarySticker99: Identifiable {
     let relativeName: String
     let category: String
 
+    var isAnimatedDog102: Bool { relativeName == "pets/dog-11" }
+
     /// bundle 内实文件（folder reference Resources/Diary → "Diary/Stickers/..."）。
     var image: UIImage? {
+        if isAnimatedDog102 { return DiaryDogFrame102.image }
         let parts = relativeName.split(separator: "/")
         guard parts.count == 2 else { return nil }
         if let url = Bundle.main.url(forResource: String(parts[1]), withExtension: "png",
@@ -337,6 +352,11 @@ struct DiarySticker99: Identifiable {
 
     static let all: [DiarySticker99] = {
         let catalog: [(String, [String])] = [
+            // (102) 第 2 项：抱心狗动态贴纸——素材是宠物池
+            // 的 dog-11 APNG（Resources/Stickers），不在
+            // Diary/Stickers 目录下；image 走 DiaryDogFrame102
+            // 定格帧，动效由画布 APNG 视图承载（打印定格）。
+            ("pets", ["dog-11"]),
             ("faces", ["crying_face_3d", "face_blowing_a_kiss_3d", "face_with_tears_of_joy_3d",
                        "pensive_face_3d", "sleeping_face_3d", "smiling_face_with_heart-eyes_3d",
                        "smiling_face_with_hearts_3d", "smiling_face_with_smiling_eyes_3d",

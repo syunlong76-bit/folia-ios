@@ -225,6 +225,20 @@ final class StageViewController: UIViewController {
     private var webRotRevealWork81: DispatchWorkItem?
     private var webRotGen81 = 0
     private var webRotStart81: CFTimeInterval = 0
+    /// (102) 第 6 项：原生样式旋转遮面——(100) 盖面只覆
+    /// 盖网页层，原生渲染层旋转时仍被系统当刚性平面斜转
+    /// （23:49 真机录屏：整层歪斜＋黑角＋落定顿挫）。本盖
+    /// 为对角线过尺寸的快照盖（居中约束钉住、边长取新旧
+    /// 两画幅对角线之大者＋余量）：随根视图转场旋转时边
+    /// 缘恒覆满屏幕四角、不露黑；盖下舞台按既有冻结管线
+    /// 以目标尺寸单轮重排，渲染器帧循环不停（冻结只门控
+    /// 布局、不动 setLifecycle/displayLink），landed 交叉
+    /// 淡入揭盖到已在新尺寸运行的活画面——无黑闪、无冻
+    /// 帧跳变。真机定案前本注释不构成验收结论。
+    private var nativeRotCover102: UIView?
+    private var nativeRotCoverGen102 = 0
+    private var nativeRotCoverStart102: CFTimeInterval = 0
+    private var nativeRotCoverSafety102: DispatchWorkItem?
     /// §0 量测节流（3.7 (67) B 组）：tick.pos 每 30 帧一行、
     /// sync.per5 每 5 秒一行。
     private var syncProbeTickCount = 0
@@ -763,6 +777,13 @@ final class StageViewController: UIViewController {
         Breadcrumbs.log("stage protocol v=\(LyricStageProtocolInfo.version)"
             + " hostWordSync=\(LyricStageProtocolInfo.hostCapabilities.supportsWordSync ? 1 : 0)")
         view.backgroundColor = .black
+        // (102) 第 7 项：全局右滑退出补到舞台页（(101) 装机
+        // 清单未含舞台，本包动了舞台旋转故一并补齐）——
+        // 左缘右滑 = closeButton 同路 closeStage()，经
+        // StageExitGate 正规退出。
+        EdgeBack101.install(on: self, page: "stage") { [weak self] in
+            self?.closeStage()
+        }
         buildLayout()
         // (62) WD 墙后画面挂载（WA 预留点，签名任务定死）。
         StageBackdrop62.attach(to: backdrop62Container)
@@ -1038,6 +1059,14 @@ final class StageViewController: UIViewController {
         if webEmbedStyleId != nil {
             beginWebRotCover81(generation: generation)
         }
+        // (102) 第 6 项：原生样式同拍上遮面（网页样式走
+        // 上面的 WebView 盖、两路互斥）。盖在冻结拍装、按
+        // 目标尺寸重排在盖下进行（alongside 既有单轮
+        // layoutStage），landed 经 p98RotReleaseAtLanded
+        // 揭盖；另设 900ms 有界兜底防盖滞留（cap102）。
+        if webEmbedStyleId == nil {
+            installNativeRotCover102(generation: generation, targetSize: size)
+        }
         coordinator.animate(alongsideTransition: { [weak self] _ in
             guard let self else { return }
             self.applySeamBandOrientation(portrait: size.width < size.height)
@@ -1207,6 +1236,14 @@ final class StageViewController: UIViewController {
             Breadcrumbs.log("p94 rot lyric x=\(left)"
                 + " w=\(Int(view.bounds.width) - left - right)")
         }
+        // (102) 第 6 项：原生盖在 landed 当场揭——盖下布
+        // 局已按目标尺寸补齐（上方 p94RotCatchUpLayout）、
+        // 渲染器未停帧，交叉淡入即活画面；揭后不进网页
+        // 盖的有界等待链。
+        if nativeRotCover102 != nil {
+            revealNativeRotCover102(via: "landed102")
+            return
+        }
         guard webRotCover81 != nil else { return }
         if p94RotStageReady {
             revealWebRotCover81(via: "landed98")
@@ -1326,6 +1363,82 @@ final class StageViewController: UIViewController {
             UserDefaults.standard.set(saved, forKey: "folia.rot84.last")
         }
         Breadcrumbs.logSync("rot84 ready gen=\(webRotGen81) ms=\(ms) web=1")
+        UIView.animate(withDuration: 0.25, delay: 0,
+                       options: [.curveEaseOut, .beginFromCurrentState]) {
+            cover.alpha = 0
+        } completion: { _ in
+            cover.removeFromSuperview()
+        }
+    }
+
+    /// (102) 第 6 项：原生旋转遮面装盖——冻结拍对整台
+    /// 取快照（snapshotView 走渲染服务器合成帧、含 Metal
+    /// 层画面），装进对角线过尺寸的居中方盖：方盖边长 =
+    /// max(现画幅, 目标画幅) 对角线 + 4，中心以约束钉在
+    /// 台心——转场旋转全程方盖边缘恒在屏幕四角之外，黑
+    /// 角无从露出；快照在方盖内按 aspectFill 居中裁切
+    /// （0.3s 级转场里裁切可接受、拉伸不可）。快照失败
+    /// 退纯色盖（取台背景色，仍遮刚性倾斜并落 miss 痕）。
+    private func installNativeRotCover102(generation: Int,
+                                          targetSize: CGSize) {
+        nativeRotCover102?.removeFromSuperview()
+        nativeRotCoverSafety102?.cancel()
+        nativeRotCoverGen102 = generation
+        nativeRotCoverStart102 = CACurrentMediaTime()
+        let cur = view.bounds.size
+        let diag = ceil(max(
+            (cur.width * cur.width + cur.height * cur.height).squareRoot(),
+            (targetSize.width * targetSize.width
+                + targetSize.height * targetSize.height).squareRoot())) + 4
+        let cover = UIView()
+        cover.backgroundColor = view.backgroundColor ?? .black
+        cover.clipsToBounds = true
+        cover.isUserInteractionEnabled = false
+        cover.translatesAutoresizingMaskIntoConstraints = false
+        if let snap = view.snapshotView(afterScreenUpdates: false),
+           cur.width > 0, cur.height > 0 {
+            let scale = max(diag / cur.width, diag / cur.height)
+            snap.frame = CGRect(
+                x: (diag - cur.width * scale) / 2,
+                y: (diag - cur.height * scale) / 2,
+                width: cur.width * scale, height: cur.height * scale)
+            snap.isUserInteractionEnabled = false
+            cover.addSubview(snap)
+        } else {
+            Breadcrumbs.log("p102 rot natcov miss=1 gen=\(generation)")
+        }
+        view.addSubview(cover)
+        NSLayoutConstraint.activate([
+            cover.centerXAnchor.constraint(equalTo: view.centerXAnchor),
+            cover.centerYAnchor.constraint(equalTo: view.centerYAnchor),
+            cover.widthAnchor.constraint(equalToConstant: diag),
+            cover.heightAnchor.constraint(equalToConstant: diag),
+        ])
+        nativeRotCover102 = cover
+        Breadcrumbs.log("p102 rot natcov gen=\(generation)"
+            + " side=\(Int(diag))")
+        // 有界兜底：landed 结算异常未达时 900ms 强揭，盖
+        // 绝不滞留（与网页盖 cap98 同纪律）。
+        let work = DispatchWorkItem { [weak self] in
+            guard let self,
+                  generation == self.nativeRotCoverGen102,
+                  self.nativeRotCover102 != nil else { return }
+            self.revealNativeRotCover102(via: "cap102")
+        }
+        nativeRotCoverSafety102 = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.9, execute: work)
+    }
+
+    /// (102) 第 6 项：原生旋转遮面揭盖——与网页盖同式
+    /// 0.25s 交叉淡出（系统转场节奏），揭后盖下即已在新
+    /// 尺寸运行的活画面。重复调用自守卫空转。
+    private func revealNativeRotCover102(via: String) {
+        guard let cover = nativeRotCover102 else { return }
+        nativeRotCover102 = nil
+        nativeRotCoverSafety102?.cancel()
+        nativeRotCoverSafety102 = nil
+        let ms = Int((CACurrentMediaTime() - nativeRotCoverStart102) * 1000)
+        Breadcrumbs.logSync("p102 rot natcov reveal via=\(via) ms=\(ms)")
         UIView.animate(withDuration: 0.25, delay: 0,
                        options: [.curveEaseOut, .beginFromCurrentState]) {
             cover.alpha = 0
@@ -2276,6 +2389,11 @@ final class StageViewController: UIViewController {
         webRotRevealWork81 = nil
         webRotCover81?.removeFromSuperview()
         webRotCover81 = nil
+        // (102) 第 6 项：原生旋转盖同清、兜底计时作废。
+        nativeRotCoverSafety102?.cancel()
+        nativeRotCoverSafety102 = nil
+        nativeRotCover102?.removeFromSuperview()
+        nativeRotCover102 = nil
         guard webEmbedStyleId != nil else { return }
         let webView = WebEffectBridge.shared.webView
         if webView.superview === rendererContainer {
@@ -3314,7 +3432,7 @@ final class StageViewController: UIViewController {
         let bar = stageBar
         bar.backgroundColor = .clear
         // (95) 第 11 条：台身圆角 35→31（胶囊形态，四宿主同值）。
-        bar.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        bar.layer.cornerRadius = DeckLayout82.expandedRadius102
         bar.layer.shadowColor = UIColor.black.cgColor
         bar.layer.shadowOpacity = 0.25
         bar.layer.shadowRadius = 20
@@ -3371,7 +3489,7 @@ final class StageViewController: UIViewController {
         // 另有长按宠物本体一路。
 
         let blur = UIVisualEffectView(effect: UIBlurEffect(style: .systemUltraThinMaterialDark))
-        blur.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        blur.layer.cornerRadius = DeckLayout82.expandedRadius102
         blur.layer.borderWidth = 1
         blur.layer.borderColor = UIColor.white.withAlphaComponent(0.30).cgColor
         blur.clipsToBounds = true
@@ -3411,7 +3529,7 @@ final class StageViewController: UIViewController {
         stageRimLight = rimLight
         let glassTint = UIView()
         glassTint.backgroundColor = UIColor.white.withAlphaComponent(0.06)
-        glassTint.layer.cornerRadius = MiniBarQuickRowView.expandedBarHeight / 2
+        glassTint.layer.cornerRadius = DeckLayout82.expandedRadius102
         glassTint.isUserInteractionEnabled = false
         glassTint.translatesAutoresizingMaskIntoConstraints = false
         bar.addSubview(glassTint)
@@ -3764,7 +3882,7 @@ final class StageViewController: UIViewController {
         // 6 条：展开锚改台底 −14（封面行退役，同两面墙）。
         // (95) 第 11 条：展开轨底锚 constant 改 −2（细轨
         // 贴胶囊下沿）。
-        stageTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -2)
+        stageTrackTopC = progressTrack.bottomAnchor.constraint(equalTo: bar.bottomAnchor, constant: -DeckLayout82.expandedTrackBottomInset102)
         stageTrackTopC?.isActive = true
         stageTrackBottomConstraint = progressTrack.bottomAnchor.constraint(
             equalTo: bar.bottomAnchor, constant: -5.5)
@@ -4301,7 +4419,7 @@ final class StageViewController: UIViewController {
         // 不动。底距 −5.5 使 5pt 线在 16pt 容器内居中。
         // (95) 第 11 条：展开侧底锚值同步 −2（本约束仅收
         // 起态激活、展开值仅为休眠回写，收起 −5.5 不动）。
-        stageTrackBottomConstraint?.constant = collapsed ? -5.5 : -2
+        stageTrackBottomConstraint?.constant = collapsed ? -5.5 : -DeckLayout82.expandedTrackBottomInset102
         // (81) 第 1 条两态口径（盖过 (79) 的恒 134，与两
         // 面墙台同账）：收起态居中 134×5 短轨；展开态还
         // 原台内全宽长 seek 轨（lead/trail ±24（(96) E 项
@@ -4339,10 +4457,14 @@ final class StageViewController: UIViewController {
         // (84) 第 1 条：把手已复原 (80) 圆点/皮肤形态，收
         // 起态不再压平（同两面墙）。
         stageProgressKnob?.transform = .identity
-        // (95) 第 11 条：展开圆角 35→31（收起 8 不动）。
-        let radius: CGFloat = collapsed ? 8 : 36
+        // (102) 第 5 项：圆角四层同写单源值（同两面墙）。
+        let radius: CGFloat = DeckLayout82.radius102(
+            collapsed: collapsed,
+            barHeight: MiniBarQuickRowView.expandedBarHeight)
         stageBar.layer.cornerRadius = radius
         stageBlurView?.layer.cornerRadius = radius
+        stageGlassTint?.layer.cornerRadius = radius
+        stageThemeLayer?.setCornerRadius(radius)
         stageBar.hitExpansionY = collapsed ? 14 : 0
         // (84) 第 1 条：主题层复原 (80) 形态口径（同两面墙）。
         stageThemeLayer?.isHidden = collapsed
@@ -4364,6 +4486,11 @@ final class StageViewController: UIViewController {
             let dy = abs(knob.center.y - track.center.y)
             Breadcrumbs.log("p97 knob stage dy=\(String(format: "%.1f", dy))"
                 + " col=\(collapsed ? 1 : 0)")
+            // (102) 第 5 项自证：把手出台量＋四层圆角实测。
+            DeckGeometry102.log(host: "stage", bar: stageBar,
+                                blur: stageBlurView, glass: stageGlassTint,
+                                theme: stageThemeLayer,
+                                knob: stageProgressKnob)
         }
         setNeedsUpdateOfHomeIndicatorAutoHidden()
         Breadcrumbs.log("p97 hind=\(prefersHomeIndicatorAutoHidden ? 1 : 0)")

@@ -757,6 +757,72 @@ enum DeckLayout82 {
     static let collapsedBottomGap: CGFloat = 8
     static let collapsedCornerRadius: CGFloat = 2.5
     static let deckCornerRadius: CGFloat = 35
+
+    // MARK: (102) 第 5 项播放台根治——几何单源（全宿主同值）
+    //
+    // 病一（把手出台）：展开态轨道底锚（变量名 TrackTopC、
+    // 实为 progressTrack.bottom = bar.bottom − 2）＋轨高 3
+    // ＋把手心锚轨心 → 轨心距台底 3.5、14pt 把手底边恒出台
+    // 底 3.5pt（(96) 已把修法写进注释、激活约束没落地）。
+    // 根治：轨道底距由公式算死——把手底边距台底留
+    // knobBottomClearance102：
+    //   inset = clearance + knob/2 − track/2
+    //         = 1.5 + 7 − 1.5 = 7。
+    // 三宿主展开态轨道底锚一律写本常量，不许再写字面量。
+    static let knobDiameter102: CGFloat = 14
+    static let expandedTrackHeight102: CGFloat = 3
+    static let knobBottomClearance102: CGFloat = 1.5
+    static var expandedTrackBottomInset102: CGFloat {
+        knobBottomClearance102 + knobDiameter102 / 2
+            - expandedTrackHeight102 / 2
+    }
+    /// 按现行公式回算把手底边出台量（>0 即出台）：旧锚
+    /// inset=2 时 = 7 − (2 + 1.5) = 3.5，与诊断逐点吻合；
+    /// 新锚 inset=7 时 = −1.5（台内留白）。
+    static func knobOverflowBelow102(trackBottomInset: CGFloat) -> CGFloat {
+        knobDiameter102 / 2 - (trackBottomInset + expandedTrackHeight102 / 2)
+    }
+
+    // 病二（四层四圆角）：台身/毛玻璃/玻璃罩/主题层曾各
+    // 写 36/36/42/35——形态收口只回写台身＋毛玻璃 36、玻
+    // 璃罩停在构建初值 42、主题层自带硬编码 35，两条圆弧
+    // 不共心即露边。根治：展开圆角恒为当前台高之半（胶囊
+    // 定义）、收起圆角单源 8；四层每次写值都经本出处，
+    // 主题层经 MiniPlayerThemeLayer.setCornerRadius 回写。
+    static var expandedRadius102: CGFloat {
+        MiniBarQuickRowView.expandedBarHeight / 2
+    }
+    static func radius102(collapsed: Bool, barHeight: CGFloat) -> CGFloat {
+        collapsed ? collapsedBarRadius102 : barHeight / 2
+    }
+    static let collapsedBarRadius102: CGFloat = 8
+}
+
+/// (102) 第 5 项自证：形态收口后由三宿主各调一次——
+/// deck.geo 报把手底边出台量（实测帧，须 ≤0）、deck.radii
+/// 报四层圆角实测值与全等标志。判读口径预登记：真机展开
+/// 台一次形态切换，日志须同窗出现两行且 overflowBelow
+/// ≤0、eq=1，否则根治未达执行路径。
+enum DeckGeometry102 {
+    static func log(host: String, bar: UIView, blur: UIView?,
+                    glass: UIView?, theme: MiniPlayerThemeLayer?,
+                    knob: UIView?) {
+        bar.layoutIfNeeded()
+        var overflow = -999.0
+        if let knob {
+            overflow = Double(knob.frame.maxY - bar.bounds.height)
+        }
+        let radii = [bar.layer.cornerRadius, blur?.layer.cornerRadius,
+                     glass?.layer.cornerRadius, theme?.layer.cornerRadius]
+        let vals = radii.map { $0.map { String(format: "%.1f", $0) } ?? "-" }
+        let present = radii.compactMap { $0 }
+        let eq = present.count == 4
+            && present.allSatisfy { abs($0 - present[0]) < 0.01 } ? 1 : 0
+        Breadcrumbs.log("deck.geo host=\(host)"
+            + " overflowBelow=\(String(format: "%.1f", overflow))")
+        Breadcrumbs.log("deck.radii host=\(host)"
+            + " v=\(vals.joined(separator: "/")) eq=\(eq)")
+    }
 }
 
 /// (84) 第 2 条：收起条改回 (80) 形态——我方条贴在系统
