@@ -2188,7 +2188,7 @@ final class HomeSeam85View: UIView {
         onCloud?()
     }
 
-    /// (93) C2：日记本入口（宿主接 DiaryViewController90）。
+    /// (93) C2：日记本入口（宿主接 DiaryBookViewController99，(100) 统一）。
     @objc private func diaryTapped93() {
         Breadcrumbs.log("p93 seam ent=diary")
         onDiary93?()

@@ -1081,8 +1081,9 @@ final class SettingsViewController: UIViewController {
         }
     }
 
-    /// (98) 第 8 条：旋转转场盲测方式切换（方式一＝freeze
-    /// 冻帧盖、方式二＝live 实时渲染；键与舞台侧同名）。
+    /// (98) 第 8 条：旋转转场盲测方式切换（方式一＝freeze、
+    /// 方式二＝live；键与舞台侧同名。(100) 第 2 项起两方式
+    /// 均设冻帧盖，只剩日志上的模式标记）。
     @objc private func rotMode98Changed() {
         let live = rotMode98Control.selectedSegmentIndex == 1
         UserDefaults.standard.set(live ? "live" : "freeze",

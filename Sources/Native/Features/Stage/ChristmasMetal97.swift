@@ -2,7 +2,9 @@ import MetalKit
 import UIKit
 
 // (97) 第 2 条：圣诞树 GPU 渲染层。旧实现逐帧在 UIView.draw
-// 里以 CGContext 全量重画约 7100 粒×（多数两遍：晕＋芯），
+// 里以 CGContext 全量重画约 7100 粒×（多数两遍：晕＋芯——
+// (100) 勘误：两遍仅指歌词粒与金星，树/雪在旧 CG 与样片里
+// 均为单遍；可见性断点是混合模式不是遍数，见渲染器对账注），
 // 每粒 saveGState/draw/restore，3x 位图 CPU 光栅化——稳态
 // 2.7fps/单帧约 370ms 的成本全在这里。改：粒子位置/尺寸/
 // alpha 仍由 ChristmasTreeStageRenderer 的既有数学逐帧算
@@ -115,16 +117,24 @@ final class XmasMetalCanvas97: MTKView {
 final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
     private(set) var isReady = false
     private var pipelineSprite: MTLRenderPipelineState?
+    // (100) 第 1 项：加色混合管线——样片除歌词暗晕外全部
+    // AdditiveBlending（见 ChristmasTreeStageRenderer 的对账注）；
+    // 暗晕/衬底仍走既有正常混合管线 pipelineSprite。
+    private var pipelineSpriteAdd: MTLRenderPipelineState?
     private var pipelineTri: MTLRenderPipelineState?
     private var atlasTexture: MTLTexture?
     private(set) var lastSprCount98 = 0
     private(set) var lastTriCount98 = 0
+    // (100) 第 1 项：双通道提交数（p100 xmas vis 的 add=/nrm=）。
+    private(set) var lastAddCount100 = 0
+    private(set) var lastNrmCount100 = 0
     private var notexLogged98 = false
     private var uvRects: [CGRect] = []     // 精灵档下标→图集 UV
     private var instanceBuffer: MTLBuffer?
     private var triBuffer: MTLBuffer?
     private var commandQueue: MTLCommandQueue?
-    private var pendingSprites: [XmasSpriteInstance97] = []
+    private var pendingSpritesAdd: [XmasSpriteInstance97] = []
+    private var pendingSpritesNormal: [XmasSpriteInstance97] = []
     private var pendingTris: [XmasSolidTri97] = []
     private var viewSizePt: CGSize = .zero
     private weak var deviceRef: MTLDevice?
@@ -146,7 +156,7 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
         commandQueue = device.makeCommandQueue()
         do {
             let lib = try device.makeLibrary(source: xmasShaderSource97, options: nil)
-            func makePipeline(vs: String, fs: String) throws -> MTLRenderPipelineState {
+            func makePipeline(vs: String, fs: String, additive: Bool = false) throws -> MTLRenderPipelineState {
                 let d = MTLRenderPipelineDescriptor()
                 d.vertexFunction = lib.makeFunction(name: vs)
                 d.fragmentFunction = lib.makeFunction(name: fs)
@@ -157,11 +167,14 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
                 ca.alphaBlendOperation = .add
                 ca.sourceRGBBlendFactor = .one
                 ca.sourceAlphaBlendFactor = .one
-                ca.destinationRGBBlendFactor = .oneMinusSourceAlpha
-                ca.destinationAlphaBlendFactor = .oneMinusSourceAlpha
+                // 加色：目标因子 one（src＋dst，样片 AdditiveBlending
+                // 等价式）；正常混合：既有 oneMinusSourceAlpha 不动。
+                ca.destinationRGBBlendFactor = additive ? .one : .oneMinusSourceAlpha
+                ca.destinationAlphaBlendFactor = additive ? .one : .oneMinusSourceAlpha
                 return try device.makeRenderPipelineState(descriptor: d)
             }
             pipelineSprite = try makePipeline(vs: "vsSprite97", fs: "fsSprite97")
+            pipelineSpriteAdd = try makePipeline(vs: "vsSprite97", fs: "fsSprite97", additive: true)
             pipelineTri = try makePipeline(vs: "vsTri97", fs: "fsTri97")
             instanceBuffer = device.makeBuffer(
                 length: MemoryLayout<XmasSpriteInstance97>.stride * Self.maxSprites,
@@ -169,7 +182,7 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
             triBuffer = device.makeBuffer(
                 length: MemoryLayout<XmasTriVert97>.stride * Self.maxTris * 3,
                 options: [.storageModeShared])
-            isReady = pipelineSprite != nil && pipelineTri != nil
+            isReady = pipelineSprite != nil && pipelineSpriteAdd != nil && pipelineTri != nil
                 && instanceBuffer != nil && triBuffer != nil
                 && commandQueue != nil
         } catch {
@@ -269,17 +282,26 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
         instanceBuffer = nil
         triBuffer = nil
         pipelineSprite = nil
+        pipelineSpriteAdd = nil
         pipelineTri = nil
         commandQueue = nil
-        pendingSprites = []
+        pendingSpritesAdd = []
+        pendingSpritesNormal = []
         pendingTris = []
         isReady = false
     }
 
     /// 一帧的实例集（渲染器在 frameTick 内备好，draw 时消费）。
-    func submit(sprites: [XmasSpriteInstance97], tris: [XmasSolidTri97],
+    /// (100) 第 1 项：双通道提交——additiveSprites 走加色管线
+    /// （树/雪/金链/歌词芯/金星/地面暖光，样片 AdditiveBlending），
+    /// normalSprites 走既有正常混合管线（歌词暗晕 12＋歌词带
+    /// 衬底 15，样片仅有的两处 NormalBlending）。
+    func submit(additiveSprites: [XmasSpriteInstance97],
+                normalSprites: [XmasSpriteInstance97],
+                tris: [XmasSolidTri97],
                 viewSize: CGSize) {
-        pendingSprites = sprites
+        pendingSpritesAdd = additiveSprites
+        pendingSpritesNormal = normalSprites
         pendingTris = tris
         viewSizePt = viewSize
     }
@@ -292,7 +314,7 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
         guard isReady,
               let drawable = view.currentDrawable,
               let pass = view.currentRenderPassDescriptor,
-              let pipelineSprite, let pipelineTri,
+              let pipelineSprite, let pipelineSpriteAdd, let pipelineTri,
               let instanceBuffer, let triBuffer, let commandQueue,
               viewSizePt.width > 0, viewSizePt.height > 0 else { return }
         var viewSize = SIMD2<Float>(Float(viewSizePt.width), Float(viewSizePt.height))
@@ -314,24 +336,43 @@ final class XmasMetalRenderer97: NSObject, MTKViewDelegate {
             enc.setVertexBytes(&viewSize, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
             enc.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: triCount * 3)
         }
-        // 精灵实例。
-        let sprCount = min(pendingSprites.count, Self.maxSprites)
-        lastSprCount98 = sprCount
+        // 精灵实例（(100) 第 1 项双通道：正常混合在前、加色在后——
+        // 正常通道只含暗晕/衬底，本就在芯后方；样片绘制序亦为晕
+        // renderOrder 2 在芯 renderOrder 3 之前。两通道复用同一
+        // 实例缓冲、顺序写入提交；实例总数不变（仍 ≤maxSprites）。
+        let sprAdd = min(pendingSpritesAdd.count, Self.maxSprites)
+        let sprNrm = min(pendingSpritesNormal.count, Self.maxSprites)
+        lastAddCount100 = sprAdd
+        lastNrmCount100 = sprNrm
+        lastSprCount98 = sprAdd + sprNrm
         lastTriCount98 = triCount
-        if sprCount > 0 && atlasTexture == nil && !notexLogged98 {
+        if lastSprCount98 > 0 && atlasTexture == nil && !notexLogged98 {
             notexLogged98 = true
-            Breadcrumbs.log("p98 xmas notex n=\(sprCount)")
+            Breadcrumbs.log("p98 xmas notex n=\(lastSprCount98)")
         }
-        if sprCount > 0, let atlasTexture {
-            let ptr = instanceBuffer.contents()
-                .bindMemory(to: XmasSpriteInstance97.self, capacity: Self.maxSprites)
-            for i in 0..<sprCount { ptr[i] = pendingSprites[i] }
-            enc.setRenderPipelineState(pipelineSprite)
-            enc.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
-            enc.setVertexBytes(&viewSize, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
-            enc.setFragmentTexture(atlasTexture, index: 0)
-            enc.drawPrimitives(type: .triangle, vertexStart: 0,
-                               vertexCount: sprCount * 6)
+        if let atlasTexture {
+            if sprNrm > 0 {
+                let ptr = instanceBuffer.contents()
+                    .bindMemory(to: XmasSpriteInstance97.self, capacity: Self.maxSprites)
+                for i in 0..<sprNrm { ptr[i] = pendingSpritesNormal[i] }
+                enc.setRenderPipelineState(pipelineSprite)
+                enc.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
+                enc.setVertexBytes(&viewSize, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
+                enc.setFragmentTexture(atlasTexture, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0,
+                                   vertexCount: sprNrm * 6)
+            }
+            if sprAdd > 0 {
+                let ptr = instanceBuffer.contents()
+                    .bindMemory(to: XmasSpriteInstance97.self, capacity: Self.maxSprites)
+                for i in 0..<sprAdd { ptr[i] = pendingSpritesAdd[i] }
+                enc.setRenderPipelineState(pipelineSpriteAdd)
+                enc.setVertexBuffer(instanceBuffer, offset: 0, index: 0)
+                enc.setVertexBytes(&viewSize, length: MemoryLayout<SIMD2<Float>>.size, index: 1)
+                enc.setFragmentTexture(atlasTexture, index: 0)
+                enc.drawPrimitives(type: .triangle, vertexStart: 0,
+                                   vertexCount: sprAdd * 6)
+            }
         }
         enc.endEncoding()
         cmd.present(drawable)

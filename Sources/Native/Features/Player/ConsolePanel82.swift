@@ -393,7 +393,7 @@ final class ConsolePanel82: UIViewController,
         }
         polaroidZone90.onOpenDiary = { [weak self] track in
             guard let self else { return }
-            let diary = DiaryViewController90(tagged: track)
+            let diary = DiaryBookViewController99(tagged: track)
             diary.modalPresentationStyle = .fullScreen
             self.present(diary, animated: true)
         }

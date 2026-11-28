@@ -54,6 +54,10 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     private let canvas = XmasMetalCanvas97()
     private let metal97 = XmasMetalRenderer97()
     private var frameSprites97: [XmasSpriteInstance97] = []
+    // (100) 第 1 项：正常混合通道实例数组（只含歌词暗晕 12＋
+    // 歌词带衬底 15，样片仅有的两处 NormalBlending；其余全部
+    // 走 frameSprites97 加色通道——见 appendSprite97 上方对账注）。
+    private var frameSpritesNormal97: [XmasSpriteInstance97] = []
     // (99) 第 1 项：分池实际绘制计数（最近一帧 buildFrame97
     // 内 append 成功数，即真进实例数组、会被 GPU 提交的数，
     // 非分配数）；noteFrameInterval 随 spr 节奏落 p99 pool 行。
@@ -61,6 +65,14 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     private var poolTree99 = 0
     private var poolGarland99 = 0
     private var poolSnow99 = 0
+    // (100) 第 1 项：可见性自证计数（最近一帧 append 成功数，
+    // 随 p99 pool 节奏落 p100 xmas vis 行）：halo＝歌词暗晕 12
+    // 绘制数；core＝歌词亮芯 8/9/10/11 绘制数；bright＝树体亮档
+    // （金灯 4/红灯 5/冰晶 6）＋金链 7 绘制数。
+    private var poolHalo100 = 0
+    private var poolCore100 = 0
+    private var poolBright100 = 0
+    private var tgtMissLogged100 = false
     private var guardLogged98a = false
     private var guardLogged98b = false
     private var frameTris97: [XmasSolidTri97] = []
@@ -149,6 +161,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
 
     func mount(context: LyricStageContext) {
         self.context = context
+        tgtMissLogged100 = false
         bakeSpritesIfNeeded()
         // (97) 第 2 条：精灵表→GPU 图集（装配期一次建好，首帧
         // 不再付 CG 全量绘制的钱——(96) 进入冻结 1056ms 的主项）。
@@ -215,7 +228,9 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         // setNeedsDisplay→CG draw 全量重画退役）。
         if atlasReady97, metal97.isReady, canvas.bounds.width > 0 {
             buildFrame97(rect: canvas.bounds)
-            metal97.submit(sprites: frameSprites97, tris: frameTris97,
+            metal97.submit(additiveSprites: frameSprites97,
+                            normalSprites: frameSpritesNormal97,
+                            tris: frameTris97,
                             viewSize: canvas.bounds.size)
             canvas.draw()
         }
@@ -235,6 +250,7 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         // 后读数才能判读残留在哪一层。
         metal97.releaseAll99()
         frameSprites97 = []
+        frameSpritesNormal97 = []
         frameTris97 = []
         Breadcrumbs.log("p99 xmas fp mb=\(Breadcrumbs.footprintMB97()) ev=off")
         bakedScale94 = 0
@@ -272,6 +288,12 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             Breadcrumbs.log("p99 xmas pool lyric=\(poolLyric99) tree=\(poolTree99)"
                 + " garland=\(poolGarland99) snow=\(poolSnow99)"
                 + " tot=\(metal97.lastSprCount98) rgba=\(t0r),\(t0g),\(t0b),255")
+            // (100) 第 1 项：可见性自证（与 p99 pool 同节奏、最近一帧
+            // 数）：halo/core/bright 为 CPU 侧 append 成功数，
+            // add/nrm 为 Metal 侧双通道实际提交数；add＋nrm 应等于
+            // p99 pool 的 tot（分流前后实例总数不变）。
+            Breadcrumbs.log("p100 xmas vis halo=\(poolHalo100) core=\(poolCore100)"
+                + " bright=\(poolBright100) add=\(metal97.lastAddCount100) nrm=\(metal97.lastNrmCount100)")
             fpsAccum = 0; fpsFrames = 0; fpsWindow = 0
         }
     }
@@ -529,9 +551,14 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     private func currentRadius(aspect: Double) -> Double { aspect < 1 ? 11.9 : 8.6 }
 
     private func rebuildTargets() {
-        targetsDirty = false
+        // (100) 第 1 项：先验 bounds 再清 dirty——旧顺序先清 dirty
+        // 后 guard，首帧零 bounds 会烧掉 dirty 位、targets 永久为
+        // 空（除非之后再有 layout 事件重脏），drawLyrics97 的
+        // targets 守卫随之整行灭歌词；改后零 bounds 帧不烧位，
+        // 下一 tick 重试。
         let bounds = canvas.bounds
         guard bounds.width > 0, bounds.height > 0 else { return }
+        targetsDirty = false
         let aspect = Double(bounds.width / bounds.height)
         let fitW = fitWidth(radius: currentRadius(aspect: aspect), aspect: aspect)
         let h = fitW * 0.25
@@ -593,18 +620,55 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     // (97) 第 2 条：旧 drawSprite（CG 逐粒贴图）→ 实例追加。
     // 径向精灵无方向性；金星靠图集内烘焙朝向（位图行序已在
     // 图集构建时对齐屏幕朝向），不再需要旧 draw 的 y 翻转。
+    // (100) 第 1 项·样片对账结论（样片 ts-spaces/
+    // sheng-dan-ge-ci-te-xiao-yang-pian/index.html，对照 (97)
+    // 前旧 CG 版 git c7aef577）：
+    //  1. 样片树粒从无晕层两遍：buildTree 只有一遍 Points 绘制
+    //     （size 0.085、白 dotTex、逐粒 vertexColors），旧 CG
+    //     (93) 树粒亦为单遍 drawSprite（c7aef577:576）；“晕＋芯
+    //     两遍”在样片与旧 CG 里都只属于歌词粒（样片 haloMat＋
+    //     lMat，旧 CG drawLyrics 695-698），Metal 移植并未丢它
+    //     （仍在 drawLyrics97 末尾 halo＋core 两笔）。故树/雪
+    //     不补晕层两遍——补了是发明口径，且实例数将从 ~10046
+    //     涨近 18000。
+    //  2. 样片树粒可见的真正机制是加色混合：tree/garland/
+    //     snow/lyric-core 的 PointsMaterial 全为
+    //     AdditiveBlending（样片 buildTree/snow/lyric 三处），
+    //     白 dot 纹理 × 逐粒色在暗底 #04160d 上相加、重叠区累
+    //     积增亮；Metal (97) 起把全通道改成正常混合（one/
+    //     oneMinusSrcAlpha，见 ChristmasMetal97 makePipeline），
+    //     暗绿点以 source-over 盖在暗底上、重叠不累积——这才
+    //     是“画了也看不见”的断点。粒径 0.085、径向档 (0/0.35/
+    //     1)、绿四档色值、雪粒 0.13/0.46 与 alpha 0.75/0.30
+    //     均与样片逐项一致，无需改数。
+    //  3. 等效口径定为：恢复样片的混合——加色通道（树/雪/金链/
+    //     歌词芯/金星/地面暖光）＋正常通道（仅歌词暗晕 12 与歌
+    //     词带衬底 15，样片仅有的两处 NormalBlending：haloMat
+    //     与 bandMesh）；绘制序正常在前、加色在后，与样片晕
+    //     renderOrder 2 在芯 renderOrder 3 之前一致。
+    //  4. vflip 开关保留不动：径向点精灵翻转不改变外观，金星
+    //     正立已证 v 轴不是病因（审计 §1 断点 3）。
+    /// 样片仅有的正常混合精灵档：12 歌词暗晕、15 歌词带衬底。
+    private static func isNormalBlendSprite(_ index: Int) -> Bool {
+        index == 12 || index == 15
+    }
     /// 返回是否真追加进实例数组（(99) 分池计数以此为准）。
     @discardableResult
     private func appendSprite97(_ spriteIndex: Int, center: (Double, Double),
                                 sizePx: Double, alpha: CGFloat) -> Bool {
         guard sizePx > 0.5, alpha > 0.01,
               let uv = metal97.uvRect(forSprite: spriteIndex) else { return false }
-        frameSprites97.append(XmasSpriteInstance97(
+        let inst = XmasSpriteInstance97(
             cx: Float(center.0), cy: Float(center.1),
             w: Float(sizePx), h: Float(sizePx),
             u0: Float(uv.minX), v0: Float(uv.minY),
             u1: Float(uv.maxX), v1: Float(uv.maxY),
-            alpha: Float(alpha)))
+            alpha: Float(alpha))
+        if Self.isNormalBlendSprite(spriteIndex) {
+            frameSpritesNormal97.append(inst)
+        } else {
+            frameSprites97.append(inst)
+        }
         return true
     }
 
@@ -614,12 +678,17 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
                                     wPx: Double, hPx: Double, alpha: CGFloat) -> Bool {
         guard wPx > 0.5, hPx > 0.5, alpha > 0.01,
               let uv = metal97.uvRect(forSprite: spriteIndex) else { return false }
-        frameSprites97.append(XmasSpriteInstance97(
+        let inst = XmasSpriteInstance97(
             cx: Float(center.0), cy: Float(center.1),
             w: Float(wPx), h: Float(hPx),
             u0: Float(uv.minX), v0: Float(uv.minY),
             u1: Float(uv.maxX), v1: Float(uv.maxY),
-            alpha: Float(alpha)))
+            alpha: Float(alpha))
+        if Self.isNormalBlendSprite(spriteIndex) {
+            frameSpritesNormal97.append(inst)
+        } else {
+            frameSprites97.append(inst)
+        }
         return true
     }
 
@@ -644,15 +713,17 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
         }
         guard sprites.count > 15 else {
             if !guardLogged98a { guardLogged98a = true; Breadcrumbs.log("p98 xmas guard sprites=\(sprites.count)") }
-            frameSprites97 = []; frameTris97 = []; return
+            frameSprites97 = []; frameSpritesNormal97 = []; frameTris97 = []; return
         }
         guard !treePos.isEmpty else {
             if !guardLogged98b { guardLogged98b = true; Breadcrumbs.log("p98 xmas guard treePos=0") }
-            frameSprites97 = []; frameTris97 = []; return
+            frameSprites97 = []; frameSpritesNormal97 = []; frameTris97 = []; return
         }
         frameSprites97.removeAll(keepingCapacity: true)
+        frameSpritesNormal97.removeAll(keepingCapacity: true)
         frameTris97.removeAll(keepingCapacity: true)
         poolLyric99 = 0; poolTree99 = 0; poolGarland99 = 0; poolSnow99 = 0
+        poolHalo100 = 0; poolCore100 = 0; poolBright100 = 0
         let t = elapsed
         let cam = makeCamera(t: t, rect: rect)
         let aspect = Double(rect.width / max(rect.height, 1))
@@ -699,14 +770,20 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             let x = Double(treePos[i * 3]), y = Double(treePos[i * 3 + 1]), z = Double(treePos[i * 3 + 2])
             guard let p = project(cam, x * cs - z * sn, y, x * sn + z * cs) else { continue }
             if appendSprite97(Int(treeSprite[i]), center: (p.sx, p.sy),
-                              sizePx: 0.085 * p.scale, alpha: 0.95) { poolTree99 += 1 }
+                              sizePx: 0.085 * p.scale, alpha: 0.95) {
+                poolTree99 += 1
+                if treeSprite[i] >= 4 { poolBright100 += 1 } // 亮档：金灯 4/红灯 5/冰晶 6
+            }
         }
         for j in 0..<Self.garlandCount {
             let x = Double(garlandPos[j * 3]), y = Double(garlandPos[j * 3 + 1]), z = Double(garlandPos[j * 3 + 2])
             guard let p = project(cam, x * cs - z * sn, y, x * sn + z * cs) else { continue }
             let tw = 0.8 + 0.35 * sin(Double(j) * 1.7)
             if appendSprite97(7, center: (p.sx, p.sy),
-                              sizePx: 0.11 * p.scale, alpha: CGFloat(min(tw, 1))) { poolGarland99 += 1 }
+                              sizePx: 0.11 * p.scale, alpha: CGFloat(min(tw, 1))) {
+                poolGarland99 += 1
+                poolBright100 += 1 // 金链 7 计入亮档
+            }
         }
 
         // 树顶金星 + 光晕（样片：星 1.05 脉动 ±0.07、晕 2.6）
@@ -745,9 +822,11 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
     // MARK: 歌词聚字（三态时序，样片 updateLyrics）
 
     private func drawLyrics97(cam: P93Cam, t: TimeInterval, fitW: Double) {
+        // (100) 第 1 项：targets 守卫从整行 return 降级——旧守卫
+        // 把 targets.count < lyricCount×3 并进本行，targets 为空
+        // 时整行歌词（含衬底）全灭；见下方衬底后的降级守卫。
         guard let snapshot, currentLineIndex >= 0,
-              snapshot.lines.indices.contains(currentLineIndex),
-              targets.count >= Self.lyricCount * 3 else { return }
+              snapshot.lines.indices.contains(currentLineIndex) else { return }
         let line = snapshot.lines[currentLineIndex]
         guard let pos = context?.positionNow() else { return }
         let local = pos - line.start
@@ -770,6 +849,19 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             let wPx = fitW * 1.22 * bp.scale
             let hPx = fitW * 0.25 * 2.3 * bp.scale
             appendSpriteRect97(15, center: (bp.sx, bp.sy), wPx: wPx, hPx: hPx, alpha: 1)
+        }
+
+        // (100) 第 1 项·降级守卫：缺 targets 只跳过歌词粒循环，
+        // 不丢整行——衬底（只依赖 center/fitW）已在上方画出，
+        // 粒子循环才依赖 targets；缺失时落一次 p100 痕以便日志
+        // 区分“歌词粒未画”与“整行未进”。根因另见 rebuildTargets
+        // 的 dirty 位顺序修（先验 bounds 再清位）。
+        guard targets.count >= Self.lyricCount * 3 else {
+            if !tgtMissLogged100 {
+                tgtMissLogged100 = true
+                Breadcrumbs.log("p100 xmas lyr tgt=0")
+            }
+            return
         }
 
         let coreSize = max(0.06, fitW * 0.016)
@@ -818,9 +910,15 @@ final class ChristmasTreeStageRenderer: LyricStageRenderer {
             // 深色描边晕先行（大 2.1×、在芯后方），再亮芯；
             // (99) 分池计数：晕＋芯均计入 lyric 池（同粒两笔）。
             if appendSprite97(12, center: (p.sx, p.sy),
-                              sizePx: coreSize * 2.1 * p.scale, alpha: CGFloat(min(bright, 1)) * 0.55) { poolLyric99 += 1 }
+                              sizePx: coreSize * 2.1 * p.scale, alpha: CGFloat(min(bright, 1)) * 0.55) {
+                poolLyric99 += 1
+                poolHalo100 += 1
+            }
             if appendSprite97(spriteIdx, center: (p.sx, p.sy),
-                              sizePx: coreSize * p.scale, alpha: CGFloat(min(max(bright, 0), 1))) { poolLyric99 += 1 }
+                              sizePx: coreSize * p.scale, alpha: CGFloat(min(max(bright, 0), 1))) {
+                poolLyric99 += 1
+                poolCore100 += 1
+            }
         }
     }
 }

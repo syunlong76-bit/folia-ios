@@ -2158,7 +2158,7 @@ final class WallPrototypeViewController: UIViewController,
         }
         seam.onDiary93 = { [weak self] in
             guard let self else { return }
-            let diary = DiaryViewController90(tagged: nil)
+            let diary = DiaryBookViewController99(tagged: nil)
             diary.modalPresentationStyle = .fullScreen
             self.present(diary, animated: true)
         }

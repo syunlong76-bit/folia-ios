@@ -60,7 +60,7 @@ targets:
         CFBundleDevelopmentRegion: zh-Hans
         CFBundleDisplayName: Virelai
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "99"
+        CFBundleVersion: "100"
         LSRequiresIPhoneOS: true
         UIViewControllerBasedStatusBarAppearance: true
         # (60) 第 1 条：启动屏只留纯黑（LaunchBlack.colorset），
@@ -91,6 +91,16 @@ targets:
         # (75) 真 Live Activity 总开关（缺此键系统恒不呈现
         # 活动、request 直接失败）。
         NSSupportsLiveActivities: true
+        # (100) 第 4 项：日记本隐私锁走 LAContext 生物识别
+        # （DiaryBookViewController99.bioTapped）；缺此键真机
+        # canEvaluatePolicy 直接失败、锁面静默走「直接进入」
+        # 兜底，Face ID 永不弹。文案与生物识别弹窗的
+        # localizedReason 同字：「解锁你的音乐日记本」。
+        # 位置：主 target info.properties 顶层——CI 先跑
+        # `xcodegen generate` 按此处重写 Info.plist，此处为
+        # 唯一生效源；仓库根 Info.plist 无此键、Widgets
+        # Info.plist 文件不存在，无第二份同名键可覆盖。
+        NSFaceIDUsageDescription: "解锁你的音乐日记本"
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
           NSExceptionDomains:
@@ -134,7 +144,7 @@ targets:
       properties:
         CFBundleDisplayName: FoliaWidgets
         CFBundleShortVersionString: "3.7"
-        CFBundleVersion: "99"
+        CFBundleVersion: "100"
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
     settings:

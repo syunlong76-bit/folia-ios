@@ -29,6 +29,16 @@ final class MiniBarArbiter99 {
     private var hiddenByArbiter: Set<String> = []
     private(set) var activeHost: String?
 
+    /// (100) 第 3 项：伴生条盘点——宿主自有第二条（如舞台
+    /// 的 StageWideBar68 全宽条）不占 host 名额、不参与
+    /// 三宿主单实例仲裁，只跟随所属宿主的可见性：宿主非
+    /// 当前可见宿主且伴生条反常可见时，仲裁经伴生条自有
+    /// 收起闭包把它收掉（只藏不恢复——唤出仍走伴生条自
+    /// 有通路，如宽条的点屏 show()；仲裁绝不代为点亮，
+    /// 避免与伴生条自有显隐状态机打架）。
+    private var companions: [String: WeakBar] = [:]
+    private var companionHide: [String: () -> Void] = [:]
+
     private init() {}
 
     /// 宿主露面时认领：登记本台并成为唯一可见宿主。
@@ -36,6 +46,13 @@ final class MiniBarArbiter99 {
         if let bar { bars[host] = WeakBar(bar) }
         activeHost = host
         apply()
+    }
+
+    /// 登记伴生条：只在宿主失势且伴生条可见时收掉它。
+    func registerCompanion(host: String, bar: UIView?,
+                           onArbiterHide: @escaping () -> Void) {
+        if let bar { companions[host] = WeakBar(bar) }
+        companionHide[host] = onArbiterHide
     }
 
     /// 形态收口后复断言（状态未变不落痕、不动视图）。
@@ -65,6 +82,19 @@ final class MiniBarArbiter99 {
             let hid = hiddenByArbiter.sorted().joined(separator: ",")
             Breadcrumbs.log("p99 deck vis act=\(activeHost ?? "-")"
                 + " hid=\(hid.isEmpty ? "-" : hid)")
+        }
+        // (100) 第 3 项：伴生条跟随——只在宿主失势且伴生
+        // 条仍可见时动作；宿主在位时绝不碰伴生条自有显隐。
+        var companionChanged = false
+        for (host, box) in companions {
+            guard host != activeHost, let view = box.view,
+                  !view.isHidden else { continue }
+            companionHide[host]?()
+            companionChanged = true
+        }
+        if companionChanged {
+            // 名 "p100 wide hid=" 14 字节。
+            Breadcrumbs.log("p100 wide hid=1")
         }
     }
 }

@@ -7,8 +7,8 @@ import LocalAuthentication
 // 开场视频 → 隐私锁 → 书主页（SwiftUI，DiaryBookViews99）三段。
 //
 // 入口落点（调研）：主页缝四图标行第 3 个「日记本」（Seam85Views book 字形）
-// → HomeWallViewController.seam.onDiary93 呈现本类（(99) 改一行类名，
-// 原 DiaryViewController90 保留供控制台/拍立得旧入口使用）。
+// → HomeWallViewController.seam.onDiary93 呈现本类（(99) 改一行类名；
+// (100) 歌单墙缝与控制台/拍立得入口亦全部改指本类，旧版无入口）。
 // 隐私锁口径（试用版）：LAContext 生物识别；不可用/失败/取消都不锁死人，
 // 锁面常驻「直接进入」兜底钮。
 final class DiaryBookViewController99: UIViewController {

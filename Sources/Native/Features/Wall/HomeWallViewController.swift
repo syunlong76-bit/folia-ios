@@ -4315,7 +4315,8 @@ extension HomeWallViewController {
         }
         // (93) C2：缝内日记本入口——(99) 第 7 项起改开 P0 新版
         // DiaryBookViewController99（开场视频＋隐私锁＋书主页）；
-        // DiaryViewController90 保留供控制台/拍立得旧入口使用。
+        // (100) 全部入口统一新版，DiaryViewController90 仅留文件
+        // 备查，不再有任何入口指向它。
         seam.onDiary93 = { [weak self] in
             guard let self else { return }
             let diary = DiaryBookViewController99(tagged: nil)

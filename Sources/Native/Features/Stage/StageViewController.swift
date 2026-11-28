@@ -352,10 +352,12 @@ final class StageViewController: UIViewController {
     private var p94RotLink: CADisplayLink?
     private var p94RotSafetyWork: DispatchWorkItem?
     /// (98) 第 8 条：旋转根治第一步——四齐门删除后的状态：
-    /// p98RotLive＝盲测模式（设置页二选一，live 时不设冻帧
-    /// 盖、网页层随系统转场实时渲染）；p98RotHoldWork＝
-    /// landed 后 stage.ready 未到时的有界等待（≤400ms，
-    /// ready 先到即揭 via=hold98、超时强揭 via=cap98）。
+    /// p98RotLive＝盲测模式（设置页二选一）；(100) 第 2 项
+    /// 起 live 亦设冻帧盖（方案 (a)，见 viewWillTransition），
+    /// 本旗只作模式标记与 p100 rot live 自证，不再决定盖
+    /// 的有无；p98RotHoldWork＝landed 后 stage.ready 未到
+    /// 时的有界等待（≤400ms，ready 先到即揭 via=hold98、
+    /// 超时强揭 via=cap98）。
     private var p98RotLive = false
     private var p98RotHoldWork: DispatchWorkItem?
     /// (86) 第 9 条：alongside 已排轮的几何（尺寸＋安全
@@ -621,6 +623,12 @@ final class StageViewController: UIViewController {
         }
         view.addSubview(bar)
         wideBar68 = bar
+        // (100) 第 3 项：全宽条纳入 MiniBarArbiter99 伴生盘
+        // 点——不占 host 名额（stage 仍是唯一舞台宿主），
+        // 只在舞台失势且本条反常可见时由仲裁经自有 hideNow
+        // 收起；唤出仍只走点屏 show()，仲裁不代为点亮。
+        MiniBarArbiter99.shared.registerCompanion(
+            host: "stage", bar: bar) { [weak bar] in bar?.hideNow() }
         let tap = UITapGestureRecognizer(
             target: self, action: #selector(wideBarStageTapped68))
         tap.cancelsTouchesInView = false
@@ -996,12 +1004,15 @@ final class StageViewController: UIViewController {
         // 快照当刚性平面倾斜/侧躺；落定后等新尺寸首帧回
         // 执再揭（(98) 改 landed 结算/有界等待）。
         // (98) 第 8 条：盲测模式读取（设置页「舞台旋转转场」
-        // 二选一、不标注优劣）：freeze＝全分辨率冻帧盖；
-        // live＝不设盖、网页层随系统转场实时渲染。
+        // 二选一、不标注优劣）：freeze/live 只作模式标记。
+        // (100) 第 2 项：live 不再是「不设盖」（旧口径作废，
+        // 见下 beginWebRotCover81 门控）。
         let rotLive98 = UserDefaults.standard.string(
             forKey: "folia.rot98.mode") == "live"
         p98RotLive = rotLive98
         Breadcrumbs.log("p98 rot mode v=\(rotLive98 ? "live" : "frz")")
+        // (100) 第 2 项：live/frz 自证（名 "p100 rot live=" 14 字节）。
+        Breadcrumbs.log("p100 rot live=\(rotLive98 ? 1 : 0)")
         // (98) 第 8 条：冻结拍即以目标尺寸并行启动网页层
         // 重建——不等 landed、不等静默合并：帧先行设目标
         // 尺寸、清 zoom/inset 残留、即刻派 resize（桥侧防
@@ -1012,7 +1023,19 @@ final class StageViewController: UIViewController {
             WebEffectBridge.shared.prepareRotationResize94()
             WebEffectBridge.shared.nudgeEffectResize81()
         }
-        if webEmbedStyleId != nil && !rotLive98 {
+        // (100) 第 2 项：盖面路径覆盖 live（方案 (a)，二选一
+        // 定案）——live 与 frz 同设盖：转场期 WKWebView 藏
+        // 在冻帧盖下，不再被系统转场当刚性平面斜转出黑角；
+        // resized 到即 p99SwapRotCover 换目标构图、landed 经
+        // p98RotReleaseAtLanded 有界揭盖（≤400ms）。选 (a)
+        // 不选 (b)（改转场方式）的理由：盖路已在 frz 上实
+        // 跑，复用同一释放/换盖/自证链，改动只是一处门控；
+        // (b) 须绕开系统旋转快照（自定义转场或禁动画），仓
+        // 内无现成路径，会牵动 layoutStage 冻结管线、安全
+        // 区/灵动岛 refront 与宠物层，风险面远大于收益。
+        // 盲测二选一自此只剩日志上的模式标记，不再有盖/
+        // 无盖的行为差。
+        if webEmbedStyleId != nil {
             beginWebRotCover81(generation: generation)
         }
         coordinator.animate(alongsideTransition: { [weak self] _ in
@@ -1138,8 +1161,9 @@ final class StageViewController: UIViewController {
         Breadcrumbs.log("p98 rot sig k=\(kind) dt=\(dt)")
         if kind == "resized" {
             p94RotWebResized = true
-            // (99) 第 4 条：buffer 已到目标尺寸——冻结盖换
-            // 目标构图帧（活版无盖、本调用自守卫空转）。
+            // (99) 第 4 条：buffer 已到目标尺寸——盖换目标构
+            // 图帧（(100) 第 2 项起 live 亦有盖，两模式同走
+            // 本调用；盖已揭则 p99SwapRotCover 自守卫空转）。
             p99SwapRotCover()
         } else if kind == "ready" {
             p94RotStageReady = true
@@ -1163,7 +1187,8 @@ final class StageViewController: UIViewController {
     /// 等待 ≤400ms——ready 先到经 p94HandleRotSignal 揭
     /// （via=hold98）、超时强揭（via=cap98）。异常路径有
     /// 界兜底：错误内容最多被盖多挡 400ms，绝不裸奔 3s、
-    /// 绝不长冻。live 盲测模式无盖、天然直达。
+    /// 绝不长冻。(100) 第 2 项：live 亦设盖，揭盖走同一
+    /// 有界路径（旧「live 无盖、天然直达」口径作废）。
     private func p98RotReleaseAtLanded() {
         guard p94RotAwaiting else { return }
         p94RotAwaiting = false
@@ -1231,6 +1256,11 @@ final class StageViewController: UIViewController {
         webView.takeSnapshot(with: snapConfig) { [weak self] image, _ in
             guard let self, rotGen == self.webRotGen81,
                   self.webEmbedStyleId != nil else { return }
+            // (100) 第 2 项：迟到快照不装盖——live 并行重建
+            // 下快照若在 landed 释放后才回图，此时装盖将无
+            // 人揭（p98RotReleaseAtLanded 已跑完且见盖为
+            // 空），盖会一直挡到下次旋转；直接丢弃。
+            guard self.p94RotAwaiting else { return }
             guard let image else {
                 Breadcrumbs.log("webfx.rot81 freeze miss=1")
                 return
