@@ -432,7 +432,10 @@ final class SearchDeck104: UIView {
             : DeckLayout82.expandedTrackHeight102 / 2
         NSLayoutConstraint.deactivate(want ? trackExpandedCs : trackCollapsedCs)
         NSLayoutConstraint.activate(want ? trackCollapsedCs : trackExpandedCs)
-        let changes = { self.superview?.layoutIfNeeded() }
+        let changes = { [weak self] in
+            guard let self else { return }
+            self.superview?.layoutIfNeeded()
+        }
         if animated {
             UIView.animate(withDuration: 0.5, delay: 0,
                            usingSpringWithDamping: 0.9,
