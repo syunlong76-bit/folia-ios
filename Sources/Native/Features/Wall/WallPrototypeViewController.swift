@@ -2426,7 +2426,7 @@ final class WallPrototypeViewController: UIViewController,
         title.font = .systemFont(ofSize: PlaylistLayout101.topTitleFont,
                                  weight: .semibold)
         title.textColor = .white
-        title.lineLimit = 1
+        title.numberOfLines = 1
         title.layer.shadowColor = UIColor.black.cgColor
         title.layer.shadowOpacity = 0.5
         title.layer.shadowRadius = 5
