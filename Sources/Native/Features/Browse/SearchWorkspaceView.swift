@@ -128,7 +128,11 @@ struct SearchWorkspaceView: View {
     // 卡面奶油白 #F6F0E1、cardInk / cardSub = 卡面题注深字 / 灰褐
     // 副字、gold = 页签下划线与封面角标的金 #D9A441；ink 仍走
     // FoliaTheme.primary（深底文字）、accent 归金（加载形/空态斜杠）。
-    private var ink: Color { FoliaTheme.primary }
+    /// (101) 第 2 项：页面 chrome 文字色随主台主题深浅翻
+    /// 转——浅底主题（花海/雪景）用卡面深字，深底（星空/
+    /// 海浪/无主题）用浅字。拍立得卡面自带奶油底深字，
+    /// 不走本色。
+    private var ink: Color { stageLight101 ? cardInk : FoliaTheme.primary }
     private var accent: Color { gold }
     private var paper: Color { Color(red: 0x17 / 255, green: 0x13 / 255, blue: 0x10 / 255) }
     private var hairline: Color { ink.opacity(0.09) }
@@ -137,6 +141,42 @@ struct SearchWorkspaceView: View {
     private var cardSub: Color { Color(red: 0x8A / 255, green: 0x7D / 255, blue: 0x6B / 255) }
     private var gold: Color { Color(red: 0xD9 / 255, green: 0xA4 / 255, blue: 0x41 / 255) }
 
+    /// (101) 第 2 项：主题联动——搜索页不设独立主题，进
+    /// 场读播放台（主台）当前主题 MiniPlayerTheme
+    /// .effective，订阅 .foliaMiniPlayerThemeChanged 跟随
+    /// （长按播放台切主题/设置页开关均经该通知）。
+    @State private var stageTheme101: MiniPlayerTheme = MiniPlayerTheme.effective
+    private var stageLight101: Bool {
+        stageTheme101 == .meadow || stageTheme101 == .snow
+    }
+    private var sub101: Color {
+        stageLight101 ? cardInk.opacity(0.55) : sub101
+    }
+    private var field101: Color {
+        stageLight101 ? Color.black.opacity(0.06) : FoliaTheme.field
+    }
+    /// 全页毛玻璃的主题色层：饱和主题色低透叠在 material
+    /// 之上透出主题色，不用灰色层洗灰。
+    private var glassTint101: Color {
+        switch stageTheme101 {
+        case .ocean:
+            return Color(red: 0x1B / 255, green: 0x3A / 255, blue: 0x6B / 255).opacity(0.5)
+        case .star:
+            return Color(red: 0x14 / 255, green: 0x1D / 255, blue: 0x4E / 255).opacity(0.55)
+        case .meadow:
+            return Color(red: 0xD9 / 255, green: 0xE8 / 255, blue: 0xCB / 255).opacity(0.5)
+        case .snow:
+            return Color(red: 0xEA / 255, green: 0xEF / 255, blue: 0xEC / 255).opacity(0.55)
+        case .none:
+            return paper.opacity(0.55)
+        }
+    }
+
+    private func logStageTheme101(_ via: String) {
+        Breadcrumbs.log("p101 search theme stage=\(String(describing: stageTheme101))"
+            + " light=\(stageLight101 ? 1 : 0) via=\(via)")
+    }
+
     var body: some View {
         ZStack {
             // (99) 第 5 项：页面背景改真毛玻璃——ultraThinMaterial
@@ -144,7 +184,9 @@ struct SearchWorkspaceView: View {
             // 暖黑纸色层由 0.94 降到 0.55，让下层墙面模糊透出；
             // 旧 0.94 几乎不透光、玻璃等于没生效。
             Rectangle().fill(.ultraThinMaterial).ignoresSafeArea()
-            paper.opacity(0.55).ignoresSafeArea()
+            // (101) 第 2 项：色层改主台主题色（透主题色不洗
+            // 灰），无主题时回落 (99) 暖黑纸色 0.55。
+            glassTint101.ignoresSafeArea()
 
             VStack(spacing: 0) {
                 header
@@ -168,7 +210,7 @@ struct SearchWorkspaceView: View {
                     HStack(spacing: 18) {
                         Text("已选 \(selectedIds62.count) 首")
                             .font(.system(size: 13, weight: .medium))
-                            .foregroundColor(ink)
+                            .foregroundColor(FoliaTheme.primary)
                         Spacer()
                         Button("收进日记本") {
                             let picked = songs.map(\.track)
@@ -181,7 +223,7 @@ struct SearchWorkspaceView: View {
                             selectedIds62 = []
                         }
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(ink)
+                        .foregroundColor(FoliaTheme.primary)
                         Button("加入队列") {
                             let picked = songs.map(\.track)
                                 .filter { selectedIds62.contains($0.id) }
@@ -191,7 +233,7 @@ struct SearchWorkspaceView: View {
                             selectedIds62 = []
                         }
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(ink)
+                        .foregroundColor(FoliaTheme.primary)
                         Button("取消") {
                             selecting62 = false
                             selectedIds62 = []
@@ -207,14 +249,25 @@ struct SearchWorkspaceView: View {
                 }
             }
         }
-        .preferredColorScheme(.dark)
+        .preferredColorScheme(stageLight101 ? .light : .dark)
         .onReceive(NotificationCenter.default.publisher(for: .foliaLikesChanged91)) { _ in
             likeRefreshTick98 += 1
+        }
+        // (101) 第 2 项：主台主题变更即跟随重读。
+        .onReceive(NotificationCenter.default.publisher(for: .foliaMiniPlayerThemeChanged)) { _ in
+            stageTheme101 = MiniPlayerTheme.effective
+            logStageTheme101("notify")
         }
         .sheet(item: $addTarget) { item in
             AddToPlaylistSheet(track: item.track)
         }
-        .onAppear { fieldFocused = true }
+        .onAppear {
+            // (101) 第 2 项：进场读取主台当前主题（面包屑
+            // 自证搜索页确实读了主台主题值）。
+            stageTheme101 = MiniPlayerTheme.effective
+            logStageTheme101("enter")
+            fieldFocused = true
+        }
     }
 
     /// (99) 第 5 项：平台切换收进搜索框旁的紧凑菜单（原整行
@@ -273,85 +326,67 @@ struct SearchWorkspaceView: View {
             }
             .foregroundColor(ink)
             .padding(.horizontal, 12)
-            .frame(height: isLandscape99 ? 44 : 52)
-            .background(RoundedRectangle(cornerRadius: 14).fill(FoliaTheme.field))
+            // (101) 第 2 项：平台小胶囊与搜索框同高 40。
+            .frame(height: 40)
+            .background(RoundedRectangle(cornerRadius: 20).fill(field101))
         }
         .accessibilityLabel("搜索平台：\(providerSummary99)")
     }
 
-    // MARK: - 头部（面包屑 + 圆形关闭钮 / 圆角搜索框 + 平台菜单(99) / 页签排 / 状态行）
+    // MARK: - 头部（(101) 定版一行：搜索框 40 + 页签并排 + 平台胶囊）
 
     private var header: some View {
-        // (99) 第 5 项：横屏时段间距 16→8，整体页眉压矮。
-        VStack(alignment: .leading, spacing: isLandscape99 ? 8 : 16) {
-            // 面包屑行：左「书库 › 搜索」，右圆形关闭钮（设计 A 同位）；
-            // 关闭通路 onClose 不变。旧版的说明文案行按设计 A 撤除
-            // （语义由 SearchHostPresenter 呈现层保证，不靠文案）。
-            HStack(alignment: .center) {
-                Text("书库 › 搜索")
-                    .font(.system(size: 13, weight: .medium))
-                    .foregroundColor(FoliaTheme.secondary)
-                Spacer()
-                Button { onClose() } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundColor(ink)
-                        .frame(width: 36, height: 36)
-                        .background(Circle().fill(Color.white.opacity(0.08)))
-                }
-                .buttonStyle(.plain)
-            }
-
-            // 搜索框（设计 A）：圆角 14 填充面 + 放大镜 + 输入；
-            // 焦点/提交/占位随页签切换的通路不变。(99) 第 5 项：
-            // 右侧并排平台菜单钮（providerMenu99），平台行不再
-            // 单独占一整行；横屏搜索框高 52→44。
+        // (101) 第 2 项：定版头部一行——小搜索框 40pt＋单曲/
+        // 专辑/歌单页签并排＋平台小胶囊；面包屑行与圆形 ✕ 撤
+        // 除（关闭走右滑退出，宿主 onClose 通路不变），无平
+        // 台图标行。注记行与状态行保留（信息行、非图标行）。
+        VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 10) {
-                HStack(spacing: 10) {
+                HStack(spacing: 8) {
                     Image(systemName: "magnifyingglass")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundColor(FoliaTheme.secondary)
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundColor(sub101)
                     TextField(kind.placeholder, text: $query)
-                        .font(.system(size: 16))
+                        .font(.system(size: 15))
                         .foregroundColor(ink)
                         .focused($fieldFocused)
                         .submitLabel(.search)
                         .autocorrectionDisabled()
                         .onSubmit { submitSearch() }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, 12)
                 .frame(maxWidth: .infinity)
-                .frame(height: isLandscape99 ? 44 : 52)
-                .background(RoundedRectangle(cornerRadius: 14).fill(FoliaTheme.field))
+                .frame(height: 40)
+                .background(RoundedRectangle(cornerRadius: 12).fill(field101))
+
+                // 页签并排同行：文字签 + 选中金色短下划线，
+                // 切换 kind + 已搜重搜的通路不变。
+                HStack(spacing: 14) {
+                    ForEach(SearchKind.allCases, id: \.self) { item in
+                        Button {
+                            guard item != kind else { return }
+                            kind = item
+                            if !submittedQuery.isEmpty { submitSearch() }
+                        } label: {
+                            VStack(spacing: 3) {
+                                Text(item.label)
+                                    .font(.system(size: 15, weight: item == kind ? .bold : .regular))
+                                RoundedRectangle(cornerRadius: 1)
+                                    .fill(item == kind ? gold : Color.clear)
+                                    .frame(width: 20, height: 2)
+                            }
+                            .foregroundColor(item == kind ? ink : sub101)
+                        }
+                        .buttonStyle(.plain)
+                    }
+                }
 
                 providerMenu99
             }
             if !providerNotes62.isEmpty {
                 Text(providerNotes62.joined(separator: "；"))
                     .font(.system(size: 11))
-                    .foregroundColor(FoliaTheme.secondary)
-            }
-
-            // 页签排（设计 A）：文字签 + 选中金色短下划线；
-            // 切换 kind + 已搜重搜的通路不变。
-            HStack(spacing: 30) {
-                ForEach(SearchKind.allCases, id: \.self) { item in
-                    Button {
-                        guard item != kind else { return }
-                        kind = item
-                        if !submittedQuery.isEmpty { submitSearch() }
-                    } label: {
-                        VStack(spacing: 6) {
-                            Text(item.label)
-                                .font(.system(size: 17, weight: item == kind ? .bold : .regular))
-                            RoundedRectangle(cornerRadius: 1.5)
-                                .fill(item == kind ? gold : Color.clear)
-                                .frame(width: 24, height: 3)
-                        }
-                        .foregroundColor(item == kind ? ink : FoliaTheme.secondary)
-                    }
-                    .buttonStyle(.plain)
-                }
+                    .foregroundColor(sub101)
             }
 
             // 状态行（11px 等宽：来源名 + 结果数 + 发丝线延伸，信息保留）。

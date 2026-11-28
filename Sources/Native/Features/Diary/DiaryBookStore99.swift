@@ -17,6 +17,19 @@ import UIKit
 // 听众日 = 凌晨 4 点分界）。今日次数取 records.days 里听众日 == 今天的计数；
 // 总时长为「次数 × 曲长」的估算（PlayHistoryStore 不记实际收听秒数）。
 
+/// (101) 第 5 项：贴纸自由画布落点（样板定版机制）——
+/// 落点用分数坐标存条目：fx/fy 为画布宽高的分数（0–1）、
+/// s 缩放、r 旋转（弧度）。系统不生成落点：全部由用户在
+/// 编辑器画布上手动拖放产生。
+struct DiaryStickerPlacement99: Codable, Equatable, Identifiable {
+    var name: String
+    var fx: Double
+    var fy: Double
+    var scale: Double
+    var rotation: Double
+    var id: String { name }
+}
+
 struct DiaryEntry99: Codable, Identifiable, Equatable {
     var id: String
     /// 本地日历日键 yyyy-MM-dd。
@@ -27,12 +40,58 @@ struct DiaryEntry99: Codable, Identifiable, Equatable {
     var mood: String?
     /// 贴纸相对路径（Diary/Stickers/<类>/<名>.png 里的 <类>/<名>），正文区小图呈现。
     var stickerNames: [String]
+    /// (101) 第 5 项：贴纸手动落点（与 stickerNames 同步：
+    /// stickerNames = placements 的 name 序）。旧档无此键
+    /// 时解码回落空数组（自定义 init 见下方 extension）。
+    var placements: [DiaryStickerPlacement99] = []
     var songId: String?
     var songTitle: String?
     var songArtist: String?
     var songArtwork: String?
     /// true = 由今日草稿确认生成（卡面打「今日草稿」标）。
     var fromDraft: Bool
+}
+
+extension DiaryEntry99 {
+    private enum CodingKeys101: String, CodingKey {
+        case id, dateKey, createdAt, text, mood, stickerNames, placements
+        case songId, songTitle, songArtist, songArtwork, fromDraft
+    }
+
+    /// 旧档兼容解码：placements 缺键回落空数组，其余键与
+    /// (99) 落盘格式逐一对应。
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys101.self)
+        id = try c.decode(String.self, forKey: .id)
+        dateKey = try c.decode(String.self, forKey: .dateKey)
+        createdAt = try c.decode(TimeInterval.self, forKey: .createdAt)
+        text = try c.decode(String.self, forKey: .text)
+        mood = try c.decodeIfPresent(String.self, forKey: .mood)
+        stickerNames = try c.decode([String].self, forKey: .stickerNames)
+        placements = try c.decodeIfPresent(
+            [DiaryStickerPlacement99].self, forKey: .placements) ?? []
+        songId = try c.decodeIfPresent(String.self, forKey: .songId)
+        songTitle = try c.decodeIfPresent(String.self, forKey: .songTitle)
+        songArtist = try c.decodeIfPresent(String.self, forKey: .songArtist)
+        songArtwork = try c.decodeIfPresent(String.self, forKey: .songArtwork)
+        fromDraft = try c.decode(Bool.self, forKey: .fromDraft)
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys101.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(dateKey, forKey: .dateKey)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(text, forKey: .text)
+        try c.encodeIfPresent(mood, forKey: .mood)
+        try c.encode(stickerNames, forKey: .stickerNames)
+        try c.encode(placements, forKey: .placements)
+        try c.encodeIfPresent(songId, forKey: .songId)
+        try c.encodeIfPresent(songTitle, forKey: .songTitle)
+        try c.encodeIfPresent(songArtist, forKey: .songArtist)
+        try c.encodeIfPresent(songArtwork, forKey: .songArtwork)
+        try c.encode(fromDraft, forKey: .fromDraft)
+    }
 }
 
 struct DiaryTodayPlay99 {
@@ -130,12 +189,14 @@ final class DiaryStore99: ObservableObject {
 
     @discardableResult
     func addEntry(text: String, mood: String?, stickerNames: [String],
+                  placements: [DiaryStickerPlacement99] = [],
                   song: DiarySong90?) -> DiaryEntry99 {
         let entry = DiaryEntry99(
             id: UUID().uuidString,
             dateKey: Self.dateKey(for: Date()),
             createdAt: Date().timeIntervalSince1970,
             text: text, mood: mood, stickerNames: stickerNames,
+            placements: placements,
             songId: song?.id, songTitle: song?.title, songArtist: song?.artist,
             songArtwork: song?.artwork, fromDraft: false)
         entries.insert(entry, at: 0)
@@ -295,5 +356,74 @@ struct DiarySticker99: Identifiable {
 
     static func named(_ relativeName: String) -> DiarySticker99? {
         all.first { $0.relativeName == relativeName }
+    }
+}
+
+// MARK: - (101) 第 5 项：手写签名（独立落盘，不动日记主档格式）
+
+/// 签名笔划点：坐标为签名板宽/高的分数（0–1），t 为相对
+/// 起笔的毫秒（美化时按速度变线宽用）。
+struct DiarySignaturePoint99: Codable, Equatable {
+    var x: Double
+    var y: Double
+    var t: Double
+}
+
+/// 签名存储：原始笔划 + 美化渲染 PNG，独立文件
+/// folia-diary99-signature.json（与日记主档分开，旧档零
+/// 迁移）。打印落款用美化版 PNG；笔划留存供重签/重渲染。
+final class DiarySignature99: ObservableObject {
+
+    static let shared = DiarySignature99()
+
+    @Published private(set) var strokes: [[DiarySignaturePoint99]] = []
+    /// 签名板宽高比（w/h），渲染时按此还原笔划几何。
+    @Published private(set) var aspect: Double = 2.4
+    @Published private(set) var beautifiedPNG: Data?
+
+    var beautifiedImage: UIImage? {
+        beautifiedPNG.flatMap { UIImage(data: $0) }
+    }
+    var hasSignature: Bool { !strokes.isEmpty && beautifiedPNG != nil }
+
+    private struct Persisted: Codable {
+        var strokes: [[DiarySignaturePoint99]]
+        var aspect: Double
+        var pngBase64: String?
+    }
+
+    private let fileURL: URL
+
+    private init() {
+        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+        fileURL = docs.appendingPathComponent("folia-diary99-signature.json")
+        if let data = try? Data(contentsOf: fileURL),
+           let file = try? JSONDecoder().decode(Persisted.self, from: data) {
+            strokes = file.strokes
+            aspect = file.aspect
+            beautifiedPNG = file.pngBase64.flatMap { Data(base64Encoded: $0) }
+        }
+    }
+
+    func save(strokes: [[DiarySignaturePoint99]], aspect: Double, png: Data?) {
+        self.strokes = strokes
+        self.aspect = aspect
+        self.beautifiedPNG = png
+        persist()
+        Breadcrumbs.log("p101 diary signature saved strokes=\(strokes.count)")
+    }
+
+    func clear() {
+        strokes = []
+        beautifiedPNG = nil
+        persist()
+        Breadcrumbs.log("p101 diary signature cleared")
+    }
+
+    private func persist() {
+        let file = Persisted(strokes: strokes, aspect: aspect,
+                             pngBase64: beautifiedPNG?.base64EncodedString())
+        guard let data = try? JSONEncoder().encode(file) else { return }
+        try? data.write(to: fileURL, options: .atomic)
     }
 }

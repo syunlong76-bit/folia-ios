@@ -4321,6 +4321,12 @@ extension HomeWallViewController {
             guard let self else { return }
             let diary = DiaryBookViewController99(tagged: nil)
             diary.modalPresentationStyle = .fullScreen
+            // (101) 第 3 项：日记本补左缘右滑退出——从呈现
+            // 方安装，不动 DiaryBookViewController99 本体
+            // （开局动画冻结区）；关闭同其自有 dismiss 路。
+            EdgeBack101.install(on: diary, page: "diary") { [weak diary] in
+                diary?.dismiss(animated: true)
+            }
             self.present(diary, animated: true)
         }
         homeSeam85 = seam
@@ -4841,6 +4847,10 @@ final class SeamNavidromeEmpty89ViewController: UIViewController {
         super.viewDidLoad()
         view.backgroundColor = UIColor(
             red: 22.0 / 255, green: 22.0 / 255, blue: 27.0 / 255, alpha: 1)
+        // (101) 第 3 项：Navidrome 空态页补左缘右滑退出。
+        EdgeBack101.install(on: self, page: "navidrome-empty") { [weak self] in
+            self?.dismiss(animated: true)
+        }
         let titleLabel = UILabel()
         titleLabel.text = "Navidrome"
         titleLabel.font = .systemFont(ofSize: 20, weight: .semibold)

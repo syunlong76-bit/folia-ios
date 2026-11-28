@@ -240,6 +240,11 @@ final class WallPrototypeViewController: UIViewController,
     /// 不拉伸，viewDidLayoutSubviews 按 min(宽,高) 更新）、
     /// 高度在完整/收起两形态间切换。
     private var miniBarWidthConstraint: NSLayoutConstraint?
+    /// (101) 第 1 项：竖屏开缝两行胶囊台状态与约束（样板
+    /// 定版：左 = 缝宽+8、右 8、高 120、圆角 30）。
+    private var capsuleTwoRow101 = false
+    private var miniBarLead101: NSLayoutConstraint?
+    private var miniBarTrail101: NSLayoutConstraint?
     private var miniBarHeightConstraint: NSLayoutConstraint?
     private var miniBarBottomC: NSLayoutConstraint?
     private var miniTrackBottomConstraint: NSLayoutConstraint?
@@ -2160,6 +2165,12 @@ final class WallPrototypeViewController: UIViewController,
             guard let self else { return }
             let diary = DiaryBookViewController99(tagged: nil)
             diary.modalPresentationStyle = .fullScreen
+            // (101) 第 3 项：日记本补左缘右滑退出——从呈现
+            // 方安装，不动 DiaryBookViewController99 本体
+            // （开局动画冻结区）；关闭同其自有 dismiss 路。
+            EdgeBack101.install(on: diary, page: "diary") { [weak diary] in
+                diary?.dismiss(animated: true)
+            }
             self.present(diary, animated: true)
         }
         seam.onNavidrome = { [weak self] in
@@ -2197,13 +2208,100 @@ final class WallPrototypeViewController: UIViewController,
     private func setPlaylistSeamExpanded85(_ expanded: Bool) {
         seamExpanded85 = expanded
         playlistSeam85?.setExpanded85(expanded)
-        let target: CGFloat = expanded ? 300 : 120
+        // (101) 第 1 项：展开档缝宽改走样板定版响应式三档
+        // （竖屏窄屏 148 / 横屏宽屏 252 / 其余 clamp(188,
+        // 48vw, 330)）；收起书脊档 120 为样板未描绘的原生
+        // 状态，保留。
+        let target: CGFloat = expanded
+            ? PlaylistLayout101.seamExpandedWidth(
+                viewWidth: view.bounds.width,
+                viewHeight: view.bounds.height)
+            : PlaylistLayout101.seamSpineWidth
+        Breadcrumbs.log("p101 layout seam target=\(Int(target)) open=\(expanded ? 1 : 0)")
         var originX: CGFloat?
         if let anchor = wallLayout.seamAnchorX85 {
             originX = wallLayout.seamPlan85(openWidth: target, preferX: anchor).originX
         }
         startSeamTween85(toWidth: target, toOriginX: originX)
         Breadcrumbs.log("seam85 expand host=wall on=\(expanded ? 1 : 0)")
+        applyCapsuleLayout101()
+    }
+
+    /// (101) 第 1 项：竖屏开缝时胶囊台两行紧凑排布（样板
+    /// body.seam-open 竖屏定版）：台左 = 缝宽 + 8、右 8、
+    /// 高 120、圆角 30、碟 36；封面/歌名走上行、控制钮整
+    /// 行走下行（miniMainCenterY 数组序 = [封面, 播放,
+    /// 上一曲, 下一曲, 控制台]，见构建处注释）。退出条件
+    /// （收缝/横屏/收起形态）即整组复原单行定版。
+    private func applyCapsuleLayout101() {
+        guard let bar = miniBar else { return }
+        let want = PlaylistLayout101.capsuleTwoRowActive(
+            viewWidth: view.bounds.width,
+            viewHeight: view.bounds.height,
+            seamExpanded: seamExpanded85) && !miniBarCollapsed
+        guard want != capsuleTwoRow101 else { return }
+        capsuleTwoRow101 = want
+        let seamW = PlaylistLayout101.seamExpandedWidth(
+            viewWidth: view.bounds.width, viewHeight: view.bounds.height)
+        if want {
+            // 横向改锚：撤居中、挂左 = 缝宽+8 / 右 8。
+            if miniBarLead101 == nil {
+                miniBarLead101 = bar.leadingAnchor.constraint(
+                    equalTo: view.leadingAnchor, constant: seamW + 8)
+                miniBarTrail101 = bar.trailingAnchor.constraint(
+                    equalTo: view.trailingAnchor, constant: -8)
+            }
+            miniBarLead101?.constant = seamW + 8
+            // 居中约束与右界守卫（trailing ≤ −12）与两行
+            // 定版（右距 8）冲突，同批撤下、退出时整组恢复。
+            for c in view.constraints where (c.firstItem as? UIView) == bar
+                && c.isActive
+                && (c.firstAttribute == .centerX
+                    || (c.firstAttribute == .trailing
+                        && c.relation == .lessThanOrEqual)) {
+                c.isActive = false
+            }
+            miniBarWidthConstraint?.isActive = false
+            miniBarLead101?.isActive = true
+            miniBarTrail101?.isActive = true
+            miniBarHeightConstraint?.constant =
+                PlaylistLayout101.capsuleTwoRowHeight
+            bar.layer.cornerRadius = PlaylistLayout101.capsuleTwoRowCorner
+            miniBlurView?.layer.cornerRadius =
+                PlaylistLayout101.capsuleTwoRowCorner
+            for (index, c) in miniMainCenterY.enumerated() {
+                c.constant = index == 0
+                    ? PlaylistLayout101.capsuleRowTopOffset
+                    : PlaylistLayout101.capsuleRowBottomOffset
+            }
+            for c in miniCover.constraints
+            where c.firstAttribute == .width || c.firstAttribute == .height {
+                c.constant = PlaylistLayout101.capsuleTwoRowCoverSize
+            }
+            miniCover.layer.cornerRadius =
+                PlaylistLayout101.capsuleTwoRowCoverSize / 2
+        } else {
+            miniBarLead101?.isActive = false
+            miniBarTrail101?.isActive = false
+            miniBarWidthConstraint?.isActive = true
+            for c in view.constraints where (c.firstItem as? UIView) == bar
+                && !c.isActive
+                && (c.firstAttribute == .centerX
+                    || (c.firstAttribute == .trailing
+                        && c.relation == .lessThanOrEqual)) {
+                c.isActive = true
+            }
+            for c in miniCover.constraints
+            where c.firstAttribute == .width || c.firstAttribute == .height {
+                c.constant = 40
+            }
+            miniCover.layer.cornerRadius = 20
+            // 高/圆角/行位由形态收口按单行定版整组回写。
+            setMiniBarForm(collapsed: miniBarCollapsed)
+        }
+        Breadcrumbs.log("p101 capsule tworow=\(want ? 1 : 0)"
+            + " h=\(Int(miniBarHeightConstraint?.constant ?? -1))"
+            + " seam=\(Int(seamW))")
     }
 
     /// (94) 94-4：歌单缝「我喜欢」落点——与主页缝同目的
@@ -2343,9 +2441,17 @@ final class WallPrototypeViewController: UIViewController,
                 x: geo.screenX - geo.width / 2, y: 0,
                 width: geo.width, height: view.bounds.height)
             seam.contentTopInset = view.safeAreaInsets.top + 56
-            seam.contentBottomInset = view.safeAreaInsets.bottom + 116
+            // (101) 第 1 项：两行台形态下内容底距按样板
+            // 定版 150，其余维持 116。
+            seam.contentBottomInset = view.safeAreaInsets.bottom
+                + (capsuleTwoRow101
+                    ? PlaylistLayout101.capsuleTwoRowContentBottom : 116)
             seam.contentOpacity = SeamState85.contentOpacity(
-                rendered: geo.width, content: seamExpanded85 ? 300 : 120)
+                rendered: geo.width, content: seamExpanded85
+                    ? PlaylistLayout101.seamExpandedWidth(
+                        viewWidth: view.bounds.width,
+                        viewHeight: view.bounds.height)
+                    : PlaylistLayout101.seamSpineWidth)
         }
         guard let tab = seamEdgeTab85 else { return }
         // 首规划未成（数据未到）前不显侧边标签，免加载
@@ -3356,10 +3462,13 @@ final class WallPrototypeViewController: UIViewController,
         // 布局宽（横屏时宽高互换），减两侧各 12 边距；横竖屏
         // 同一宽度、居中，横屏左右留白。
         let portraitBarWidth = min(view.bounds.width, view.bounds.height) - 24
-        if let constraint = miniBarWidthConstraint,
+        // (101) 第 1 项：两行台形态横向由左右锚治理，本
+        // 宽度写让路（applyCapsuleLayout101 状态机收口）。
+        if !capsuleTwoRow101, let constraint = miniBarWidthConstraint,
            abs(constraint.constant - portraitBarWidth) > 0.5 {
             constraint.constant = portraitBarWidth
         }
+        applyCapsuleLayout101()
         // 贴纸层（3.7 (24)，纯新增）：失败/空态/缓冲贴纸定位。
         stickerLayoutOverlays()
         // (96) C 项：布局收口后做台钮最终渲染自证（同主页墙 probeDeckRender94 口径，内部去重）。
@@ -5885,7 +5994,8 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         table.backgroundColor = .black
         table.separatorStyle = .none
         table.showsVerticalScrollIndicator = false
-        table.rowHeight = 56
+        // (101) 第 1 项：行高按样板列表定版 min-h 72（原 56）。
+        table.rowHeight = PlaylistLayout101.listRowMinHeight
         table.dataSource = self
         table.delegate = self
         table.register(PlaylistMagazineCell91.self,
@@ -5903,13 +6013,15 @@ extension WallPrototypeViewController: UITableViewDataSource, UITableViewDelegat
         view.addSubview(shelf)
         shelfView91 = shelf
         let headTitle = UILabel()
-        headTitle.font = .systemFont(ofSize: 17, weight: .semibold)
+        // (101) 第 1 项：内容头按样板定版 20 粗（原 17）。
+        headTitle.font = .systemFont(ofSize: PlaylistLayout101.contentTitleFont, weight: .bold)
         headTitle.textColor = .white
         headTitle.translatesAutoresizingMaskIntoConstraints = false
         shelf.addSubview(headTitle)
         shelfHeaderTitle91 = headTitle
         let headCount = UILabel()
-        headCount.font = .systemFont(ofSize: 12.5)
+        // (101) 第 1 项：总数按样板定版 15（原 12.5）。
+        headCount.font = .systemFont(ofSize: PlaylistLayout101.contentCountFont)
         headCount.textColor = UIColor.white.withAlphaComponent(0.5)
         headCount.translatesAutoresizingMaskIntoConstraints = false
         shelf.addSubview(headCount)
@@ -6536,14 +6648,16 @@ final class PlaylistMagazineCell91: UITableViewCell {
         contentView.addSubview(numberLabel)
         coverView.contentMode = .scaleAspectFill
         coverView.clipsToBounds = true
-        coverView.layer.cornerRadius = 6
+        // (101) 第 1 项：列表缩略图圆角按样板定版 10（原 6）。
+        coverView.layer.cornerRadius = PlaylistLayout101.listThumbCorner
         coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         contentView.addSubview(coverView)
-        titleLabel.font = .systemFont(ofSize: 14)
+        // (101) 第 1 项：行名/歌手按样板定版 16 / 13.5。
+        titleLabel.font = .systemFont(ofSize: 16)
         titleLabel.textColor = UIColor.white.withAlphaComponent(0.92)
         titleLabel.lineBreakMode = .byTruncatingTail
         contentView.addSubview(titleLabel)
-        artistLabel.font = .systemFont(ofSize: 12)
+        artistLabel.font = .systemFont(ofSize: 13.5)
         artistLabel.textColor = UIColor.white.withAlphaComponent(0.5)
         artistLabel.lineBreakMode = .byTruncatingTail
         contentView.addSubview(artistLabel)
@@ -6574,15 +6688,19 @@ final class PlaylistMagazineCell91: UITableViewCell {
         // (95) 第 6 条集成调整：缝 64→120 后整行内容右移 56 保原内部
         // 间距（编号起点原贴缝缘 64），防编号/封面被缝盖住。
         numberLabel.frame = CGRect(x: 120, y: 0, width: 26, height: h)
-        coverView.frame = CGRect(x: 156, y: (h - 44) / 2, width: 44, height: 44)
-        diaryButton91.frame = CGRect(x: w - 44, y: (h - 24) / 2, width: 24, height: 24)
-        heartDisc91.frame = CGRect(x: w - 76, y: (h - 18) / 2, width: 18, height: 18)
-        heartButton91.frame = heartDisc91.frame
-        let textX: CGFloat = 212
-        titleLabel.frame = CGRect(x: textX, y: h / 2 - 17,
-                                  width: w - textX - 88, height: 17)
-        artistLabel.frame = CGRect(x: textX, y: h / 2 + 2,
-                                   width: w - textX - 88, height: 15)
+        // (101) 第 1 项：缩略图按样板定版 54（原 44）。
+        let thumb = PlaylistLayout101.listThumbSize
+        coverView.frame = CGRect(x: 156, y: (h - thumb) / 2, width: thumb, height: thumb)
+        // (101) 第 1 项：爱心/加号钮命中按样板定版 40（视
+        // 觉盘 18 居中于命中框内）。
+        diaryButton91.frame = CGRect(x: w - 52, y: (h - 40) / 2, width: 40, height: 40)
+        heartButton91.frame = CGRect(x: w - 100, y: (h - 40) / 2, width: 40, height: 40)
+        heartDisc91.frame = heartButton91.frame.insetBy(dx: 11, dy: 11)
+        let textX: CGFloat = 222
+        titleLabel.frame = CGRect(x: textX, y: h / 2 - 20,
+                                  width: w - textX - 112, height: 20)
+        artistLabel.frame = CGRect(x: textX, y: h / 2 + 3,
+                                   width: w - textX - 112, height: 17)
     }
 
     override func prepareForReuse() {
@@ -6711,7 +6829,8 @@ final class PlaylistShelfCell91: UICollectionViewCell {
         super.init(frame: frame)
         coverView.contentMode = .scaleAspectFill
         coverView.clipsToBounds = true
-        coverView.layer.cornerRadius = 10
+        // (101) 第 1 项：网格封面圆角按样板定版 18（原 10）。
+        coverView.layer.cornerRadius = PlaylistLayout101.gridCoverCorner
         coverView.layer.borderColor = ThemeSystem62.currentAccent.cgColor
         coverView.backgroundColor = UIColor.white.withAlphaComponent(0.08)
         contentView.addSubview(coverView)
@@ -6734,11 +6853,12 @@ final class PlaylistShelfCell91: UICollectionViewCell {
         contentView.addSubview(heartButton91)
         diaryButton91.addTarget(self, action: #selector(diaryTapped91), for: .touchUpInside)
         contentView.addSubview(diaryButton91)
-        titleLabel.font = .systemFont(ofSize: 13, weight: .medium)
+        // (101) 第 1 项：网格卡名/歌手按样板定版 15/600、13。
+        titleLabel.font = .systemFont(ofSize: 15, weight: .semibold)
         titleLabel.textColor = .white
         titleLabel.lineBreakMode = .byTruncatingTail
         contentView.addSubview(titleLabel)
-        artistLabel.font = .systemFont(ofSize: 11)
+        artistLabel.font = .systemFont(ofSize: 13)
         artistLabel.textColor = UIColor.white.withAlphaComponent(0.5)
         artistLabel.lineBreakMode = .byTruncatingTail
         contentView.addSubview(artistLabel)
@@ -6764,8 +6884,8 @@ final class PlaylistShelfCell91: UICollectionViewCell {
             Self.heartPosLogged98 = true
             Breadcrumbs.log("p98 heart pos host=shelf r=\(Int(150 - heartDisc91.frame.maxX)) b=\(Int(150 - heartDisc91.frame.maxY))")
         }
-        titleLabel.frame = CGRect(x: 0, y: 156, width: 150, height: 17)
-        artistLabel.frame = CGRect(x: 0, y: 175, width: 150, height: 14)
+        titleLabel.frame = CGRect(x: 0, y: 156, width: 150, height: 19)
+        artistLabel.frame = CGRect(x: 0, y: 177, width: 150, height: 16)
     }
 
     override func prepareForReuse() {

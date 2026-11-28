@@ -86,6 +86,8 @@ struct DiaryBookRootView99: View {
     @State private var editorRequest: DiaryEditorRequest99?
     @State private var detailEntry: DiaryEntry99?
     @State private var shareEntry: DiaryEntry99?
+    /// (101) 第 5 项：手写签名板开关（头部入口）。
+    @State private var showSignaturePad101 = false
 
     private let pageTitles = ["今日草稿", "时间轴", "日历", "歌曲", "回收站"]
 
@@ -97,6 +99,9 @@ struct DiaryBookRootView99: View {
                 header
                     .sheet(item: $editorRequest) { request in
                         DiaryEditorView99(store: store, request: request)
+                    }
+                    .sheet(isPresented: $showSignaturePad101) {
+                        DiarySignaturePad99()
                     }
                 // 书体：纸面容器＋中缝（横屏双页时中缝即书脊）
                 ZStack {
@@ -116,7 +121,11 @@ struct DiaryBookRootView99: View {
                         }
                     }
                     .clipShape(RoundedRectangle(cornerRadius: 14))
-                    .offset(x: dragOffset)
+                    // (101) 第 5 项：真翻页——拖动时书页绕纵轴
+                    // 3D 卷起（perspective + 随动明暗）替代旧
+                    // 平移近似，松手弹簧落定换页（下方手势）。
+                    .modifier(DiaryPageCurl101(offset: dragOffset,
+                                               width: geo.size.width))
                 }
                 .padding(.horizontal, 12)
                 .padding(.top, 8)
@@ -145,6 +154,9 @@ struct DiaryBookRootView99: View {
                             var next = spreadIndex
                             if value.translation.width < -60 { next = min(spreadIndex + step, spreads.count - 1) }
                             if value.translation.width > 60 { next = max(spreadIndex - step, 0) }
+                            // (101) 第 5 项：翻页路径自证（3D
+                            // 卷页，非平移）。
+                            Breadcrumbs.log("p101 diary flip curl=1 turned=\(next != spreadIndex ? 1 : 0)")
                             withAnimation(.spring(response: 0.42, dampingFraction: 0.86)) {
                                 spreadIndex = next
                                 dragOffset = 0
@@ -181,6 +193,18 @@ struct DiaryBookRootView99: View {
                 Text("以歌为线索，记下每一个时刻").font(.system(size: 11)).foregroundColor(DiaryPaper99.dim)
             }
             Spacer()
+            // (101) 第 5 项：手写签名入口（签名板：手写 →
+            // 系统美化 → 存档，打印落款用美化版）。
+            Button {
+                showSignaturePad101 = true
+            } label: {
+                Image(systemName: "scribble.variable")
+                    .font(.system(size: 15, weight: .semibold))
+                    .frame(width: 34, height: 34)
+                    .background(Circle().fill(DiaryPaper99.card))
+                    .foregroundColor(DiaryPaper99.ink)
+            }
+            .accessibilityLabel("手写签名")
             Button {
                 editorRequest = DiaryEditorRequest99(song: initialSong,
                                                      prefillText: store.editorAutosave)
@@ -333,6 +357,13 @@ struct DiaryEntryCard99: View {
             if !entry.text.isEmpty {
                 Text(entry.text).font(.system(size: 14)).foregroundColor(DiaryPaper99.ink)
                     .lineLimit(4)
+            }
+            // (101) 第 5 项：落点画布回放（分数坐标同源）。
+            if !entry.placements.isEmpty {
+                DiaryPlacementCanvas99(placements: entry.placements)
+                    .frame(height: 74)
+                    .background(RoundedRectangle(cornerRadius: 8)
+                        .fill(DiaryPaper99.paper.opacity(0.65)))
             }
             HStack(spacing: 8) {
                 if let mood = entry.mood {
@@ -569,10 +600,18 @@ struct DiaryDetailView99: View {
                     if !entry.text.isEmpty {
                         Text(entry.text).font(.system(size: 15.5))
                     }
-                    HStack(spacing: 8) {
-                        ForEach(entry.stickerNames, id: \.self) { name in
-                            if let sticker = DiarySticker99.named(name), let image = sticker.image {
-                                Image(uiImage: image).resizable().scaledToFit().frame(width: 44, height: 44)
+                    if !entry.placements.isEmpty {
+                        // (101) 第 5 项：按用户落点原样回放。
+                        DiaryPlacementCanvas99(placements: entry.placements)
+                            .frame(height: 180)
+                            .background(RoundedRectangle(cornerRadius: 10)
+                                .fill(DiaryPaper99.card))
+                    } else {
+                        HStack(spacing: 8) {
+                            ForEach(entry.stickerNames, id: \.self) { name in
+                                if let sticker = DiarySticker99.named(name), let image = sticker.image {
+                                    Image(uiImage: image).resizable().scaledToFit().frame(width: 44, height: 44)
+                                }
                             }
                         }
                     }
@@ -611,7 +650,10 @@ struct DiaryEditorView99: View {
     @Environment(\.dismiss) private var dismiss
     @State private var text: String = ""
     @State private var mood: String?
-    @State private var pickedStickers: [String] = []
+    /// (101) 第 5 项：贴纸落点（自由画布手动拖放，系统不
+    /// 自动摆放）；selectedSticker101 为当前选中贴纸名。
+    @State private var placements: [DiaryStickerPlacement99] = []
+    @State private var selectedSticker101: String?
     @State private var song: DiarySong90?
 
     var body: some View {
@@ -643,15 +685,45 @@ struct DiaryEditorView99: View {
                         .onChange(of: text) { _, newValue in
                             if request.editing == nil { store.setEditorAutosave(newValue) }
                         }
-                    if !pickedStickers.isEmpty {
-                        HStack(spacing: 8) {
-                            ForEach(pickedStickers, id: \.self) { name in
-                                if let sticker = DiarySticker99.named(name), let image = sticker.image {
-                                    Image(uiImage: image).resizable().scaledToFit().frame(width: 40, height: 40)
-                                        .onTapGesture { pickedStickers.removeAll { $0 == name } }
-                                }
+                    // (101) 第 5 项：贴纸自由画布——点选下方
+                    // 贴纸加入画布，拖动摆放、选中后可缩放/
+                    // 旋转/删除，落点全部由手动产生。
+                    Text("贴纸画布（拖动摆放）").font(.system(size: 13, weight: .semibold))
+                        .foregroundColor(DiaryPaper99.dim)
+                    DiaryPlacementCanvas99(
+                        placements: placements,
+                        editable: true,
+                        selectedName: selectedSticker101,
+                        onMove: { name, fx, fy in
+                            if let idx = placements.firstIndex(where: { $0.name == name }) {
+                                placements[idx].fx = fx
+                                placements[idx].fy = fy
+                            }
+                        },
+                        onSelect: { selectedSticker101 = $0 })
+                        .frame(height: 220)
+                        .background(RoundedRectangle(cornerRadius: 12).fill(DiaryPaper99.card))
+                        .overlay(RoundedRectangle(cornerRadius: 12)
+                            .stroke(Color.black.opacity(0.06), lineWidth: 1))
+                    if let selected = selectedSticker101,
+                       let idx = placements.firstIndex(where: { $0.name == selected }) {
+                        HStack(spacing: 14) {
+                            Button("缩小") {
+                                placements[idx].scale = max(0.5, placements[idx].scale - 0.15)
+                            }
+                            Button("放大") {
+                                placements[idx].scale = min(2.2, placements[idx].scale + 0.15)
+                            }
+                            Button("左转") { placements[idx].rotation -= .pi / 12 }
+                            Button("右转") { placements[idx].rotation += .pi / 12 }
+                            Spacer()
+                            Button("删除", role: .destructive) {
+                                placements.remove(at: idx)
+                                selectedSticker101 = nil
                             }
                         }
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundColor(DiaryPaper99.accent)
                     }
                     Text("此刻心情").font(.system(size: 13, weight: .semibold)).foregroundColor(DiaryPaper99.dim)
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 4), spacing: 8) {
@@ -665,7 +737,8 @@ struct DiaryEditorView99: View {
                                 .foregroundColor(mood == item ? .white : DiaryPaper99.ink)
                         }
                     }
-                    Text("贴纸（点选贴入正文区）").font(.system(size: 13, weight: .semibold))
+                    Text("贴纸（点选加入画布，再拖到想要的位置）")
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundColor(DiaryPaper99.dim)
                     LazyVGrid(columns: Array(repeating: GridItem(.flexible()), count: 6), spacing: 8) {
                         ForEach(DiarySticker99.all) { sticker in
@@ -679,13 +752,19 @@ struct DiaryEditorView99: View {
                             .frame(height: 44)
                             .padding(4)
                             .background(RoundedRectangle(cornerRadius: 10).fill(
-                                pickedStickers.contains(sticker.relativeName)
+                                placements.contains { $0.name == sticker.relativeName }
                                     ? DiaryPaper99.accent.opacity(0.25) : DiaryPaper99.card))
                             .onTapGesture {
-                                if pickedStickers.contains(sticker.relativeName) {
-                                    pickedStickers.removeAll { $0 == sticker.relativeName }
+                                // 已在画布 → 选中它；未在 → 加入
+                                // 画布中央作为起拖点，落点随即由
+                                // 用户拖动决定（非系统排布）。
+                                if placements.contains(where: { $0.name == sticker.relativeName }) {
+                                    selectedSticker101 = sticker.relativeName
                                 } else {
-                                    pickedStickers.append(sticker.relativeName)
+                                    placements.append(DiaryStickerPlacement99(
+                                        name: sticker.relativeName,
+                                        fx: 0.5, fy: 0.5, scale: 1, rotation: 0))
+                                    selectedSticker101 = sticker.relativeName
                                 }
                             }
                         }
@@ -704,13 +783,24 @@ struct DiaryEditorView99: View {
                     Button("保存") { save() }
                         .fontWeight(.semibold)
                         .disabled(text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                                  && song == nil && pickedStickers.isEmpty)
+                                  && song == nil && placements.isEmpty)
                 }
             }
             .onAppear {
                 song = request.song
                 mood = request.editing?.mood
-                pickedStickers = request.editing?.stickerNames ?? []
+                if let existing = request.editing?.placements, !existing.isEmpty {
+                    placements = existing
+                } else if let names = request.editing?.stickerNames, !names.isEmpty {
+                    placements = names.enumerated().map { index, name in
+                        DiaryStickerPlacement99(
+                            name: name, fx: 0.5,
+                            fy: min(0.85, 0.3 + 0.18 * Double(index)),
+                            scale: 1, rotation: 0)
+                    }
+                } else {
+                    placements = []
+                }
                 text = request.prefillText
             }
         }
@@ -718,10 +808,15 @@ struct DiaryEditorView99: View {
 
     private func save() {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let names = placements.map(\.name)
+        // (101) 第 5 项：落点自证——数量 + manual=1（全部
+        // 由用户在画布上拖放产生）。
+        Breadcrumbs.log("p101 diary sticker placed n=\(placements.count) manual=1")
         if var editing = request.editing {
             editing.text = trimmed
             editing.mood = mood
-            editing.stickerNames = pickedStickers
+            editing.stickerNames = names
+            editing.placements = placements
             if let song {
                 editing.songId = song.id
                 editing.songTitle = song.title
@@ -730,7 +825,8 @@ struct DiaryEditorView99: View {
             }
             store.updateEntry(editing)
         } else {
-            store.addEntry(text: trimmed, mood: mood, stickerNames: pickedStickers, song: song)
+            store.addEntry(text: trimmed, mood: mood, stickerNames: names,
+                           placements: placements, song: song)
             if request.isDraftConfirm { store.markDraftConfirmed() }
         }
         dismiss()
@@ -741,6 +837,17 @@ struct DiaryEditorView99: View {
 
 struct DiaryShareCard99: View {
     let entry: DiaryEntry99
+    /// (101) 第 5 项：逐字打印——正文只显前 typedCount 字
+    /// （静态渲染/分享出图时传 .max 全显）。
+    var typedCount: Int = .max
+    /// 打印落定时落款：用户手写签名的美化版（drop-in）。
+    var showSignature: Bool = false
+    @ObservedObject private var sigStore = DiarySignature99.shared
+
+    private var typedText: String {
+        String(entry.text.prefix(max(0, typedCount)))
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("音乐日记").font(.system(size: 13, weight: .bold)).foregroundColor(DiaryPaper99.accent)
@@ -749,17 +856,36 @@ struct DiaryShareCard99: View {
                     .font(.system(size: 14, weight: .semibold)).foregroundColor(DiaryPaper99.ink)
             }
             if !entry.text.isEmpty {
-                Text(entry.text).font(.system(size: 14)).foregroundColor(DiaryPaper99.ink)
+                Text(typedText).font(.system(size: 14)).foregroundColor(DiaryPaper99.ink)
             }
-            HStack(spacing: 6) {
-                ForEach(entry.stickerNames.prefix(5), id: \.self) { name in
-                    if let sticker = DiarySticker99.named(name), let image = sticker.image {
-                        Image(uiImage: image).resizable().scaledToFit().frame(width: 34, height: 34)
+            if !entry.placements.isEmpty {
+                DiaryPlacementCanvas99(placements: entry.placements)
+                    .frame(height: 84)
+            } else {
+                HStack(spacing: 6) {
+                    ForEach(entry.stickerNames.prefix(5), id: \.self) { name in
+                        if let sticker = DiarySticker99.named(name), let image = sticker.image {
+                            Image(uiImage: image).resizable().scaledToFit().frame(width: 34, height: 34)
+                        }
                     }
                 }
             }
-            Text(DiaryEntryCard99.timeText(entry.createdAt) + (entry.mood.map { " · \($0)" } ?? ""))
-                .font(.system(size: 11)).foregroundColor(DiaryPaper99.dim)
+            HStack(alignment: .bottom, spacing: 8) {
+                Text(DiaryEntryCard99.timeText(entry.createdAt) + (entry.mood.map { " · \($0)" } ?? ""))
+                    .font(.system(size: 11)).foregroundColor(DiaryPaper99.dim)
+                Spacer()
+                // (101) 第 5 项：签名落款——打印末尾 drop-in
+                // （弹簧缩放落定），图为系统美化后的笔迹。
+                if showSignature, let signature = sigStore.beautifiedImage {
+                    Image(uiImage: signature)
+                        .resizable().scaledToFit()
+                        .frame(height: 36)
+                        .scaleEffect(showSignature ? 1 : 0.4)
+                        .opacity(showSignature ? 1 : 0)
+                        .animation(.spring(response: 0.46, dampingFraction: 0.72),
+                                   value: showSignature)
+                }
+            }
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -770,9 +896,17 @@ struct DiaryShareCard99: View {
 struct DiaryShareView99: View {
     let entry: DiaryEntry99
     @Environment(\.dismiss) private var dismiss
-    @State private var printProgress: CGFloat = 0
+    /// (101) 第 5 项：逐字打印状态——typedCount 逐字推进
+    /// （15–30ms/字），printDone 后签名落款 + 出分享钮。
+    @State private var typedCount = 0
+    @State private var printDone = false
     @State private var showActivity = false
     @State private var renderedImage: UIImage?
+
+    private var printProgress: CGFloat {
+        entry.text.isEmpty ? 1
+            : min(1, CGFloat(typedCount) / CGFloat(entry.text.count))
+    }
 
     var body: some View {
         NavigationStack {
@@ -787,19 +921,20 @@ struct DiaryShareView99: View {
                                 .fill(Color.black.opacity(0.35))
                                 .frame(width: 200, height: 6)
                                 .offset(y: 22))
-                    DiaryShareCard99(entry: entry)
+                    DiaryShareCard99(entry: entry, typedCount: typedCount,
+                                     showSignature: printDone)
                         .frame(width: 300)
                         .clipShape(Rectangle())
                         .mask(
                             VStack(spacing: 0) {
-                                Rectangle().frame(height: max(1, 190 * printProgress))
+                                Rectangle().frame(height: max(1, 300 * printProgress))
                                 Color.clear
                             }
                             .frame(maxHeight: .infinity, alignment: .top))
                         .shadow(color: .black.opacity(0.12), radius: 6, y: 3)
                 }
                 .padding(.top, 26)
-                if printProgress >= 1 {
+                if printDone {
                     Button {
                         renderAndShare()
                     } label: {
@@ -823,9 +958,9 @@ struct DiaryShareView99: View {
                     Button("关闭") { dismiss() }
                 }
             }
-            .onAppear {
+            .task {
                 Breadcrumbs.log("p99 diary export")
-                withAnimation(.easeInOut(duration: 1.8)) { printProgress = 1 }
+                await runPrint101()
             }
             .sheet(isPresented: $showActivity) {
                 if let renderedImage {
@@ -835,9 +970,36 @@ struct DiaryShareView99: View {
         }
     }
 
+    /// (101) 第 5 项：逐字打印——样板定版节拍：每字
+    /// 15 + rand×15 ms，每 16 字 +46ms、每 5 字 +14ms；
+    /// 纸面 mask 随 typedCount 同步吐出（上方 printProgress
+    /// 派生），打完签名 drop-in 落款（卡内弹簧）。
+    @MainActor
+    private func runPrint101() async {
+        let total = entry.text.count
+        Breadcrumbs.log("p101 diary print typewriter chars=\(total)")
+        if total == 0 {
+            printDone = true
+            return
+        }
+        var index = 0
+        while index < total {
+            index += 1
+            typedCount = index
+            var delay = 15 + Double.random(in: 0..<15)
+            if index % 16 == 0 { delay += 46 }
+            if index % 5 == 0 { delay += 14 }
+            try? await Task.sleep(nanoseconds: UInt64(delay * 1_000_000))
+            if Task.isCancelled { return }
+        }
+        printDone = true
+        Breadcrumbs.log("p101 diary print done sig=\(DiarySignature99.shared.hasSignature ? 1 : 0)")
+    }
+
     @MainActor
     private func renderAndShare() {
-        let renderer = ImageRenderer(content: DiaryShareCard99(entry: entry).frame(width: 340))
+        let renderer = ImageRenderer(content: DiaryShareCard99(
+            entry: entry, typedCount: .max, showSignature: true).frame(width: 340))
         renderer.scale = 3
         if let image = renderer.uiImage {
             renderedImage = image
@@ -852,4 +1014,295 @@ struct DiaryActivityView99: UIViewControllerRepresentable {
         UIActivityViewController(activityItems: items, applicationActivities: nil)
     }
     func updateUIViewController(_ controller: UIActivityViewController, context: Context) {}
+}
+
+// MARK: - (101) 第 5 项：翻页卷曲 / 贴纸自由画布 / 签名美化与签名板
+
+/// 真翻页近似：拖动量驱动整页绕纵轴 3D 旋转（锚点随方向
+/// 落在书脊侧）+ perspective + 随动明暗渐变，呈纸页卷起
+/// 感；松手由既有弹簧换页落定。
+private struct DiaryPageCurl101: ViewModifier {
+    let offset: CGFloat
+    let width: CGFloat
+    func body(content: Content) -> some View {
+        let t = max(-1, min(1, offset / max(width, 1)))
+        content
+            .rotation3DEffect(
+                .degrees(Double(-t * 16)),
+                axis: (x: 0, y: 1, z: 0),
+                anchor: t < 0 ? .leading : .trailing,
+                perspective: 0.55)
+            .offset(x: offset * 0.22)
+            .overlay(
+                LinearGradient(
+                    colors: [.black.opacity(0.20 * abs(Double(t))), .clear,
+                             .black.opacity(0.10 * abs(Double(t)))],
+                    startPoint: .leading, endPoint: .trailing)
+                    .allowsHitTesting(false))
+    }
+}
+
+/// 贴纸自由画布：按条目落点（分数坐标）渲染；编辑态可拖
+/// 动改落点、点选选中。落点只由用户手势产生与修改。
+struct DiaryPlacementCanvas99: View {
+    let placements: [DiaryStickerPlacement99]
+    var editable: Bool = false
+    var selectedName: String? = nil
+    var onMove: ((String, Double, Double) -> Void)? = nil
+    var onSelect: ((String) -> Void)? = nil
+    @State private var dragStart101: (name: String, fx: Double, fy: Double)?
+
+    var body: some View {
+        GeometryReader { geo in
+            ZStack {
+                ForEach(placements) { placement in
+                    if let sticker = DiarySticker99.named(placement.name),
+                       let image = sticker.image {
+                        Image(uiImage: image)
+                            .resizable().scaledToFit()
+                            .frame(width: 54 * placement.scale,
+                                   height: 54 * placement.scale)
+                            .rotationEffect(.radians(placement.rotation))
+                            .background(
+                                RoundedRectangle(cornerRadius: 8)
+                                    .stroke(DiaryPaper99.accent,
+                                            lineWidth: editable && selectedName == placement.name ? 1.6 : 0))
+                            .position(x: placement.fx * geo.size.width,
+                                      y: placement.fy * geo.size.height)
+                            .onTapGesture {
+                                if editable { onSelect?(placement.name) }
+                            }
+                            .gesture(editable ? dragGesture(for: placement,
+                                                            in: geo.size) : nil)
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private func dragGesture(for placement: DiaryStickerPlacement99,
+                             in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 2)
+            .onChanged { value in
+                if dragStart101?.name != placement.name {
+                    dragStart101 = (placement.name, placement.fx, placement.fy)
+                    onSelect?(placement.name)
+                }
+                guard let start = dragStart101 else { return }
+                let fx = min(0.95, max(0.05,
+                    start.fx + Double(value.translation.width / max(size.width, 1))))
+                let fy = min(0.92, max(0.08,
+                    start.fy + Double(value.translation.height / max(size.height, 1))))
+                onMove?(placement.name, fx, fy)
+            }
+            .onEnded { _ in dragStart101 = nil }
+    }
+}
+
+/// 签名美化渲染：两遍移动平均平滑 + 二次曲线中点重采样
+/// + 按速度变线宽、笔划两端收尖（样板美化口径的原生
+/// 实现）。输入为分数坐标笔划，渲染到任意尺寸。
+struct DiarySignatureRender101: View {
+    let strokes: [[DiarySignaturePoint99]]
+    var lineColor: Color = DiaryPaper99.ink
+
+    var body: some View {
+        Canvas { context, size in
+            for stroke in strokes {
+                let dense = Self.beautified(stroke, size: size)
+                guard dense.count > 1 else { continue }
+                for index in 1..<dense.count {
+                    var path = Path()
+                    path.move(to: dense[index - 1].point)
+                    path.addLine(to: dense[index].point)
+                    context.stroke(path, with: .color(lineColor),
+                                   style: StrokeStyle(lineWidth: dense[index].width,
+                                                      lineCap: .round))
+                }
+            }
+        }
+    }
+
+    /// 平滑 + 重采样 + 线宽曲线，返回稠密点列。
+    static func beautified(_ stroke: [DiarySignaturePoint99],
+                           size: CGSize) -> [(point: CGPoint, width: CGFloat)] {
+        guard stroke.count > 1 else { return [] }
+        var pts: [CGPoint] = stroke.map {
+            CGPoint(x: $0.x * size.width, y: $0.y * size.height)
+        }
+        var times: [Double] = stroke.map(\.t)
+        // 两遍移动平均平滑（权重 1-2-1，端点保持）。
+        for _ in 0..<2 where pts.count > 2 {
+            var next = pts
+            for i in 1..<(pts.count - 1) {
+                next[i] = CGPoint(
+                    x: (pts[i - 1].x + 2 * pts[i].x + pts[i + 1].x) / 4,
+                    y: (pts[i - 1].y + 2 * pts[i].y + pts[i + 1].y) / 4)
+            }
+            pts = next
+        }
+        // 二次曲线中点法重采样：每段采样 6 步。
+        var dense: [(CGPoint, Double)] = [(pts[0], times[0])]
+        var current = pts[0]
+        var currentT = times[0]
+        for i in 1..<pts.count {
+            let control = pts[i - 1]
+            let end = i == pts.count - 1
+                ? pts[i]
+                : CGPoint(x: (pts[i - 1].x + pts[i].x) / 2,
+                          y: (pts[i - 1].y + pts[i].y) / 2)
+            let endT = i == times.count - 1
+                ? times[i]
+                : (times[i - 1] + times[i]) / 2
+            for step in 1...6 {
+                let u = Double(step) / 6
+                let x = (1 - u) * (1 - u) * current.x
+                    + 2 * (1 - u) * u * control.x + u * u * end.x
+                let y = (1 - u) * (1 - u) * current.y
+                    + 2 * (1 - u) * u * control.y + u * u * end.y
+                dense.append((CGPoint(x: x, y: y),
+                              currentT + (endT - currentT) * u))
+            }
+            current = end
+            currentT = endT
+        }
+        // 线宽：速度越快越细，两端 12% 收尖。
+        let total = dense.count
+        return dense.enumerated().map { index, item in
+            var width: CGFloat = 3.4
+            if index > 0 {
+                let prev = dense[index - 1]
+                let dist = hypot(item.0.x - prev.0.x, item.0.y - prev.0.y)
+                let dt = max(item.1 - prev.1, 1)
+                let speed = dist / CGFloat(dt) // pt/ms
+                width = min(4.6, max(1.1, 4.6 - speed * 2.4))
+            }
+            let edge = min(1, Double(min(index, total - 1 - index)) / max(1, Double(total) * 0.12))
+            let taper = 0.25 + 0.75 * edge
+            return (item.0, width * CGFloat(taper))
+        }
+    }
+}
+
+/// 手写签名板：采集笔划 → 美化预览 → 存档（原始笔划 +
+/// 美化 PNG）。打印分享卡落款用美化版。
+struct DiarySignaturePad99: View {
+    @ObservedObject private var sigStore = DiarySignature99.shared
+    @Environment(\.dismiss) private var dismiss
+    /// 本次采集的笔划（像素坐标，存档时按板面尺寸归一化）。
+    @State private var strokes: [[DiarySignaturePoint99]] = []
+    @State private var strokeStart: Date?
+    @State private var padSize: CGSize = .zero
+
+    var body: some View {
+        NavigationStack {
+            VStack(spacing: 14) {
+                Text("在下面写下你的签名，系统会自动美化笔迹，打印日记时落在末尾。")
+                    .font(.system(size: 12.5)).foregroundColor(DiaryPaper99.dim)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                // 签名板：原始笔划实时回显。
+                ZStack {
+                    RoundedRectangle(cornerRadius: 12).fill(DiaryPaper99.card)
+                    if strokes.isEmpty, sigStore.hasSignature,
+                       let image = sigStore.beautifiedImage {
+                        Image(uiImage: image).resizable().scaledToFit()
+                            .frame(maxHeight: 110)
+                            .opacity(0.55)
+                    }
+                    Canvas { context, size in
+                        for stroke in strokes {
+                            guard stroke.count > 1 else { continue }
+                            var path = Path()
+                            path.move(to: CGPoint(x: stroke[0].x, y: stroke[0].y))
+                            for point in stroke.dropFirst() {
+                                path.addLine(to: CGPoint(x: point.x, y: point.y))
+                            }
+                            context.stroke(path, with: .color(DiaryPaper99.ink),
+                                           style: StrokeStyle(lineWidth: 2.4,
+                                                              lineCap: .round, lineJoin: .round))
+                        }
+                    }
+                }
+                .frame(height: 190)
+                .background(GeometryReader { geo in
+                    Color.clear.onAppear { padSize = geo.size }
+                        .onChange(of: geo.size) { _, new in padSize = new }
+                })
+                .contentShape(Rectangle())
+                .gesture(
+                    DragGesture(minimumDistance: 0)
+                        .onChanged { value in
+                            if strokeStart == nil {
+                                strokeStart = Date()
+                                strokes.append([])
+                            }
+                            let t = (strokeStart.map {
+                                Date().timeIntervalSince($0) * 1000
+                            }) ?? 0
+                            strokes[strokes.count - 1].append(
+                                DiarySignaturePoint99(x: Double(value.location.x),
+                                                      y: Double(value.location.y), t: t))
+                        }
+                        .onEnded { _ in strokeStart = nil })
+                // 美化预览（本次笔划）。
+                if !strokes.isEmpty, padSize.width > 0 {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("美化预览").font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(DiaryPaper99.dim)
+                        DiarySignatureRender101(strokes: normalizedStrokes)
+                            .frame(height: 74)
+                            .background(RoundedRectangle(cornerRadius: 10)
+                                .fill(DiaryPaper99.card))
+                    }
+                }
+                HStack(spacing: 12) {
+                    Button("清除") {
+                        strokes = []
+                        if sigStore.hasSignature { sigStore.clear() }
+                    }
+                    .foregroundColor(.red)
+                    Spacer()
+                    Button("完成") { save() }
+                        .fontWeight(.semibold)
+                        .disabled(strokes.isEmpty)
+                }
+                .font(.system(size: 14.5))
+                Spacer()
+            }
+            .padding(18)
+            .background(DiaryPaper99.paper)
+            .navigationTitle("手写签名")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button("取消") { dismiss() }
+                }
+            }
+        }
+    }
+
+    private var normalizedStrokes: [[DiarySignaturePoint99]] {
+        guard padSize.width > 0, padSize.height > 0 else { return [] }
+        return strokes.map { stroke in
+            stroke.map {
+                DiarySignaturePoint99(x: $0.x / padSize.width,
+                                      y: $0.y / padSize.height, t: $0.t)
+            }
+        }
+    }
+
+    @MainActor
+    private func save() {
+        let normalized = normalizedStrokes
+        guard !normalized.isEmpty, padSize.width > 0 else { return }
+        let aspect = Double(padSize.width / padSize.height)
+        let render = DiarySignatureRender101(strokes: normalized)
+            .frame(width: 480, height: 480 / aspect)
+        let renderer = ImageRenderer(content: render)
+        renderer.scale = 2
+        let png = renderer.uiImage?.pngData()
+        sigStore.save(strokes: normalized, aspect: aspect, png: png)
+        dismiss()
+    }
 }

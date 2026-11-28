@@ -190,6 +190,14 @@ class WorkbenchSectionViewController: UIViewController {
         super.viewDidLoad()
         overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         view.backgroundColor = WorkbenchTheme.background
+        // (101) 第 3 项：工作台全分区（含曲目列表子类）补
+        // 左缘右滑退出——走本页既有回墙契约 dismissToWall
+        // （未注入时退化关本页，与分区页关闭口径一致）。
+        EdgeBack101.install(on: self, page: "workbench") { [weak self] in
+            guard let self else { return }
+            if let dismissToWall { dismissToWall() }
+            else { dismiss(animated: true) }
+        }
 
         let titleLabel = UILabel()
         titleLabel.text = sectionTitle

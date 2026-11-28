@@ -26,6 +26,11 @@ enum SearchHostPresenter {
 
     static func presentSearch(from presenter: UIViewController) {
         Breadcrumbs.log("search.open from=home-wall")
+        // (101) 第 2 项：呈现层自证——搜索页进场时主台（播
+        // 放台）当前主题值在此落盘，页内再读同源并跟随。
+        Breadcrumbs.log("p101 search present stage-theme="
+            + "\(String(describing: MiniPlayerTheme.effective))"
+            + " fx=\(MiniPlayerTheme.effectsEnabled ? 1 : 0)")
         let host = UIHostingController(rootView: SearchWorkspaceView())
         host.rootView = SearchWorkspaceView(
             onClose: { [weak host] in
@@ -43,6 +48,11 @@ enum SearchHostPresenter {
                 presentCollection(collection, from: host)
             })
         host.modalPresentationStyle = .fullScreen
+        // (101) 第 3 项：搜索页补左缘右滑退出（头部 ✕ 已按
+        // 定版撤除，关闭走本手势 + onClose 同路 dismiss）。
+        EdgeBack101.install(on: host, page: "search") { [weak host] in
+            host?.dismiss(animated: true)
+        }
         presenter.present(host, animated: true)
     }
 

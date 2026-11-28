@@ -1190,24 +1190,33 @@ final class SeamMaster: UIView {
             outgoing.transform = .identity
             return
         }
-        // (95) 10：iOS 系统弹簧交叉淡化＋入场区轻位移
-        // （4pt→0）；动画完成才置 outgoing 的 isHidden 终
-        // 态，期间 .allowUserInteraction 不阻塞点按。
+        // (101) 第 4 项：切换动画重做为 iOS 系统弹簧——
+        // UISpringTimingParameters（系统 present/dismiss 同
+        // 源的弹簧求解）驱动 UIViewPropertyAnimator，入场区
+        // 缩放 0.96 + 上移 10pt 滑入、出场区反向轻退，禁硬
+        // 切/瞬移；动画完成才置 outgoing 的 isHidden 终态。
+        // 取码/轮询通路不动（(99) 秒切口径保留）。
         startQRAnimProbe95()
         incoming.isHidden = false
         incoming.alpha = 0
-        incoming.transform = CGAffineTransform(translationX: 0, y: 4)
+        incoming.transform = CGAffineTransform(translationX: 0, y: 10)
+            .scaledBy(x: 0.96, y: 0.96)
         outgoing.isHidden = false
         outgoing.alpha = 1
-        UIView.animate(withDuration: 0.45, delay: 0,
-                       usingSpringWithDamping: 0.86,
-                       initialSpringVelocity: 0.6,
-                       options: [.allowUserInteraction,
-                                 .beginFromCurrentState]) {
+        outgoing.transform = .identity
+        Breadcrumbs.log("p101 seam qr anim spring dir=\(open ? "open" : "close")")
+        let spring = UISpringTimingParameters(dampingRatio: 0.86,
+                                              initialVelocity: CGVector(dx: 0, dy: 0.4))
+        let animator = UIViewPropertyAnimator(duration: 0.55,
+                                              timingParameters: spring)
+        animator.addAnimations {
             incoming.alpha = 1
             incoming.transform = .identity
             outgoing.alpha = 0
-        } completion: { [weak self] _ in
+            outgoing.transform = CGAffineTransform(translationX: 0, y: -6)
+                .scaledBy(x: 0.99, y: 0.99)
+        }
+        animator.addCompletion { [weak self] _ in
             outgoing.isHidden = true
             outgoing.alpha = 1
             outgoing.transform = .identity
@@ -1215,6 +1224,7 @@ final class SeamMaster: UIView {
             incoming.transform = .identity
             self?.stopQRAnimProbe95()
         }
+        animator.startAnimation()
     }
 
     // (95) 10：帧间隔自证——CADisplayLink 记最大帧间隔，

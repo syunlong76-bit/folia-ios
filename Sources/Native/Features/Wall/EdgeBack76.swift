@@ -124,3 +124,23 @@ final class EdgeBack76: NSObject, UIViewControllerTransitioningDelegate,
         }
     }
 }
+
+/// (101) 第 3 项：全局右滑退出补齐装配口——复用 EdgeBack76
+/// 机制（左缘 pan + 百分比驱动 dismiss，阈值/冲突纪律同
+/// (76) 定版），仅加装配面包屑供真机日志逐页验路径。各
+/// 页 onDismiss 仍走该页自己的关闭契约。
+enum EdgeBack101 {
+
+    @discardableResult
+    static func install(
+        on host: UIViewController,
+        page: String,
+        shouldBeginAt: @escaping (CGPoint) -> Bool = { _ in true },
+        onDismiss: @escaping () -> Void
+    ) -> EdgeBack76 {
+        Breadcrumbs.log("p101 edgeback install page=\(page)")
+        return EdgeBack76.install(on: host,
+                                  shouldBeginAt: shouldBeginAt,
+                                  onDismiss: onDismiss)
+    }
+}

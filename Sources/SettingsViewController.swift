@@ -154,6 +154,13 @@ final class SettingsViewController: UIViewController {
         // 让 UIAlertController 等系统子界面跟随深色，避免弹出白框跳戏
         overrideUserInterfaceStyle = ThemeSystem62.interfaceStyleOverride() // (62) INT-1：明暗三段读主题系统，不再写死深色
         view.backgroundColor = .clear
+        // (101) 第 3 项：设置页补左缘右滑退出（呈现为
+        // animated:false、关闭按钮走 dismiss，本手势同路
+        // dismiss；入场弹簧在 viewDidAppear 自理、不受
+        // transitioningDelegate 影响）。
+        EdgeBack101.install(on: self, page: "settings") { [weak self] in
+            self?.dismiss(animated: true)
+        }
 
         buildLayout()
         refresh()

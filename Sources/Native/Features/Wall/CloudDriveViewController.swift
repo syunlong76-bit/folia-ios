@@ -28,6 +28,11 @@ final class CloudDriveViewController: UIViewController, UITableViewDataSource, U
         super.viewDidLoad()
         view.backgroundColor = UIColor(white: 0.07, alpha: 1)
         overrideUserInterfaceStyle = .dark
+        // (101) 第 3 项：云盘页补左缘右滑退出（关闭契约同
+        // closeTapped 的 dismiss）。
+        EdgeBack101.install(on: self, page: "cloud-drive") { [weak self] in
+            self?.dismiss(animated: true)
+        }
 
         let titleLabel = UILabel()
         titleLabel.text = "云盘"

@@ -395,6 +395,11 @@ final class ConsolePanel82: UIViewController,
             guard let self else { return }
             let diary = DiaryBookViewController99(tagged: track)
             diary.modalPresentationStyle = .fullScreen
+            // (101) 第 3 项：日记本补左缘右滑退出（呈现方
+            // 安装，理由同缝入口处注释）。
+            EdgeBack101.install(on: diary, page: "diary") { [weak diary] in
+                diary?.dismiss(animated: true)
+            }
             self.present(diary, animated: true)
         }
         mainView87.addSubview(polaroidZone90)
